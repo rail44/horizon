@@ -61,9 +61,9 @@ use horizon_agent::roles::RoleId;
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
-    resolve_approval, should_fold_completion, unregister_session_runtime, ApprovalDecision,
-    ApprovalOutcome, HostTools, RecallContext, SessionDomainPolicy, ToolCompletion,
-    ToolSessionState,
+    resolve_approval, resolve_auto_approval, should_fold_completion, start_approval_gate,
+    unregister_session_runtime, ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome,
+    HostTools, JudgeDecision, RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
 };
 use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
@@ -1156,12 +1156,11 @@ fn run_session(
         None
     };
 
-    // Shadow-mode judge (`docs/agent-approval-design.md`'s "Judge design",
-    // implemented shadow-only -- `horizon_agent::judge`'s module doc): a
+    // Enforcing judge (`docs/agent-approval-design.md`'s "Judge design"): a
     // second model id on this process's *same* provider/`base_url`, reusing
-    // the process's own event-log writer for the calibration record. `None`
-    // (no judge fires for this session) whenever `OPENAI_API_KEY` isn't set
-    // or no writer is configured -- see `JudgeHandle::new`.
+    // the process's own event-log writer for the verdict record. `None`
+    // preserves human approval whenever `OPENAI_API_KEY` isn't set or no
+    // writer is configured -- see `JudgeHandle::new`.
     let judge = JudgeHandle::new(state.agent_config.rig.base_url.clone(), state.writer());
 
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
@@ -1276,7 +1275,8 @@ fn handle_provider_event(
     session_id: SessionId,
     provider_event: ProviderEvent,
 ) {
-    let processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
+    let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
+    gate_processing_approval(session_id, &mut processing.horizon_events);
     for command in processing.provider_commands {
         let _ = commands_tx.send(command);
     }
@@ -1291,6 +1291,46 @@ fn handle_provider_event(
     let _ = live_state.extend_provider_events(processing.horizon_events);
     for event in to_forward {
         send_session_event(state, session_id, event);
+    }
+}
+
+/// Intercepts the policy-generated human prompt after its kind/reason are
+/// fully derived. The original tool request remains foldable immediately;
+/// only the prompt and waiting state are held while the asynchronous judge
+/// runs.
+fn gate_processing_approval(session_id: SessionId, events: &mut Vec<ProviderEvent>) {
+    gate_processing_approval_with(events, |candidate| {
+        start_approval_gate(session_id, candidate)
+    });
+}
+
+fn gate_processing_approval_with(
+    events: &mut Vec<ProviderEvent>,
+    start_gate: impl FnOnce(ApprovalCandidate) -> ApprovalGate,
+) {
+    let request = events.iter().find_map(|event| match &event.event {
+        Event::ToolCallRequested(request) => Some(request.clone()),
+        _ => None,
+    });
+    let approval = events.iter().find_map(|event| match &event.event {
+        Event::ApprovalRequested(approval) => Some(approval.clone()),
+        _ => None,
+    });
+    let (Some(request), Some(approval)) = (request, approval) else {
+        return;
+    };
+    let call_id = approval.call_id.clone();
+    let candidate = ApprovalCandidate { request, approval };
+    if matches!(start_gate(candidate), ApprovalGate::Pending) {
+        events.retain(|event| {
+            !matches!(
+                &event.event,
+                Event::ApprovalRequested(approval) if approval.call_id == call_id
+            ) && !matches!(
+                &event.event,
+                Event::StateChanged(SessionState::WaitingForApproval)
+            )
+        });
     }
 }
 
@@ -1315,6 +1355,9 @@ fn fold_tool_completion(
     completion: ToolCompletion,
 ) {
     match completion {
+        ToolCompletion::ApprovalJudged(judgment) => {
+            fold_approval_judgment(state, live_state, commands_tx, session_id, judgment)
+        }
         ToolCompletion::Finished(result) => {
             fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
         }
@@ -1331,6 +1374,75 @@ fn fold_tool_completion(
             denials,
             result,
         } => fold_filesystem_denied(state, live_state, session_id, call_id, denials, result),
+    }
+}
+
+fn fold_approval_judgment(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    commands_tx: &Sender<Command>,
+    session_id: SessionId,
+    judgment: horizon_agent::tools::ApprovalJudgment,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &judgment.candidate.request.call_id)
+        || frame.has_tool_call_started(&judgment.candidate.request.call_id)
+    {
+        return;
+    }
+    if frame
+        .actionable_pending_approval_call_ids()
+        .contains(&judgment.candidate.request.call_id)
+    {
+        // A duplicate/stale verdict must not duplicate a prompt or overturn
+        // a verdict that has already escalated to the human.
+        return;
+    }
+    match judgment.decision {
+        JudgeDecision::AutoApprove => {
+            let logged_call_id = judgment.candidate.request.call_id.clone();
+            let outcome = resolve_auto_approval(&frame, session_id, &judgment.candidate);
+            forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
+        }
+        JudgeDecision::Escalate => {
+            emit_human_approval(state, live_state, session_id, judgment.candidate.approval);
+        }
+    }
+}
+
+fn emit_human_approval(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    approval: ApprovalRequest,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &approval.call_id) {
+        return;
+    }
+    let events = vec![
+        Event::ApprovalRequested(approval),
+        Event::StateChanged(SessionState::WaitingForApproval),
+    ];
+    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
+    for event in events {
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
+    }
+}
+
+fn begin_reissued_approval(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    request: horizon_agent::contract::ToolCallRequest,
+    approval: ApprovalRequest,
+) {
+    let request_event = Event::ToolCallRequested(request.clone());
+    let _ = live_state.extend_provider_events(std::iter::once(request_event.clone().into()));
+    send_session_event(state, session_id, AgentWireEvent::Event(request_event));
+    let candidate = ApprovalCandidate { request, approval };
+    if let ApprovalGate::Human(candidate) = start_approval_gate(session_id, candidate) {
+        emit_human_approval(state, live_state, session_id, candidate.approval);
     }
 }
 
@@ -1440,22 +1552,20 @@ fn fold_domain_denied(
         original_request.tool_id,
         if domains.len() == 1 { "it" } else { "them" }
     );
-    let events = vec![
-        Event::ToolCallRequested(original_request),
-        Event::ApprovalRequested(ApprovalRequest {
+    begin_reissued_approval(
+        state,
+        live_state,
+        session_id,
+        original_request,
+        ApprovalRequest {
             call_id,
             reason,
             kind: ApprovalKind::DomainDenialRetry {
                 domains,
                 prior_result: result,
             },
-        }),
-        Event::StateChanged(SessionState::WaitingForApproval),
-    ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+        },
+    );
 }
 
 fn fold_domain_grant_required(
@@ -1472,11 +1582,6 @@ fn fold_domain_grant_required(
     let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
         return;
     };
-    horizon_agent::tools::maybe_fire_shadow_domain_judge(
-        session_id,
-        &original_request,
-        domains.clone(),
-    );
     let domain_list = domains.join(", ");
     let reason = format!(
         "`{}` needs to contact {domain_list}, but no request was sent to that domain. Allow {} \
@@ -1484,19 +1589,17 @@ fn fold_domain_grant_required(
         original_request.tool_id,
         if domains.len() == 1 { "it" } else { "them" }
     );
-    let events = vec![
-        Event::ToolCallRequested(original_request),
-        Event::ApprovalRequested(ApprovalRequest {
+    begin_reissued_approval(
+        state,
+        live_state,
+        session_id,
+        original_request,
+        ApprovalRequest {
             call_id,
             reason,
             kind: ApprovalKind::DomainGrant { domains },
-        }),
-        Event::StateChanged(SessionState::WaitingForApproval),
-    ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+        },
+    );
 }
 
 fn fold_filesystem_denied(
@@ -1514,11 +1617,6 @@ fn fold_filesystem_denied(
     let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
         return;
     };
-    horizon_agent::tools::maybe_fire_shadow_filesystem_judge(
-        session_id,
-        &original_request,
-        &denials,
-    );
     let reason = denials
         .iter()
         .map(|denial| {
@@ -1532,9 +1630,12 @@ fn fold_filesystem_denied(
         })
         .collect::<Vec<_>>()
         .join("; ");
-    let events = vec![
-        Event::ToolCallRequested(original_request),
-        Event::ApprovalRequested(ApprovalRequest {
+    begin_reissued_approval(
+        state,
+        live_state,
+        session_id,
+        original_request,
+        ApprovalRequest {
             call_id,
             reason: format!(
                 "`bash` crossed the filesystem sandbox boundary: {reason}. \
@@ -1544,13 +1645,8 @@ fn fold_filesystem_denied(
                 denials,
                 prior_result: result,
             },
-        }),
-        Event::StateChanged(SessionState::WaitingForApproval),
-    ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+        },
+    );
 }
 
 /// A `Command` envelope arriving from Horizon for this session.
@@ -1602,7 +1698,18 @@ fn resolve_and_forward(
     // `AlreadyResolved` arm below can still name it in its log line.
     let logged_call_id = call_id.clone();
     let frame = live_state.frame();
-    match resolve_approval(&frame, session_id, call_id, decision) {
+    let outcome = resolve_approval(&frame, session_id, call_id, decision);
+    forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
+}
+
+fn forward_approval_outcome(
+    state: &Arc<SessiondState>,
+    commands_tx: &Sender<Command>,
+    session_id: SessionId,
+    logged_call_id: ToolCallId,
+    outcome: ApprovalOutcome,
+) {
+    match outcome {
         ApprovalOutcome::Executed {
             events, command, ..
         } => {
@@ -1640,6 +1747,36 @@ fn resolve_and_forward(
 mod tests {
     use super::*;
     use horizon_agent::contract::Exit;
+
+    fn judge_test_state() -> Arc<SessiondState> {
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ))
+    }
+
+    fn judge_candidate(call_id: &str) -> ApprovalCandidate {
+        let request = horizon_agent::contract::ToolCallRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            tool_id: "mock.approval_required".to_string(),
+            input: serde_json::json!({}).into(),
+        };
+        ApprovalCandidate {
+            approval: ApprovalRequest {
+                call_id: request.call_id.clone(),
+                reason: "test approval".to_string(),
+                kind: ApprovalKind::Standard,
+            },
+            request,
+        }
+    }
 
     /// A session whose log ends in `SessionState::Terminated` (the state
     /// `rig`'s `Command::Shutdown` path sends, with no accompanying
@@ -1943,6 +2080,157 @@ mod tests {
             Some(&Event::StateChanged(SessionState::WaitingForApproval))
         );
         assert!(commands_rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn gate_suppresses_prompt_while_pending_and_preserves_human_fallback() {
+        let candidate = judge_candidate("gate-shape");
+        let original = vec![
+            ProviderEvent::from(Event::ToolCallRequested(candidate.request.clone())),
+            ProviderEvent::from(Event::ApprovalRequested(candidate.approval.clone())),
+            ProviderEvent::from(Event::StateChanged(SessionState::WaitingForApproval)),
+        ];
+
+        let mut pending = original.clone();
+        gate_processing_approval_with(&mut pending, |observed| {
+            assert_eq!(observed, candidate);
+            ApprovalGate::Pending
+        });
+        assert_eq!(pending.len(), 1);
+        assert!(matches!(pending[0].event, Event::ToolCallRequested(_)));
+
+        let mut human = original.clone();
+        gate_processing_approval_with(&mut human, |candidate| {
+            ApprovalGate::Human(Box::new(candidate))
+        });
+        assert_eq!(human, original);
+    }
+
+    #[test]
+    fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
+        let state = judge_test_state();
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let candidate = judge_candidate("judge-auto");
+        live_state.extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(candidate.request.clone()).into(),
+        ));
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_approval_judgment(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            horizon_agent::tools::ApprovalJudgment {
+                candidate: candidate.clone(),
+                decision: JudgeDecision::AutoApprove,
+            },
+        );
+
+        assert!(matches!(
+            commands_rx.try_recv(),
+            Ok(Command::ApproveToolCall { call_id }) if call_id == candidate.request.call_id
+        ));
+        assert!(drain_events(&mut outgoing_rx).is_empty());
+        assert!(live_state
+            .frame()
+            .actionable_pending_approval_call_ids()
+            .is_empty());
+    }
+
+    #[test]
+    fn late_or_started_verdict_is_ignored() {
+        for terminal_event in [
+            Event::ToolCallStarted(ToolCallId("judge-stale".to_string())),
+            Event::ToolCallFinished(ToolCallResult::new(
+                ToolCallId("judge-stale".to_string()),
+                serde_json::json!({ "cancelled": true }),
+            )),
+        ] {
+            let state = judge_test_state();
+            let live_state = LiveState::with_disabled_persistence();
+            let session_id = SessionId::new();
+            let connection = Connection::new(state.clone());
+            let mut outgoing_rx = connection.subscribe_agent(session_id);
+            let candidate = judge_candidate("judge-stale");
+            live_state.extend_provider_events(
+                [
+                    Event::ToolCallRequested(candidate.request.clone()),
+                    terminal_event,
+                ]
+                .into_iter()
+                .map(Into::into),
+            );
+            let (commands_tx, commands_rx) = unbounded::<Command>();
+
+            fold_approval_judgment(
+                &state,
+                &live_state,
+                &commands_tx,
+                session_id,
+                horizon_agent::tools::ApprovalJudgment {
+                    candidate,
+                    decision: JudgeDecision::Escalate,
+                },
+            );
+
+            assert!(commands_rx.try_recv().is_err());
+            assert!(drain_events(&mut outgoing_rx).is_empty());
+        }
+    }
+
+    #[test]
+    fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ));
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let request = horizon_agent::contract::ToolCallRequest {
+            call_id: ToolCallId("duplicate-judge".to_string()),
+            tool_id: "mock.approval_required".to_string(),
+            input: serde_json::json!({}).into(),
+        };
+        live_state.extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ));
+        let judgment = horizon_agent::tools::ApprovalJudgment {
+            candidate: ApprovalCandidate {
+                approval: ApprovalRequest {
+                    call_id: request.call_id.clone(),
+                    reason: "ask once".to_string(),
+                    kind: ApprovalKind::Standard,
+                },
+                request,
+            },
+            decision: JudgeDecision::Escalate,
+        };
+        let (commands_tx, _commands_rx) = unbounded::<Command>();
+
+        fold_approval_judgment(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            judgment.clone(),
+        );
+        assert_eq!(drain_events(&mut outgoing_rx).len(), 2);
+
+        fold_approval_judgment(&state, &live_state, &commands_tx, session_id, judgment);
+        assert!(drain_events(&mut outgoing_rx).is_empty());
     }
 
     #[test]

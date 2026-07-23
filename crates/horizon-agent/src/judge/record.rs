@@ -1,22 +1,6 @@
-//! The shadow-mode calibration record: a lightweight, `call_id`-keyed diagnostic
-//! logged for every judged (or rate-limit-skipped) boundary-crossing call, so
-//! it can later be correlated against the human's real approve/deny decision
-//! for that same call -- the ground-truth label the calibration protocol
-//! needs (`docs/research/agent-approval-judge-prompt-2026-07-19.md`'s
-//! "Calibration protocol").
-//!
-//! **Deliberately not the pinned enforcing-mode audit shape.**
-//! `docs/agent-approval-design.md`'s "Judge design" pins the verdict riding
-//! the gated tool call's own `output` JSON (the `is_error`-style additive
-//! convention) -- that only works once the judge's verdict *is* the result.
-//! In shadow mode the real result is produced later, by the human's
-//! decision, not by the judge, so there is no tool-result JSON for the
-//! verdict to ride yet. This module instead writes a standalone record
-//! through the same event log/DuckDB projection pipeline every other agent
-//! event goes through, so it's durable (survives a DuckDB rebuild from the
-//! JSONL log, unlike a table populated only at insert time) and
-//! `json_extract`-queryable the same way (`agent-inspect`'s own way of
-//! reading `output_json`/`provider_payload_json` columns).
+//! Durable, `call_id`-keyed enforcing-judge audit records. They use the same
+//! event log/DuckDB projection pipeline as agent events, so they survive a
+//! projection rebuild and remain JSON-queryable.
 //!
 //! **Why this rides `Event::ProviderRequestFinished`.** Horizon's `Event`
 //! enum is closed and adding a variant for this ripples across four
@@ -33,7 +17,7 @@
 //! one place that matters -- `agent_events.provider_payload_json`, a
 //! free-form JSON column already unconditionally stored regardless of the
 //! `Event` variant. `event_kind` is overridden to a distinct string
-//! (`SHADOW_VERDICT_EVENT_KIND`) rather than the derived
+//! (`JUDGE_VERDICT_EVENT_KIND`) rather than the derived
 //! `"provider_request_finished"`, so a query can filter on it directly.
 use uuid::Uuid;
 
@@ -42,13 +26,15 @@ use crate::persistence::event_log::{
     Record, WriterHandle, AGENT_EVENT_LOG_SCHEMA, AGENT_EVENT_LOG_VERSION,
 };
 
-use super::{JudgeDecision, JudgeInput, JudgeVerdict};
+use super::{JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};
 
-/// The `agent_events.event_kind` label every shadow-judge record (verdict or
-/// skipped) carries -- e.g. `SELECT * FROM agent_events WHERE event_kind =
-/// 'judge_shadow_verdict'`, then `json_extract(provider_payload_json, '$.judge_decision')`
-/// etc. over the matched rows.
-pub const SHADOW_VERDICT_EVENT_KIND: &str = "judge_shadow_verdict";
+/// Current enforcing-mode event label.
+pub const JUDGE_VERDICT_EVENT_KIND: &str = "judge_verdict";
+/// Historical label retained so existing persisted logs and queries remain
+/// intelligible after the enforcing-mode rename.
+pub const LEGACY_SHADOW_VERDICT_EVENT_KIND: &str = "judge_shadow_verdict";
+#[deprecated(note = "new enforcing records use JUDGE_VERDICT_EVENT_KIND")]
+pub const SHADOW_VERDICT_EVENT_KIND: &str = LEGACY_SHADOW_VERDICT_EVENT_KIND;
 
 /// Writes one real verdict's calibration record.
 pub(super) fn write_verdict(
@@ -63,9 +49,11 @@ pub(super) fn write_verdict(
         "call_id": input.call_id,
         "tool_id": input.tool_id,
         "judge_model": model,
+        "mode": "enforcing",
         "judge_decision": decision_label(verdict.decision),
         "judge_stage": verdict.stage,
         "judge_confidence": verdict.confidence,
+        "fallback_reason": verdict.fallback_reason.map(fallback_reason_label),
         "latency_ms": latency_ms,
         "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
@@ -74,8 +62,8 @@ pub(super) fn write_verdict(
 }
 
 /// Writes a record for a call the rate limiter skipped -- never reached the
-/// model at all, so there is no decision/stage/confidence/latency to
-/// report, only that this `call_id` went unjudged and why.
+/// model at all. It records the enforced fail-closed escalation and why,
+/// with no model stage/confidence/latency.
 pub(super) fn write_skipped(
     writer: &WriterHandle,
     session_id: SessionId,
@@ -87,6 +75,9 @@ pub(super) fn write_skipped(
         "call_id": input.call_id,
         "tool_id": input.tool_id,
         "judge_model": model,
+        "mode": "enforcing",
+        "judge_decision": "escalate",
+        "fallback_reason": reason,
         "skipped_reason": reason,
         "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
@@ -101,6 +92,14 @@ fn decision_label(decision: JudgeDecision) -> &'static str {
     }
 }
 
+fn fallback_reason_label(reason: JudgeFallbackReason) -> &'static str {
+    match reason {
+        JudgeFallbackReason::ClientError => "client_error",
+        JudgeFallbackReason::Unparseable => "unparseable",
+        JudgeFallbackReason::Timeout => "timeout",
+    }
+}
+
 fn append(writer: &WriterHandle, session_id: SessionId, payload: serde_json::Value) {
     let record = Record {
         schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
@@ -112,7 +111,7 @@ fn append(writer: &WriterHandle, session_id: SessionId, payload: serde_json::Val
         provider_id: None,
         role_id: None,
         session_context: None,
-        event_kind: SHADOW_VERDICT_EVENT_KIND.to_string(),
+        event_kind: JUDGE_VERDICT_EVENT_KIND.to_string(),
         event: Event::ProviderRequestFinished,
         provider_payload: Some(payload),
         created_at_unix_ms: unix_time_ms(),
@@ -173,6 +172,7 @@ mod tests {
                 decision: JudgeDecision::Escalate,
                 stage: 2,
                 confidence: None,
+                fallback_reason: None,
             },
             512,
         );
@@ -181,7 +181,7 @@ mod tests {
         let report = event_log::read(&path).expect("read");
         assert_eq!(report.records.len(), 1);
         let record = &report.records[0];
-        assert_eq!(record.event_kind, SHADOW_VERDICT_EVENT_KIND);
+        assert_eq!(record.event_kind, JUDGE_VERDICT_EVENT_KIND);
         assert_eq!(record.event, Event::ProviderRequestFinished);
         let payload = record.provider_payload.as_ref().expect("payload present");
         assert_eq!(payload["call_id"], "call-1");
@@ -189,12 +189,14 @@ mod tests {
         assert_eq!(payload["judge_stage"], 2);
         assert_eq!(payload["judge_confidence"], serde_json::Value::Null);
         assert_eq!(payload["latency_ms"], 512);
+        assert_eq!(payload["mode"], "enforcing");
+        assert_eq!(payload["fallback_reason"], serde_json::Value::Null);
 
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
-    fn write_skipped_records_the_reason_with_no_verdict_fields() {
+    fn write_skipped_records_fail_closed_decision_and_reason() {
         let path = temp_log_path("skipped");
         let (writer, _init_rx) = WriterHandle::open(&path);
         let session_id = SessionId::new();
@@ -216,7 +218,8 @@ mod tests {
             .as_ref()
             .expect("payload");
         assert_eq!(payload["skipped_reason"], "rate_limited");
-        assert_eq!(payload.get("judge_decision"), None);
+        assert_eq!(payload["fallback_reason"], "rate_limited");
+        assert_eq!(payload["judge_decision"], "escalate");
 
         let _ = std::fs::remove_file(path);
     }
@@ -225,7 +228,7 @@ mod tests {
     /// record through the ordinary frame reducer must be a complete no-op,
     /// never a spurious frame item in the session's transcript.
     #[test]
-    fn the_shadow_record_folds_as_a_no_op_into_the_session_frame() {
+    fn the_judge_record_folds_as_a_no_op_into_the_session_frame() {
         let events = vec![Event::ProviderRequestFinished];
         let frame = crate::frame::agent_frame_from_events(&events);
         assert!(frame.items.is_empty());

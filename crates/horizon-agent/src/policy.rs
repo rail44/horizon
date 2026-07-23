@@ -30,9 +30,8 @@ pub(crate) enum Classification {
     /// excluded, see leg 4b's own `DomainDenialRetry` path). No *real*
     /// tool in this crate's catalog is classified this way today (there are
     /// no MCP/external tools wired in yet); `mock.boundary_crossing` is the
-    /// fixture that exercises this classification and the shadow-mode
-    /// judge wiring it drives (`judge::maybe_fire_shadow_judge`) until a
-    /// real boundary-crossing tool exists.
+    /// fixture that exercises this classification until a real
+    /// boundary-crossing tool exists.
     BoundaryCrossing,
     /// Always human (tier 3): irreversible/destructive by policy, or a
     /// contained-eligible tool call whose session isn't isolated / has no
@@ -43,7 +42,7 @@ pub(crate) enum Classification {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum BoundaryDisposition {
     /// The call crosses the host boundary but the owner-selected policy
-    /// permits it without stopping; the shadow judge still records it.
+    /// permits it without creating an approval candidate.
     Auto,
     /// The call must wait for a human decision before contact occurs.
     Human,
@@ -258,7 +257,7 @@ pub(crate) fn annotate_git_operation_approval(output: &mut Value, writable_roots
 pub fn horizon_events_for_provider_event(
     event: &Event,
     tool_state: &ToolSessionState,
-    session_id: SessionId,
+    _session_id: SessionId,
 ) -> Vec<Event> {
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
@@ -317,7 +316,6 @@ pub fn horizon_events_for_provider_event(
                             }));
                             events.push(Event::StateChanged(SessionState::WaitingForApproval));
                         }
-                        crate::judge::maybe_fire_shadow_judge(tool_state, session_id, request);
                     }
                     Classification::AlwaysAsk => {
                         let (reason, kind) = git_operation_approval(tool_state, request)
@@ -336,17 +334,6 @@ pub fn horizon_events_for_provider_event(
                             kind,
                         }));
                         events.push(Event::StateChanged(SessionState::WaitingForApproval));
-                        // Shadow-mode judge (`docs/agent-approval-design.md`'s
-                        // "Judge design", implemented shadow-only per
-                        // `crate::judge`'s module doc): fire-and-forget, after
-                        // the events above are already decided -- this can
-                        // never change what the human sees. Contained and
-                        // AlwaysAsk calls never reach the judge (tier-1
-                        // auto-approve and tier-3 irreversible are not its
-                        // domain); network domain crossings are excluded by
-                        // construction (leg 4b's `DomainDenialRetry` approval
-                        // is emitted from an entirely separate seam in
-                        // `horizon-sessiond`, never through this function).
                     }
                 }
             }
@@ -713,13 +700,8 @@ mod tests {
             .any(|event| matches!(event, Event::ApprovalRequested(_))));
     }
 
-    /// The core shadow-mode guarantee: a `BoundaryCrossing`-classified call
-    /// gets byte-for-byte the same events a plain `AlwaysAsk` call would --
-    /// installing (and firing) a judge handle changes nothing about what
-    /// the human sees. `judge_fires_for_a_boundary_crossing_call_but_not_a_
-    /// contained_one` (in `judge`'s own tests) proves the judge really does
-    /// activate for one and not the other; this test proves that activation
-    /// has zero effect on this function's return value either way.
+    /// Both policy classes derive the same typed candidate shape. Sessiond
+    /// gates that candidate after this pure policy mapping returns.
     #[test]
     fn boundary_crossing_produces_the_same_events_as_always_ask() {
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);

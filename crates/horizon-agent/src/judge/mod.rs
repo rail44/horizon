@@ -1,12 +1,9 @@
 //! The inline LLM "judge" -- `docs/agent-approval-design.md`'s "Judge
 //! design" section and `docs/research/agent-approval-judge-prompt-2026-07-19.md`,
-//! implemented here in **shadow mode only**: this module computes a verdict
-//! on every boundary-crossing tool call and logs it as calibration data
-//! (see [`record`]), but never changes what the human is asked or what
-//! happens to the call -- the enforcing flip (gating the actual approve/
-//! execute decision on the verdict) is explicitly out of scope for this
-//! module and is a separate, later change at
-//! `policy::horizon_events_for_provider_event`'s call site.
+//! implemented here as an asynchronous enforcing gate for every approval
+//! candidate. A safe verdict follows the ordinary approved execution/retry
+//! path without exposing a transient prompt; every failure or escalation
+//! preserves the ordinary human approval path.
 //!
 //! ## Shape
 //!
@@ -23,23 +20,16 @@
 //!   stage's raw text response back into a [`JudgeDecision`] (Plan B: lenient
 //!   parsing, never `logit_bias`); [`client`] is the wire-level mockable
 //!   seam over rig's OpenAI-completions client; [`ratelimit`] is the
-//!   judge-call budget; [`record`] is the shadow-mode calibration record;
+//!   judge-call budget; [`record`] is the durable verdict record;
 //!   [`runtime`] is the dedicated tokio runtime judge calls are spawned
 //!   onto.
 //!
 //! ## Wiring at the seam
 //!
-//! [`maybe_fire_shadow_judge`] is what `policy::horizon_events_for_provider_event`
-//! calls from its `Classification::BoundaryCrossing` arm, after -- never
-//! instead of -- building the ordinary `ApprovalRequested`/`StateChanged`
-//! events every classification already got. It is fire-and-forget: no
-//! return value, no effect on the events the seam returns, so shadow mode
-//! is byte-for-byte unchanged human-facing behavior by construction (see
-//! this crate's `tests.rs`/`policy.rs` tests asserting exactly that).
-//! `Classification::Contained` and `Classification::AlwaysAsk` never reach
-//! this function at all -- tier-1 auto-approved and tier-3
-//! irreversible-by-policy calls are not the judge's domain (`docs/
-//! agent-approval-design.md`'s "Judge at the boundary").
+//! [`start_approval_gate`] is called only after the approval kind and reason
+//! have been derived. It returns immediately: accepted work completes on
+//! the session's normal async-results channel, while unavailable or
+//! rate-limited work falls back to the human prompt synchronously.
 
 mod client;
 mod handle;
@@ -49,12 +39,17 @@ mod ratelimit;
 mod record;
 mod runtime;
 
-use crate::contract::{Message, MessageRole, SessionId, ToolCallRequest};
+use crate::contract::{
+    ApprovalKind, ApprovalRequest, Message, MessageRole, SessionId, ToolCallRequest,
+};
 use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
-pub use record::SHADOW_VERDICT_EVENT_KIND;
+#[allow(deprecated)]
+pub use record::{
+    JUDGE_VERDICT_EVENT_KIND, LEGACY_SHADOW_VERDICT_EVENT_KIND, SHADOW_VERDICT_EVENT_KIND,
+};
 
 use client::{ModelClient, RawCompletionRequest};
 
@@ -68,12 +63,38 @@ pub struct JudgeVerdict {
     pub decision: JudgeDecision,
     pub stage: u8,
     pub confidence: Option<f32>,
+    pub fallback_reason: Option<JudgeFallbackReason>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum JudgeDecision {
     AutoApprove,
     Escalate,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum JudgeFallbackReason {
+    ClientError,
+    Unparseable,
+    Timeout,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalCandidate {
+    pub request: ToolCallRequest,
+    pub approval: ApprovalRequest,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ApprovalJudgment {
+    pub candidate: ApprovalCandidate,
+    pub decision: JudgeDecision,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ApprovalGate {
+    Pending,
+    Human(Box<ApprovalCandidate>),
 }
 
 /// What the judge is allowed to see for one call -- `docs/agent-approval-
@@ -110,9 +131,9 @@ const STAGE2_MAX_TOKENS: u64 = 300;
 
 /// The two-stage cascade: stage 1 (single-token, err-toward-block) decides
 /// on its own if it says "safe" (`N` -> [`JudgeDecision::AutoApprove`]);
-/// anything else (`Y`, or an unparseable response, which defaults to
-/// escalate per Plan B) runs stage 2's chain-of-thought re-evaluation for
-/// the final verdict. Never panics or propagates a network error to the
+/// an explicit `Y` runs stage 2's chain-of-thought re-evaluation. An
+/// unparseable response or client error escalates immediately. Never panics
+/// or propagates a network error to the
 /// caller -- a failed stage always resolves to [`JudgeDecision::Escalate`],
 /// the fail-safe direction (`docs/agent-approval-design.md`'s
 /// "Judge-unreachable is fail-safe").
@@ -124,14 +145,31 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
         additional_params: client::stage1_additional_params(),
     };
     let (stage1_decision, confidence) = match client.complete(model, stage1_request).await {
-        Ok(response) => (
-            parse::parse_stage1(&response.text),
-            response
-                .logprobs
-                .as_ref()
-                .and_then(parse::confidence_from_logprobs),
-        ),
-        Err(_) => (JudgeDecision::Escalate, None),
+        Ok(response) => {
+            let Some(decision) = parse::parse_stage1_result(&response.text) else {
+                return JudgeVerdict {
+                    decision: JudgeDecision::Escalate,
+                    stage: 1,
+                    confidence: None,
+                    fallback_reason: Some(JudgeFallbackReason::Unparseable),
+                };
+            };
+            (
+                decision,
+                response
+                    .logprobs
+                    .as_ref()
+                    .and_then(parse::confidence_from_logprobs),
+            )
+        }
+        Err(_) => {
+            return JudgeVerdict {
+                decision: JudgeDecision::Escalate,
+                stage: 1,
+                confidence: None,
+                fallback_reason: Some(JudgeFallbackReason::ClientError),
+            };
+        }
     };
 
     if let JudgeDecision::AutoApprove = stage1_decision {
@@ -139,6 +177,7 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
             decision: JudgeDecision::AutoApprove,
             stage: 1,
             confidence,
+            fallback_reason: None,
         };
     }
 
@@ -148,90 +187,86 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
         max_tokens: STAGE2_MAX_TOKENS,
         additional_params: client::stage2_additional_params(),
     };
-    let stage2_decision = match client.complete(model, stage2_request).await {
-        Ok(response) => parse::parse_stage2(&response.text),
-        Err(_) => JudgeDecision::Escalate,
+    let (stage2_decision, fallback_reason) = match client.complete(model, stage2_request).await {
+        Ok(response) => match parse::parse_stage2_result(&response.text) {
+            Some(decision) => (decision, None),
+            None => (
+                JudgeDecision::Escalate,
+                Some(JudgeFallbackReason::Unparseable),
+            ),
+        },
+        Err(_) => (
+            JudgeDecision::Escalate,
+            Some(JudgeFallbackReason::ClientError),
+        ),
     };
 
     JudgeVerdict {
         decision: stage2_decision,
         stage: 2,
         confidence: None,
+        fallback_reason,
     }
 }
 
-/// The seam's one call into this module -- see the module doc's "Wiring at
-/// the seam" section. A no-op whenever this session has no installed
-/// [`JudgeHandle`] (no `OPENAI_API_KEY`, or no event-log writer -- see
-/// `JudgeHandle::new`), which is every session in this crate's own test
-/// suite unless a test explicitly installs one.
-pub(crate) fn maybe_fire_shadow_judge(
+/// Starts one enforcing judgment without blocking the session loop.
+/// Missing judge configuration and rate-limit exhaustion preserve the
+/// human approval flow immediately.
+pub(crate) fn start_approval_gate(
     tool_state: &ToolSessionState,
     session_id: SessionId,
-    request: &ToolCallRequest,
-) {
+    candidate: ApprovalCandidate,
+    result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
+) -> ApprovalGate {
     let Some(judge) = tool_state.judge_handle() else {
-        return;
+        return ApprovalGate::Human(Box::new(candidate));
     };
     let prior_user_messages = crate::tools::live_frame_for_session(session_id)
         .map(|frame| prior_user_messages_from_frame(&frame))
         .unwrap_or_default();
-    let requested_domains = if request.tool_id == "web_fetch" {
-        crate::tools::web::domain_grant_from_input(&request.input)
-            .into_iter()
-            .collect()
-    } else {
-        Vec::new()
-    };
-    judge.maybe_fire(
+    let (requested_filesystem_grants, requested_domains) =
+        trusted_approval_context(&candidate.approval.kind);
+    if judge.start(
         session_id,
-        request,
+        candidate.clone(),
         prior_user_messages,
-        Vec::new(),
+        requested_filesystem_grants,
         requested_domains,
-    );
+        result_tx,
+    ) {
+        ApprovalGate::Pending
+    } else {
+        ApprovalGate::Human(Box::new(candidate))
+    }
 }
 
-pub(crate) fn maybe_fire_shadow_filesystem_judge(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &ToolCallRequest,
-    denials: &[horizon_sandbox::FilesystemDenial],
-) {
-    let Some(judge) = tool_state.judge_handle() else {
-        return;
-    };
-    let prior_user_messages = crate::tools::live_frame_for_session(session_id)
-        .map(|frame| prior_user_messages_from_frame(&frame))
-        .unwrap_or_default();
-    judge.maybe_fire(
-        session_id,
-        request,
-        prior_user_messages,
-        denials.iter().map(|denial| denial.grant.clone()).collect(),
-        Vec::new(),
-    );
-}
-
-pub(crate) fn maybe_fire_shadow_domain_judge(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &ToolCallRequest,
-    domains: Vec<String>,
-) {
-    let Some(judge) = tool_state.judge_handle() else {
-        return;
-    };
-    let prior_user_messages = crate::tools::live_frame_for_session(session_id)
-        .map(|frame| prior_user_messages_from_frame(&frame))
-        .unwrap_or_default();
-    judge.maybe_fire(
-        session_id,
-        request,
-        prior_user_messages,
-        Vec::new(),
-        domains,
-    );
+fn trusted_approval_context(
+    kind: &ApprovalKind,
+) -> (Vec<horizon_sandbox::FilesystemGrant>, Vec<String>) {
+    match kind {
+        ApprovalKind::FilesystemDenialRetry { denials, .. } => (
+            denials.iter().map(|denial| denial.grant.clone()).collect(),
+            Vec::new(),
+        ),
+        ApprovalKind::GitOperation { writable_roots } => (
+            writable_roots
+                .iter()
+                .cloned()
+                .map(|path| horizon_sandbox::FilesystemGrant {
+                    path,
+                    access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                    scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                })
+                .collect(),
+            Vec::new(),
+        ),
+        ApprovalKind::DomainGrant { domains } | ApprovalKind::DomainDenialRetry { domains, .. } => {
+            (Vec::new(), domains.clone())
+        }
+        ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry | ApprovalKind::Unknown => {
+            (Vec::new(), Vec::new())
+        }
+    }
 }
 
 /// Prior user messages, oldest first, from a session's live frame -- the
@@ -310,6 +345,20 @@ mod tests {
         }
     }
 
+    struct SlowClient;
+
+    #[async_trait]
+    impl ModelClient for SlowClient {
+        async fn complete(
+            &self,
+            _model: &str,
+            _request: RawCompletionRequest,
+        ) -> anyhow::Result<RawCompletionResponse> {
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            Ok(ScriptedClient::text("N", None))
+        }
+    }
+
     fn input(call_id: &str) -> JudgeInput {
         JudgeInput {
             call_id: call_id.to_string(),
@@ -332,6 +381,7 @@ mod tests {
 
         assert_eq!(verdict.decision, JudgeDecision::AutoApprove);
         assert_eq!(verdict.stage, 1);
+        assert_eq!(verdict.fallback_reason, None);
         assert!((verdict.confidence.unwrap() - 1.0).abs() < 1e-6);
         assert_eq!(
             client.requests.lock().unwrap().len(),
@@ -353,6 +403,7 @@ mod tests {
 
         assert_eq!(verdict.decision, JudgeDecision::AutoApprove);
         assert_eq!(verdict.stage, 2);
+        assert_eq!(verdict.fallback_reason, None);
         assert_eq!(
             verdict.confidence, None,
             "confidence is only ever derived from stage 1's own logprobs"
@@ -361,15 +412,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stage1_unparseable_response_escalates_to_stage2() {
+    async fn explicit_stage2_escalation_is_not_labeled_as_a_fallback() {
         let client = ScriptedClient::new(vec![
-            Ok(ScriptedClient::text("", None)),
+            Ok(ScriptedClient::text("Y", None)),
             Ok(ScriptedClient::text("VERDICT: ESCALATE", None)),
         ]);
-        let verdict = run_judge("syn:small:text", &client, &input("call-3")).await;
+        let verdict = run_judge("syn:small:text", &client, &input("call-explicit")).await;
 
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
         assert_eq!(verdict.stage, 2);
+        assert_eq!(verdict.fallback_reason, None);
+    }
+
+    #[tokio::test]
+    async fn stage1_unparseable_response_escalates_immediately() {
+        let client = ScriptedClient::new(vec![Ok(ScriptedClient::text("", None))]);
+        let verdict = run_judge("syn:small:text", &client, &input("call-3")).await;
+
+        assert_eq!(verdict.decision, JudgeDecision::Escalate);
+        assert_eq!(verdict.stage, 1);
+        assert_eq!(
+            verdict.fallback_reason,
+            Some(JudgeFallbackReason::Unparseable)
+        );
+        assert_eq!(client.requests.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn stage2_unparseable_response_escalates() {
+        let client = ScriptedClient::new(vec![
+            Ok(ScriptedClient::text("Y", None)),
+            Ok(ScriptedClient::text("maybe", None)),
+        ]);
+        let verdict = run_judge("syn:small:text", &client, &input("call-3b")).await;
+
+        assert_eq!(verdict.decision, JudgeDecision::Escalate);
+        assert_eq!(verdict.stage, 2);
+        assert_eq!(
+            verdict.fallback_reason,
+            Some(JudgeFallbackReason::Unparseable)
+        );
         assert_eq!(client.requests.lock().unwrap().len(), 2);
     }
 
@@ -378,9 +460,10 @@ mod tests {
         let client = ScriptedClient::new(vec![Err(anyhow::anyhow!("connection refused"))]);
         let verdict = run_judge("syn:small:text", &client, &input("call-4")).await;
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
+        assert_eq!(verdict.stage, 1);
         assert_eq!(
-            verdict.stage, 2,
-            "a stage-1 failure must still fall through to stage 2"
+            verdict.fallback_reason,
+            Some(JudgeFallbackReason::ClientError)
         );
 
         let client = ScriptedClient::new(vec![
@@ -389,6 +472,10 @@ mod tests {
         ]);
         let verdict = run_judge("syn:small:text", &client, &input("call-5")).await;
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
+        assert_eq!(
+            verdict.fallback_reason,
+            Some(JudgeFallbackReason::ClientError)
+        );
     }
 
     #[tokio::test]
@@ -452,29 +539,48 @@ mod tests {
         assert_eq!(builtin_tool_description("not.a.real.tool"), None);
     }
 
-    // --- seam integration: shadow mode changes nothing the human sees -----
+    #[test]
+    fn trusted_context_covers_git_filesystem_and_domain_candidates() {
+        let root = std::env::temp_dir().join("judge-git-root");
+        let (grants, domains) = trusted_approval_context(&ApprovalKind::GitOperation {
+            writable_roots: vec![root.clone()],
+        });
+        assert_eq!(domains, Vec::<String>::new());
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].path, root);
+        assert_eq!(
+            grants[0].access,
+            horizon_sandbox::FilesystemGrantAccess::ReadWrite
+        );
 
-    /// A fake [`ModelClient`] that always resolves quickly (a bare `N`,
-    /// stage 1 only) and counts how many times it was called -- used to
-    /// prove the seam actually fires (or doesn't) without ever touching the
-    /// network or needing to script specific verdicts.
-    struct CountingClient {
-        calls: Arc<Mutex<usize>>,
-    }
+        let denial = horizon_sandbox::FilesystemDenial {
+            attempted_path: std::env::temp_dir().join("attempted"),
+            grant: horizon_sandbox::FilesystemGrant {
+                path: std::env::temp_dir().join("approved"),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::File,
+            },
+        };
+        let (grants, domains) = trusted_approval_context(&ApprovalKind::FilesystemDenialRetry {
+            denials: vec![denial.clone()],
+            prior_result: crate::contract::ToolCallResult::new(
+                crate::contract::ToolCallId("call-context".to_string()),
+                serde_json::json!({}),
+            ),
+        });
+        assert_eq!(grants, vec![denial.grant]);
+        assert!(domains.is_empty());
 
-    #[async_trait]
-    impl ModelClient for CountingClient {
-        async fn complete(
-            &self,
-            _model: &str,
-            _request: RawCompletionRequest,
-        ) -> anyhow::Result<RawCompletionResponse> {
-            *self.calls.lock().unwrap() += 1;
-            Ok(RawCompletionResponse {
-                text: "N".to_string(),
-                logprobs: None,
-            })
-        }
+        let expected_domains = vec!["example.com".to_string()];
+        let (grants, domains) = trusted_approval_context(&ApprovalKind::DomainDenialRetry {
+            domains: expected_domains.clone(),
+            prior_result: crate::contract::ToolCallResult::new(
+                crate::contract::ToolCallId("call-domain".to_string()),
+                serde_json::json!({}),
+            ),
+        });
+        assert!(grants.is_empty());
+        assert_eq!(domains, expected_domains);
     }
 
     fn temp_event_log(label: &str) -> std::path::PathBuf {
@@ -484,138 +590,171 @@ mod tests {
         ))
     }
 
-    fn tool_call_requested(tool_id: &str) -> crate::contract::Event {
-        tool_call_requested_with_input(tool_id, serde_json::json!({}))
-    }
-
-    fn tool_call_requested_with_input(
-        tool_id: &str,
-        input: serde_json::Value,
-    ) -> crate::contract::Event {
-        crate::contract::Event::ToolCallRequested(crate::contract::ToolCallRequest {
+    fn candidate(kind: ApprovalKind) -> ApprovalCandidate {
+        let request = ToolCallRequest {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
-            tool_id: tool_id.to_string(),
-            input: input.into(),
-        })
-    }
-
-    /// Polls for `predicate` to become true, up to a short bound -- the
-    /// judge fires fire-and-forget onto its own background runtime
-    /// (`runtime::runtime`), so a test observing its effect can't just read
-    /// synchronously after calling the seam.
-    fn wait_until(mut predicate: impl FnMut() -> bool) {
-        for _ in 0..200 {
-            if predicate() {
-                return;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            tool_id: "mock.approval_required".to_string(),
+            input: serde_json::json!({}).into(),
+        };
+        ApprovalCandidate {
+            approval: ApprovalRequest {
+                call_id: request.call_id.clone(),
+                reason: "test approval".to_string(),
+                kind,
+            },
+            request,
         }
-        panic!("condition did not become true within the test's wait budget");
     }
 
     #[test]
-    fn seam_fires_the_judge_for_a_boundary_crossing_call_but_not_a_contained_one() {
-        let path = temp_event_log("fires");
+    fn enforcing_gate_returns_pending_then_delivers_auto_approval() {
+        let path = temp_event_log("auto");
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let calls = Arc::new(Mutex::new(0usize));
-        let client: Arc<dyn ModelClient> = Arc::new(CountingClient {
-            calls: Arc::clone(&calls),
-        });
-        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-
-        let tool_state = ToolSessionState::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .with_judge(Some(judge));
-        let session_id = SessionId::new();
-
-        // Contained: an isolated `fs.write` never reaches `RequireApproval`'s
-        // classification branch at all (tier-1 auto-execute), so the judge
-        // must never fire for it.
-        let _ = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested("fs.write"),
-            &tool_state,
-            session_id,
-        );
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(
-            *calls.lock().unwrap(),
-            0,
-            "a Contained call must never fire the judge"
-        );
-
-        // BoundaryCrossing: the judge must fire exactly once.
-        let _ = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested("mock.boundary_crossing"),
-            &tool_state,
-            session_id,
-        );
-        wait_until(|| *calls.lock().unwrap() == 1);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    /// The other half of the shadow-mode guarantee, at the real seam this
-    /// time (not just the pure event-shape comparison in `policy`'s own
-    /// tests): installing *and firing* a real (fake-backed) judge produces
-    /// byte-for-byte the same events as having no judge installed at all.
-    #[test]
-    fn a_firing_judge_changes_nothing_about_the_returned_events() {
-        let path = temp_event_log("unchanged");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let client: Arc<dyn ModelClient> = Arc::new(CountingClient {
-            calls: Arc::new(Mutex::new(0)),
-        });
-        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-
-        let with_judge = ToolSessionState::new(std::env::temp_dir())
-            .with_isolated_worktree(true)
-            .with_judge(Some(judge));
-        let without_judge =
-            ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
-        let session_id = SessionId::new();
-
-        let events_with_judge = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested("mock.boundary_crossing"),
-            &with_judge,
-            session_id,
-        );
-        let events_without_judge = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested("mock.boundary_crossing"),
-            &without_judge,
-            session_id,
-        );
-
-        assert_eq!(events_with_judge, events_without_judge);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    #[test]
-    fn web_search_has_no_human_prompt_and_fires_the_shadow_judge_once() {
-        let path = temp_event_log("web-search");
-        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
-        let calls = Arc::new(Mutex::new(0usize));
-        let client: Arc<dyn ModelClient> = Arc::new(CountingClient {
-            calls: Arc::clone(&calls),
-        });
+        let client: Arc<dyn ModelClient> = Arc::new(ScriptedClient::new(vec![Ok(
+            ScriptedClient::text("N", None),
+        )]));
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
-
-        let events = crate::policy::horizon_events_for_provider_event(
-            &tool_call_requested_with_input(
-                "web_search",
-                serde_json::json!({ "query": "rust agents" }),
-            ),
-            &tool_state,
-            SessionId::new(),
+        let session_id = SessionId::new();
+        let expected = candidate(ApprovalKind::Standard);
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, session_id, expected.clone(), tx,),
+            ApprovalGate::Pending
         );
+        let completion = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("judge completion");
+        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = completion else {
+            panic!("unexpected completion");
+        };
+        assert_eq!(
+            judgment,
+            ApprovalJudgment {
+                candidate: expected,
+                decision: JudgeDecision::AutoApprove,
+            }
+        );
+        let _ = std::fs::remove_file(path);
+    }
 
-        assert!(!events
-            .iter()
-            .any(|event| matches!(event, crate::contract::Event::ApprovalRequested(_))));
-        wait_until(|| *calls.lock().unwrap() == 1);
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        assert_eq!(*calls.lock().unwrap(), 1);
+    #[test]
+    fn enforcing_gate_delivers_escalation_on_model_error() {
+        let path = temp_event_log("error");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let client: Arc<dyn ModelClient> = Arc::new(ScriptedClient::new(vec![Err(
+            anyhow::anyhow!("connection refused"),
+        )]));
+        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(
+                &tool_state,
+                SessionId::new(),
+                candidate(ApprovalKind::Standard),
+                tx,
+            ),
+            ApprovalGate::Pending
+        );
+        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("judge completion")
+        else {
+            panic!("unexpected completion");
+        };
+        assert_eq!(judgment.decision, JudgeDecision::Escalate);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn missing_judge_preserves_the_human_candidate_immediately() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let expected = candidate(ApprovalKind::Unknown);
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, SessionId::new(), expected.clone(), tx,),
+            ApprovalGate::Human(Box::new(expected))
+        );
+    }
+
+    #[test]
+    fn timeout_delivers_fail_closed_escalation() {
+        let path = temp_event_log("timeout");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let judge = JudgeHandle::for_test_with_limits(
+            "test-judge-model",
+            Arc::new(SlowClient),
+            writer.clone(),
+            std::time::Duration::from_millis(5),
+            10.0,
+            5.0,
+        );
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(
+                &tool_state,
+                SessionId::new(),
+                candidate(ApprovalKind::DomainGrant {
+                    domains: vec!["example.com".to_string()],
+                }),
+                tx,
+            ),
+            ApprovalGate::Pending
+        );
+        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("timeout completion")
+        else {
+            panic!("unexpected completion");
+        };
+        assert_eq!(judgment.decision, JudgeDecision::Escalate);
+        writer.flush().expect("flush timeout audit");
+        let report = crate::persistence::event_log::read(&path).expect("read timeout audit");
+        let payload = report.records[0]
+            .provider_payload
+            .as_ref()
+            .expect("timeout payload");
+        assert_eq!(payload["fallback_reason"], "timeout");
+        assert_eq!(payload["judge_decision"], "escalate");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn rate_limit_exhaustion_preserves_human_flow_immediately() {
+        let path = temp_event_log("rate");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let judge = JudgeHandle::for_test_with_limits(
+            "test-judge-model",
+            Arc::new(SlowClient),
+            writer.clone(),
+            std::time::Duration::from_secs(1),
+            0.0,
+            0.0,
+        );
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let expected = candidate(ApprovalKind::FilesystemDenialRetry {
+            denials: Vec::new(),
+            prior_result: crate::contract::ToolCallResult::new(
+                crate::contract::ToolCallId("call-1".to_string()),
+                serde_json::json!({}),
+            ),
+        });
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, SessionId::new(), expected.clone(), tx,),
+            ApprovalGate::Human(Box::new(expected))
+        );
+        assert!(rx.try_recv().is_err());
+        writer.flush().expect("flush rate-limit audit");
+        let report = crate::persistence::event_log::read(&path).expect("read rate-limit audit");
+        let payload = report.records[0]
+            .provider_payload
+            .as_ref()
+            .expect("rate-limit payload");
+        assert_eq!(payload["fallback_reason"], "rate_limited");
+        assert_eq!(payload["judge_decision"], "escalate");
         let _ = std::fs::remove_file(path);
     }
 }

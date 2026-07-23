@@ -10,7 +10,7 @@ mod recall;
 mod state;
 pub(crate) mod web;
 
-pub use approval::{resolve_approval, ApprovalDecision, ApprovalOutcome};
+pub use approval::{resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome};
 pub(crate) use bash::{metadata_writable_roots, requires_metadata_write};
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
@@ -32,39 +32,28 @@ pub use processing::process_agent_provider_event;
 pub use state::{
     register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
 };
-// Narrow, crate-internal-only read for `judge::maybe_fire_shadow_judge` --
+// Narrow, crate-internal-only read for the approval judge --
 // see `state::live_frame_for_session`'s own doc comment for why this stays
 // `pub(crate)` rather than exposing `SessionRuntime` itself.
 pub(crate) use state::live_frame_for_session;
 
-/// Fires the existing shadow judge for a trusted, supervisor-derived
-/// filesystem grant request. It remains diagnostic only; the human approval
-/// path is unchanged.
-pub fn maybe_fire_shadow_filesystem_judge(
+pub use crate::judge::{ApprovalCandidate, ApprovalGate, ApprovalJudgment, JudgeDecision};
+
+/// Starts the enforcing approval gate for a fully-derived candidate.
+/// Missing runtime/judge configuration fails closed to the human path.
+pub fn start_approval_gate(
     session_id: crate::contract::SessionId,
-    request: &crate::contract::ToolCallRequest,
-    denials: &[horizon_sandbox::FilesystemDenial],
-) {
+    candidate: ApprovalCandidate,
+) -> ApprovalGate {
     let Some(runtime) = state::session_runtime(session_id) else {
-        return;
+        return ApprovalGate::Human(Box::new(candidate));
     };
-    crate::judge::maybe_fire_shadow_filesystem_judge(
+    crate::judge::start_approval_gate(
         &runtime.tool_state,
         session_id,
-        request,
-        denials,
-    );
-}
-
-pub fn maybe_fire_shadow_domain_judge(
-    session_id: crate::contract::SessionId,
-    request: &crate::contract::ToolCallRequest,
-    domains: Vec<String>,
-) {
-    let Some(runtime) = state::session_runtime(session_id) else {
-        return;
-    };
-    crate::judge::maybe_fire_shadow_domain_judge(&runtime.tool_state, session_id, request, domains);
+        candidate,
+        runtime.async_results.clone(),
+    )
 }
 
 /// Executes a Horizon-approved (`RequireApproval`) tool once the user has

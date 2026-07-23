@@ -546,6 +546,19 @@
             "TurnEnded"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Exact token usage the provider reported for the most recent completed\nrequest. This is a durable inspection record, not transcript state;\nit is emitted separately from `ProviderRequestFinished` so providers\nwhich cannot report usage retain the existing lifecycle marker.",
+          "properties": {
+            "ProviderRequestUsage": {
+              "$ref": "#/$defs/ProviderRequestUsage"
+            }
+          },
+          "required": [
+            "ProviderRequestUsage"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -890,6 +903,38 @@
       },
       "required": [
         "model"
+      ],
+      "type": "object"
+    },
+    "ProviderRequestUsage": {
+      "description": "Exact usage reported by a provider for one completion request. The fields\nuse provider-neutral input/output names while retaining separately reported\ncached input for later JSONL or DuckDB inspection.",
+      "properties": {
+        "cached_input_tokens": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "input_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "output_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "total_tokens": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "input_tokens",
+        "output_tokens",
+        "total_tokens"
       ],
       "type": "object"
     },

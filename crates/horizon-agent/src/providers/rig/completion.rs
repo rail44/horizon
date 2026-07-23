@@ -19,7 +19,7 @@ use crate::{
     config::RigAgentConfig,
     contract::{
         Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
-        ProviderRequestSent, ToolCallId, ToolCallResult,
+        ProviderRequestSent, ProviderRequestUsage, ToolCallId, ToolCallResult,
     },
     prompt::{system_prompt, SessionEnvironment},
     tools::{definitions, Definition},
@@ -257,7 +257,10 @@ async fn rig_openai_turn_streaming(
                     tool_call_progress.note_delta(&internal_call_id, &delta);
                 }
             },
-            StreamedAssistantContent::Final(_) => {}
+            StreamedAssistantContent::Final(response) => {
+                let _ = events_tx
+                    .send(provider_request_usage_event_from_openai_final(&response).into());
+            }
         }
     }
 
@@ -302,6 +305,28 @@ async fn rig_openai_turn_streaming(
             failed: false,
         },
     ))
+}
+
+pub(super) fn provider_request_usage_event_from_openai_final(
+    response: &openai::completion::streaming::StreamingCompletionResponse,
+) -> Event {
+    let usage = &response.usage;
+    let input_tokens = saturating_u64(usage.prompt_tokens);
+    let total_tokens = saturating_u64(usage.total_tokens);
+    Event::ProviderRequestUsage(ProviderRequestUsage {
+        input_tokens,
+        output_tokens: total_tokens.saturating_sub(input_tokens),
+        total_tokens,
+        cached_input_tokens: usage
+            .prompt_tokens_details
+            .as_ref()
+            .map(|details| saturating_u64(details.cached_tokens))
+            .unwrap_or_default(),
+    })
+}
+
+fn saturating_u64(value: usize) -> u64 {
+    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// OpenAI defaults this to true, but Horizon also supports configurable

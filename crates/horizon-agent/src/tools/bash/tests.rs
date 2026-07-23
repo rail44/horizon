@@ -24,6 +24,9 @@ fn config() -> BashToolConfig {
 /// message otherwise, rather than every call site pattern-matching by hand.
 fn expect_finished(completion: BashCompletion) -> ToolCallResult {
     match completion {
+        BashCompletion::ApprovalJudged(judgment) => {
+            panic!("expected a finished bash completion, got judge result: {judgment:?}")
+        }
         BashCompletion::Finished(result) => result,
         BashCompletion::DomainDenied {
             call_id, domains, ..

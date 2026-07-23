@@ -341,13 +341,15 @@ product-owned API. Decisions:
   session's audit value is also inferior: verdicts would need id/time
   correlation back to the calls they gated, whereas inline the verdict
   rides the gated call's own record.
-- **Seam**: `policy::horizon_events_for_provider_event`'s
-  `RequireApproval` arm — the single point where `ApprovalRequested`
-  is emitted. The judge gates that emission: auto-approve → the
-  existing approve/execute path; escalate → today's flow unchanged.
-  Non-blocking via a new `select!` arm on the session thread,
-  mirroring the generalized async `ToolCompletion` channel shape (blocking inline would
-  stall `Cancel` handling for the round-trip).
+- **Seam**: every candidate that would otherwise emit
+  `ApprovalRequested`. Policy-generated Standard/Git candidates and
+  sessiond-generated filesystem/domain retry candidates enter the same
+  gate only after their typed `ApprovalKind` is fully derived.
+  Auto-approve follows the existing approved execute/retry path without
+  persisting a fake prompt; escalate preserves today's human flow.
+  Completion arrives through the generalized async `ToolCompletion`
+  channel selected alongside provider, inbound (including `Cancel`), and
+  replay traffic.
 - **Input restriction (the injection defense)**: the judge sees only
   prior user messages plus the raw tool-call arguments — no tool
   results, no assistant prose. Both are already available pre-fold at
@@ -378,13 +380,15 @@ product-owned API. Decisions:
   `docs/agent-feedback-design.md`'s non-goals transfers: prefer a different
   model family from the acting agent, and calibrate against a human-labeled
   set before trusting the FNR.
-- **Audit** (owner decision): the verdict rides the tool call's
-  `output` JSON (the `is_error` convention) — zero projection change,
-  immediately `json_extract`-queryable in DuckDB; promote to a
-  `denied`-style additive field on `ToolCallResult` if it needs its
-  own indexed column. A new `Event` variant was considered and
-  rejected (compiler-enforced ripple across event_kind/projection/
-  frame for no added audit value).
+- **Audit**: every verdict and fail-closed skip is a standalone durable
+  JSONL/DuckDB record using the already fold-neutral
+  `ProviderRequestFinished` carrier and event kind `judge_verdict`.
+  Existing `judge_shadow_verdict` records remain readable; the payload's
+  `mode: "enforcing"` distinguishes new records. Additive
+  `fallback_reason` values (`client_error`, `unparseable`, `timeout`, or
+  `rate_limited`) distinguish fail-closed human escalation from an explicit
+  model verdict. No synthetic approval event is persisted for auto-approved
+  calls.
 - **Prerequisite**: a per-*call* trust predicate. Today's
   `ToolPermission` is per-tool-id ("bash always asks"); the tier model
   needs "this bash call is contained / this one crosses the boundary".
@@ -406,7 +410,11 @@ product-owned API. Decisions:
   (registration metadata, not agent prose) — deferred to the judge-prompt
   research (`docs/research/agent-approval-judge-prompt-2026-07-19.md`).
 - **Judge-unreachable is fail-safe** (2026-07-19): a judge call that
-  times out or errors escalates to the human (never auto-approves); the
+  times out (60-second whole-cascade deadline), errors, is rate-limited,
+  or returns an unparseable response escalates to the human (never
+  auto-approves). Sixty seconds accommodates the observed roughly
+  49.4-second slow stage-2 response while still putting a deterministic
+  upper bound on hidden waiting; the
   unreachable rate is recorded in the audit so a judge that is silently
   failing-open-to-human is visible rather than invisibly degrading the
   approval-reduction the judge exists to provide.
@@ -431,16 +439,15 @@ addendum). These are the first production tools classified
 outward (query text / URLs are exfiltration channels), pull untrusted
 content inward, and mutate nothing.
 
-- **`web_search` (Exa REST adapter): auto-approved from day one, with
-  the shadow judge logging a verdict on every call.** Per-call human
+- **`web_search` (Exa REST adapter): policy-auto-approved.** Per-call human
   approval for search exists in no surveyed product (crush and
   opencode run search unapproved — crush gates only its outer
   `agentic_fetch` delegation; Claude Code auto-approves `WebSearch`
   and gates only fetch; Codex/Gemini run provider-side search with no
   per-call prompt): the exfiltration channel is "query string to one
-  fixed vendor," the narrow end of the risk. Suspicious-query
-  detection is the judge's job, reviewed post-hoc from the audit
-  record rather than pre-approved by a human. The API key
+  fixed vendor," the narrow end of the risk. Because enforcing mode judges
+  approval candidates rather than maintaining a side-channel classifier,
+  this policy-auto path does not invoke the judge. The API key
   (`EXA_API_KEY`) is environment-only, per the config rule that
   secrets never come from the file; without it the tool reports
   unconfigured rather than failing cryptically.
@@ -455,14 +462,13 @@ content inward, and mutate nothing.
   surveyed product that gates anything here (Claude Code's per-domain
   fetch prompt). These human decisions are the judge's calibration
   pairs.
-- **After the enforcing flip**, the judge takes over both dispositions
-  (including new-domain fetch decisions). Until then
-  `BoundaryCrossing` carries a per-tool disposition: search = auto +
-  shadow verdict; fetch = allowlist check → human on miss + shadow
-  verdict.
+- **Enforcing mode (landed 2026-07-23)** judges every human candidate,
+  including new-domain fetch decisions. `web_search` remains intentionally
+  auto-approved by its fixed-endpoint policy and therefore creates no
+  approval candidate.
 - **Approval and retry shape.** `BoundaryCrossing` has independent
-  `Auto`/`Human` disposition: both fire the shadow judge, while only Human
-  emits a prompt. Pre-contact fetch approval is the additive
+  `Auto`/`Human` disposition; only Human creates a judge candidate.
+  Pre-contact fetch approval is the additive
   `ApprovalKind::DomainGrant`, distinct from bash's post-attempt
   `DomainDenialRetry`. An unseen redirect host produces a structured async
   `DomainGrantRequired`; sessiond reissues the original call, approval adds
@@ -539,11 +545,11 @@ refactoring wave folds into this item.
    already-computed result. See the "Network is its own layer" bullet's
    "Leg 4b" note for the full shape. A persistent, config-file allowlist
    remains out of scope (this leg's allowlist lives only for the
-   session's lifetime); the judge leg is the only remainder.*
+   session's lifetime).*
    *Filesystem containment-denial correction landed 2026-07-21: the reduced
    nono-derived Linux helper records `openat`/`openat2` denials regardless of
-   command exit status; exact session grants are human-approved, shadow-judged
-   as trusted mediation data, revalidated, and retried sandboxed.*
+   command exit status; exact session grants are judge-gated using trusted
+   mediation data, revalidated, and retried sandboxed.*
    *Network containment correction landed 2026-07-21: active egress now uses
    the session's exact TCP allowlist-proxy endpoint, ordinary HTTP clients get
    standard proxy environment, and Linux runs combined filesystem/network
@@ -556,42 +562,19 @@ refactoring wave folds into this item.
    config key, audit field. Folds in backlog 47 (turn_id-null tracker
    flaw — fix so approval analytics can measure the judge's effect)
    and backlog 48 (identical-edit resubmission feedback).
-   **Shadow mode landed 2026-07-19** (`crates/horizon-agent/src/judge/`):
-   the calibration gate this section's "Prerequisite"/the owner's
-   "don't enforce until FNR is measured on real traffic" decision asks
-   for is realized structurally by shipping shadow-first — the judge
-   runs on every `Classification::BoundaryCrossing` call and logs a
-   verdict, but never gates the actual approve/execute decision; the
-   human still sees `ApprovalRequested` exactly as before (proven by an
-   integration test asserting the returned events are byte-for-byte
-   identical whether or not a firing judge is installed). The enforcing
-   flip (a `select!` arm at this seam that actually waits on the
-   judge and gates execution) is explicitly a separate, later change —
-   not built here. Implementation notes not otherwise in this doc:
-   - **Audit shape differs from this section's own pin.** The verdict
-     riding the gated call's `ToolCallResult.output` JSON only works once
-     the judge's verdict *is* the result; in shadow mode the real result
-     is still produced later, by the human's decision. Instead, each
-     verdict (or rate-limit skip) is a standalone record written straight
-     through `WriterHandle::append` (bypassing `LiveState`/`Appender`,
-     since the async judge call runs off the session's own thread) --
-     riding the already-existing, already-everywhere-a-no-op-on-fold
-     `Event::ProviderRequestFinished` variant with the real payload in
-     `provider_payload` and `event_kind` overridden to
-     `judge::SHADOW_VERDICT_EVENT_KIND` (`"judge_shadow_verdict"`), rather
-     than a new `Event` variant (this doc's "Audit" bullet already
-     rejected one, for the enforcing shape's different reason). Durable
-     through the normal JSONL/DuckDB pipeline (survives a projection
-     rebuild) and `json_extract`-queryable via `agent_events` the same
-     way `agent-inspect` reads any other free-form payload column;
-     confirmed a no-op on frame fold, rig-history replay, and DB
-     projection by inspection, not assumed.
-   - **Production calibration traffic began with web tools.** `web_search`
-     and `web_fetch` are the first real `BoundaryCrossing` classifications;
-     the former auto-runs against one fixed vendor and the latter supplies
-     human labels on exact-host misses. `mock.boundary_crossing` remains only
-     as a transport-free fixture. Non-isolated fs/bash calls remain
-     `AlwaysAsk`, as pinned above.
+   **Enforcing mode landed 2026-07-23** (`crates/horizon-agent/src/judge/`,
+   `crates/horizon-sessiond/src/session.rs`): all typed approval candidates
+   are held behind the asynchronous judge. `AutoApprove` enters the existing
+   approved execute/retry path; explicit escalation, model error, timeout,
+   rate limiting, and unparseable output expose the unchanged human prompt.
+   Stale completions are dropped after cancellation/resolution. Audit records
+   remain standalone and fold-neutral, renamed from the historical
+   `judge_shadow_verdict` to `judge_verdict` with an enforcing-mode marker.
+   - **Production approval traffic includes web tools.** `web_fetch` exact-host
+     misses enter the gate. `web_search` auto-runs against one fixed vendor
+     and creates no candidate. `mock.boundary_crossing` remains a
+     transport-free fixture; non-isolated fs/bash calls are `AlwaysAsk` but
+     now enter the same enforcing gate.
    - **Judge model config**: `syn:small:text` (this section's pin) is a
      Rust constant (`config::DEFAULT_JUDGE_MODEL`), overridable via
      `HORIZON_AGENT_JUDGE_MODEL` -- env-only, mirroring
