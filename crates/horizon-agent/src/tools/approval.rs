@@ -7,7 +7,9 @@ use crate::contract::{
 use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
-use crate::tools::bash::SandboxedApprovalOrigin;
+use crate::tools::bash::{
+    HostExecutionApproval, HostExecutionApprovalSource, SandboxedApprovalOrigin,
+};
 use crate::tools::state::{session_runtime, SessionRuntime};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -95,7 +97,13 @@ pub fn resolve_approval(
     call_id: ToolCallId,
     decision: ApprovalDecision,
 ) -> ApprovalOutcome {
-    if let Some(outcome) = try_execute(frame, session_id, &call_id, &decision) {
+    if let Some(outcome) = try_execute(
+        frame,
+        session_id,
+        &call_id,
+        &decision,
+        HostExecutionApprovalSource::Human,
+    ) {
         return outcome;
     }
 
@@ -142,6 +150,7 @@ pub fn resolve_auto_approval(
             request,
             &ApprovalDecision::Approve,
             candidate.approval.kind.clone(),
+            HostExecutionApprovalSource::Judge,
         )
     } else if request.tool_id == "web_fetch" {
         resolve_web_fetch(
@@ -161,6 +170,7 @@ fn try_execute(
     session_id: SessionId,
     call_id: &ToolCallId,
     decision: &ApprovalDecision,
+    approval_source: HostExecutionApprovalSource,
 ) -> Option<ApprovalOutcome> {
     let request = frame.tool_call_request(call_id)?;
     if !is_horizon_executed_tool(&request.tool_id) {
@@ -188,7 +198,14 @@ fn try_execute(
         // function (approve, deny, a future replay) reads the same source
         // of truth.
         let kind = frame.approval_kind(call_id).unwrap_or_default();
-        resolve_bash(session_id, &runtime, request, decision, kind)
+        resolve_bash(
+            session_id,
+            &runtime,
+            request,
+            decision,
+            kind,
+            approval_source,
+        )
     } else if request.tool_id == "web_fetch" {
         let kind = frame.approval_kind(call_id).unwrap_or_default();
         resolve_web_fetch(session_id, &runtime, request, decision, kind)
@@ -294,17 +311,20 @@ fn resolve_synchronous_tool(
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
 /// but an approve only *starts* the command — see `ApprovalOutcome::
-/// Started`. Domain/filesystem denial retries and the pre-execution
-/// [`ApprovalKind::GitOperation`] grant each keep the rerun sandboxed;
-/// [`ApprovalKind::Standard`] takes the ordinary explicit-approval path.
+/// Started`. Domain-denial retries and pre-execution
+/// [`ApprovalKind::GitOperation`] grants keep the rerun sandboxed.
+/// Filesystem-denial and [`ApprovalKind::Standard`] approvals run only that
+/// call with the host process's ordinary authority.
 /// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed;
-/// new containment denials name a structured narrow grant instead.
+/// new filesystem denials carry observed paths as the approval trigger, not
+/// as a complete bound on the approved execution.
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
     kind: ApprovalKind,
+    approval_source: HostExecutionApprovalSource,
 ) -> ApprovalOutcome {
     match kind {
         ApprovalKind::DomainDenialRetry {
@@ -321,14 +341,17 @@ fn resolve_bash(
         ApprovalKind::FilesystemDenialRetry {
             denials,
             prior_result,
-        } => resolve_filesystem_denial_retry(
-            session_id,
-            runtime,
-            request,
-            decision,
-            denials,
-            prior_result,
-        ),
+        } => {
+            let approval = HostExecutionApproval::new(approval_source, denials);
+            resolve_host_execution_retry(
+                session_id,
+                runtime,
+                request,
+                decision,
+                prior_result,
+                approval,
+            )
+        }
         ApprovalKind::GitOperation { writable_roots } => {
             resolve_git_operation(session_id, runtime, request, decision, writable_roots)
         }
@@ -359,7 +382,9 @@ fn resolve_bash(
             }),
             false,
         ),
-        ApprovalKind::Standard => resolve_standard_bash(session_id, runtime, request, decision),
+        ApprovalKind::Standard => {
+            resolve_standard_bash(session_id, runtime, request, decision, approval_source)
+        }
     }
 }
 
@@ -434,6 +459,7 @@ fn resolve_standard_bash(
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
+    approval_source: HostExecutionApprovalSource,
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
@@ -446,12 +472,13 @@ fn resolve_standard_bash(
                 .live_state
                 .extend_provider_events(events.clone().into_iter().map(Into::into));
 
-            bash::spawn(
+            bash::spawn_approved_host(
                 session_id,
                 call_id,
                 request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
+                HostExecutionApproval::new(approval_source, Vec::new()),
                 runtime.async_results.clone(),
             );
 
@@ -463,15 +490,14 @@ fn resolve_standard_bash(
     }
 }
 
-fn resolve_filesystem_denial_retry(
+fn resolve_host_execution_retry(
     session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
-    denials: Vec<horizon_sandbox::FilesystemDenial>,
     prior_result: ToolCallResult,
+    approval: HostExecutionApproval,
 ) -> ApprovalOutcome {
-    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         let events = vec![Event::ToolCallFinished(prior_result.clone())];
         let frame = runtime
@@ -484,29 +510,14 @@ fn resolve_filesystem_denial_retry(
         };
     }
 
-    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-        let events = vec![Event::ToolCallFinished(prior_result.clone())];
-        let frame = runtime
-            .live_state
-            .extend_provider_events(events.clone().into_iter().map(Into::into));
-        return ApprovalOutcome::Executed {
-            events,
-            frame,
-            command: Command::ToolCallResult(prior_result),
-        };
-    };
-
-    let approved_grants = if runtime
+    // Preserve any still-valid narrow grants as a session-local optimization
+    // for later sandboxed calls. The approval itself authorizes this whole
+    // call, so a stale proposal only prevents persistence; it does not turn
+    // the approved retry back into another incremental-denial loop.
+    let _ = runtime
         .tool_state
-        .approve_filesystem_denials(&denials)
-        .is_ok()
-    {
-        denials.iter().map(|denial| denial.grant.clone()).collect()
-    } else {
-        // The proposal changed after display. Apply nothing and rerun under
-        // the current sandbox so the mediator can produce a fresh proposal.
-        Vec::new()
-    };
+        .approve_filesystem_denials(approval.trigger_denials());
+
     let call_id = request.call_id.clone();
     let events = vec![
         Event::StateChanged(SessionState::ToolRunning),
@@ -515,19 +526,13 @@ fn resolve_filesystem_denial_retry(
     let frame = runtime
         .live_state
         .extend_provider_events(events.clone().into_iter().map(Into::into));
-    bash::spawn_sandboxed(
+    bash::spawn_approved_host(
         session_id,
         call_id,
         request.input.0.clone(),
         runtime.tool_state.bash_cwd_handle(),
         runtime.tool_state.bash_config(),
-        workspace_root.to_path_buf(),
-        runtime.tool_state.network_proxy(),
-        SandboxedApprovalOrigin::ManualFilesystemRetry {
-            grants: approved_grants,
-        },
-        runtime.tool_state.filesystem_grants_snapshot(),
-        git_metadata_roots,
+        approval,
         runtime.async_results.clone(),
     );
     ApprovalOutcome::Started { events, frame }

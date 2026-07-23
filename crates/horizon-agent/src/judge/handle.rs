@@ -15,8 +15,8 @@ use crate::persistence::event_log::WriterHandle;
 use super::client::{ModelClient, RigModelClient};
 use super::ratelimit::RateLimiter;
 use super::{
-    record, run_judge, ApprovalCandidate, ApprovalJudgment, JudgeDecision, JudgeFallbackReason,
-    JudgeInput,
+    record, run_judge, ApprovalCandidate, ApprovalJudgment, JudgeApprovalContext, JudgeDecision,
+    JudgeFallbackReason, JudgeInput,
 };
 
 const JUDGE_TIMEOUT: Duration = Duration::from_secs(60);
@@ -99,8 +99,7 @@ impl JudgeHandle {
         session_id: SessionId,
         candidate: ApprovalCandidate,
         prior_user_messages: Vec<String>,
-        requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
-        requested_domains: Vec<String>,
+        context: JudgeApprovalContext,
         result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
     ) -> bool {
         let request = &candidate.request;
@@ -110,8 +109,9 @@ impl JudgeHandle {
             args: request.input.0.clone(),
             tool_description: super::builtin_tool_description(&request.tool_id),
             prior_user_messages,
-            requested_filesystem_grants,
-            requested_domains,
+            requested_filesystem_grants: context.requested_filesystem_grants,
+            requested_domains: context.requested_domains,
+            host_execution_requested: context.host_execution_requested,
         };
         if !self.limiter.try_acquire() {
             record::write_skipped(

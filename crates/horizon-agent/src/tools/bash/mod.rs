@@ -38,8 +38,8 @@ use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
 use crate::policy::{
-    annotate_auto_approval, annotate_domain_approval, annotate_filesystem_approval,
-    annotate_git_operation_approval, annotate_sandboxed,
+    annotate_auto_approval, annotate_domain_approval, annotate_git_operation_approval,
+    annotate_host_execution_approval, annotate_sandboxed,
 };
 use crate::tools::network::SessionNetworkProxy;
 
@@ -110,11 +110,45 @@ pub(crate) enum SandboxedApprovalOrigin {
     /// decision, carrying the domain(s) they just approved for this
     /// session.
     ManualDomainRetry { domains: Vec<String> },
-    ManualFilesystemRetry {
-        grants: Vec<horizon_sandbox::FilesystemGrant>,
-    },
     /// A human approved the validated Git metadata roots for this call.
     ManualGitOperation,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum HostExecutionApprovalSource {
+    Human,
+    Judge,
+}
+
+impl HostExecutionApprovalSource {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Judge => "judge",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct HostExecutionApproval {
+    source: HostExecutionApprovalSource,
+    trigger_denials: Vec<horizon_sandbox::FilesystemDenial>,
+}
+
+impl HostExecutionApproval {
+    pub(crate) fn new(
+        source: HostExecutionApprovalSource,
+        trigger_denials: Vec<horizon_sandbox::FilesystemDenial>,
+    ) -> Self {
+        Self {
+            source,
+            trigger_denials,
+        }
+    }
+
+    pub(crate) fn trigger_denials(&self) -> &[horizon_sandbox::FilesystemDenial] {
+        &self.trigger_denials
+    }
 }
 
 /// Kicks off a bash call and returns immediately; the UI thread must not
@@ -135,12 +169,48 @@ pub(crate) enum SandboxedApprovalOrigin {
 /// other bash call in flight, or queues it (FIFO) behind whatever is
 /// already running for that session — a session's bash calls never run
 /// concurrently with each other.
-pub fn spawn(
+#[cfg(test)]
+fn spawn(
     session_id: SessionId,
     call_id: ToolCallId,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
+    result_tx: Sender<BashCompletion>,
+) {
+    spawn_host(session_id, call_id, input, cwd, config, None, result_tx);
+}
+
+/// Runs one explicitly approved call with the host process's ordinary
+/// authority. The elevation is call-scoped: the next bash call starts from
+/// the normal sandbox policy again.
+pub(crate) fn spawn_approved_host(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    input: Value,
+    cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
+    approval: HostExecutionApproval,
+    result_tx: Sender<BashCompletion>,
+) {
+    spawn_host(
+        session_id,
+        call_id,
+        input,
+        cwd,
+        config,
+        Some(approval),
+        result_tx,
+    );
+}
+
+fn spawn_host(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    input: Value,
+    cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
+    approval: Option<HostExecutionApproval>,
     result_tx: Sender<BashCompletion>,
 ) {
     registry::enqueue(
@@ -150,10 +220,25 @@ pub fn spawn(
             run_job_body(session_id, call_id, &result_tx, move || {
                 let mut output = exec::run(&run_call_id, &input, &cwd, &config);
                 // Honest either way (`docs/agent-approval-design.md`'s
-                // "Audit"): this path never engages the sandbox, whether
-                // it's an ordinary manual approval or a retry-without-
-                // sandbox rerun after a tier-1 denial.
+                // "Audit"): this path never engages the sandbox. Host
+                // execution is not represented as sandboxed merely because
+                // it followed an approval. Explicitly mediated calls receive
+                // additional scope and source markers below.
                 annotate_sandboxed(&mut output, false);
+                if let Some(approval) = &approval {
+                    annotate_host_execution_approval(
+                        &mut output,
+                        approval.source.label(),
+                        &approval.trigger_denials,
+                    );
+                    if approval.source == HostExecutionApprovalSource::Judge {
+                        annotate_auto_approval(
+                            &mut output,
+                            "judge",
+                            "judge approved one call with host execution authority",
+                        );
+                    }
+                }
                 BashCompletion::Finished(ToolCallResult::new(run_call_id.clone(), output))
             });
         }),
@@ -180,9 +265,9 @@ pub fn spawn(
 /// `SessionNetworkProxy`, if one is running -- `Some` gives the sandbox its
 /// exact loopback TCP proxy endpoint, `None` falls back to
 /// `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
-/// says whether this run is a tier-1 auto-approval or a human's
-/// domain-denial-retry approve -- see [`SandboxedApprovalOrigin`] -- so the
-/// eventual `Finished` result is annotated honestly either way.
+/// says whether this run is a tier-1 auto-approval, a domain-denial retry,
+/// or a Git operation approval -- see [`SandboxedApprovalOrigin`] -- so the
+/// eventual `Finished` result is annotated honestly.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_sandboxed(
     session_id: SessionId,
@@ -283,9 +368,6 @@ pub fn spawn_sandboxed(
                         ),
                         SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
                             annotate_domain_approval(&mut result.output, domains)
-                        }
-                        SandboxedApprovalOrigin::ManualFilesystemRetry { grants } => {
-                            annotate_filesystem_approval(&mut result.output, grants)
                         }
                         SandboxedApprovalOrigin::ManualGitOperation => {}
                     }

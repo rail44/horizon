@@ -1621,7 +1621,7 @@ fn fold_filesystem_denied(
         .iter()
         .map(|denial| {
             format!(
-                "attempted {}; allow {:?} {:?} access to {}",
+                "attempted {} (suggested {:?} {:?} access to {})",
                 denial.attempted_path.display(),
                 denial.grant.access,
                 denial.grant.scope,
@@ -1639,7 +1639,8 @@ fn fold_filesystem_denied(
             call_id,
             reason: format!(
                 "`bash` crossed the filesystem sandbox boundary: {reason}. \
-                 Add only these session-scoped grants and retry inside the sandbox?"
+                 Run this same call once with the host process's ordinary authority? \
+                 Later calls start sandboxed again."
             ),
             kind: ApprovalKind::FilesystemDenialRetry {
                 denials,
@@ -2007,7 +2008,7 @@ mod tests {
     }
 
     #[test]
-    fn fold_filesystem_denial_requests_the_displayed_narrow_grant() {
+    fn fold_filesystem_denial_requests_one_call_of_host_execution() {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
         let state = Arc::new(SessiondState::new(
             ProviderRegistry::builtin_with_config(
@@ -2071,6 +2072,12 @@ mod tests {
             .expect("filesystem approval request");
         assert!(approval.reason.contains(&attempted.display().to_string()));
         assert!(approval.reason.contains(&grant_path.display().to_string()));
+        assert!(approval
+            .reason
+            .contains("host process's ordinary authority"));
+        assert!(approval
+            .reason
+            .contains("Later calls start sandboxed again"));
         assert!(matches!(
             &approval.kind,
             ApprovalKind::FilesystemDenialRetry { denials, .. } if denials == &vec![denial]

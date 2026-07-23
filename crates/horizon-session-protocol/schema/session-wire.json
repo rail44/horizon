@@ -123,7 +123,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A Linux supervisor observed one or more trusted filesystem boundary\ncrossings. Approving adds exactly these displayed session grants and\nreruns the same command while containment stays enabled.",
+          "description": "A sandboxed `bash` call crossed a filesystem boundary whose complete\nrequirements cannot be derived ahead of time. Approval authorizes the\nSAME call to run once with the host process's ordinary authority;\nlater calls start sandboxed again. The observed grants may still be\nretained session-locally to reduce repeat denials, but they are not a\ncomplete description of what the approved host execution may access.\n\nThe variant name predates the host-execution behavior and remains\nstable so existing event-log records continue to deserialize.",
           "properties": {
             "FilesystemDenialRetry": {
               "properties": {

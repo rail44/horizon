@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use serde_json::Value;
 
 use crate::contract::{
-    ApprovalKind, ApprovalRequest, Error, Event, SessionId, SessionState, ToolPermission,
+    ApprovalKind, ApprovalRequest, Error, Event, SessionId, SessionState, ToolCallRequest,
+    ToolPermission,
 };
 use crate::tools::ToolSessionState;
 
@@ -221,18 +222,32 @@ pub(crate) fn annotate_network_denials(
     }
 }
 
-pub(crate) fn annotate_filesystem_approval(
+/// Records that an approved `bash` call ran once with the host process's
+/// ordinary authority after a sandbox boundary crossing. This is deliberately
+/// distinct from a narrow filesystem grant: the observed denials explain why
+/// mediation started, but do not bound what the one approved execution could
+/// access.
+pub(crate) fn annotate_host_execution_approval(
     output: &mut Value,
-    grants: &[horizon_sandbox::FilesystemGrant],
+    source: &str,
+    denials: &[horizon_sandbox::FilesystemDenial],
 ) {
     if let Some(map) = output.as_object_mut() {
-        map.insert("filesystem_approved".to_string(), Value::Bool(true));
+        map.insert("host_execution_approved".to_string(), Value::Bool(true));
         map.insert(
-            "approved_filesystem_paths".to_string(),
+            "approval_scope".to_string(),
+            Value::String("host_execution_once".to_string()),
+        );
+        map.insert(
+            "approval_source".to_string(),
+            Value::String(source.to_string()),
+        );
+        map.insert(
+            "approval_trigger_paths".to_string(),
             Value::Array(
-                grants
+                denials
                     .iter()
-                    .map(|grant| Value::String(grant.path.display().to_string()))
+                    .map(|denial| Value::String(denial.attempted_path.display().to_string()))
                     .collect(),
             ),
         );
@@ -293,10 +308,7 @@ pub fn horizon_events_for_provider_event(
                                         },
                                     )
                             } else {
-                                format!(
-                                    "`{}` requested Horizon approval for this tool call.",
-                                    request.tool_id
-                                )
+                                standard_approval_reason(request)
                             };
                             let kind = if request.tool_id == "web_fetch" {
                                 ApprovalKind::DomainGrant {
@@ -320,13 +332,7 @@ pub fn horizon_events_for_provider_event(
                     Classification::AlwaysAsk => {
                         let (reason, kind) = git_operation_approval(tool_state, request)
                             .unwrap_or_else(|| {
-                                (
-                                    format!(
-                                        "`{}` requested Horizon approval for this tool call.",
-                                        request.tool_id
-                                    ),
-                                    ApprovalKind::Standard,
-                                )
+                                (standard_approval_reason(request), ApprovalKind::Standard)
                             });
                         events.push(Event::ApprovalRequested(ApprovalRequest {
                             call_id: request.call_id.clone(),
@@ -360,6 +366,20 @@ pub fn horizon_events_for_provider_event(
     }
 
     events
+}
+
+fn standard_approval_reason(request: &ToolCallRequest) -> String {
+    if request.tool_id == "bash" {
+        "`bash` requested approval to run this call once outside Horizon's filesystem, network, \
+         and process sandbox with the host process's ordinary authority. Later calls start \
+         sandboxed again."
+            .to_string()
+    } else {
+        format!(
+            "`{}` requested Horizon approval for this tool call.",
+            request.tool_id
+        )
+    }
 }
 
 fn git_operation_approval(
@@ -434,6 +454,19 @@ mod tests {
                 "{tool_id} isolation, not sandbox availability, is what fs tier 1 needs"
             );
         }
+    }
+
+    #[test]
+    fn standard_bash_approval_reason_names_the_one_call_host_scope() {
+        let request = ToolCallRequest {
+            call_id: crate::contract::ToolCallId("call-host-reason".to_string()),
+            tool_id: "bash".to_string(),
+            input: serde_json::json!({ "command": "cargo check" }).into(),
+        };
+        let reason = standard_approval_reason(&request);
+        assert!(reason.contains("filesystem, network, and process sandbox"));
+        assert!(reason.contains("host process's ordinary authority"));
+        assert!(reason.contains("Later calls start sandboxed again"));
     }
 
     #[test]

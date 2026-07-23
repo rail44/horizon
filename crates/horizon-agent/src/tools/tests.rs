@@ -1909,11 +1909,12 @@ fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
 
 #[cfg(target_os = "linux")]
 #[test]
-fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
+fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontains() {
     let workspace = temp_workspace("filesystem-retry-workspace");
     let outside = temp_workspace("filesystem-retry-outside");
     let target = outside.join("approved.txt");
     let sibling = outside.join("sibling.txt");
+    let later = outside.join("later.txt");
     fs::write(&target, "before").unwrap();
     let denial = horizon_sandbox::FilesystemDenial {
         attempted_path: target.clone(),
@@ -1923,7 +1924,7 @@ fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
             scope: horizon_sandbox::FilesystemGrantScope::File,
         },
     };
-    let tool_state = ToolSessionState::new(workspace);
+    let tool_state = ToolSessionState::new(workspace).with_isolated_worktree(true);
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -1953,9 +1954,9 @@ fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
     );
     let approval = ApprovalRequest {
         call_id: call_id.clone(),
-        reason: "allow exact file and retry".to_string(),
+        reason: "run this call once with host authority".to_string(),
         kind: ApprovalKind::FilesystemDenialRetry {
-            denials: vec![denial],
+            denials: vec![denial.clone()],
             prior_result,
         },
     };
@@ -1964,19 +1965,94 @@ fn resolve_approval_filesystem_retry_adds_exact_grant_and_stays_sandboxed() {
     assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
-        .expect("sandboxed retry completion");
+        .expect("host retry completion");
+    let result = expect_finished(completion);
+    assert_eq!(result.output["sandboxed"], false);
+    assert_eq!(result.output["host_execution_approved"], true);
+    assert_eq!(result.output["approval_scope"], "host_execution_once");
+    assert_eq!(result.output["approval_source"], "judge");
+    assert_eq!(result.output["auto_approved"], true);
+    assert_eq!(result.output["policy_tier"], "judge");
+    assert_eq!(
+        result.output["approval_trigger_paths"],
+        json!([denial.attempted_path.display().to_string()])
+    );
+    assert_eq!(fs::read_to_string(&target).unwrap(), "approved");
+    assert_eq!(fs::read_to_string(&sibling).unwrap(), "blocked");
+    assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
 
+    let later_request = ToolCallRequest {
+        call_id: ToolCallId("bash-filesystem-later".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": format!("printf later > {}", later.display())
+        })
+        .into(),
+    };
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &later_request),
+        Execution::Started(_)
+    ));
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("later sandboxed completion");
     match completion {
         BashCompletion::FilesystemDenied { denials, .. } => {
-            assert!(denials.iter().any(|item| item.attempted_path == sibling));
+            assert!(denials.iter().any(|item| item.attempted_path == later));
         }
-        other => panic!("sibling must remain denied after an exact-file grant: {other:?}"),
+        other => panic!("the next call must start sandboxed again: {other:?}"),
     }
-    assert_eq!(fs::read_to_string(&target).unwrap(), "approved");
-    assert!(!sibling.exists());
-    assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
+    assert!(!later.exists());
+
     unregister_session_runtime(session_id);
     fs::remove_dir_all(outside).unwrap();
+}
+
+#[test]
+fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state, live_state.clone(), bash_results_tx);
+    let call_id = ToolCallId("bash-filesystem-denied-by-user".to_string());
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo must-not-run" }).into(),
+    };
+    let prior_result = ToolCallResult::new(
+        call_id.clone(),
+        json!({ "is_error": true, "filesystem_denied": true }),
+    );
+    let frame = live_state.extend_events([
+        Event::ToolCallRequested(request),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "host execution required".to_string(),
+            kind: ApprovalKind::FilesystemDenialRetry {
+                denials: Vec::new(),
+                prior_result: prior_result.clone(),
+            },
+        }),
+    ]);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id,
+        ApprovalDecision::Deny { reason: None },
+    );
+    match outcome {
+        ApprovalOutcome::Executed { command, .. } => {
+            assert_eq!(command, Command::ToolCallResult(prior_result));
+        }
+        other => panic!("deny must forward the first sandbox result: {other:?}"),
+    }
+    assert!(bash_results_rx
+        .recv_timeout(Duration::from_millis(200))
+        .is_err());
+    unregister_session_runtime(session_id);
 }
 
 #[test]
@@ -2249,6 +2325,10 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
     assert_eq!(result.call_id, call_id);
     assert_eq!(result.output["exit_code"], 0);
     assert_eq!(result.output["output"], "hi\n");
+    assert_eq!(result.output["sandboxed"], false);
+    assert_eq!(result.output["host_execution_approved"], true);
+    assert_eq!(result.output["approval_scope"], "host_execution_once");
+    assert_eq!(result.output["approval_source"], "human");
 }
 
 #[test]

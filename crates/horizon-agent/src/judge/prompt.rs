@@ -138,6 +138,16 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
         content.push('\n');
     }
 
+    if input.host_execution_requested {
+        content.push_str("[APPROVAL EFFECT — trusted Horizon mediation]\n");
+        content.push_str(
+            "Approving reruns this one call outside Horizon's filesystem, network, and \
+             process sandbox with the host process's ordinary authority. The displayed \
+             filesystem grants, if any, explain the observed denial but do not bound this \
+             execution. Later calls start sandboxed again.\n\n",
+        );
+    }
+
     let open_marker = format!("<<<UNTRUSTED_ARGS_{}>>>", input.call_id);
     let close_marker = format!("<<<END_UNTRUSTED_ARGS_{}>>>", input.call_id);
     content.push_str(&open_marker);
@@ -167,6 +177,7 @@ mod tests {
             prior_user_messages: vec!["please list the files".to_string()],
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
+            host_execution_requested: false,
         }
     }
 
@@ -218,6 +229,29 @@ mod tests {
         let domain = content.find("- redirect.example").unwrap();
         let untrusted = content.find("<<<UNTRUSTED_ARGS_call-domain>>>").unwrap();
         assert!(trusted < domain && domain < untrusted);
+    }
+
+    #[test]
+    fn host_execution_effect_is_explicit_and_outside_untrusted_args() {
+        let mut input = input("call-host", serde_json::json!({ "command": "cargo test" }));
+        input.host_execution_requested = true;
+        let content = user_content(&input);
+
+        let effect = content
+            .find("[APPROVAL EFFECT — trusted Horizon mediation]")
+            .unwrap();
+        let authority = content
+            .find("outside Horizon's filesystem, network, and process sandbox")
+            .unwrap();
+        let untrusted = content.find("<<<UNTRUSTED_ARGS_call-host>>>").unwrap();
+        assert!(effect < authority && authority < untrusted);
+        assert!(content.contains("Later calls start sandboxed again."));
+    }
+
+    #[test]
+    fn narrow_approval_does_not_claim_host_execution() {
+        let content = user_content(&input("call-narrow", serde_json::json!({})));
+        assert!(!content.contains("[APPROVAL EFFECT — trusted Horizon mediation]"));
     }
 
     #[test]
