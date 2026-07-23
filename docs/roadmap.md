@@ -310,9 +310,8 @@ lands:
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
 
-- **Kitty Associated Text — designed 2026-07-23; ready for implementation**
-  (`docs/terminal-kitty-associated-text-design.md`). Horizon currently accepts
-  flag 16 without emitting the promised generated-text field. The decided
+- **Kitty Associated Text — implemented 2026-07-23**
+  (`docs/terminal-kitty-associated-text-design.md`, protocol v13). The shipped
   slice adds version-gated structured key/text commands, carries GPUI
   `key_char` into the daemon-owned encoder, represents keyless IME commits with
   Kitty key code zero under flags 8+16, and preserves raw UTF-8 plus legacy-key

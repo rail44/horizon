@@ -1,6 +1,6 @@
 # Kitty Keyboard Associated Text
 
-Status: decided 2026-07-23 (owner approved); ready for implementation.
+Status: implemented 2026-07-23 (protocol v13).
 This is the implementation brief for the first correctness slice from
 `horizon-terminal-core`'s resident Kitty keyboard compliance matrix. The
 normative protocol is Kitty's
