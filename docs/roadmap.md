@@ -25,8 +25,9 @@ The shell is GPUI-based with Horizon's own winit platform layer on
 every OS (native decorations, IME). Terminals and agent sessions are
 hosted by `horizon-sessiond` and survive UI restarts; the workspace
 (tabs, weighted splits, focus, attachments) persists and restores.
-Terminal input is kitty-faithful with a code-resident compliance
-matrix. One command model drives workspace mode, the palette, and the
+Terminal input implements Kitty's common disambiguation/event paths with a
+code-resident compliance matrix; its known higher-level gaps are explicit.
+One command model drives workspace mode, the palette, and the
 `horizon` CLI control plane. The theme derives from a small seed
 (`docs/theme-design.md`), editable live in a first-party settings
 pane. Agent sessions have roles, skills, recall over a DuckDB
@@ -308,6 +309,15 @@ lands:
   scroll context) are designed tiers of the frame/command contract, not
   ad-hoc additions, and ecosystem code ports only at the pure-function
   level.
+
+- **Kitty Associated Text — designed 2026-07-23; ready for implementation**
+  (`docs/terminal-kitty-associated-text-design.md`). Horizon currently accepts
+  flag 16 without emitting the promised generated-text field. The decided
+  slice adds version-gated structured key/text commands, carries GPUI
+  `key_char` into the daemon-owned encoder, represents keyless IME commits with
+  Kitty key code zero under flags 8+16, and preserves raw UTF-8 plus legacy-key
+  fallback for v11/v12 peers. It intentionally does not absorb the matrix's
+  keypad, physical-layout, extended-modifier, or alacritty stack defects.
 
 - **Terminal scrollback — windowed overscan** (implemented through phase 3
   on 2026-07-22,
