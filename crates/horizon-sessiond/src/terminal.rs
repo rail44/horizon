@@ -477,6 +477,7 @@ fn spawn_terminal(
     let (mouse_tx, mouse_rx) = crossbeam_channel::unbounded();
     let (paste_tx, paste_rx) = crossbeam_channel::unbounded();
     let (key_tx, key_rx) = crossbeam_channel::unbounded();
+    let (text_tx, text_rx) = crossbeam_channel::unbounded();
     let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
     let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
     let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
@@ -501,6 +502,7 @@ fn spawn_terminal(
                 mouse_rx,
                 paste_rx,
                 key_rx,
+                text_rx,
                 selection_rx,
                 focus_rx,
                 color_scheme_rx,
@@ -524,6 +526,7 @@ fn spawn_terminal(
                 mouse_tx,
                 paste_tx,
                 key_tx,
+                text_tx,
                 selection_tx,
                 focus_tx,
                 color_scheme_tx,
@@ -579,6 +582,7 @@ fn run_writer(
         mouse_tx,
         paste_tx,
         key_tx,
+        text_tx,
         selection_tx,
         focus_tx,
         color_scheme_tx,
@@ -596,7 +600,16 @@ fn run_writer(
                 modifiers,
                 event,
             } => {
-                let _ = key_tx.send((key, modifiers, event));
+                // Legacy key command: the v13 daemon treats it as a structured
+                // key input with no associated text, preserving wire
+                // compatibility with older clients.
+                let _ = key_tx.send((key, modifiers, event, None));
+            }
+            TerminalCommand::KeyInput(input) => {
+                let _ = key_tx.send((input.key, input.modifiers, input.kind, input.text));
+            }
+            TerminalCommand::TextInput(text) => {
+                let _ = text_tx.send(text);
             }
             TerminalCommand::Paste(text) => {
                 let _ = paste_tx.send(text);

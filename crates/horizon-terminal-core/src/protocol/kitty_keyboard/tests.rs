@@ -36,6 +36,9 @@ const TEST_REGISTRY: &[(&str, bool)] = &[
     ("very_high_function_keys_are_unimplemented", true),
     ("standalone_modifier_keypresses_are_unimplemented", true),
     ("keypad_keys_ignore_disambiguate_flag", true),
+    ("csi_u_associated_text_truth_table", false),
+    ("text_input_encodes_as_keyless_csi_u", false),
+    ("text_input_falls_back_to_raw_utf8_without_flags", false),
 ];
 
 /// (a) Every `Compliant`/`Deviation`/`Bypassed` entry must name a real,

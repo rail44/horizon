@@ -1247,6 +1247,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "Legacy key event, kept for older peers and raw headless/test input.\nA v13 daemon treats this as a `KeyInput` with `text: None`.",
           "properties": {
             "Key": {
               "properties": {
@@ -1254,7 +1255,7 @@
                   "$ref": "#/$defs/KeyEventKind"
                 },
                 "key": {
-                  "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it\nappears there as \"any value\". A termwiz bump that changes this\nencoding is invisible to the schema checker and must be\nreviewed as the wire change it is."
+                  "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it\nappears there as \"any value\". A termwiz bump that changes this\nencoding is invisible to the schema checker and must be reviewed\nas the wire change it is."
                 },
                 "modifiers": {
                   "description": "See `key`: termwiz-owned serde shape, \"any value\" in the schema."
@@ -1270,6 +1271,32 @@
           },
           "required": [
             "Key"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Structured key event carrying optional generated text. Sent by a v13\nUI when the negotiated version is at least 13; encoded by the daemon\naccording to the terminal's live Kitty keyboard mode.",
+          "properties": {
+            "KeyInput": {
+              "$ref": "#/$defs/TerminalKeyInput"
+            }
+          },
+          "required": [
+            "KeyInput"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Committed text for which no key event is available, most notably an\nIME commit. Encoded as a Kitty CSI-u event with key code 0 when flags\n8 + 16 are active, otherwise written as raw UTF-8.",
+          "properties": {
+            "TextInput": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "TextInput"
           ],
           "type": "object"
         },
@@ -1529,6 +1556,33 @@
         "mouse_reporting",
         "keys_as_escape_codes",
         "palette_overrides"
+      ],
+      "type": "object"
+    },
+    "TerminalKeyInput": {
+      "description": "A structured key event: key identity plus the platform-produced text,\nif any, that this key generated. Carried by `TerminalCommand::KeyInput`.",
+      "properties": {
+        "key": {
+          "description": "termwiz's own serde shape, pinned by the termwiz version — an\nexternal type the schema artifact cannot introspect, so it appears\nthere as \"any value\". A termwiz bump that changes this encoding is\ninvisible to the schema checker and must be reviewed as the wire\nchange it is."
+        },
+        "kind": {
+          "$ref": "#/$defs/KeyEventKind"
+        },
+        "modifiers": {
+          "description": "See `key`: termwiz-owned serde shape, \"any value\" in the schema."
+        },
+        "text": {
+          "description": "Platform-produced text for this key event, copied from GPUI's\n`Keystroke::key_char`. `None` means the key generated no text or the\nplatform did not provide it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "key",
+        "modifiers",
+        "kind"
       ],
       "type": "object"
     },
@@ -2226,5 +2280,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 12
+  "x-session-protocol-version": 13
 }

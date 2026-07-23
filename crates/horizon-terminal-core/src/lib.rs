@@ -21,7 +21,7 @@ mod session_loop;
 mod types;
 
 pub use contract::{
-    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand,
+    ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalKeyInput,
     TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};

@@ -12,8 +12,8 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
-    ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame, TerminalMouseReport,
-    TerminalScroll, TerminalScrollWindow, TerminalSize, TerminalUpdate,
+    ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame, TerminalKeyInput,
+    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSize, TerminalUpdate,
 };
 use horizon_workspace::SessionId;
 
@@ -696,6 +696,15 @@ fn version_supports_windowing(negotiated: Option<u32>) -> bool {
         .is_some_and(|version| version >= horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION)
 }
 
+/// `TerminalSession::structured_input_supported` extracted to a pure function
+/// so the gate — the `>=` comparison, `TERMINAL_STRUCTURED_INPUT_VERSION`, and
+/// `None`-means-no-connection handling — is unit-testable directly.
+fn version_supports_structured_input(negotiated: Option<u32>) -> bool {
+    negotiated.is_some_and(|version| {
+        version >= horizon_session_protocol::TERMINAL_STRUCTURED_INPUT_VERSION
+    })
+}
+
 /// Whether the `TerminalCommand` channel to `horizon-sessiond` is known dead.
 /// Mirrors `agent::session::RuntimeReachability` (backlog #35): a failed send
 /// used to be a silent `let _ = ...` no-op. Kept as a free-standing state
@@ -1065,17 +1074,42 @@ impl TerminalSession {
         }
     }
 
-    pub(crate) fn send_key(
+    /// Structured key input carrying the platform-generated text, if any.
+    /// Sent only when the negotiated protocol version supports structured
+    /// terminal input; older runtimes continue to receive `TerminalCommand::
+    /// Key` via [`Self::send_key`].
+    pub(crate) fn send_key_with_text(
         &self,
         key: termwiz::input::KeyCode,
         modifiers: termwiz::input::Modifiers,
         event: KeyEventKind,
+        text: Option<String>,
     ) {
-        self.dispatch(TerminalCommand::Key {
-            key,
-            modifiers,
-            event,
-        });
+        if self.structured_input_supported() {
+            self.dispatch(TerminalCommand::KeyInput(TerminalKeyInput {
+                key,
+                modifiers,
+                kind: event,
+                text,
+            }));
+        } else {
+            self.dispatch(TerminalCommand::Key {
+                key,
+                modifiers,
+                event,
+            });
+        }
+    }
+
+    /// Committed text for which no key identity is available, most notably
+    /// an IME commit. Sent as `TerminalCommand::TextInput` when the negotiated
+    /// version supports it, otherwise as raw UTF-8 `Input`.
+    pub(crate) fn send_text_input(&self, text: String) {
+        if self.structured_input_supported() {
+            self.dispatch(TerminalCommand::TextInput(text));
+        } else {
+            self.dispatch(TerminalCommand::Input(text.into_bytes()));
+        }
     }
 
     pub(crate) fn send_mouse(&self, report: TerminalMouseReport) {
@@ -1147,6 +1181,15 @@ impl TerminalSession {
         version_supports_windowing(self.wire.negotiated_version())
     }
 
+    /// Whether this connection's negotiated version supports structured
+    /// terminal input with associated text
+    /// (`TERMINAL_STRUCTURED_INPUT_VERSION`). `None` (no connection yet) and
+    /// any older version both gate it off, falling back to legacy `Key` and
+    /// raw UTF-8 `Input` commands.
+    fn structured_input_supported(&self) -> bool {
+        version_supports_structured_input(self.wire.negotiated_version())
+    }
+
     /// Whether the frontend owns this wheel gesture. False for old peers and
     /// whenever an alternate-screen/mouse-reporting application owns scroll.
     pub(crate) fn local_scrollback_available(&self) -> bool {
@@ -1205,10 +1248,6 @@ impl TerminalSession {
         })
     }
 
-    pub(crate) fn send_input(&self, bytes: Vec<u8>) {
-        self.dispatch(TerminalCommand::Input(bytes));
-    }
-
     pub(crate) fn send_paste(&self, text: String) {
         self.dispatch(TerminalCommand::Paste(text));
     }
@@ -1255,8 +1294,8 @@ fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        continuous_anchor, version_supports_windowing, RowGenerations, RuntimeReachability,
-        ScrollIpc, Scrollback, WindowFetch,
+        continuous_anchor, version_supports_structured_input, version_supports_windowing,
+        RowGenerations, RuntimeReachability, ScrollIpc, Scrollback, WindowFetch,
     };
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
@@ -2220,6 +2259,27 @@ mod tests {
         );
         assert!(
             version_supports_windowing(Some(min + 1)),
+            "a newer peer stays in"
+        );
+    }
+
+    #[test]
+    fn version_supports_structured_input_gates_at_the_min_version() {
+        let min = horizon_session_protocol::TERMINAL_STRUCTURED_INPUT_VERSION;
+        assert!(
+            !version_supports_structured_input(None),
+            "no connection: gated off"
+        );
+        assert!(
+            !version_supports_structured_input(Some(min - 1)),
+            "an older peer is gated off"
+        );
+        assert!(
+            version_supports_structured_input(Some(min)),
+            "the min version is in"
+        );
+        assert!(
+            version_supports_structured_input(Some(min + 1)),
             "a newer peer stays in"
         );
     }

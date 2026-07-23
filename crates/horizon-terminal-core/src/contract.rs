@@ -40,15 +40,38 @@ pub struct TerminalSummary {
     pub session_id: Uuid,
 }
 
+/// A structured key event: key identity plus the platform-produced text,
+/// if any, that this key generated. Carried by `TerminalCommand::KeyInput`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalKeyInput {
+    /// termwiz's own serde shape, pinned by the termwiz version — an
+    /// external type the schema artifact cannot introspect, so it appears
+    /// there as "any value". A termwiz bump that changes this encoding is
+    /// invisible to the schema checker and must be reviewed as the wire
+    /// change it is.
+    #[schemars(with = "serde_json::Value")]
+    pub key: KeyCode,
+    /// See `key`: termwiz-owned serde shape, "any value" in the schema.
+    #[schemars(with = "serde_json::Value")]
+    pub modifiers: Modifiers,
+    pub kind: KeyEventKind,
+    /// Platform-produced text for this key event, copied from GPUI's
+    /// `Keystroke::key_char`. `None` means the key generated no text or the
+    /// platform did not provide it.
+    pub text: Option<String>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum TerminalCommand {
     Input(Vec<u8>),
+    /// Legacy key event, kept for older peers and raw headless/test input.
+    /// A v13 daemon treats this as a `KeyInput` with `text: None`.
     Key {
         /// termwiz's own serde shape, pinned by the termwiz version — an
         /// external type the schema artifact cannot introspect, so it
         /// appears there as "any value". A termwiz bump that changes this
-        /// encoding is invisible to the schema checker and must be
-        /// reviewed as the wire change it is.
+        /// encoding is invisible to the schema checker and must be reviewed
+        /// as the wire change it is.
         #[schemars(with = "serde_json::Value")]
         key: KeyCode,
         /// See `key`: termwiz-owned serde shape, "any value" in the schema.
@@ -56,6 +79,14 @@ pub enum TerminalCommand {
         modifiers: Modifiers,
         event: KeyEventKind,
     },
+    /// Structured key event carrying optional generated text. Sent by a v13
+    /// UI when the negotiated version is at least 13; encoded by the daemon
+    /// according to the terminal's live Kitty keyboard mode.
+    KeyInput(TerminalKeyInput),
+    /// Committed text for which no key event is available, most notably an
+    /// IME commit. Encoded as a Kitty CSI-u event with key code 0 when flags
+    /// 8 + 16 are active, otherwise written as raw UTF-8.
+    TextInput(String),
     Paste(String),
     Resize(TerminalSize),
     Scroll(TerminalScroll),

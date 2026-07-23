@@ -337,7 +337,13 @@ impl TerminalCore {
         render::snapshot_window(&self.term, anchor, height)
     }
 
-    pub fn encode_key(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> String {
+    pub fn encode_key(
+        &self,
+        key: KeyCode,
+        mods: Modifiers,
+        event: KeyEventKind,
+        text: Option<&str>,
+    ) -> String {
         let mode = *self.term.mode();
         let flags = kitty_keyboard::flags_from_mode(mode);
 
@@ -371,7 +377,7 @@ impl TerminalCore {
         // `legacy_bytes` (built for the four keys `kitty_override`
         // promotes, not text keys) has to reproduce it.
         if let KeyCode::Char(c) = key {
-            let bytes = kitty_keyboard::encode_text_key(c, mods, flags, event);
+            let bytes = kitty_keyboard::encode_text_key(c, mods, flags, event, text);
             return String::from_utf8(bytes).unwrap_or_default();
         }
 
@@ -384,6 +390,7 @@ impl TerminalCore {
                 mods,
                 flags,
                 event,
+                text,
                 mode.contains(TermMode::APP_CURSOR),
                 mode.contains(TermMode::LINE_FEED_NEW_LINE),
             );
@@ -401,8 +408,37 @@ impl TerminalCore {
             .unwrap_or_default()
     }
 
-    pub fn key_input(&self, key: KeyCode, mods: Modifiers, event: KeyEventKind) -> Vec<u8> {
-        self.encode_key(key, mods, event).into_bytes()
+    pub fn key_input(
+        &self,
+        key: KeyCode,
+        mods: Modifiers,
+        event: KeyEventKind,
+        text: Option<&str>,
+    ) -> Vec<u8> {
+        self.encode_key(key, mods, event, text).into_bytes()
+    }
+
+    /// Encode a text input event for which no key identity is available,
+    /// most notably an IME commit. When the terminal has negotiated kitty's
+    /// "report all keys as escape codes" (0b1000) and "report associated
+    /// text" (0b10000) flags, this emits the keyless `CSI 0;1;text u`
+    /// form; otherwise it falls back to raw UTF-8 bytes.
+    pub fn text_input(&self, text: &str) -> Vec<u8> {
+        let flags = kitty_keyboard::flags_from_mode(*self.term.mode());
+        if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
+            && flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
+            && !text.is_empty()
+            && !text.chars().any(|c| c.is_control())
+        {
+            let codepoints = text
+                .chars()
+                .map(|c| (c as u32).to_string())
+                .collect::<Vec<_>>()
+                .join(":");
+            format!("\x1b[0;1;{codepoints}u").into_bytes()
+        } else {
+            text.as_bytes().to_vec()
+        }
     }
 
     /// Starts a selection of the given `kind` at `point`. `kind` maps

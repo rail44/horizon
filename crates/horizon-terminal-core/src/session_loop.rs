@@ -53,7 +53,11 @@ pub struct CoreReceivers {
     pub scroll_rx: Receiver<TerminalScroll>,
     pub mouse_rx: Receiver<TerminalMouseReport>,
     pub paste_rx: Receiver<String>,
-    pub key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind)>,
+    pub key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind, Option<String>)>,
+    /// Committed text for which no key identity is available, most notably
+    /// an IME commit (`TerminalCommand::TextInput`). Encoded by the core
+    /// according to the live Kitty keyboard mode.
+    pub text_rx: Receiver<String>,
     pub selection_rx: Receiver<SelectionCommand>,
     pub focus_rx: Receiver<bool>,
     /// Demuxed `TerminalCommand::SetColorScheme` -- a live theme apply's
@@ -73,7 +77,10 @@ pub struct CoreSenders {
     pub scroll_tx: Sender<TerminalScroll>,
     pub mouse_tx: Sender<TerminalMouseReport>,
     pub paste_tx: Sender<String>,
-    pub key_tx: Sender<(KeyCode, Modifiers, KeyEventKind)>,
+    pub key_tx: Sender<(KeyCode, Modifiers, KeyEventKind, Option<String>)>,
+    /// Committed text for which no key identity is available, most notably
+    /// an IME commit (`TerminalCommand::TextInput`).
+    pub text_tx: Sender<String>,
     pub selection_tx: Sender<SelectionCommand>,
     pub focus_tx: Sender<bool>,
     pub color_scheme_tx: Sender<TerminalColorScheme>,
@@ -208,6 +215,7 @@ pub fn run_terminal_core(
         mouse_rx,
         paste_rx,
         key_rx,
+        text_rx,
         selection_rx,
         focus_rx,
         color_scheme_rx,
@@ -266,7 +274,7 @@ pub fn run_terminal_core(
                 notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(key_rx) -> key => {
-                let Ok((key, modifiers, event)) = key else {
+                let Ok((key, modifiers, event, text)) = key else {
                     return;
                 };
                 // `key_input` only encodes bytes for the PTY -- it never
@@ -274,7 +282,19 @@ pub fn run_terminal_core(
                 // notify here. The real echo arrives back through `pty_rx`
                 // (below), which is what actually mutates the grid and
                 // takes `notify_snapshot`'s immediate slot.
-                let input = core.key_input(key, modifiers, event);
+                let input = core.key_input(key, modifiers, event, text.as_deref());
+                if !input.is_empty() {
+                    let _ = command_tx.send(TerminalCommand::Input(input));
+                }
+            }
+            recv(text_rx) -> text => {
+                let Ok(text) = text else {
+                    return;
+                };
+                // `text_input` encodes committed text (e.g. IME commits) for
+                // the PTY according to the live Kitty keyboard mode. Like
+                // `key_input`, it does not touch visible state.
+                let input = core.text_input(&text);
                 if !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
@@ -453,6 +473,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -509,12 +530,14 @@ mod tests {
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (key_tx, key_rx) = crossbeam_channel::unbounded();
+        let (_text_tx, text_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
             scroll_rx: crossbeam_channel::never(),
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx,
+            text_rx,
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -540,7 +563,12 @@ mod tests {
             .expect("startup snapshot");
 
         key_tx
-            .send((KeyCode::Char('a'), Modifiers::NONE, KeyEventKind::Press))
+            .send((
+                KeyCode::Char('a'),
+                Modifiers::NONE,
+                KeyEventKind::Press,
+                None,
+            ))
             .unwrap();
 
         // The key must still be encoded and forwarded to the PTY writer --
@@ -578,6 +606,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -663,6 +692,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -726,6 +756,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -825,6 +856,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx,
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx: crossbeam_channel::never(),
@@ -897,6 +929,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx,
             color_scheme_rx: crossbeam_channel::never(),
@@ -976,6 +1009,7 @@ mod tests {
             mouse_rx: crossbeam_channel::never(),
             paste_rx: crossbeam_channel::never(),
             key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
             selection_rx: crossbeam_channel::never(),
             focus_rx: crossbeam_channel::never(),
             color_scheme_rx,

@@ -375,10 +375,12 @@ impl TerminalView {
         let Some(key) = term_key_code(&event.keystroke, true) else {
             return;
         };
-        self.session.read(cx).send_key(
+        // Release events never carry associated text.
+        self.session.read(cx).send_key_with_text(
             key,
             term_modifiers(&event.keystroke.modifiers),
             KeyEventKind::Release,
+            None,
         );
     }
 
@@ -495,14 +497,22 @@ impl TerminalView {
         } else {
             KeyEventKind::Press
         };
+        // Preserve GPUI's generated text (Keystroke::key_char) so the daemon
+        // can include it as the associated-text subfield when the terminal
+        // has negotiated that flag.
+        let text = keystroke.key_char.clone();
         input_trace!(
-            "handle_key key={:?} sent: TerminalCommand::Key kind={:?}",
+            "handle_key key={:?} sent: structured key kind={:?} text={}",
             keystroke.key,
-            kind
+            kind,
+            crate::input_trace::describe_text(text.as_deref().unwrap_or(""))
         );
-        self.session
-            .read(cx)
-            .send_key(key, term_modifiers(&keystroke.modifiers), kind);
+        self.session.read(cx).send_key_with_text(
+            key,
+            term_modifiers(&keystroke.modifiers),
+            kind,
+            text,
+        );
     }
 }
 
@@ -713,10 +723,10 @@ impl EntityInputHandler for TerminalView {
             return;
         }
         input_trace!(
-            "replace_text_in_range sent: TerminalCommand::Input {}",
+            "replace_text_in_range sent: structured text input {}",
             crate::input_trace::describe_text(text)
         );
-        self.session.read(cx).send_input(text.as_bytes().to_vec());
+        self.session.read(cx).send_text_input(text.to_string());
         cx.notify();
     }
 

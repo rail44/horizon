@@ -313,7 +313,7 @@ impl DecodeSkipLog {
 /// interoperate (tolerant evolution), rather than being rejected. The schema
 /// artifact carries the bump as `x-session-protocol-version` even though no
 /// wire type moved.
-pub const SESSION_PROTOCOL_VERSION: u32 = 12;
+pub const SESSION_PROTOCOL_VERSION: u32 = 13;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -328,7 +328,11 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 12;
 /// v12 (scrollback windowing) is *additive*, not a reshape, so it does **not**
 /// raise this floor: a v12 peer negotiates 11 with a v11 peer and falls back
 /// to round-trip scrolling (`SESSION_PROTOCOL_VERSION`'s v12 note), which is
-/// exactly the cross-version interop the owner requires.
+/// exactly the cross-version interop the owner requires. v13 (structured
+/// terminal input) is also *additive*, so it likewise does **not** raise
+/// this floor: a v13 peer negotiates 11 with a v11/v12 peer and falls back
+/// to legacy `Key`/`Input` commands (`TERMINAL_STRUCTURED_INPUT_VERSION`'s
+/// note), preserving lossless cross-version interop.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 
 /// The first negotiated version at which the daemon answers
@@ -341,6 +345,14 @@ pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 /// [`SESSION_PROTOCOL_VERSION`] so a later, unrelated version bump cannot
 /// silently move the feature gate.
 pub const SCROLLBACK_WINDOW_MIN_VERSION: u32 = 12;
+
+/// The first negotiated version at which the client sends structured
+/// terminal input commands (`TerminalCommand::KeyInput` and
+/// `TerminalCommand::TextInput`) and the daemon encodes them with associated
+/// text according to the live Kitty keyboard mode
+/// (`docs/terminal-kitty-associated-text-design.md` §3). Below this (a v11/
+/// v12 peer), the client falls back to legacy `Key` and raw UTF-8 `Input`.
+pub const TERMINAL_STRUCTURED_INPUT_VERSION: u32 = 13;
 
 /// An inclusive protocol-version range one peer supports, as exchanged in
 /// [`SessionHub::hello`].

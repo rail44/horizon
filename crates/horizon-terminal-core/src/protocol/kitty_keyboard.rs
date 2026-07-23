@@ -85,14 +85,15 @@ pub(crate) fn encode(
     mods: Modifiers,
     flags: KittyKeyboardFlags,
     event: KeyEventKind,
+    text: Option<&str>,
     application_cursor_keys: bool,
     newline_mode: bool,
 ) -> Vec<u8> {
-    if let Some(bytes) = kitty_override(key, mods, flags, event) {
+    if let Some(bytes) = kitty_override(key, mods, flags, event, text) {
         return bytes;
     }
 
-    if let Some(bytes) = navigation_key_event_override(key, mods, flags, event) {
+    if let Some(bytes) = navigation_key_event_override(key, mods, flags, event, text) {
         return bytes;
     }
 
@@ -184,6 +185,7 @@ fn kitty_override(
     mods: Modifiers,
     flags: KittyKeyboardFlags,
     event: KeyEventKind,
+    text: Option<&str>,
 ) -> Option<Vec<u8>> {
     if flags.is_empty() {
         return None;
@@ -234,15 +236,49 @@ fn kitty_override(
     }
     let mod_value = 1u32 + mod_bits;
     let event_type = event_type_subfield(event, flags);
+    let text = associated_text_subfield(text, flags, event);
     let mut sequence = format!("\x1b[{codepoint}");
-    if mod_value != 1 || event_type.is_some() {
+    if mod_value != 1 || event_type.is_some() || text.is_some() {
         sequence.push_str(&format!(";{mod_value}"));
         if let Some(event_type) = event_type {
             sequence.push_str(&format!(":{event_type}"));
         }
+        if let Some(text) = text {
+            sequence.push(';');
+            sequence.push_str(&text);
+        }
     }
     sequence.push('u');
     Some(sequence.into_bytes())
+}
+
+/// The associated-text subfield: decimal codepoints, colon-separated, only
+/// emitted when `REPORT_EVENT_TYPES` and `REPORT_ASSOCIATED_TEXT` are both
+/// negotiated and the event is a press or repeat with non-empty, non-control
+/// text. Returns `None` for any other case, so callers simply skip the field.
+fn associated_text_subfield(
+    text: Option<&str>,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+) -> Option<String> {
+    let text = text?;
+    if !event.is_down() {
+        return None;
+    }
+    if !flags.contains(KittyKeyboardFlags::REPORT_EVENT_TYPES)
+        || !flags.contains(KittyKeyboardFlags::REPORT_ASSOCIATED_TEXT)
+    {
+        return None;
+    }
+    if text.is_empty() || text.chars().any(|c| c.is_control()) {
+        return None;
+    }
+    Some(
+        text.chars()
+            .map(|c| (c as u32).to_string())
+            .collect::<Vec<_>>()
+            .join(":"),
+    )
 }
 
 /// The Kitty spec's "event-type" subfield value for `event`
@@ -300,6 +336,7 @@ fn navigation_key_event_override(
     mods: Modifiers,
     flags: KittyKeyboardFlags,
     event: KeyEventKind,
+    text: Option<&str>,
 ) -> Option<Vec<u8>> {
     let event_type = event_type_subfield(event, flags)?;
     let (intro, terminator) = navigation_key_form(key)?;
@@ -319,7 +356,14 @@ fn navigation_key_event_override(
         mod_bits |= 0b1000;
     }
     let mod_value = 1u32 + mod_bits;
-    Some(format!("{intro};{mod_value}:{event_type}{terminator}").into_bytes())
+    let text = associated_text_subfield(text, flags, event);
+    let mut sequence = format!("{intro};{mod_value}:{event_type}");
+    if let Some(text) = text {
+        sequence.push(';');
+        sequence.push_str(&text);
+    }
+    sequence.push(terminator);
+    Some(sequence.into_bytes())
 }
 
 /// The `CSI` intro/terminator pair `legacy_bytes` uses for the navigation
@@ -619,9 +663,10 @@ pub(crate) fn encode_text_key(
     mods: Modifiers,
     flags: KittyKeyboardFlags,
     event: KeyEventKind,
+    text: Option<&str>,
 ) -> Vec<u8> {
     if flags.contains(KittyKeyboardFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES) {
-        return csi_u_text_key(c, mods, flags, event);
+        return csi_u_text_key(c, mods, flags, event, text);
     }
     if !event.is_down() {
         return Vec::new();
@@ -697,6 +742,7 @@ fn csi_u_text_key(
     mods: Modifiers,
     flags: KittyKeyboardFlags,
     event: KeyEventKind,
+    text: Option<&str>,
 ) -> Vec<u8> {
     let mut mod_bits = u32::from(mods.encode_xterm());
     if mods.contains(Modifiers::SUPER) {
@@ -712,10 +758,15 @@ fn csi_u_text_key(
         sequence.push_str(&format!(":{}", c.to_ascii_uppercase() as u32));
     }
     let event_type = event_type_subfield(event, flags);
-    if mod_value != 1 || event_type.is_some() {
+    let text = associated_text_subfield(text, flags, event);
+    if mod_value != 1 || event_type.is_some() || text.is_some() {
         sequence.push_str(&format!(";{mod_value}"));
         if let Some(event_type) = event_type {
             sequence.push_str(&format!(":{event_type}"));
+        }
+        if let Some(text) = text {
+            sequence.push(';');
+            sequence.push_str(&text);
         }
     }
     sequence.push('u');
@@ -1048,12 +1099,17 @@ pub(crate) const KITTY_COMPLIANCE: &[FeatureEntry] = &[
     FeatureEntry {
         feature: "Report associated text",
         key_class: "text keys",
-        verdict: Verdict::Unimplemented(
-            "the flag is tracked (flags_from_mode sets REPORT_ASSOCIATED_TEXT from \
-             TermMode::REPORT_ASSOCIATED_TEXT) but no code path ever emits the associated-text \
-             CSI u subfield it requires; no test is possible without an implementation to test",
-        ),
-        tests: &[],
+        verdict: Verdict::Compliant,
+        tests: &["csi_u_associated_text_truth_table"],
+    },
+    FeatureEntry {
+        feature: "Report associated text: keyless IME commit",
+        key_class: "text input without a key event",
+        verdict: Verdict::Compliant,
+        tests: &[
+            "text_input_encodes_as_keyless_csi_u",
+            "text_input_falls_back_to_raw_utf8_without_flags",
+        ],
     },
 ];
 
