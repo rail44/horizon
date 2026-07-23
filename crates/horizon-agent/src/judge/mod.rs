@@ -119,6 +119,15 @@ pub(crate) struct JudgeInput {
     /// Canonical Horizon-derived hosts kept outside the untrusted argument
     /// region. Empty for calls that do not request or use a domain grant.
     pub(crate) requested_domains: Vec<String>,
+    /// Approval reruns this one call with the host process's ordinary
+    /// authority rather than adding only the displayed narrow grants.
+    pub(crate) host_execution_requested: bool,
+}
+
+pub(crate) struct JudgeApprovalContext {
+    requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    requested_domains: Vec<String>,
+    host_execution_requested: bool,
 }
 
 /// "Small but not 1" (the research doc's Plan B recommendation for stage
@@ -224,14 +233,12 @@ pub(crate) fn start_approval_gate(
     let prior_user_messages = crate::tools::live_frame_for_session(session_id)
         .map(|frame| prior_user_messages_from_frame(&frame))
         .unwrap_or_default();
-    let (requested_filesystem_grants, requested_domains) =
-        trusted_approval_context(&candidate.approval.kind);
+    let context = trusted_approval_context(&candidate.approval.kind, &candidate.request.tool_id);
     if judge.start(
         session_id,
         candidate.clone(),
         prior_user_messages,
-        requested_filesystem_grants,
-        requested_domains,
+        context,
         result_tx,
     ) {
         ApprovalGate::Pending
@@ -240,16 +247,18 @@ pub(crate) fn start_approval_gate(
     }
 }
 
-fn trusted_approval_context(
-    kind: &ApprovalKind,
-) -> (Vec<horizon_sandbox::FilesystemGrant>, Vec<String>) {
+fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApprovalContext {
     match kind {
-        ApprovalKind::FilesystemDenialRetry { denials, .. } => (
-            denials.iter().map(|denial| denial.grant.clone()).collect(),
-            Vec::new(),
-        ),
-        ApprovalKind::GitOperation { writable_roots } => (
-            writable_roots
+        ApprovalKind::FilesystemDenialRetry { denials, .. } => JudgeApprovalContext {
+            requested_filesystem_grants: denials
+                .iter()
+                .map(|denial| denial.grant.clone())
+                .collect(),
+            requested_domains: Vec::new(),
+            host_execution_requested: true,
+        },
+        ApprovalKind::GitOperation { writable_roots } => JudgeApprovalContext {
+            requested_filesystem_grants: writable_roots
                 .iter()
                 .cloned()
                 .map(|path| horizon_sandbox::FilesystemGrant {
@@ -258,13 +267,23 @@ fn trusted_approval_context(
                     scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
                 })
                 .collect(),
-            Vec::new(),
-        ),
+            requested_domains: Vec::new(),
+            host_execution_requested: false,
+        },
         ApprovalKind::DomainGrant { domains } | ApprovalKind::DomainDenialRetry { domains, .. } => {
-            (Vec::new(), domains.clone())
+            JudgeApprovalContext {
+                requested_filesystem_grants: Vec::new(),
+                requested_domains: domains.clone(),
+                host_execution_requested: false,
+            }
         }
         ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry | ApprovalKind::Unknown => {
-            (Vec::new(), Vec::new())
+            JudgeApprovalContext {
+                requested_filesystem_grants: Vec::new(),
+                requested_domains: Vec::new(),
+                host_execution_requested: matches!(kind, ApprovalKind::Standard)
+                    && tool_id == "bash",
+            }
         }
     }
 }
@@ -368,6 +387,7 @@ mod tests {
             prior_user_messages: vec!["please check the logs".to_string()],
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
+            host_execution_requested: false,
         }
     }
 
@@ -542,14 +562,18 @@ mod tests {
     #[test]
     fn trusted_context_covers_git_filesystem_and_domain_candidates() {
         let root = std::env::temp_dir().join("judge-git-root");
-        let (grants, domains) = trusted_approval_context(&ApprovalKind::GitOperation {
-            writable_roots: vec![root.clone()],
-        });
-        assert_eq!(domains, Vec::<String>::new());
-        assert_eq!(grants.len(), 1);
-        assert_eq!(grants[0].path, root);
+        let context = trusted_approval_context(
+            &ApprovalKind::GitOperation {
+                writable_roots: vec![root.clone()],
+            },
+            "bash",
+        );
+        assert_eq!(context.requested_domains, Vec::<String>::new());
+        assert!(!context.host_execution_requested);
+        assert_eq!(context.requested_filesystem_grants.len(), 1);
+        assert_eq!(context.requested_filesystem_grants[0].path, root);
         assert_eq!(
-            grants[0].access,
+            context.requested_filesystem_grants[0].access,
             horizon_sandbox::FilesystemGrantAccess::ReadWrite
         );
 
@@ -561,26 +585,42 @@ mod tests {
                 scope: horizon_sandbox::FilesystemGrantScope::File,
             },
         };
-        let (grants, domains) = trusted_approval_context(&ApprovalKind::FilesystemDenialRetry {
-            denials: vec![denial.clone()],
-            prior_result: crate::contract::ToolCallResult::new(
-                crate::contract::ToolCallId("call-context".to_string()),
-                serde_json::json!({}),
-            ),
-        });
-        assert_eq!(grants, vec![denial.grant]);
-        assert!(domains.is_empty());
+        let context = trusted_approval_context(
+            &ApprovalKind::FilesystemDenialRetry {
+                denials: vec![denial.clone()],
+                prior_result: crate::contract::ToolCallResult::new(
+                    crate::contract::ToolCallId("call-context".to_string()),
+                    serde_json::json!({}),
+                ),
+            },
+            "bash",
+        );
+        assert_eq!(
+            context.requested_filesystem_grants,
+            vec![denial.grant.clone()]
+        );
+        assert!(context.requested_domains.is_empty());
+        assert!(context.host_execution_requested);
 
         let expected_domains = vec!["example.com".to_string()];
-        let (grants, domains) = trusted_approval_context(&ApprovalKind::DomainDenialRetry {
-            domains: expected_domains.clone(),
-            prior_result: crate::contract::ToolCallResult::new(
-                crate::contract::ToolCallId("call-domain".to_string()),
-                serde_json::json!({}),
-            ),
-        });
-        assert!(grants.is_empty());
-        assert_eq!(domains, expected_domains);
+        let context = trusted_approval_context(
+            &ApprovalKind::DomainDenialRetry {
+                domains: expected_domains.clone(),
+                prior_result: crate::contract::ToolCallResult::new(
+                    crate::contract::ToolCallId("call-domain".to_string()),
+                    serde_json::json!({}),
+                ),
+            },
+            "bash",
+        );
+        assert!(context.requested_filesystem_grants.is_empty());
+        assert_eq!(context.requested_domains, expected_domains);
+        assert!(!context.host_execution_requested);
+
+        let context = trusted_approval_context(&ApprovalKind::Standard, "bash");
+        assert!(context.host_execution_requested);
+        let context = trusted_approval_context(&ApprovalKind::Standard, "web_fetch");
+        assert!(!context.host_execution_requested);
     }
 
     fn temp_event_log(label: &str) -> std::path::PathBuf {

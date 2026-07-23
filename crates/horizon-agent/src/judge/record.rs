@@ -57,6 +57,7 @@ pub(super) fn write_verdict(
         "latency_ms": latency_ms,
         "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
+        "approval_scope": approval_scope(input),
     });
     append(writer, session_id, payload);
 }
@@ -81,8 +82,17 @@ pub(super) fn write_skipped(
         "skipped_reason": reason,
         "requested_filesystem_grants": input.requested_filesystem_grants,
         "requested_domains": input.requested_domains,
+        "approval_scope": approval_scope(input),
     });
     append(writer, session_id, payload);
+}
+
+fn approval_scope(input: &JudgeInput) -> &'static str {
+    if input.host_execution_requested {
+        "host_execution_once"
+    } else {
+        "bounded"
+    }
 }
 
 fn decision_label(decision: JudgeDecision) -> &'static str {
@@ -153,6 +163,7 @@ mod tests {
             prior_user_messages: Vec::new(),
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
+            host_execution_requested: false,
         }
     }
 
@@ -191,6 +202,40 @@ mod tests {
         assert_eq!(payload["latency_ms"], 512);
         assert_eq!(payload["mode"], "enforcing");
         assert_eq!(payload["fallback_reason"], serde_json::Value::Null);
+        assert_eq!(payload["approval_scope"], "bounded");
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn host_execution_verdict_records_the_whole_call_scope() {
+        let path = temp_log_path("host-scope");
+        let (writer, _init_rx) = WriterHandle::open(&path);
+        let session_id = SessionId::new();
+        let mut input = judge_input("call-host");
+        input.host_execution_requested = true;
+
+        write_verdict(
+            &writer,
+            session_id,
+            &input,
+            "syn:small:text",
+            JudgeVerdict {
+                decision: JudgeDecision::AutoApprove,
+                stage: 1,
+                confidence: Some(1.0),
+                fallback_reason: None,
+            },
+            12,
+        );
+        writer.flush().expect("flush");
+
+        let report = event_log::read(&path).expect("read");
+        let payload = report.records[0]
+            .provider_payload
+            .as_ref()
+            .expect("payload");
+        assert_eq!(payload["approval_scope"], "host_execution_once");
 
         let _ = std::fs::remove_file(path);
     }
@@ -220,6 +265,7 @@ mod tests {
         assert_eq!(payload["skipped_reason"], "rate_limited");
         assert_eq!(payload["fallback_reason"], "rate_limited");
         assert_eq!(payload["judge_decision"], "escalate");
+        assert_eq!(payload["approval_scope"], "bounded");
 
         let _ = std::fs::remove_file(path);
     }

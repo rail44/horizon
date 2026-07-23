@@ -614,9 +614,15 @@ pub enum ApprovalKind {
         domains: Vec<String>,
         prior_result: ToolCallResult,
     },
-    /// A Linux supervisor observed one or more trusted filesystem boundary
-    /// crossings. Approving adds exactly these displayed session grants and
-    /// reruns the same command while containment stays enabled.
+    /// A sandboxed `bash` call crossed a filesystem boundary whose complete
+    /// requirements cannot be derived ahead of time. Approval authorizes the
+    /// SAME call to run once with the host process's ordinary authority;
+    /// later calls start sandboxed again. The observed grants may still be
+    /// retained session-locally to reduce repeat denials, but they are not a
+    /// complete description of what the approved host execution may access.
+    ///
+    /// The variant name predates the host-execution behavior and remains
+    /// stable so existing event-log records continue to deserialize.
     FilesystemDenialRetry {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         prior_result: ToolCallResult,

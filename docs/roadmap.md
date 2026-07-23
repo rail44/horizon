@@ -173,6 +173,14 @@ lands:
   escalation, error, timeout, rate limiting, and unparseable output fail
   closed to the human flow. Durable `judge_verdict` audit records retain
   compatibility with historical `judge_shadow_verdict` data.
+  **Agent #61 filesystem retry correction LANDED 2026-07-24:** authenticated
+  denial paths now trigger, but do not pretend to bound, approval. Judge or
+  human approval reruns exactly that bash call once with the host process's
+  ordinary authority; the next call starts sandboxed. Judge prompts and audit
+  outputs explicitly record `host_execution_once` plus decision source.
+  Domain and Git approvals remain narrow and sandboxed. The existing
+  `FilesystemDenialRetry` serialized name is reused for readable history;
+  its former incremental narrow-grant execution path is deleted.
   **Sandbox backend decided 2026-07-19: migrate `horizon-sandbox`
   from the self-built bwrap+seccompiler+landlock stack to depend on
   nono (`nono` 0.68, Apache-2.0) -- full adoption, both OSes
@@ -206,7 +214,7 @@ lands:
   deeper Linux prerequisite: nono's former `Blocked`/Landlock path was TCP-only and
   `ReadableScope::Full` permits arbitrary pathname UDS. The owner direction is
   to replace unsandboxed denial retry with structured, session-scoped narrow
-  grants and sandboxed retry for network and FS. The network leg uses the
+  grants and sandboxed retry for network and initially FS. The network leg uses the
   session's exact TCP proxy endpoint with nono `ProxyOnly`, ordinary HTTP proxy
   environment, and always-on Linux seccomp mediation (bare Landlock is only
   port-exact and leaves UDP/UDS holes). Owner narrowed the implementation
@@ -216,10 +224,10 @@ lands:
   landed 2026-07-21:** a dedicated single-threaded helper applies Landlock,
   records `openat`/`openat2` denials through seccomp-notify even when the child
   exits 0, authenticates a bounded report, and drives judge-gated human
-  exact-file/nearest-existing-parent grants. Approval is session-local,
-  revalidated, and always retries sandboxed; the old unsandboxed retry producer
-  is removed and its serialized approval kind fails closed. Existing-file and
-  missing-leaf enforcement tests prove sibling paths remain denied. **The
+  exact-file/nearest-existing-parent grants. The 2026-07-24 Agent #61
+  correction above supersedes the filesystem retry semantics: the observed
+  path is now a mediation trigger and an optional later-call optimization,
+  while the approved call runs once with host authority. **The
   Linux network leg also landed 2026-07-21:** the helper now owns one combined
   filesystem/network listener, emulates the one trusted fixed-endpoint connect,
   and records/denies direct TCP, UDP, named/abstract UDS, same-port decoys, and

@@ -1,20 +1,27 @@
 # Containment Denials and Narrow-Grant Retries
 
 Status: network direction accepted 2026-07-20; runtime ownership narrowed
-2026-07-21. The Linux helper now has one combined filesystem/network seccomp
-listener, exact per-session proxy-endpoint enforcement, structured bypass
-records, ordinary HTTP client proxy configuration, and the existing
-domain-denial narrow-grant retry. Recording-deny `openat`/`openat2` mediation,
-structured filesystem approval, session grant store, sandboxed retry, and
-shadow-judge input are also implemented. The missing-leaf policy is the nearest
-existing parent directory, displayed honestly as a recursive tree grant.
+2026-07-21; filesystem approval semantics superseded 2026-07-24 after Agent
+#61 dogfooding. The Linux helper still supplies trustworthy filesystem-denial
+evidence, but a dynamic shell call's complete filesystem, network, subprocess,
+and control-flow requirements cannot be derived from one failed attempt.
+`FilesystemDenialRetry` therefore authorizes only that same call to run once
+with the host process's ordinary authority. Later calls start sandboxed again.
+Observed grants may remain in the session as a revalidated optimization, but
+they do not bound the approved execution. Domain approvals and Git metadata
+preflight remain narrow and sandboxed because their complete scopes are
+derivable. The historical narrow-filesystem-retry sections below document the
+2026-07-21 mechanism; this status and the "2026-07-24 superseding decision"
+section are authoritative where they conflict.
 Metadata-writing Git commands now have a bounded preflight path: Horizon asks
 before the first attempt, validates the isolated worktree's Git indirection,
 and grants its metadata roots only to that sandboxed command.
-The owner has decided that containment denials become
-boundary-grant decisions, approval never removes the sandbox, and the local
-cross-platform network baseline is a proxy-aware compatibility layer backed
-by OS enforcement rather than transparent redirection. Horizon will first
+The original decision treated all containment denials as narrow
+boundary-grant decisions. The 2026-07-24 correction limits that invariant to
+derivable scopes: domains and Git metadata. Filesystem evidence triggers a
+whole-call approval instead. The local cross-platform network baseline remains
+a proxy-aware compatibility layer backed by OS enforcement rather than
+transparent redirection. Horizon will first
 extract the smallest relevant nono-cli v0.68.0 supervised-runtime slice into
 a local workspace crate instead of designing a new kernel-facing runtime from
 scratch. macOS runtime verification and filesystem-denial recovery remain
@@ -26,28 +33,53 @@ their separate boundary-crossing classification and SSRF policy.
 
 ## Decision summary
 
-The direction is sound, with one prerequisite: Horizon must first make its
-containment boundary true in the mechanism, then build approval on the
-mechanism's structured denial records.
+The mechanism still must make containment true and produce structured denial
+records. The approval scope now depends on whether Horizon can derive a
+complete capability boundary.
 
-- A containment denial is not permission to run without containment.
-  `SandboxDenialRetry` / `RetryWithoutSandbox` must retire from the tier-1
-  path. A denial either names a grant that can be added narrowly and retried
-  sandboxed, or becomes a non-retryable contained failure.
+- Domain denial and Git metadata scopes remain narrow, additive or
+  command-scoped, and retry sandboxed.
+- A filesystem denial is evidence that mediation is required, not proof of a
+  complete grant set. Judge or human approval reruns that exact call once with
+  host authority. It never disables the sandbox for the session.
 - Successful Internet egress must have traversed the per-session HTTP CONNECT
   proxy. Direct TCP, UDP, and unapproved local IPC that could provide an
   alternate egress route remain denied. A client may ignore proxy
   configuration, but such a client must remain unable to connect directly.
-- A generic domain or filesystem denial grant is session-scoped, additive, and
-  applied to a fresh sandbox policy on retry. It is never global and never
-  changes an already-running Landlock/Seatbelt domain. The Git preflight below
-  is deliberately narrower: its metadata roots live only for one approved
-  command and any chained retry of that same command.
+- A domain grant is session-scoped and additive. A Git preflight grant is
+  command-scoped. Revalidated filesystem observations may be stored
+  session-locally only to reduce later denials; they are not the authority for
+  the current approved host execution.
 - Exit status and process output are diagnostic evidence only. They are not an
   authority for naming or granting a resource.
-- The existing judge should receive the same structured grant request as the
-  human. It remains shadow-only until its separately planned enforcing flip;
-  this work must not silently turn shadow verdicts into execution authority.
+- The enforcing judge and human receive the same trusted approval effect.
+  Whole-call host execution is stated separately from untrusted arguments and
+  is recorded as `approval_scope=host_execution_once`.
+
+## 2026-07-24 superseding decision
+
+Agent #61 showed that incremental filesystem grants turn ordinary toolchain
+work into repeated approval/troubleshooting cycles: Cargo reached its package
+cache, shared build lock, linked Git metadata, Wasmtime cache, npm logs, and
+other paths over several attempts. A shell command is a program, so no general
+static or first-failure analysis can guarantee its complete capability set.
+
+The execution contract is now:
+
+1. Start every eligible call sandboxed.
+2. If authenticated filesystem mediation reports a boundary crossing, keep
+   the failed result inside sessiond and create one typed approval candidate.
+3. Judge or human approval reruns the same tool id/input once through the
+   ordinary host bash path. The result records `sandboxed=false`,
+   `host_execution_approved=true`, `approval_scope=host_execution_once`,
+   `approval_source`, and the observed trigger paths.
+4. Denial forwards the already-computed sandbox result unchanged.
+5. The next call starts from normal sandbox policy. There is no session-wide
+   unsandboxed mode.
+
+`FilesystemDenialRetry` retains its serialized name only so historical event
+logs deserialize. Its former narrow-grant execution implementation and tests
+are removed rather than kept as a compatibility mode.
 
 The network half is implementable from nono 0.68.0's existing public
 primitives and its nono-cli supervised-runtime implementation, but the
@@ -60,9 +92,10 @@ those installers cannot simply be assumed to compose (the
 returns `EBUSY` for a second listener). The combined filter needs a small
 upstream nono API addition or a bounded local deviation from the copied
 runtime, backed by a real integration test. The filesystem grant store and
-sandboxed retry are implementable now. Complete, trustworthy automatic
-discovery of every filesystem denial is **not** provided by nono's current
-`Sandbox::apply_auto` API; the exact limitation is described below.
+sandboxed retry were the initial 2026-07-21 implementation. Complete,
+trustworthy automatic discovery of every filesystem denial is **not** provided
+by nono's current `Sandbox::apply_auto` API; that limitation motivated the
+2026-07-24 one-call host-execution correction above.
 
 ## Git-operation preflight
 
@@ -156,32 +189,35 @@ the shell absorbs `EPERM` and exits 0.
 
 `horizon-agent` now consumes that authenticated report independently of child
 exit status, resolves each supported attempt to a displayed static grant,
-and emits `FilesystemDenialRetry`. Approve revalidates the original attempted
-path, stores the grant in that session only, rebuilds a fresh sandbox, and
-retries the same call. Stored proposals are revalidated before every later
-spawn; a changed symlink or missing suffix drops the stale grant. Deny forwards
-the already-computed result. The legacy `SandboxDenialRetry` remains
-deserializable for event-log compatibility but fails closed, and no execution
-path emits `RetryWithoutSandbox`.
+and emits `FilesystemDenialRetry`. As superseded on 2026-07-24, approve
+revalidates and may store the observed grant for later sandboxed calls, then
+runs the approved call once with host authority. A changed symlink or missing
+suffix prevents persistence but does not narrow or cancel the already-approved
+whole call. Deny forwards the already-computed result. The next call starts
+sandboxed. The legacy `SandboxDenialRetry` remains deserializable for
+event-log compatibility and fails closed.
 
 ## Required invariants
 
-1. **Containment:** no approval outcome widens a call beyond the named
-   resource, and no tier-1 retry calls the unsandboxed bash path.
+1. **Call-scoped elevation:** filesystem approval may widen only the approved
+   call to the host process's ordinary authority. It never changes the
+   session's default; the next call starts sandboxed.
 2. **Provenance:** a grantable resource comes from the proxy or OS mediation
    layer, not from shell text controlled by the command.
-3. **Specificity:** the request carries the canonical domain, or canonical
-   path plus access (`read` or `read_write`) and actual scope (`file` or
-   recursive directory). The UI must show the real scope.
+3. **Honest scope:** the request carries the canonical domain, or the observed
+   canonical path plus access and suggested grant scope. Filesystem
+   observations are displayed as triggers, never as the full bound of host
+   execution.
 4. **Session isolation:** grants live in one `ToolSessionState` and disappear
    with that session. A grant in session A cannot affect session B.
-5. **Deterministic retry:** approve mutates the session grant set, then reruns
-   the same tool id/input under a newly-built sandbox policy. Deny forwards the
-   already-computed prior result.
+5. **Deterministic retry:** filesystem approve reruns the same tool id/input
+   once on the host; domain and Git approvals rerun sandboxed with their
+   derived grants. Deny forwards the already-computed prior result.
 6. **Fail closed:** malformed records, unavailable mediation, or an unsupported
    denial kind never produce an automatic or human-grantable widening.
-7. **Audit:** the original denial, decision source (judge or human), exact
-   grant, and retry result remain attributable to the original call id.
+7. **Audit:** the original denial, decision source (judge or human), approval
+   scope, trigger paths, and retry result remain attributable to the original
+   call id.
 
 ## Pre-correction wiring and verified findings
 
@@ -377,10 +413,9 @@ infer a broader Cargo or package-manager root from the command text.
 
 It is compatibility-only and fails closed. New Linux open denials emit
 `FilesystemDenialRetry`, and domain denials continue to emit
-`DomainDenialRetry`; both approve paths call `bash::spawn_sandboxed`.
-`RetryWithoutSandbox` and its sessiond fold were removed. Ordinary
-`ApprovalKind::Standard` remains the explicit initial human approval path and
-is not a containment-denial retry.
+`DomainDenialRetry`. Domain approval calls `bash::spawn_sandboxed`;
+filesystem approval calls the explicit one-call host path. Ordinary
+`ApprovalKind::Standard` bash approval has the same host-execution effect.
 
 ## Delivered filesystem contract and future generalization
 
@@ -406,27 +441,31 @@ struct ContainmentDenial {
 ```
 
 The current delivery uses `FilesystemDenialRetry { denials, prior_result }`
-beside the existing `DomainDenialRetry`; the two can later converge on
-`ContainmentGrantRetry { denial }` when network transport is replaced. A
-separate non-grantable `ContainmentFailure` should cover events that do not
-map to a safe narrow grant (for example, a client trying direct TCP rather
-than the configured proxy, an unsupported syscall, or ambiguous filesystem
-evidence).
+beside the existing `DomainDenialRetry`, but their approval effects are
+deliberately different: the former triggers one host execution, while the
+latter adds a narrow domain and retries sandboxed. A separate non-grantable
+`ContainmentFailure` should cover events that do not justify either action
+(for example, a client trying direct TCP rather than the configured proxy or
+an unsupported syscall).
 
-The session currently owns an interior-mutable list of approved filesystem
-denials beside its network proxy. `run_sandboxed` snapshots revalidated grants
-before each spawn.
-Grant mutation and retry stay in `tools::approval`, where the current
-domain-only implementation already demonstrates the right ownership.
+The session currently owns an interior-mutable list of observed filesystem
+grants beside its network proxy. `run_sandboxed` snapshots revalidated grants
+before each spawn. This list optimizes later sandboxed calls; it does not
+authorize the approved host retry. Grant mutation and retry stay in
+`tools::approval`.
 
 ```text
 sandboxed call
     -> mechanism records no boundary denial -> normal ToolCallFinished
-    -> mechanism records grantable denial
-         -> trusted ContainmentGrant request
-         -> shadow judge records its verdict
-         -> human approve -> mutate this session -> rebuild policy -> retry sandboxed
-         -> human deny    -> forward prior result
+    -> mechanism records filesystem denial
+         -> trusted approval-effect request
+         -> enforcing judge auto-approves or escalates to human
+         -> approve -> run this same call once with host authority
+         -> deny    -> forward prior result
+         -> next call starts sandboxed
+    -> proxy records domain denial
+         -> trusted narrow domain grant
+         -> approve -> mutate this session -> retry sandboxed
     -> mechanism records non-grantable denial -> contained error; never unsandbox
 ```
 
@@ -542,19 +581,19 @@ captured.
    denial even if shell exit is 0. Cargo uses the asserted
    `CARGO_HTTP_PROXY`/HTTP proxy environment contract; a network-dependent
    Cargo fixture is intentionally not part of the offline repository gate.
-3. **Generalize the grant contract — network and filesystem retry shapes
-   delivered separately.** Domain approve/deny behavior remains
-   session-local and always retries sandboxed; audit fields identify the
-   denial source and decision source.
-4. **Add filesystem session grants and the chosen discovery slice — delivered
-   2026-07-21.** At
-   minimum reproduce the shared Cargo build-dir incident: the denied canonical
-   path is named despite exit 0, approval adds only the displayed root, retry
-   succeeds sandboxed, and a sibling path remains denied.
+3. **Generalize the approval contract — delivered separately.** Domain
+   approve/deny remains session-local and retries sandboxed. Filesystem
+   approval uses one-call host execution as of 2026-07-24. Audit fields
+   identify the source and scope.
+4. **Add filesystem denial discovery and approval recovery — delivered
+   2026-07-21, semantics corrected 2026-07-24.** The denied canonical path is
+   named despite exit 0. Approval lets the entire current call complete with
+   host authority, while a new call is sandboxed again.
 5. **Connect the judge seam in shadow mode.** Every grant request records a
    verdict against the same call id; no verdict changes execution yet.
-6. **Delete unsandbox retry.** Repository search finds no tier-1 path from a
-   containment denial to plain `bash::spawn`.
+6. **Make host retry explicit and call-scoped.** Repository search finds no
+   session-wide containment disable. The only host retry path carries
+   `host_execution_once` audit metadata.
 
 All per-OS tests must exercise real containment, not only `CapabilitySet`
 shape. The normal workspace quality gate remains mandatory.

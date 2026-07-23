@@ -301,17 +301,22 @@ product-owned API. Decisions:
   normalized host exactly: approving `example.com` does not approve
   `api.example.com`. Thus bash proxy denials and host fetch prompts mutate one
   session-scoped policy without making the proxy the policy owner.
-- **Denial UX** (corrected 2026-07-21): a containment denial never authorizes
-  removing containment. Linux `openat`/`openat2` crossings come from the
+- **Filesystem-denial UX** (corrected 2026-07-24 after Agent #61
+  dogfooding): Linux `openat`/`openat2` crossings still come from the
   authenticated supervisor report, not exit status or stderr, and become
-  `FilesystemDenialRetry` requests carrying the attempted path plus the real
-  exact-file or recursive-directory grant. Approve revalidates and adds only
-  that session grant, then reruns the same call through `spawn_sandboxed`;
-  deny forwards the prior result. `RetryWithoutSandbox` is removed. The old
-  serialized `SandboxDenialRetry` kind remains readable only for event-log
-  compatibility and resolves fail-closed. This is an incident-complete open
-  slice, not a claim that every Landlock-controlled filesystem syscall can be
-  discovered. See `docs/containment-denial-narrow-grants-design.md`.
+  `FilesystemDenialRetry` requests carrying the observed attempted path and
+  suggested grant. Those observations cannot describe all paths, subprocess
+  behavior, network access, or process operations a dynamic shell call may
+  need. Approve therefore reruns only that same call with the host process's
+  ordinary authority; later calls start sandboxed again. The observed grants
+  may be revalidated and retained session-locally as an optimization for later
+  sandboxed calls, but do not bound the approved execution. Deny forwards the
+  prior result. The judge prompt and result/audit records explicitly name the
+  `host_execution_once` scope and whether the source was the judge or a human.
+  Domain and Git scopes remain narrow and sandboxed because Horizon can derive
+  those complete capabilities. `FilesystemDenialRetry` keeps its serialized
+  name so existing event-log records remain readable; the old narrow-retry
+  execution path is not retained.
 - **Git metadata preflight** (2026-07-21): an isolated worktree's writable
   content root does not include the linked worktree gitdir or shared common
   gitdir, so `git add`/`git commit` cannot wait for generic post-hoc denial
@@ -350,6 +355,11 @@ product-owned API. Decisions:
   Completion arrives through the generalized async `ToolCompletion`
   channel selected alongside provider, inbound (including `Cancel`), and
   replay traffic.
+  For bash `Standard` and filesystem-denial candidates, trusted mediation
+  explicitly tells the judge that approval grants one host execution outside
+  Horizon's filesystem, network, and process sandbox. Displayed denial paths
+  are triggers, not bounds. Other candidates remain bounded by their typed
+  grant.
 - **Input restriction (the injection defense)**: the judge sees only
   prior user messages plus the raw tool-call arguments — no tool
   results, no assistant prose. Both are already available pre-fold at
@@ -546,10 +556,13 @@ refactoring wave folds into this item.
    "Leg 4b" note for the full shape. A persistent, config-file allowlist
    remains out of scope (this leg's allowlist lives only for the
    session's lifetime).*
-   *Filesystem containment-denial correction landed 2026-07-21: the reduced
-   nono-derived Linux helper records `openat`/`openat2` denials regardless of
-   command exit status; exact session grants are judge-gated using trusted
-   mediation data, revalidated, and retried sandboxed.*
+   *Filesystem containment-denial correction landed 2026-07-21, then its
+   approval semantics were corrected 2026-07-24 after Agent #61 dogfooding:
+   the reduced nono-derived Linux helper records `openat`/`openat2` denials
+   regardless of command exit status. Those trusted records trigger judge or
+   human review, but are not treated as a complete capability prediction.
+   Approve runs that call once with host authority; the next call is
+   sandboxed again.*
    *Network containment correction landed 2026-07-21: active egress now uses
    the session's exact TCP allowlist-proxy endpoint, ordinary HTTP clients get
    standard proxy environment, and Linux runs combined filesystem/network
