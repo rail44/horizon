@@ -125,6 +125,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::ProviderRequestSent(_)
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
+            | Event::ProviderRequestUsage(_)
             | Event::Exited(_)
             | Event::TurnEnded(_)
             | Event::Unknown => None,

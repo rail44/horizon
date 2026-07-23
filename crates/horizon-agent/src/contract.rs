@@ -164,6 +164,11 @@ pub enum Event {
     /// reducer-side wall clock, respectively), not carried on this event
     /// itself, so this variant's own wire shape stays unchanged.
     TurnEnded(TurnEndReason),
+    /// Exact token usage the provider reported for the most recent completed
+    /// request. This is a durable inspection record, not transcript state;
+    /// it is emitted separately from `ProviderRequestFinished` so providers
+    /// which cannot report usage retain the existing lifecycle marker.
+    ProviderRequestUsage(ProviderRequestUsage),
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —
@@ -227,6 +232,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ProviderRequestSent(_) => "provider_request_sent",
         Event::ProviderRequestFirstToken => "provider_request_first_token",
         Event::ProviderRequestFinished => "provider_request_finished",
+        Event::ProviderRequestUsage(_) => "provider_request_usage",
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
@@ -644,6 +650,18 @@ pub enum ApprovalKind {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderRequestSent {
     pub model: String,
+}
+
+/// Exact usage reported by a provider for one completion request. The fields
+/// use provider-neutral input/output names while retaining separately reported
+/// cached input for later JSONL or DuckDB inspection.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ProviderRequestUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub total_tokens: u64,
+    #[serde(default)]
+    pub cached_input_tokens: u64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize)]

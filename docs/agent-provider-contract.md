@@ -140,6 +140,7 @@ enum Event {
     ProviderRequestSent(ProviderRequestSent),
     ProviderRequestFirstToken,
     ProviderRequestFinished,
+    ProviderRequestUsage(ProviderRequestUsage),
     Error(Error),
     Exited(Exit),
 }
@@ -162,6 +163,10 @@ Notes:
   `agent-inspect` skill). `ProviderRequestSent` carries the model id;
   Horizon renders none of the three in the transcript — they are pure
   timing markers for replay/inspection, folded into the frame as no-ops.
+- `ProviderRequestUsage` is a separate frame-neutral event emitted when the
+  provider supplies final per-request input, output, total, and cached-input
+  token counts. It remains queryable through the generic JSONL/DuckDB event
+  records without making token accounting provider-specific.
 - `Exited` is runtime lifecycle, distinct from detached pane state.
 
 Provider runtime transport uses an event envelope:

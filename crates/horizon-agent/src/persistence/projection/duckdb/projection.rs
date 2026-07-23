@@ -119,6 +119,7 @@ impl Store {
             | Event::ProviderRequestSent(_)
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
+            | Event::ProviderRequestUsage(_)
             | Event::Error(_)
             | Event::Exited(_) => Ok(false),
             // Skew catch-all (`Event::Unknown`'s doc): an event this build

@@ -275,6 +275,12 @@ lands:
   dropped (no prior art; revisit with web tools). LANDED 2026-07-20
   (merge `4816d3c`): `model_catalog` (cached, timeout-bounded `/models`
   query), `derive_history_token_budget`, and `ToolResultPruningMemory`.
+- **Agent #61 dogfooding observability/approval slice — shipped 2026-07-23.**
+  Rig's OpenAI-compatible streaming final response now records exact usage as
+  an additive, frame-neutral `ProviderRequestUsage` event (input, output,
+  total, and cached input) beside `ProviderRequestFinished`, queryable through
+  the generic JSONL/DuckDB records; `git branch --show-current` is recognized
+  as read-only, and the thin tool policy directs temporary files to `$TMPDIR`.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

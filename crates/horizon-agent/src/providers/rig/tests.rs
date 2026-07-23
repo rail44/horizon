@@ -2,7 +2,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::completion::{
     history_token_window_policy, openai_turn_additional_params, partial_assistant_message,
-    rig_tool_definitions, windowed_history_for_request, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    provider_request_usage_event_from_openai_final, rig_tool_definitions,
+    windowed_history_for_request, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
@@ -29,8 +30,8 @@ const TEST_DOOM_LOOP_WINDOW: usize = 5;
 use crate::contract::SessionId;
 use crate::contract::{
     Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
-    ProviderEvent, ProviderId, SessionState, StartSession, ToolCallId, ToolCallRequest,
-    ToolCallResult, ToolPermission, TurnEndReason,
+    ProviderEvent, ProviderId, ProviderRequestUsage, SessionState, StartSession, ToolCallId,
+    ToolCallRequest, ToolCallResult, ToolPermission, TurnEndReason,
 };
 use rig_core::{
     completion::{
@@ -52,6 +53,60 @@ fn openai_turns_explicitly_enable_parallel_tool_calls() {
         openai_turn_additional_params()["parallel_tool_calls"],
         serde_json::Value::Bool(true)
     );
+}
+
+#[test]
+fn openai_stream_final_usage_emits_cached_input_event() {
+    let response =
+        rig_core::providers::openai::completion::streaming::StreamingCompletionResponse {
+            usage: rig_core::providers::openai::completion::Usage {
+                prompt_tokens: 100,
+                total_tokens: 125,
+                prompt_tokens_details: Some(
+                    rig_core::providers::openai::completion::PromptTokensDetails {
+                        cached_tokens: 80,
+                    },
+                ),
+            },
+        };
+
+    assert_eq!(
+        provider_request_usage_event_from_openai_final(&response),
+        Event::ProviderRequestUsage(ProviderRequestUsage {
+            input_tokens: 100,
+            output_tokens: 25,
+            total_tokens: 125,
+            cached_input_tokens: 80,
+        })
+    );
+}
+
+#[test]
+fn provider_usage_event_persists_through_the_generic_duckdb_record() {
+    let store = crate::persistence::projection::duckdb::Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    let usage = ProviderRequestUsage {
+        input_tokens: 100,
+        output_tokens: 25,
+        total_tokens: 125,
+        cached_input_tokens: 80,
+    };
+
+    store
+        .append_event(crate::persistence::projection::duckdb::AppendEvent {
+            session_id,
+            turn_id: Some("turn-1".to_string()),
+            provider_id: Some(ProviderId("builtin.agent.rig".to_string())),
+            role_id: None,
+            event: Event::ProviderRequestUsage(usage),
+            provider_payload: None,
+        })
+        .expect("append usage event");
+
+    let events = store.events_for_session(session_id).expect("events");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].event, Event::ProviderRequestUsage(usage));
+    assert_eq!(events[0].event_kind, "provider_request_usage");
 }
 
 #[test]

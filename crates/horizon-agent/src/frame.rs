@@ -453,6 +453,15 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
             Event::ProviderRequestFinished => {
                 lines.push("provider request finished".to_string());
             }
+            Event::ProviderRequestUsage(usage) => {
+                lines.push(format!(
+                    "provider request usage: {} input, {} output, {} total, {} cached input",
+                    usage.input_tokens,
+                    usage.output_tokens,
+                    usage.total_tokens,
+                    usage.cached_input_tokens,
+                ));
+            }
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),
@@ -601,7 +610,9 @@ pub(crate) fn apply_agent_event_to_frame(
         Event::ProviderRequestSent(sent) => {
             turn.model = Some(sent.model.clone());
         }
-        Event::ProviderRequestFirstToken | Event::ProviderRequestFinished => {}
+        Event::ProviderRequestFirstToken
+        | Event::ProviderRequestFinished
+        | Event::ProviderRequestUsage(_) => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
         // The turn's receipt: see `Event::TurnEnded`'s doc comment and
