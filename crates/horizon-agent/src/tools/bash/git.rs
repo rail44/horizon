@@ -131,15 +131,6 @@ fn segment_requires_metadata_write(words: &[String]) -> bool {
                 index += 1;
             }
             value if value.starts_with('-') => return true,
-            // `branch` is generally write-capable, but this exact form only
-            // prints the currently checked-out branch. Keep every other
-            // branch invocation fail-closed.
-            "branch"
-                if words.get(index + 1).map(String::as_str) == Some("--show-current")
-                    && words.get(index + 2).is_none() =>
-            {
-                return false;
-            }
             subcommand => return !READ_ONLY_SUBCOMMANDS.contains(&subcommand),
         }
     }
@@ -441,8 +432,6 @@ mod tests {
             "echo ok && env TRACE=1 /usr/bin/git push origin main",
             "env -u GIT_DIR git commit -m test",
             "command git branch topic",
-            "git branch --show-current topic",
-            "git branch -d topic",
         ] {
             assert!(command_requires_metadata_write(command), "{command}");
         }
@@ -453,9 +442,6 @@ mod tests {
             "echo 'git commit -m nope'",
             "printf '%s' git commit",
             "command -v git commit",
-            "git branch --show-current",
-            "git rev-parse --show-toplevel && git branch --show-current && git log -1",
-            "env TRACE=1 command -- /usr/bin/git branch --show-current",
         ] {
             assert!(!command_requires_metadata_write(command), "{command}");
         }
