@@ -1041,7 +1041,7 @@ fn system_prompt_carries_tool_policy_and_retry_nudge() {
     let lower = prompt.to_ascii_lowercase();
     assert!(lower.contains("absolute path"));
     assert!(prompt.contains("$TMPDIR"));
-    assert!(prompt.contains("literal /tmp is outside the writable sandbox"));
+    assert!(prompt.contains("sandboxed calls do not rely on literal /tmp being writable"));
     assert!(lower.contains("retry"));
 }
 
