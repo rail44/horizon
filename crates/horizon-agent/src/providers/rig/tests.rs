@@ -1,10 +1,11 @@
 use std::collections::{HashMap, HashSet};
 
 use super::completion::{
-    await_provider_phase, history_token_window_policy, openai_turn_additional_params,
-    partial_assistant_message, provider_request_usage_event_from_openai_final,
-    rig_tool_definitions, windowed_history_for_request, ProviderRequestSpan, ProviderWait,
-    TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    await_provider_phase, history_for_provider_request, history_token_window_policy,
+    openai_turn_additional_params, partial_assistant_message,
+    provider_request_usage_event_from_openai_final, rig_tool_definitions,
+    windowed_history_for_request, ProviderRequestSpan, ProviderWait, TurnCompletion,
+    MULTI_TOOL_TEST_BATCH_SIZE,
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
@@ -1574,6 +1575,26 @@ fn history_token_window_policy_uses_the_configured_budget() {
     assert!(
         windowed.len() < history.len(),
         "the configured budget, not some other default, must drive the window"
+    );
+}
+
+#[test]
+fn production_history_is_unmodified_while_pruning_is_disabled() {
+    let config = RigAgentConfig {
+        history_token_budget: 1,
+        protected_recent_tool_result_tokens: 0,
+        ..Default::default()
+    };
+    let history = vec![
+        RigMessage::user("task instruction"),
+        RigMessage::assistant("a".repeat(10_000)),
+        RigMessage::user("tool result shaped working context".repeat(1_000)),
+    ];
+
+    assert_eq!(
+        history_for_provider_request(&config, history.clone()),
+        history,
+        "the configured budget must not alter outgoing history while pruning is disabled"
     );
 }
 

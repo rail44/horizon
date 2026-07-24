@@ -38,6 +38,12 @@
 //! The full, unwindowed history (`rig_history`) is never touched by this --
 //! only the cloned view `windowed_history_for_request` sends to the
 //! provider for one turn (see that function's doc comment).
+//!
+//! Owner decision 2026-07-25: keep this implementation and its tests, but
+//! do not apply it to provider requests while Horizon first fixes the much
+//! earlier source of context pressure (excessive sequential tool turns and
+//! repeated history transmission). See
+//! [`TOOL_RESULT_HISTORY_PRUNING_ENABLED`].
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -46,6 +52,15 @@ use rig_core::completion::message::{ToolResult, ToolResultContent, UserContent};
 use rig_core::completion::{AssistantContent, Message};
 use rig_core::OneOrMany;
 use rig_memory::{MemoryError, MemoryPolicy, TokenCounter};
+
+/// Temporary integration switch for tool-result history pruning.
+///
+/// `false` means provider requests receive the canonical Rig history
+/// unchanged. This is deliberately a fixed code decision rather than a user
+/// configuration knob: pruning is disabled product-wide until its tradeoffs
+/// are reconsidered after the upstream context-pressure problem is fixed.
+/// The policy implementation remains compiled and directly tested below.
+pub(super) const TOOL_RESULT_HISTORY_PRUNING_ENABLED: bool = false;
 
 /// Avoid cache-hostile tiny edits: early pruning happens only when one batch
 /// can reclaim at least this much estimated context. This is Horizon's scaled

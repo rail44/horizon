@@ -146,18 +146,15 @@ pub const DEFAULT_DOOM_LOOP_WINDOW: usize = 5;
 pub(crate) const DEFAULT_STREAM_FLUSH_INTERVAL_MS: u64 = 100;
 /// Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`.
 pub(crate) const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
-/// Token budget for the conversation history sent to the provider on each
-/// turn (`providers::rig::completion`'s `history_token_window_policy`,
-/// applying `rig_memory::TokenWindowMemory`). 60,000 is conservative rather
-/// than tight against any particular model's real context window: the
-/// counter behind it (`rig_memory::HeuristicTokenCounter`'s OpenAI preset)
-/// approximates tokens from UTF-8 byte lengths and can over- or
-/// under-count by up to ~30% on real content, and the budget only bounds
-/// history -- it leaves headroom on top for the system prompt, the new
-/// turn's prompt, and the tool responses a turn is still free to request
-/// after this history is sent. Applies regardless of provider, but was
-/// chosen with Horizon's current provider in mind: an OpenAI-compatible
-/// endpoint fronting Kimi.
+/// Retained token budget for the conversation-history pruning implementation.
+/// Pruning is disabled product-wide as of the owner decision on 2026-07-25,
+/// so this value is not currently applied to provider requests. Historically,
+/// 60,000 was conservative rather than tight against any particular model's
+/// real context window: the counter behind it
+/// (`rig_memory::HeuristicTokenCounter`'s OpenAI preset) approximates tokens
+/// from UTF-8 byte lengths and can over- or under-count by up to ~30% on real
+/// content. The budget only covered history, leaving headroom for the system
+/// prompt, the new turn's prompt, and later tool responses.
 pub(crate) const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// Character cap on the composed "Repository instructions" system-prompt
 /// section built by `instructions::extra_sections` from `AGENTS.md`/
@@ -172,7 +169,8 @@ pub(crate) const DEFAULT_HISTORY_TOKEN_BUDGET: usize = 60_000;
 /// token history budget, leaving the rest for conversation history and the
 /// turn's own prompt.
 pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
-/// Token floor within which `providers::rig::memory::ToolResultPruningMemory`
+/// Retained token floor within which
+/// `providers::rig::memory::ToolResultPruningMemory`
 /// (axis B, `docs/research/agent-context-memory-separation-2026-07-20.md`'s
 /// "Decision (2026-07-20)") never elides a tool-result message's content,
 /// even under budget pressure -- protects the most recently landed
@@ -320,22 +318,16 @@ pub struct RigAgentConfig {
     /// above. Was `providers::rig::stream`'s `STREAM_FLUSH_CHARS`. Always
     /// [`DEFAULT_STREAM_FLUSH_CHARS`].
     pub stream_flush_chars: usize,
-    /// Token budget applied to the conversation history sent to the
-    /// provider on each turn -- see [`DEFAULT_HISTORY_TOKEN_BUDGET`] for
-    /// why 60,000 was chosen. Always active (no "0/unset disables
-    /// windowing" escape hatch), matching this struct's other tuning
-    /// knobs (`iteration_cap`, `doom_loop_window`, ...): always
-    /// [`DEFAULT_HISTORY_TOKEN_BUDGET`]. This only shapes the *view* sent
-    /// to the provider (`providers::rig::completion::
-    /// windowed_history_for_request`) -- `rig_history` itself, and the
-    /// DuckDB-persisted event log it's rebuilt from, are never truncated.
+    /// Retained budget for the disabled history-pruning implementation; see
+    /// [`DEFAULT_HISTORY_TOKEN_BUDGET`]. Provider requests currently receive
+    /// unmodified history, so this field has no runtime effect.
     pub history_token_budget: usize,
     /// Token floor within which a tool-result message is never elided by
     /// axis B's pruning policy -- see
     /// [`DEFAULT_PROTECTED_RECENT_TOOL_RESULT_TOKENS`] for why 8,000 was
-    /// chosen. Always that constant; read by `providers::rig::completion::
-    /// history_token_window_policy` when it builds
-    /// `providers::rig::memory::ToolResultPruningMemory`.
+    /// chosen. Retained for the disabled
+    /// `providers::rig::memory::ToolResultPruningMemory` implementation and
+    /// its direct tests; it has no production effect while pruning is off.
     pub protected_recent_tool_result_tokens: usize,
     /// Character cap applied to the composed "Repository instructions"
     /// system-prompt section -- see

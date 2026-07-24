@@ -23,8 +23,8 @@ use crate::{
 
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
-    load_rig_history, model_catalog, rig_initialization_message, rig_tool_result_message,
-    ToolCallDescriptor, TurnCompletion,
+    load_rig_history, memory::TOOL_RESULT_HISTORY_PRUNING_ENABLED, model_catalog,
+    rig_initialization_message, rig_tool_result_message, ToolCallDescriptor, TurnCompletion,
 };
 
 pub(super) fn spawn_rig_session(
@@ -77,18 +77,15 @@ pub(super) fn spawn_rig_session(
                 return;
             };
 
-            // Axis A (model-derived history budget,
-            // `docs/research/agent-context-memory-separation-2026-07-20.md`'s
-            // "Decision (2026-07-20)"): query the provider's model catalog once
-            // this session's dedicated Tokio runtime exists (the network call
-            // needs an async context; this crate's config construction stays
-            // sync/pure) and, if resolvable, replace `config.history_token_budget`'s
-            // conservative built-in default with one derived from the model's
-            // actual served context window. A process-wide cache
-            // (`model_catalog::ModelWindowCache`) means only the first session
-            // for a given (base_url, model) pair actually performs the query.
-            let config =
-                runtime.block_on(model_catalog::apply_model_derived_history_budget(config));
+            // The model-derived budget exists only to parameterize the
+            // tool-result pruning policy. While that policy is disabled by
+            // owner decision, skip its `/models` query as well; the resulting
+            // budget would otherwise be computed and then ignored.
+            let config = if TOOL_RESULT_HISTORY_PRUNING_ENABLED {
+                runtime.block_on(model_catalog::apply_model_derived_history_budget(config))
+            } else {
+                config
+            };
 
             let _ = events_tx.send(Event::StateChanged(SessionState::Created).into());
             let _ = events_tx.send(

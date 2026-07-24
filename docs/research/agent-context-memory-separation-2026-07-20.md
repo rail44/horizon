@@ -590,6 +590,17 @@ conservatively when absent.
 Axis A and axis B are implemented together; the replay cache is dropped for
 now.
 
+> **Superseded operationally 2026-07-25.** The implementation and this
+> original rationale remain as a decision record, but both axes are disabled
+> in production. Agent #67 completed a small read-only audit only after 47
+> provider requests and 46 sequential tool calls, totaling 953,303 reported
+> tokens (581,952 cached input). The owner judged that Horizon must first fix
+> why ordinary work produces and retransmits this much context; enabling a
+> lossy pruning mechanism before that was the wrong order. Outgoing history is
+> therefore passed through unchanged, and the model-catalog budget query is
+> skipped while pruning is off. Re-enabling requires a new decision after the
+> upstream context-pressure problem is addressed.
+
 **Axis A — model-derived history budget.** At provider/session start, query
 `{base_url}/models` once (cached per process per `(base_url, model)`), and
 set `history_token_budget = context_length − max_output_length −

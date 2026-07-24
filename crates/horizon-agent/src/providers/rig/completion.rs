@@ -30,7 +30,7 @@ use super::{
         horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
         rig_tool_call_provider_payload, rig_tool_call_request,
     },
-    memory::ToolResultPruningMemory,
+    memory::{ToolResultPruningMemory, TOOL_RESULT_HISTORY_PRUNING_ENABLED},
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
 
@@ -216,8 +216,7 @@ async fn rig_openai_turn_streaming(
         .into(),
     );
     let mut request_span = ProviderRequestSpan::new(events_tx.clone());
-    let policy = history_token_window_policy(config);
-    let history = windowed_history_for_request(history, &policy);
+    let history = history_for_provider_request(config, history);
     let stream_request = model
         .completion_request(prompt)
         .messages(history)
@@ -430,8 +429,11 @@ pub(super) fn openai_turn_additional_params() -> serde_json::Value {
     serde_json::json!({ "parallel_tool_calls": true })
 }
 
-/// Builds the memory policy applied to the outgoing history just before it
-/// is sent to the provider (see [`windowed_history_for_request`]) --
+/// Builds the retained tool-result-aware memory policy. The policy is not
+/// currently applied to production requests; see
+/// [`history_for_provider_request`] and
+/// [`TOOL_RESULT_HISTORY_PRUNING_ENABLED`].
+///
 /// [`ToolResultPruningMemory`] (axis B,
 /// `docs/research/agent-context-memory-separation-2026-07-20.md`'s
 /// "Decision (2026-07-20)"), which prefers to shrink old tool-result
@@ -455,6 +457,30 @@ pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> ToolResult
         config.protected_recent_tool_result_tokens,
         HeuristicTokenCounter::openai(),
     )
+}
+
+/// Returns the history view sent to the provider.
+///
+/// Owner decision 2026-07-25 disables every form of tool-result pruning
+/// while Horizon first addresses why ordinary tasks need so many sequential
+/// provider/tool rounds. With the switch off this is an exact pass-through:
+/// no duplicate-read elision, proactive soft pruning, over-budget
+/// tool-result replacement, or oldest-turn dropping. A real provider context
+/// limit is therefore surfaced by the provider instead of Horizon silently
+/// discarding information.
+///
+/// The disabled branch remains here, rather than deleting the policy, so the
+/// implementation and its direct tests stay available for an explicit future
+/// product decision.
+pub(super) fn history_for_provider_request(
+    config: &RigAgentConfig,
+    history: Vec<Message>,
+) -> Vec<Message> {
+    if !TOOL_RESULT_HISTORY_PRUNING_ENABLED {
+        return history;
+    }
+    let policy = history_token_window_policy(config);
+    windowed_history_for_request(history, &policy)
 }
 
 /// Applies `policy` to `history` -- the *view* of the conversation sent to

@@ -279,6 +279,14 @@ lands:
   dropped (no prior art; revisit with web tools). LANDED 2026-07-20
   (merge `4816d3c`): `model_catalog` (cached, timeout-bounded `/models`
   query), `derive_history_token_budget`, and `ToolResultPruningMemory`.
+  **Disabled by owner decision 2026-07-25:** Agent #67 showed that a small
+  read-only audit still made 47 provider requests and 46 sequential tool
+  calls. The primary problem is that ordinary work creates and repeatedly
+  retransmits too much context; lossy history pruning was introduced in the
+  wrong order. Production requests now pass the full Rig history through
+  unchanged and skip the otherwise-unused model-catalog budget query. The
+  pruning implementation and tests remain in-tree for possible
+  reconsideration only after the upstream context-pressure problem is fixed.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,
@@ -289,10 +297,12 @@ lands:
   Grounded in `docs/research/agent-tool-output-and-read-routing-2026-07-24.md`:
   read now defaults to 500 lines with explicit 2,000-line and 50k-character
   bounds, continuation/version metadata, and prompt routing through grep/glob;
-  grep accepts a single file and bounded context. The provider projection
+  grep accepts a single file and bounded context. The provider request view
   removes exact duplicate read windows and batch-prunes worthwhile old tool
   output outside the protected recent region while canonical history and
-  persisted records remain intact for recall.
+  persisted records remain intact for recall. That history-pruning portion
+  is retained but disabled by the 2026-07-25 owner decision above; the
+  read/grep bounds and prompt routing remain active.
 - **Agent #64 provider-silence recovery — implemented 2026-07-24.**
   Dogfooding exposed an eighth completion request with a sent marker but no
   first token, finish, error, or turn end after several minutes. Provider
