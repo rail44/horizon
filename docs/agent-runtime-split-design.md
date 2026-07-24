@@ -919,3 +919,53 @@ casualty: a rebuild failure is no longer folded into `AgentdState`'s
 skipped-lines-style status (the writer module has no handle to
 `AgentdState`), so that specific client-visible surfacing regressed to
 stderr-only; still reported, just not over the wire.
+
+### Addendum (2026-07-24): session panics are durable and terminal
+
+Agent #65 dogfooding reproduced a session that stopped immediately after a
+persisted `ProviderRequestFinished`: the process remained alive, the
+session's dedicated thread no longer existed, and the session still appeared
+in `session_list`. The last fact followed directly from
+`spawn_session_thread`'s old shape: `run_session(...)` ran before the
+`sessions.remove(...)` cleanup, with no unwind boundary. A panic skipped the
+cleanup and its default hook wrote the payload only to sessiond's transient
+launching terminal. The evidence established that an unwind was possible on
+the session thread; it did not establish the exact panicking expression.
+
+The session host now has two unwind boundaries:
+
+- The dispatcher boundary records the current phase before handling a
+  provider event, asynchronous tool completion, inbound command, or replay
+  request. Provider phases include the exact `contract::event_kind`. If that
+  work panics, a process-wide hook first copies Rust's source
+  `file:line:column` into a thread-local slot (then delegates to the previous
+  hook unchanged); the payload, source location, and phase are committed
+  through the session's existing `LiveState` as `Event::Error`. An in-flight
+  turn is closed with `TurnEnded(Failed)`, and the session ends in
+  `StateChanged(Terminated)`. Using the existing `LiveState` is load-bearing:
+  its `Appender` still owns the active turn tracker, so the diagnostic and
+  closing events retain the failed turn's `turn_id`.
+- The thread-lifetime boundary catches setup and panic-reporting failures
+  that occur outside that dispatcher scope. It emits the same diagnostic and
+  terminal state with a fresh `Appender` (without fabricating a turn-less
+  `TurnEnded`), then proceeds to thread-local runtime unregister and
+  process-wide session removal. Runtime unregister has its own final boundary
+  so even a cleanup defect cannot recreate the stale `session_list` entry.
+
+`WaitingForUser` is deliberately not used for this path. The provider handle
+and dedicated thread are being dropped, so advertising an input-ready state
+would leave a pane that accepts input for a runtime that no longer exists.
+Ordinary provider request failures remain recoverable and continue to use
+`Error` → `TurnEnded(Failed)` → `WaitingForUser`; a sessiond internal panic is
+a different, fatal boundary.
+
+The per-attachment subscriber mutex now recovers its contained map after
+poisoning in both subscribe and send paths. This prevents the panic reporter
+from immediately suffering a secondary panic while forwarding its own
+diagnostic. Unit coverage intentionally panics at a named
+`provider_request_finished` phase, verifies the source location and
+phase/payload message, wire sequence, JSONL records and shared `turn_id`, and
+poisons the subscriber map before reconnecting and sending successfully. The
+next real reproduction will therefore preserve the exact Rust source location
+and panic payload beside the triggering event kind instead of requiring an
+inference from missing tail events.
