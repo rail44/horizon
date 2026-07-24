@@ -3636,7 +3636,6 @@ dependencies = [
  "regex",
  "reqwest 0.13.4",
  "rig-core",
- "rig-memory",
  "schemars 1.2.1",
  "serde",
  "serde_json",
@@ -7078,16 +7077,6 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 2.0.118",
-]
-
-[[package]]
-name = "rig-memory"
-version = "0.39.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "718603378cd5e89a8f587260ddfe1f06d27ae18943d926edc420ac4f52a3436e"
-dependencies = [
- "rig-core",
- "tracing",
 ]
 
 [[package]]

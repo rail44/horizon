@@ -279,14 +279,38 @@ lands:
   dropped (no prior art; revisit with web tools). LANDED 2026-07-20
   (merge `4816d3c`): `model_catalog` (cached, timeout-bounded `/models`
   query), `derive_history_token_budget`, and `ToolResultPruningMemory`.
-  **Disabled by owner decision 2026-07-25:** Agent #67 showed that a small
-  read-only audit still made 47 provider requests and 46 sequential tool
-  calls. The primary problem is that ordinary work creates and repeatedly
-  retransmits too much context; lossy history pruning was introduced in the
-  wrong order. Production requests now pass the full Rig history through
-  unchanged and skip the otherwise-unused model-catalog budget query. The
-  pruning implementation and tests remain in-tree for possible
-  reconsideration only after the upstream context-pressure problem is fixed.
+  **Reversed and removed by owner decision 2026-07-25.** A lossy history
+  transformation is a tradeoff that should not have been introduced while the
+  amount of context ordinary work produces was itself unresolved; the ordering
+  was wrong, independent of the policy's own merits. First switched off
+  (`87dc479`), then deleted: both modules, the budget constants and config
+  fields, the `history_for_provider_request`/`windowed_history_for_request`
+  seam, and the `rig-memory` dependency. Provider requests now carry
+  `rig_history` verbatim with no provider-facing projection of any kind.
+  Reinstating one is a single call site if a future decision calls for it.
+  Two things follow, both open: the baseline context-consumption problem
+  itself (see below), and an unbounded-history gap — nothing checks the
+  model's real context window, `context_length_exceeded` is handled nowhere,
+  and an overflowed session would fail every subsequent turn with no recovery
+  path (latent: max observed single-request input since 2026-07-23 is 32,277
+  tokens against a 262,144 window).
+- **Agent context-consumption baseline — open, being scoped 2026-07-25.**
+  Measured from agent #67's persisted event log: a read-only audit over six
+  files totaling 85KB used 47 provider requests, 46 tool calls (all strictly
+  one call per request), 944,023 input tokens for 9,280 output tokens, and
+  moved 281,321 characters of tool output — 3.3x the audited corpus. Same-file
+  re-reads dominate (`catalog.rs` 14x, `config.rs` 8x, `read.rs` and `grep.rs`
+  5x each with identical windows). Structural contributors identified so far,
+  not yet attributed by weight: round-trip count multiplies everything (across
+  the last ~1.5 days of log, 872 of 973 tool-bearing requests carried exactly
+  one tool call, although `parallel_tool_calls: true` is sent and the `fs.read`
+  description invites batching); an early large tool result is re-sent once per
+  remaining turn (agent #67's opening repo-wide grep returned 49,678
+  characters — the 50k cap — on turn 1); and a ~7,020-token fixed preamble
+  (`AGENTS.md` at 16.8KB plus 17 advertised tool schemas, two of which are
+  `mock.*` test fixtures). Note that the observed 62% cache-hit rate was
+  measured while pruning was still active; no session has run since it was
+  removed, so the current baseline is unmeasured.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,

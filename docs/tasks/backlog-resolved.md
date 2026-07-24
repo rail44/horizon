@@ -985,3 +985,28 @@ full resolution/closing records.
     quality gate and protocol-skew check remain mandatory, and the project
     session reviews and integrates the reported ref directly; the GitHub merge
     button is not a substitute for that gate.
+
+64. *(reverted 2026-07-25)* **Agent history budget + tool-result-aware
+    eviction.** Landed 2026-07-20 (`4816d3c`) as `model_catalog` (cached,
+    timeout-bounded `/models` query), `derive_history_token_budget`, and
+    `ToolResultPruningMemory` replacing the stock `TokenWindowMemory` —
+    decided in `docs/research/agent-context-memory-separation-2026-07-20.md`
+    off the dispatched-agent incident where a worker's first turn read ~99k
+    tokens of files and evicted its own task instruction. Switched off on
+    2026-07-25 (`87dc479`) and then removed entirely by owner decision: a
+    lossy history transformation is a tradeoff, and it should not have been
+    introduced while the amount of context ordinary work produces in the
+    first place was an open, unaddressed problem. The ordering was the
+    reason — no defect was demonstrated in the policy itself, and no causal
+    claim was ever established between it and any observed session behavior.
+    Deleted: `providers/rig/memory.rs`, `providers/rig/model_catalog.rs`,
+    `derive_history_token_budget` with its budget constants, the two
+    `RigAgentConfig` fields, the `history_for_provider_request` /
+    `windowed_history_for_request` seam, and the `rig-memory` dependency.
+    Provider requests now carry `rig_history` verbatim. The original
+    incident this entry was opened for is therefore unaddressed again, and
+    now shares a root with the broader context-consumption item on the
+    roadmap; the unbounded-history gap it leaves (nothing bounds history
+    against the model's real context window, and `context_length_exceeded`
+    is handled nowhere, so an overflowed session fails every subsequent turn
+    with no recovery path) is recorded there as open.

@@ -1,8 +1,6 @@
 mod completion;
 mod history;
 mod mapping;
-mod memory;
-mod model_catalog;
 mod session;
 mod stream;
 

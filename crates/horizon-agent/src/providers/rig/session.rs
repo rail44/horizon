@@ -23,8 +23,8 @@ use crate::{
 
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
-    load_rig_history, memory::TOOL_RESULT_HISTORY_PRUNING_ENABLED, model_catalog,
-    rig_initialization_message, rig_tool_result_message, ToolCallDescriptor, TurnCompletion,
+    load_rig_history, rig_initialization_message, rig_tool_result_message, ToolCallDescriptor,
+    TurnCompletion,
 };
 
 pub(super) fn spawn_rig_session(
@@ -75,16 +75,6 @@ pub(super) fn spawn_rig_session(
                 );
                 let _ = events_tx.send(Event::StateChanged(SessionState::Terminated).into());
                 return;
-            };
-
-            // The model-derived budget exists only to parameterize the
-            // tool-result pruning policy. While that policy is disabled by
-            // owner decision, skip its `/models` query as well; the resulting
-            // budget would otherwise be computed and then ignored.
-            let config = if TOOL_RESULT_HISTORY_PRUNING_ENABLED {
-                runtime.block_on(model_catalog::apply_model_derived_history_budget(config))
-            } else {
-                config
             };
 
             let _ = events_tx.send(Event::StateChanged(SessionState::Created).into());

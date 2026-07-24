@@ -590,16 +590,47 @@ conservatively when absent.
 Axis A and axis B are implemented together; the replay cache is dropped for
 now.
 
-> **Superseded operationally 2026-07-25.** The implementation and this
-> original rationale remain as a decision record, but both axes are disabled
-> in production. Agent #67 completed a small read-only audit only after 47
-> provider requests and 46 sequential tool calls, totaling 953,303 reported
-> tokens (581,952 cached input). The owner judged that Horizon must first fix
-> why ordinary work produces and retransmits this much context; enabling a
-> lossy pruning mechanism before that was the wrong order. Outgoing history is
-> therefore passed through unchanged, and the model-catalog budget query is
-> skipped while pruning is off. Re-enabling requires a new decision after the
-> upstream context-pressure problem is addressed.
+> **Reversed 2026-07-25 — implementation removed; this section is now a
+> decision record only.**
+>
+> Owner decision: a lossy history transformation is a tradeoff, and it should
+> not have been introduced while the amount of context ordinary work produces
+> in the first place was an open, unaddressed problem. That ordering — not any
+> measured defect in the policy itself — is the reason. No claim is made here
+> that pruning caused any particular observed behavior; that was never
+> established.
+>
+> The behavior that prompted the review: agent #67, a small read-only audit
+> over six files totaling 85KB, needed 47 provider requests and 46 sequential
+> tool calls, 944,023 input tokens (581,952 reported as cached) for 9,280
+> output tokens, and moved 281,321 characters of tool output — 3.3x the size of
+> the entire corpus it was auditing. Whatever the causes, that baseline is the
+> problem to solve, and it is upstream of anything a history policy can do.
+>
+> Both axes were first switched off (`87dc479`), then deleted outright: 
+> `providers/rig/memory.rs`, `providers/rig/model_catalog.rs`,
+> `derive_history_token_budget` with its budget constants and the two
+> `RigAgentConfig` fields, the `history_for_provider_request` /
+> `windowed_history_for_request` seam, and the `rig-memory` dependency. A
+> provider request now receives `rig_history` verbatim; there is no separate
+> provider-facing projection of it at all.
+>
+> The seam was deleted rather than kept as a placeholder because it had become
+> an identity function that still asserted, structurally, that "the provider
+> view is a projection of canonical history" — an invitation to put logic there
+> again. Reinstating it is one function call at one call site
+> (`providers/rig/completion.rs`), so nothing of value is stored by keeping an
+> empty version of it. Everything below stands as the original 2026-07-20
+> rationale, unedited.
+>
+> **Known consequence, tracked separately:** nothing now bounds history against
+> the model's real context window. An overflow surfaces as a provider error,
+> and because the history only grows, that session then fails on every
+> subsequent turn with no recovery path. No code anywhere handles
+> `context_length_exceeded`. Observed maximum single-request input since usage
+> recording began (2026-07-23) is 32,277 tokens against Kimi-K2.7-Code's
+> 262,144 window, so this is a latent gap rather than a live one — but it is a
+> real gap, and it is independent of whether a pruning policy exists.
 
 **Axis A — model-derived history budget.** At provider/session start, query
 `{base_url}/models` once (cached per process per `(base_url, model)`), and

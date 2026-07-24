@@ -12,7 +12,6 @@ use rig_core::{
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
     OneOrMany,
 };
-use rig_memory::{HeuristicTokenCounter, MemoryPolicy};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -30,7 +29,6 @@ use super::{
         horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
         rig_tool_call_provider_payload, rig_tool_call_request,
     },
-    memory::{ToolResultPruningMemory, TOOL_RESULT_HISTORY_PRUNING_ENABLED},
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
 
@@ -216,7 +214,11 @@ async fn rig_openai_turn_streaming(
         .into(),
     );
     let mut request_span = ProviderRequestSpan::new(events_tx.clone());
-    let history = history_for_provider_request(config, history);
+    // The provider sees the session's canonical history verbatim: Horizon
+    // keeps no separate, lossily-projected view of it (owner decision
+    // 2026-07-25, `docs/research/agent-context-memory-separation-2026-07-20.md`).
+    // A real context-window overflow is therefore reported by the provider
+    // rather than hidden by Horizon silently discarding older content.
     let stream_request = model
         .completion_request(prompt)
         .messages(history)
@@ -427,90 +429,6 @@ fn saturating_u64(value: usize) -> u64 {
 /// still waits for every result before the next completion.
 pub(super) fn openai_turn_additional_params() -> serde_json::Value {
     serde_json::json!({ "parallel_tool_calls": true })
-}
-
-/// Builds the retained tool-result-aware memory policy. The policy is not
-/// currently applied to production requests; see
-/// [`history_for_provider_request`] and
-/// [`TOOL_RESULT_HISTORY_PRUNING_ENABLED`].
-///
-/// [`ToolResultPruningMemory`] (axis B,
-/// `docs/research/agent-context-memory-separation-2026-07-20.md`'s
-/// "Decision (2026-07-20)"), which prefers to shrink old tool-result
-/// *content* to a short placeholder before ever dropping a whole message,
-/// so the task instruction (a plain `UserContent::Text`, never touched by
-/// that step) survives as a byproduct. Replaces the stock `rig_memory::
-/// TokenWindowMemory` this used to return, which applied a pure recency
-/// cutoff with no distinction between tool output and everything else.
-///
-/// Uses `rig-memory`'s OpenAI [`HeuristicTokenCounter`] preset -- a
-/// provider-agnostic, byte-length heuristic, not the real tokenizer of
-/// whatever model `config.model` names -- which is why
-/// `config.history_token_budget` (axis A: model-derived when resolvable,
-/// see `model_catalog::apply_model_derived_history_budget`, else
-/// `config::DEFAULT_HISTORY_TOKEN_BUDGET`) already reserves a safety margin
-/// against that approximation's own documented ~30% error rather than
-/// tracking a specific context window exactly.
-pub(super) fn history_token_window_policy(config: &RigAgentConfig) -> ToolResultPruningMemory {
-    ToolResultPruningMemory::new(
-        config.history_token_budget,
-        config.protected_recent_tool_result_tokens,
-        HeuristicTokenCounter::openai(),
-    )
-}
-
-/// Returns the history view sent to the provider.
-///
-/// Owner decision 2026-07-25 disables every form of tool-result pruning
-/// while Horizon first addresses why ordinary tasks need so many sequential
-/// provider/tool rounds. With the switch off this is an exact pass-through:
-/// no duplicate-read elision, proactive soft pruning, over-budget
-/// tool-result replacement, or oldest-turn dropping. A real provider context
-/// limit is therefore surfaced by the provider instead of Horizon silently
-/// discarding information.
-///
-/// The disabled branch remains here, rather than deleting the policy, so the
-/// implementation and its direct tests stay available for an explicit future
-/// product decision.
-pub(super) fn history_for_provider_request(
-    config: &RigAgentConfig,
-    history: Vec<Message>,
-) -> Vec<Message> {
-    if !TOOL_RESULT_HISTORY_PRUNING_ENABLED {
-        return history;
-    }
-    let policy = history_token_window_policy(config);
-    windowed_history_for_request(history, &policy)
-}
-
-/// Applies `policy` to `history` -- the *view* of the conversation sent to
-/// the provider for this turn. This never touches `rig_history` itself
-/// (the session loop's source of truth, appended to and persisted via the
-/// DuckDB projection unchanged by the caller in `complete_rig_turn`): only
-/// the clone handed to this function is ever windowed.
-///
-/// [`ToolResultPruningMemory::apply`] cannot currently fail (its
-/// `MemoryPolicy` impl only ever returns `Ok`), but [`MemoryPolicy::apply`]
-/// is fallible by contract, so a future policy change (or a different
-/// policy swapped in here) could start returning `Err`. On `Err` the
-/// original, unwindowed history is used instead and the failure is logged
-/// via `tracing` -- never silently dropping context (an empty history) or
-/// failing the turn outright over a policy bug.
-pub(super) fn windowed_history_for_request(
-    history: Vec<Message>,
-    policy: &dyn MemoryPolicy,
-) -> Vec<Message> {
-    let fallback = history.clone();
-    match policy.apply(history) {
-        Ok(windowed) => windowed,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                "history token-window policy failed; sending unwindowed history"
-            );
-            fallback
-        }
-    }
 }
 
 /// Builds the OpenAI Completions client for a turn.

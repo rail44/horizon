@@ -50,15 +50,18 @@ lines of context on each side. Individual lines are capped at 2,000
 characters and the complete serialized result at 50,000 characters. These
 are harness invariants rather than prompt-only conventions.
 
-Before building a provider request, exact duplicate reads of the same
-path/window/version are reduced to a reference while retaining the newest
-copy. Old tool-result bodies are also soft-pruned as one batch once at least
-8,000 estimated tokens are reclaimable, outside a protected recent 8,000
-token region. The batch threshold avoids frequent small prompt mutations
-that work against provider caching. Both transformations affect only the
-provider projection: canonical session history and persisted event/DuckDB
-records retain the returned tool result and remain available through recall.
-The measurement and prior-art basis is recorded in
+A provider request carries the session's canonical history verbatim. Horizon
+maintains no separate, lossily-projected view of it: nothing elides duplicate
+reads, shrinks old tool-result bodies, or drops turns on the way out. That
+mechanism existed between 2026-07-20 and 2026-07-25 and was removed with the
+owner decision recorded in
+`research/agent-context-memory-separation-2026-07-20.md` — a lossy history
+transformation is a tradeoff that should not be taken while the amount of
+context ordinary work produces in the first place is itself unresolved. The
+bounds above are the current answer to output size, and they act where the
+content is produced rather than after the fact.
+
+The measurement and prior-art basis for the read/grep bounds is recorded in
 `research/agent-tool-output-and-read-routing-2026-07-24.md`.
 
 ## Edit Semantics
