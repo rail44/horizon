@@ -263,7 +263,7 @@ fn soft_prune_old_tool_results(
             });
             let old_cost = counter.count(message);
             let new_cost = counter.count(&replacement);
-            (new_cost < old_cost).then_some((index, replacement, old_cost - new_cost))
+            (new_cost < old_cost).then(|| (index, replacement, old_cost - new_cost))
         })
         .collect::<Vec<_>>();
     let savings = replacements
@@ -572,6 +572,23 @@ mod tests {
             assistant_text("done"),
         ];
         let policy = ToolResultPruningMemory::new(100_000, 100_000, exact_byte_counter());
+
+        let windowed = policy.apply(history.clone()).expect("apply never fails");
+
+        assert_eq!(windowed, history);
+    }
+
+    #[test]
+    fn short_old_tool_result_does_not_underflow_soft_pruning() {
+        let history = vec![
+            tool_call("call-1", "fs.read", serde_json::json!({ "path": "/a" })),
+            tool_result("call-1", "x"),
+        ];
+        // With no protected suffix, the short result is considered for soft
+        // pruning. Its descriptive placeholder costs more than the original
+        // one-byte result, so it must be skipped without evaluating a
+        // backwards `old_cost - new_cost` subtraction.
+        let policy = ToolResultPruningMemory::new(100_000, 0, exact_byte_counter());
 
         let windowed = policy.apply(history.clone()).expect("apply never fails");
 

@@ -35,14 +35,12 @@
 //! running: both just send through whatever `outgoing` currently points at,
 //! silently dropping events when it's `None` (no client to see them).
 
-use std::any::Any;
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt;
-use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -62,6 +60,7 @@ use horizon_agent::persistence::event_log::{
 };
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::roles::RoleId;
+use horizon_agent::runtime_panic::{catch_runtime_panic, PanicLocation, PanicReport};
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
     cancelled_tool_call_result, process_agent_provider_event, register_session_runtime,
@@ -123,64 +122,6 @@ enum SessionLoopPhase {
     CleaningUp,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct PanicLocation {
-    file: String,
-    line: u32,
-    column: u32,
-}
-
-impl fmt::Display for PanicLocation {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}:{}:{}", self.file, self.line, self.column)
-    }
-}
-
-static INSTALL_PANIC_LOCATION_HOOK: Once = Once::new();
-
-thread_local! {
-    /// `catch_unwind` returns only the payload; Rust gives the source
-    /// location solely to the panic hook. The process-wide hook below writes
-    /// that location into this per-thread slot before delegating to the
-    /// previous hook, so unrelated session and non-session panics never race
-    /// over one shared "last panic" value.
-    static LAST_PANIC_LOCATION: RefCell<Option<PanicLocation>> = const {
-        RefCell::new(None)
-    };
-}
-
-fn install_panic_location_hook() {
-    INSTALL_PANIC_LOCATION_HOOK.call_once(|| {
-        let previous = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |info| {
-            if let Some(location) = info.location() {
-                LAST_PANIC_LOCATION.with(|slot| {
-                    if let Ok(mut slot) = slot.try_borrow_mut() {
-                        *slot = Some(PanicLocation {
-                            file: location.file().to_string(),
-                            line: location.line(),
-                            column: location.column(),
-                        });
-                    }
-                });
-            }
-            previous(info);
-        }));
-    });
-}
-
-fn clear_panic_location() {
-    LAST_PANIC_LOCATION.with(|slot| {
-        if let Ok(mut slot) = slot.try_borrow_mut() {
-            *slot = None;
-        }
-    });
-}
-
-fn take_panic_location() -> Option<PanicLocation> {
-    LAST_PANIC_LOCATION.with(|slot| slot.try_borrow_mut().ok().and_then(|mut slot| slot.take()))
-}
-
 impl fmt::Display for SessionLoopPhase {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -204,22 +145,11 @@ struct SessionPanic {
 }
 
 impl SessionPanic {
-    fn from_payload(
-        phase: SessionLoopPhase,
-        payload: Box<dyn Any + Send>,
-        location: Option<PanicLocation>,
-    ) -> Self {
-        let payload = match payload.downcast::<String>() {
-            Ok(message) => *message,
-            Err(payload) => match payload.downcast::<&'static str>() {
-                Ok(message) => (*message).to_string(),
-                Err(_) => "non-string panic payload".to_string(),
-            },
-        };
+    fn from_report(phase: SessionLoopPhase, report: PanicReport) -> Self {
         Self {
             phase,
-            payload,
-            location,
+            payload: report.payload,
+            location: report.location,
         }
     }
 
@@ -252,10 +182,7 @@ fn catch_session_panic<T>(
     phase: &Cell<SessionLoopPhase>,
     operation: impl FnOnce() -> T,
 ) -> Result<T, SessionPanic> {
-    install_panic_location_hook();
-    clear_panic_location();
-    catch_unwind(AssertUnwindSafe(operation))
-        .map_err(|payload| SessionPanic::from_payload(phase.get(), payload, take_panic_location()))
+    catch_runtime_panic(operation).map_err(|report| SessionPanic::from_report(phase.get(), report))
 }
 
 fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -596,7 +523,7 @@ fn spawn_session_thread(
                 failure.message()
             );
             phase.set(SessionLoopPhase::RecordingPanic);
-            let report_outcome = catch_unwind(AssertUnwindSafe(|| {
+            let report_outcome = catch_runtime_panic(|| {
                 record_uncaught_session_panic(
                     &thread_state,
                     session_id,
@@ -604,10 +531,9 @@ fn spawn_session_thread(
                     panic_role_id.as_ref(),
                     &failure,
                 );
-            }));
-            if let Err(payload) = report_outcome {
-                let reporting_failure =
-                    SessionPanic::from_payload(phase.get(), payload, take_panic_location());
+            });
+            if let Err(report) = report_outcome {
+                let reporting_failure = SessionPanic::from_report(phase.get(), report);
                 eprintln!(
                     "horizon-sessiond: could not record panic for session {session_id:?}: {}",
                     reporting_failure.message()
@@ -620,11 +546,10 @@ fn spawn_session_thread(
         // session entry fixed below. Cleanup itself gets a final boundary so
         // an unrelated cleanup defect cannot skip removal from `sessions`.
         phase.set(SessionLoopPhase::CleaningUp);
-        if let Err(payload) = catch_unwind(AssertUnwindSafe(|| {
+        if let Err(report) = catch_runtime_panic(|| {
             unregister_session_runtime(session_id);
-        })) {
-            let cleanup_failure =
-                SessionPanic::from_payload(phase.get(), payload, take_panic_location());
+        }) {
+            let cleanup_failure = SessionPanic::from_report(phase.get(), report);
             eprintln!(
                 "horizon-sessiond: cleanup panic in session {session_id:?}: {}",
                 cleanup_failure.message()
@@ -1429,7 +1354,10 @@ fn run_session(
                         provider_event,
                     );
                 }
-                Err(_) => break,
+                Err(_) => {
+                    record_unexpected_provider_exit(state, &live_state, session_id);
+                    break;
+                }
             },
             recv(async_results_rx) -> message => {
                 if let Ok(completion) = message {
@@ -1492,6 +1420,49 @@ fn record_session_loop_panic(
     for event in events {
         send_session_event(state, session_id, AgentWireEvent::Event(event));
     }
+}
+
+/// Converts an event-channel disconnect into an explicit terminal outcome.
+///
+/// A provider's normal `Command::Shutdown` path sends `Terminated` before
+/// dropping its sender, so an already-dead frame is a no-op here. Any other
+/// disconnect means the provider runtime can no longer accept input. Leaving
+/// its last live state (`Running` in the incident that motivated this guard)
+/// persisted would make the pane look indefinitely busy and would revive a
+/// non-existent provider on replay.
+///
+/// The provider panic boundary emits its detailed `Error` before dropping the
+/// last sender. Crossbeam drains queued messages before reporting disconnect,
+/// so a trailing error item suppresses the generic fallback diagnostic while
+/// this function still closes the active turn and terminates the session.
+fn record_unexpected_provider_exit(
+    state: &Arc<SessiondState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+) {
+    let events = unexpected_provider_exit_events(&live_state.frame());
+    let _ = live_state.extend_provider_events(events.iter().cloned().map(ProviderEvent::from));
+    for event in events {
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
+    }
+}
+
+fn unexpected_provider_exit_events(frame: &AgentFrame) -> Vec<Event> {
+    if session_is_dead(frame) {
+        return Vec::new();
+    }
+
+    let mut events = Vec::new();
+    if !matches!(frame.items.last(), Some(AgentFrameItem::Error(_))) {
+        events.push(Event::Error(AgentError {
+            message: "Agent provider runtime exited unexpectedly.".to_string(),
+        }));
+    }
+    if frame.is_turn_in_flight() {
+        events.push(Event::TurnEnded(TurnEndReason::Failed));
+    }
+    events.push(Event::StateChanged(SessionState::Terminated));
+    events
 }
 
 /// Last-resort reporting for a panic that happens before `LiveState` exists,
@@ -2194,6 +2165,67 @@ mod tests {
             recovery_turn_ids[1].turn_id, recovery_turn_ids[2].turn_id,
             "the terminal state must close the same failed turn"
         );
+    }
+
+    #[test]
+    fn unexpected_provider_exit_fails_and_terminates_an_active_turn() {
+        let frame = agent_frame_from_events(&[
+            Event::MessageCommitted(horizon_agent::contract::Message {
+                role: horizon_agent::contract::MessageRole::User,
+                text: "keep working".to_string(),
+            }),
+            Event::StateChanged(SessionState::Running),
+        ]);
+
+        assert_eq!(
+            unexpected_provider_exit_events(&frame),
+            vec![
+                Event::Error(AgentError {
+                    message: "Agent provider runtime exited unexpectedly.".to_string(),
+                }),
+                Event::TurnEnded(TurnEndReason::Failed),
+                Event::StateChanged(SessionState::Terminated),
+            ]
+        );
+    }
+
+    #[test]
+    fn unexpected_provider_exit_keeps_the_provider_panic_diagnostic() {
+        let panic_message =
+            "internal Rig provider panic at memory.rs:266:66: attempt to subtract with overflow";
+        let frame = agent_frame_from_events(&[
+            Event::MessageCommitted(horizon_agent::contract::Message {
+                role: horizon_agent::contract::MessageRole::User,
+                text: "keep working".to_string(),
+            }),
+            Event::StateChanged(SessionState::Running),
+            Event::Error(AgentError {
+                message: panic_message.to_string(),
+            }),
+        ]);
+
+        assert_eq!(
+            unexpected_provider_exit_events(&frame),
+            vec![
+                Event::TurnEnded(TurnEndReason::Failed),
+                Event::StateChanged(SessionState::Terminated),
+            ],
+            "the detailed provider error is already folded before disconnect"
+        );
+        assert!(matches!(
+            frame.items.last(),
+            Some(AgentFrameItem::Error(error)) if error.message == panic_message
+        ));
+    }
+
+    #[test]
+    fn expected_provider_exit_after_shutdown_adds_nothing() {
+        let frame = agent_frame_from_events(&[
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::Terminated),
+        ]);
+
+        assert!(unexpected_provider_exit_events(&frame).is_empty());
     }
 
     #[test]

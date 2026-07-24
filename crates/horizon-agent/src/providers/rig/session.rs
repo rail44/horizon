@@ -17,6 +17,7 @@ use crate::{
     persistence::projection::duckdb::SharedDuckdbStore,
     prompt::SessionEnvironment,
     roles::RoleDefinition,
+    runtime_panic::catch_runtime_panic,
     tools::cancelled_tool_call_result,
 };
 
@@ -46,63 +47,76 @@ pub(super) fn spawn_rig_session(
     let provider_id = request.provider_id;
     let session_id = request.session_id;
 
+    let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
-        // Blocks this dedicated thread (never the caller of `start_session`,
-        // and never sessiond's async accept loop) until the event-log
-        // writer's own rebuild-or-open decision has landed -- see
-        // `SharedDuckdbStore`'s doc comment for why this must be a genuine
-        // wait, not "read whatever's there right now": reading too early
-        // here (or through a fresh `Store::open`) is exactly the
-        // resumed-session bug this fixed -- a session's own real history
-        // silently not showing up.
-        let duckdb_store = duckdb_cell.wait();
-        let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
-        let extra_sections = session_extra_sections(&environment, &config, role);
+        let outcome = catch_runtime_panic(move || {
+            // Blocks this dedicated thread (never the caller of `start_session`,
+            // and never sessiond's async accept loop) until the event-log
+            // writer's own rebuild-or-open decision has landed -- see
+            // `SharedDuckdbStore`'s doc comment for why this must be a genuine
+            // wait, not "read whatever's there right now": reading too early
+            // here (or through a fresh `Store::open`) is exactly the
+            // resumed-session bug this fixed -- a session's own real history
+            // silently not showing up.
+            let duckdb_store = duckdb_cell.wait();
+            let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
+            let extra_sections = session_extra_sections(&environment, &config, role);
 
-        let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
+            let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            else {
+                let _ = events_tx.send(
+                    Event::Error(Error {
+                        message: "Rig session unavailable: failed to create Tokio runtime."
+                            .to_string(),
+                    })
+                    .into(),
+                );
+                let _ = events_tx.send(Event::StateChanged(SessionState::Terminated).into());
+                return;
+            };
+
+            // Axis A (model-derived history budget,
+            // `docs/research/agent-context-memory-separation-2026-07-20.md`'s
+            // "Decision (2026-07-20)"): query the provider's model catalog once
+            // this session's dedicated Tokio runtime exists (the network call
+            // needs an async context; this crate's config construction stays
+            // sync/pure) and, if resolvable, replace `config.history_token_budget`'s
+            // conservative built-in default with one derived from the model's
+            // actual served context window. A process-wide cache
+            // (`model_catalog::ModelWindowCache`) means only the first session
+            // for a given (base_url, model) pair actually performs the query.
+            let config =
+                runtime.block_on(model_catalog::apply_model_derived_history_budget(config));
+
+            let _ = events_tx.send(Event::StateChanged(SessionState::Created).into());
             let _ = events_tx.send(
-                Event::Error(Error {
-                    message: "Rig session unavailable: failed to create Tokio runtime.".to_string(),
+                Event::MessageCommitted(AgentMessage {
+                    role: MessageRole::Assistant,
+                    text: rig_initialization_message(&provider_id, &config, rig_history.len()),
                 })
                 .into(),
             );
-            let _ = events_tx.send(Event::StateChanged(SessionState::Terminated).into());
-            return;
-        };
+            let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
 
-        // Axis A (model-derived history budget,
-        // `docs/research/agent-context-memory-separation-2026-07-20.md`'s
-        // "Decision (2026-07-20)"): query the provider's model catalog once
-        // this session's dedicated Tokio runtime exists (the network call
-        // needs an async context; this crate's config construction stays
-        // sync/pure) and, if resolvable, replace `config.history_token_budget`'s
-        // conservative built-in default with one derived from the model's
-        // actual served context window. A process-wide cache
-        // (`model_catalog::ModelWindowCache`) means only the first session
-        // for a given (base_url, model) pair actually performs the query.
-        let config = runtime.block_on(model_catalog::apply_model_derived_history_budget(config));
-
-        let _ = events_tx.send(Event::StateChanged(SessionState::Created).into());
-        let _ = events_tx.send(
-            Event::MessageCommitted(AgentMessage {
-                role: MessageRole::Assistant,
-                text: rig_initialization_message(&provider_id, &config, rig_history.len()),
-            })
-            .into(),
-        );
-        let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
-
-        runtime.block_on(run_session_loop(
-            commands_rx,
-            events_tx,
-            config,
-            environment,
-            extra_sections,
-            rig_history,
-        ));
+            runtime.block_on(run_session_loop(
+                commands_rx,
+                events_tx,
+                config,
+                environment,
+                extra_sections,
+                rig_history,
+            ));
+        });
+        if let Err(report) = outcome {
+            let _ = panic_events_tx.send(
+                Event::Error(Error {
+                    message: report.message("internal Rig provider panic"),
+                })
+                .into(),
+            );
+        }
     });
 
     SessionHandle::new(commands_tx, events_rx)

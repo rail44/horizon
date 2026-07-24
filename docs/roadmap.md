@@ -301,17 +301,17 @@ lands:
   closed by a finished marker before timeout errors return the session to
   `WaitingForUser`. Automatic retry is intentionally excluded because
   Horizon cannot establish whether the provider already accepted the request.
-- **Agent #65 session-panic capture and cleanup — implemented 2026-07-24.**
-  A repeated stop after `ProviderRequestFinished` left no session thread but
-  did leave a stale `session_list` entry because the thread's cleanup lived
-  after an unguarded `run_session`. Session dispatch now records its exact
-  provider-event/command/tool/replay phase and persists the Rust
-  `file:line:column` plus panic payload as an `Error`, closes an active turn
-  as failed and terminates the unusable session. A thread-lifetime fallback
-  and poison-recovering subscriber path guarantee diagnostic forwarding and
-  registration cleanup; the next real reproduction will identify the exact
-  panicking source location rather than inferring a panic from missing tail
-  events.
+- **Agent #65/#66 provider-panic root fix — implemented 2026-07-25.**
+  The host-panic capture added after #65 remains valid hardening, but #66
+  disproved the original boundary inference: the attached UI session list was
+  not sessiond's runtime registry. Offline replay of #66's exact persisted
+  history found the real panic in tool-result soft pruning:
+  `then_some(old_cost - new_cost)` eagerly underflowed when a short result's
+  placeholder was larger. Lazy evaluation plus a regression test fixes the
+  cause. Panic capture is now shared with the Rig thread, and a provider event
+  channel that closes from a live state always persists failed/terminated
+  state, so future provider defects cannot leave a pane indefinitely
+  `Running` (`docs/agent-runtime-split-design.md`, 2026-07-25 correction).
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

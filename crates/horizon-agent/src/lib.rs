@@ -25,6 +25,7 @@ pub(crate) mod policy;
 pub(crate) mod prompt;
 pub(crate) mod providers;
 pub mod roles;
+pub mod runtime_panic;
 pub mod skills;
 pub mod socket;
 pub mod tools;

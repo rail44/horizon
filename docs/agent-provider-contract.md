@@ -166,6 +166,9 @@ Notes:
   Every sent marker has a matching finished marker, including provider setup
   errors, cancellation, and response-stream timeouts. Stream establishment
   and silence between chunks are independently bounded at 120 seconds.
+  `ProviderRequestFinished` bounds the request span; it is not evidence of a
+  successful response by itself. The Rig provider's span guard also emits it
+  while unwinding so a panicking request cannot leave timing state open.
   Horizon does not retry a timed-out generation automatically because it
   cannot prove that retrying would avoid duplicate generation, billing, or
   tool-call intent. A timeout instead follows the normal failed-turn path:
@@ -175,6 +178,17 @@ Notes:
   token counts. It remains queryable through the generic JSONL/DuckDB event
   records without making token accounting provider-specific.
 - `Exited` is runtime lifecycle, distinct from detached pane state.
+
+Dropping the provider event channel is a runtime-lifecycle boundary, not an
+implicit successful turn. A normal provider shutdown must emit
+`StateChanged(Terminated)` (or `Exited`) before its last sender is dropped. If
+the channel disconnects from any live state, sessiond persists an error unless
+the provider already supplied a more specific trailing one, closes an active
+turn with `TurnEnded(Failed)`, and finishes with
+`StateChanged(Terminated)`. The builtin Rig thread catches unwinds at its own
+boundary and emits the panic payload plus Rust source location first; the
+channel-close rule supplies the common terminal sequence. A dead provider can
+therefore never leave replay or the pane parked in `Running`.
 
 Provider runtime transport uses an event envelope:
 

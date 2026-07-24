@@ -969,3 +969,35 @@ poisons the subscriber map before reconnecting and sending successfully. The
 next real reproduction will therefore preserve the exact Rust source location
 and panic payload beside the triggering event kind instead of requiring an
 inference from missing tail events.
+
+### Correction (2026-07-25): the repeated stop was in the Rig provider thread
+
+Agent #66 reproduced the same tail on a binary containing the session-host
+boundaries above: `ProviderRequestSent` followed one millisecond later by the
+span guard's `ProviderRequestFinished`, with no host-panic diagnostic. The
+remaining threads and a replay of the 138 persisted events established the
+actual boundary. The Rig provider thread unwound while sessiond was still
+waiting on its event receiver; that receiver treated disconnect as a normal
+`break`. The attached pane listed by the UI control plane was workspace state,
+not proof that sessiond's runtime registry still contained the session. The
+earlier addendum's stale-registration explanation was therefore an incorrect
+inference, although its host-side unwind and cleanup guards remain useful for
+the separate failure class they cover.
+
+Offline replay reconstructed the exact 29-message Rig history and reproduced
+the panic at `providers/rig/memory.rs`: soft pruning used
+`condition.then_some((..., old_cost - new_cost))`. `then_some` evaluates its
+argument eagerly, so a short tool result whose descriptive placeholder was
+larger evaluated the backwards subtraction even though the condition was
+false. Debug builds panicked on the `usize` underflow before the request
+future reached the network. Lazy `then(|| ...)` now evaluates the subtraction
+only for a real saving, with a short-result regression test.
+
+Panic-location capture now lives once in `horizon-agent::runtime_panic` and is
+shared by both boundaries. The Rig thread sends a detailed `Error` before its
+last event sender drops. Independently, sessiond treats an event-channel
+disconnect from any non-terminal frame as fatal: it preserves a trailing
+provider diagnostic when present (or supplies a generic one), closes an
+in-flight turn as failed, and persists `Terminated`. Thus a future provider
+defect is both actionable and terminal instead of looking like indefinite
+provider latency.
