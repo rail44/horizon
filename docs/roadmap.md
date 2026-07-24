@@ -293,6 +293,14 @@ lands:
   removes exact duplicate read windows and batch-prunes worthwhile old tool
   output outside the protected recent region while canonical history and
   persisted records remain intact for recall.
+- **Agent #64 provider-silence recovery — implemented 2026-07-24.**
+  Dogfooding exposed an eighth completion request with a sent marker but no
+  first token, finish, error, or turn end after several minutes. Provider
+  stream establishment and inter-chunk silence are now independently bounded
+  at 120 seconds, cancellation covers both waits, and every sent request is
+  closed by a finished marker before timeout errors return the session to
+  `WaitingForUser`. Automatic retry is intentionally excluded because
+  Horizon cannot establish whether the provider already accepted the request.
 - **portable-pty fork-safety root fix** (backlog 28/31).
   Bounded-retry mitigation shipped. Bounded investigation 2026-07-19:
   hypothesis CONFIRMED at source level (heap-allocating

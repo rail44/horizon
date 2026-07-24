@@ -163,6 +163,13 @@ Notes:
   `agent-inspect` skill). `ProviderRequestSent` carries the model id;
   Horizon renders none of the three in the transcript — they are pure
   timing markers for replay/inspection, folded into the frame as no-ops.
+  Every sent marker has a matching finished marker, including provider setup
+  errors, cancellation, and response-stream timeouts. Stream establishment
+  and silence between chunks are independently bounded at 120 seconds.
+  Horizon does not retry a timed-out generation automatically because it
+  cannot prove that retrying would avoid duplicate generation, billing, or
+  tool-call intent. A timeout instead follows the normal failed-turn path:
+  `Error`, `TurnEnded(Failed)`, then `StateChanged(WaitingForUser)`.
 - `ProviderRequestUsage` is a separate frame-neutral event emitted when the
   provider supplies final per-request input, output, total, and cached-input
   token counts. It remains queryable through the generic JSONL/DuckDB event

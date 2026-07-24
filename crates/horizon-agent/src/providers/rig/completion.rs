@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, future::Future, time::Duration};
 
 use crossbeam_channel::Sender;
 use futures_util::StreamExt;
@@ -33,6 +33,72 @@ use super::{
     memory::ToolResultPruningMemory,
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
 };
+
+/// Bounds the HTTP/request setup phase before rig yields a response stream.
+///
+/// Provider requests are deliberately not retried here: once a request has
+/// crossed the network boundary Horizon cannot know whether retrying would
+/// duplicate generation, billing, or tool-call intent.
+const PROVIDER_STREAM_ESTABLISH_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Maximum silence between response-stream chunks, including the wait for
+/// the first chunk after the HTTP response stream has been established.
+const PROVIDER_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Debug, Eq, PartialEq)]
+pub(super) enum ProviderWait<T> {
+    Ready(T),
+    Cancelled,
+}
+
+/// Waits for one provider phase while keeping both cancellation and a
+/// wall-clock bound active. Keeping this generic lets establishment and each
+/// streamed chunk share exactly the same stop semantics.
+pub(super) async fn await_provider_phase<T>(
+    future: impl Future<Output = T>,
+    token: &CancellationToken,
+    timeout: Duration,
+    phase: &'static str,
+) -> anyhow::Result<ProviderWait<T>> {
+    tokio::select! {
+        _ = token.cancelled() => Ok(ProviderWait::Cancelled),
+        result = tokio::time::timeout(timeout, future) => {
+            result
+                .map(ProviderWait::Ready)
+                .map_err(|_| anyhow::anyhow!(
+                    "provider {phase} timed out after {timeout:?}"
+                ))
+        }
+    }
+}
+
+/// Guarantees a matching `ProviderRequestFinished` marker for every path
+/// after `ProviderRequestSent`, including stream setup errors, idle
+/// timeouts, cancellation, and task unwinding. `finish` preserves the normal
+/// event ordering by closing the span before transcript events are emitted.
+pub(super) struct ProviderRequestSpan {
+    events_tx: Option<Sender<ProviderEvent>>,
+}
+
+impl ProviderRequestSpan {
+    pub(super) fn new(events_tx: Sender<ProviderEvent>) -> Self {
+        Self {
+            events_tx: Some(events_tx),
+        }
+    }
+
+    fn finish(&mut self) {
+        if let Some(events_tx) = self.events_tx.take() {
+            let _ = events_tx.send(Event::ProviderRequestFinished.into());
+        }
+    }
+}
+
+impl Drop for ProviderRequestSpan {
+    fn drop(&mut self) {
+        self.finish();
+    }
+}
 
 /// What the session loop must remember about a requested tool call while
 /// its result is outstanding: the tool id and the call's arguments.
@@ -149,16 +215,35 @@ async fn rig_openai_turn_streaming(
         })
         .into(),
     );
+    let mut request_span = ProviderRequestSpan::new(events_tx.clone());
     let policy = history_token_window_policy(config);
     let history = windowed_history_for_request(history, &policy);
-    let mut stream = model
+    let stream_request = model
         .completion_request(prompt)
         .messages(history)
         .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
         .preamble(system_prompt(environment, extra_sections))
         .additional_params(openai_turn_additional_params())
-        .stream()
-        .await?;
+        .stream();
+    let mut stream = match await_provider_phase(
+        stream_request,
+        token,
+        PROVIDER_STREAM_ESTABLISH_TIMEOUT,
+        "stream establishment",
+    )
+    .await?
+    {
+        ProviderWait::Ready(result) => result?,
+        ProviderWait::Cancelled => {
+            return Ok((
+                partial_assistant_message(None, "", Vec::new()),
+                TurnCompletion {
+                    cancelled: true,
+                    ..TurnCompletion::default()
+                },
+            ));
+        }
+    };
 
     let mut first_token_seen = false;
     let mut text = String::new();
@@ -181,12 +266,19 @@ async fn rig_openai_turn_streaming(
     let mut tool_call_progress = ToolCallProgressBuffer::new(events_tx.clone(), config);
 
     loop {
-        let chunk = tokio::select! {
-            _ = token.cancelled() => {
+        let chunk = match await_provider_phase(
+            stream.next(),
+            token,
+            PROVIDER_STREAM_IDLE_TIMEOUT,
+            "response stream",
+        )
+        .await?
+        {
+            ProviderWait::Cancelled => {
                 cancelled = true;
                 break;
             }
-            chunk = stream.next() => chunk,
+            ProviderWait::Ready(chunk) => chunk,
         };
         let Some(chunk) = chunk else {
             break;
@@ -267,7 +359,7 @@ async fn rig_openai_turn_streaming(
     // The provider's response stream is done, either exhausted normally or
     // cut short by cancellation — either way, the request's wall-clock span
     // ends here, before the resulting message/tool-call events below.
-    let _ = events_tx.send(Event::ProviderRequestFinished.into());
+    request_span.finish();
 
     reasoning_buffer.flush();
     text_buffer.flush();
