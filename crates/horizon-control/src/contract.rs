@@ -83,8 +83,12 @@ pub enum EnvelopeBody {
     Query(Query),
     HelloAck(HelloAck),
     Rejected(Rejected),
-    /// A successful [`Invoke`] with nothing to return.
-    Ok,
+    /// A successful [`Invoke`]. Session-creating commands set `session_id`;
+    /// all other commands leave it `null`. Keeping the same `ok` kind makes
+    /// the addition forward-compatible for clients that ignore the payload.
+    Ok {
+        session_id: Option<String>,
+    },
     Error(ErrorMessage),
     Sessions(Sessions),
     State(State),

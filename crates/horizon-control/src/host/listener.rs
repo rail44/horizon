@@ -152,7 +152,7 @@ mod tests {
 
     impl ControlExecutor for StubExecutor {
         fn execute(&self, _request: ControlRequest) -> EnvelopeBody {
-            EnvelopeBody::Ok
+            EnvelopeBody::Ok { session_id: None }
         }
     }
 

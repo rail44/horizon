@@ -155,7 +155,11 @@ fn state_query_supports_json_output() {
 #[test]
 fn invoke_new_terminal_reports_ok() {
     let socket_path = temp_socket_path("new-terminal");
-    stub_server(socket_path.clone(), our_hello_ack(), vec![EnvelopeBody::Ok]);
+    stub_server(
+        socket_path.clone(),
+        our_hello_ack(),
+        vec![EnvelopeBody::Ok { session_id: None }],
+    );
 
     let (code, stdout, stderr) = run_ctl(&["new-terminal"], &socket_path, false);
     assert_eq!(code, 0, "stderr: {stderr}");
@@ -183,7 +187,11 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
         if let EnvelopeBody::Invoke(invoke) = request.body {
             *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
         }
-        wire::write_envelope(&mut writer, &Envelope::new(request.id, EnvelopeBody::Ok)).unwrap();
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::new(request.id, EnvelopeBody::Ok { session_id: None }),
+        )
+        .unwrap();
     });
 
     let (code, stdout, stderr) = run_ctl(
@@ -209,6 +217,28 @@ fn new_agent_with_prompt_reaches_the_server_and_reports_ok() {
 }
 
 #[test]
+fn new_agent_reports_created_session_id_in_json_output() {
+    let socket_path = temp_socket_path("new-agent-json-id");
+    stub_server(
+        socket_path.clone(),
+        our_hello_ack(),
+        vec![EnvelopeBody::Ok {
+            session_id: Some("00000000-0000-0000-0000-000000000001".to_string()),
+        }],
+    );
+
+    let (code, stdout, stderr) = run_ctl(&["--json", "new-agent"], &socket_path, false);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stdout.contains("\"kind\": \"ok\""), "stdout: {stdout}");
+    assert!(
+        stdout.contains("\"session_id\": \"00000000-0000-0000-0000-000000000001\""),
+        "stdout: {stdout}"
+    );
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
 fn continue_turn_reaches_the_server_and_reports_ok() {
     let socket_path = temp_socket_path("continue-turn");
     let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
@@ -227,7 +257,11 @@ fn continue_turn_reaches_the_server_and_reports_ok() {
         if let EnvelopeBody::Invoke(invoke) = request.body {
             *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
         }
-        wire::write_envelope(&mut writer, &Envelope::new(request.id, EnvelopeBody::Ok)).unwrap();
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::new(request.id, EnvelopeBody::Ok { session_id: None }),
+        )
+        .unwrap();
     });
 
     let (code, stdout, stderr) = run_ctl(&["continue-turn", "s-1"], &socket_path, false);
@@ -348,7 +382,7 @@ fn destructive_subcommand_with_yes_proceeds_without_a_tty() {
                 has_turn_in_flight: false,
                 destructive_commands: vec!["terminate-all-detached".to_string()],
             }),
-            EnvelopeBody::Ok,
+            EnvelopeBody::Ok { session_id: None },
         ],
     );
 
@@ -378,7 +412,7 @@ fn destructive_subcommand_not_listed_by_the_server_skips_confirmation() {
                 has_turn_in_flight: false,
                 destructive_commands: vec![],
             }),
-            EnvelopeBody::Ok,
+            EnvelopeBody::Ok { session_id: None },
         ],
     );
 
@@ -405,7 +439,7 @@ fn destructive_subcommand_on_a_tty_asks_and_honors_the_answer() {
                 has_turn_in_flight: false,
                 destructive_commands: vec!["terminate-all-detached".to_string()],
             }),
-            EnvelopeBody::Ok,
+            EnvelopeBody::Ok { session_id: None },
         ],
     );
 

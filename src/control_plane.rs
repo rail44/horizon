@@ -23,6 +23,10 @@ use crate::workspace::WorkspaceShell;
 
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(5);
 
+fn ok_body() -> EnvelopeBody {
+    EnvelopeBody::Ok { session_id: None }
+}
+
 #[derive(Clone)]
 struct PendingRequest {
     request: ControlRequest,
@@ -151,7 +155,9 @@ fn dispatch_invoke(
             match shell
                 .external_new_session(kind, role_id, split, activate, prompt, isolate, window, cx)
             {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(session_id) => EnvelopeBody::Ok {
+                    session_id: Some(session_id),
+                },
                 Err(message) => error_body(message),
             }
         }
@@ -165,7 +171,7 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_attach(session_id, activate, window, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
@@ -175,21 +181,21 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_terminate(session_id, window, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
         "terminate-all-detached" => {
             shell.external_terminate_all_detached(window, cx);
-            EnvelopeBody::Ok
+            ok_body()
         }
         "reload-config" => {
             shell.execute_external(CommandId::ReloadConfig, window, cx);
-            EnvelopeBody::Ok
+            ok_body()
         }
         "open-terminal-in-session-directory" => {
             shell.execute_external(CommandId::OpenTerminalInSessionDirectory, window, cx);
-            EnvelopeBody::Ok
+            ok_body()
         }
         "approve" => {
             let session_id = match session_id_arg(args, "session_id") {
@@ -201,7 +207,7 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_approve(session_id, call_id, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
@@ -215,7 +221,7 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_deny(session_id, call_id, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
@@ -225,7 +231,7 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_cancel(session_id, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
@@ -235,13 +241,13 @@ fn dispatch_invoke(
                 Err(message) => return error_body(message),
             };
             match shell.external_continue_turn(session_id, cx) {
-                Ok(()) => EnvelopeBody::Ok,
+                Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
         "reload-session-runtime" => {
             shell.execute_external(CommandId::ReloadSessionRuntime, window, cx);
-            EnvelopeBody::Ok
+            ok_body()
         }
         other => error_body(format!("unknown external command `{other}`")),
     }
