@@ -1575,6 +1575,37 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
     assert_eq!(definitions.len(), 3);
 }
 
+/// `docs/agent-explore-design.md`'s first test requirement, at the point
+/// the restriction actually reaches the model: an exploration session
+/// advertises exactly `fs.read`/`fs.grep`/`fs.glob` and nothing else --
+/// notably not `agent.explore` itself, which is what makes recursion
+/// impossible to express rather than merely discouraged.
+#[test]
+fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
+    let base = RigAgentConfig::default();
+    let role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        .expect("the explore role must resolve");
+
+    let config = role_adjusted_config(&base, Some(role));
+
+    let allowed = config
+        .allowed_tool_ids
+        .expect("the explore role must set an allow list");
+    let advertised = rig_tool_definitions(Some(&allowed))
+        .into_iter()
+        .map(|definition| definition.name)
+        .collect::<Vec<_>>();
+    assert_eq!(advertised, vec!["fs.read", "fs.glob", "fs.grep"]);
+    assert_eq!(
+        config.iteration_cap, 25,
+        "an exploration answers one question and runs under a tighter turn cap"
+    );
+    assert_eq!(
+        config.model, base.model,
+        "the exploration runs on the requester's own model (decision: no cheap-model override in v1)"
+    );
+}
+
 #[test]
 fn role_adjusted_config_is_unchanged_for_a_role_less_session() {
     let base = RigAgentConfig::default();

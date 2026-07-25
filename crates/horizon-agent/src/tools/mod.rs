@@ -3,6 +3,7 @@ mod bash;
 mod catalog;
 mod config;
 mod execution;
+pub(crate) mod explore;
 mod fs;
 mod network;
 mod processing;
@@ -14,6 +15,11 @@ pub use approval::{resolve_approval, resolve_auto_approval, ApprovalDecision, Ap
 pub(crate) use bash::{metadata_writable_roots, requires_metadata_write};
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
+// The `agent.explore` daemon seam (`docs/agent-explore-design.md`): `pub`
+// because `horizon-sessiond` implements it and installs it on every
+// session's `ToolSessionState`, the same way it constructs the network
+// proxy and judge handles this module also exposes.
+pub use explore::{ExplorationHost, StartedExploration};
 // `execute_agent_tool`/`Execution` are re-exported fully `pub` (not
 // `pub(crate)`) specifically so `tests/tier1_network_containment.rs` --
 // an integration test, hence external to this crate -- can drive the real

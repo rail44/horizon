@@ -156,6 +156,18 @@ struct Inner {
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
     judge: Option<Arc<JudgeHandle>>,
+    /// This session's handle onto the daemon's spawn/subscribe/terminate
+    /// capability for parallel exploration sessions (`tools::explore`,
+    /// `docs/agent-explore-design.md`). Injected post-construction the same
+    /// way [`Self::judge`]/[`Self::network`] are: only `horizon-sessiond`'s
+    /// `session::run_session` can host a peer session, and only it knows
+    /// this session's workspace root and provider -- both of which the
+    /// exploration must share. `None` (every construction site in this
+    /// crate's own tests, and deliberately for an exploration session
+    /// itself, which must not spawn further explorations) makes
+    /// `agent.explore` resolve to an actionable error result rather than a
+    /// silent no-op.
+    exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
 }
 
 impl ToolSessionState {
@@ -203,6 +215,7 @@ impl ToolSessionState {
                 network: None,
                 domains: SessionDomainPolicy::default(),
                 judge: None,
+                exploration: None,
             }),
         }
     }
@@ -307,6 +320,27 @@ impl ToolSessionState {
     /// This session's enforcing judge handle, if one is installed.
     pub(crate) fn judge_handle(&self) -> Option<Arc<JudgeHandle>> {
         self.inner.judge.clone()
+    }
+
+    /// Installs this session's exploration host after construction -- see
+    /// [`Inner::exploration`]'s doc comment. Same construction-time-only
+    /// safety contract as [`Self::with_judge`]/[`Self::with_network_proxy`].
+    pub fn with_exploration_host(
+        mut self,
+        exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
+    ) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.exploration = exploration;
+        }
+        self
+    }
+
+    /// This session's exploration host, if one is installed -- what
+    /// `tools::explore::start` spawns and terminates through.
+    pub(crate) fn exploration_host(
+        &self,
+    ) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
+        self.inner.exploration.clone()
     }
 
     /// v1 workspace root: the process's current directory at session start,
@@ -499,6 +533,7 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 /// terminal sessions, which never register).
 pub fn unregister_session_runtime(session_id: SessionId) {
     crate::tools::web::cancel_session(session_id);
+    crate::tools::explore::cancel_session(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });
