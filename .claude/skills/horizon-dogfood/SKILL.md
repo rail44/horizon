@@ -30,9 +30,15 @@ running in; pass a session-id to split off a different pane) /
 `--active` to activate the new pane, `new-config-agent` for the
 config role. Destructive verbs need `--yes`.
 
-**Identify.** `horizon sessions --json` lists sessions (id, role,
-attach state). The newest agent session after your spawn is yours.
-`horizon state` dumps the workspace snapshot.
+**Identify.** Since `6b0c57a` (2026-07-25), `new-agent` echoes the created
+session id — `OK <session-id>` in human mode, `payload.session_id` under
+`--json`. Use that; do not diff `horizon sessions --json` before/after
+(racy when spawns interleave — the old workaround this replaced). Caveat:
+the id comes from the control-plane host, which is the running GUI
+process — a GUI started before `6b0c57a` still replies with a bare `OK`,
+and then the sessions diff is the only fallback. `horizon sessions --json`
+lists sessions (id, role, attach state); `horizon state` dumps the
+workspace snapshot.
 
 **Observe live.** The agent's event stream persists to
 `~/.local/share/horizon/agent-events.jsonl` (shared across sessions —

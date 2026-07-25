@@ -77,3 +77,21 @@ unattended agent should not stall on a routine build in one run out of three.
   `cargo test`, `749e79fa` on `cargo nextest run`); two auto-approved.
 - Filed from a dogfooding batch run for the agent context-consumption work
   (`docs/research/agent-read-navigation-prior-art-2026-07-25.md`).
+
+## Additional observations (2026-07-25, later sessions)
+
+- A fourth distinct path set: `cargo clippy --workspace` crossed on
+  `~/.cargo/horizon-build-dir/.rustc_info.json` alone.
+- One command can stall **more than once**: a `cargo test` run was
+  approved for `.cargo/.package-cache-mutate`, and its retry then stalled
+  again on `.cargo/horizon-build-dir/debug/.fingerprint/horizon-agent-
+  <hash>/lib-horizon_agent`. Fingerprint paths embed a metadata hash that
+  changes whenever the crate's source changes, so **per-path File grants
+  can never converge for cargo** — the next edit invalidates the grant.
+- Routing the gate through `hooks/pre-commit` needs one approval for the
+  whole run; invoking `cargo check`/`clippy`/`nextest` separately needs
+  one per step (three observed).
+- The sandbox's own suggestions already escalate to `ReadWrite
+  DirectoryTree` on `~/.cargo` in some refusals; the approval granularity
+  just doesn't follow. Tree-level grants for `CARGO_HOME` + the shared
+  build dir look like the only shape that converges.

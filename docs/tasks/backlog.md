@@ -79,6 +79,21 @@ entries live in `backlog-resolved.md` keeping their original numbers
     analytics structurally blind to exactly the approval bursts they
     should measure. Same identity family as backlog 42. Recorded
     2026-07-19.
+    *Root cause identified 2026-07-25:* approval is only one trigger. The
+    rig session loop emits `SessionState::WaitingForUser` repeatedly
+    *mid-turn* — one measured session logged Running=51, ToolRunning=54,
+    WaitingForUser=10 with `turn_ended=0` — and the tracker closes the
+    turn on that state, so a single turn is closed many times over. Only
+    `Event::TurnEnded` is a trustworthy end-of-turn signal; external
+    tooling learned this the hard way (three completion misjudgements in
+    one day). Two dogfooding attempts to fix it (sessions `7d7d6f74`,
+    `35771ee1`, same brief) both died at the model's context ceiling
+    while surveying the consumer side; their partial, compiling work is
+    preserved on branches `horizon/7d7d6f74` and `horizon/35771ee1`
+    (emit-site changes + tests in `providers/rig/session.rs`,
+    `persistence/event_log/{mod,turn}.rs`). The task is a primary
+    motivator for `agent.explore` (`docs/agent-explore-design.md`), and
+    should be re-attempted once that lands.
 
 48. **Model resubmits byte-identical `fs.edit` calls it already
     applied.** In the worst same-file run (22 consecutive edits, session

@@ -13,17 +13,19 @@ about *reading* that history, not the app's live runtime.
 ## Where the data lives
 
 - **JSONL event log** (the durable source of truth): path from the
-  `HORIZON_AGENT_EVENT_LOG` env var, then `config.toml`'s `[agent].event_log_path`,
-  falling back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (commonly
+  `HORIZON_AGENT_EVENT_LOG` env var, falling back to
+  `$XDG_DATA_HOME/horizon/agent-events.jsonl` (commonly
   `~/.local/share/horizon/agent-events.jsonl` on Linux if `XDG_DATA_HOME` is
-  unset) — see `crates/horizon-agent/src/config.rs`'s `AgentPersistenceConfig`. One file, one
-  background writer thread, shared by every agent session in the process —
-  sessions interleave in it, distinguished by `session_id`.
-- **DuckDB projection** (optional, rebuildable, *not* the source of truth):
-  exists only if `HORIZON_AGENT_STATE_DB` (or `config.toml`'s
-  `[agent].state_db_path`) was set to a file path (conventionally `*.duckdb`)
-  when Horizon last started; unset means no DuckDB file at all — this one has
-  no built-in default path.
+  unset) — see `crates/horizon-agent/src/config.rs`'s `AgentPersistenceConfig`.
+  There is no config-file key: the 2026-07-18 config-narrowing wave made
+  these paths environment-only. One file, one background writer thread,
+  shared by every agent session in the process — sessions interleave in it,
+  distinguished by `session_id`.
+- **DuckDB projection** (rebuildable, *not* the source of truth): path from
+  `HORIZON_AGENT_STATE_DB`, falling back to
+  `$XDG_DATA_HOME/horizon/agent-state.duckdb`. Since the config narrowing
+  there is no "unset = disabled" state and no config-file key — the
+  projection always exists once the agent runtime has started.
 - **Bash tool output spill files**: every `bash` tool call writes its full,
   uncapped output to `<temp dir>/horizon-bash-<uuid>.log`, referenced by the
   tool result's `output_file` field — always, regardless of whether the
@@ -226,7 +228,7 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 ## DuckDB projection
 
 **The projection is live now (as of the recall work), and the recipes below
-"work" while `horizon-agentd` is running — but may silently lag.**
+"work" while `horizon-sessiond` is running — but may silently lag.**
 Previously the projection was only rebuilt at startup, then the store was
 closed; now the event-log writer thread opens the store once at startup
 and *keeps it open* for the rest of the process's life, live-appending
@@ -237,14 +239,15 @@ blocked** by that open (POSIX file locks are per-process, and DuckDB's own
 locking follows suit here) — but it reads DuckDB's own on-disk,
 last-checkpointed state, which can trail behind what the live writer
 connection has actually committed in memory. Treat a `duckdb -readonly`
-read taken while agentd is running as a **diagnostic snapshot that may be
+read taken while sessiond is running as a **diagnostic snapshot that may be
 stale**, not as an authoritative live view. For anything time-sensitive (a
 session's most recent few events, "did this just happen"), **prefer the
 JSONL recipes earlier in this doc** — they read the same file the writer
 itself appends to, with no separate database engine's checkpoint timing in
-the way. For a guaranteed-current DuckDB read, stop agentd first (a plain
-kill/stop, or `horizon reload-agent-runtime`, whose drain-then-respawn
-window is brief but real), or query a copied `*.duckdb` file (DuckDB may
+the way. For a guaranteed-current DuckDB read, stop sessiond first (a plain
+kill/stop, or `horizon reload-session-runtime` — note it also ends the
+UI's terminal sessions, verified 2026-07-25; agent sessions survive), or
+query a copied `*.duckdb` file (DuckDB may
 also keep a sibling `*.duckdb.wal` — copy both together, or checkpoint
 first if you have a live connection available).
 
@@ -252,10 +255,10 @@ Requires the separate `duckdb` CLI (`command -v duckdb`) — it is not bundled
 with Horizon and must be installed independently. The projection lives at
 `$XDG_DATA_HOME/horizon/agent-state.duckdb` (falling back to
 `~/.local/share/horizon/agent-state.duckdb`), unless `HORIZON_AGENT_STATE_DB`
-or the config file's `[agent].state_db_path` relocates it
-(`AgentPersistenceConfig`/`resolve_state_db_path` in
-`crates/horizon-agent/src/config.rs`). There is nothing to inspect only if
-`horizon-agentd` has never started, or the file was deleted since.
+relocates it — environment-only, no config-file key
+(`AgentPersistenceConfig` in `crates/horizon-agent/src/config.rs`). There is
+nothing to inspect only if `horizon-sessiond` has never started, or the file
+was deleted since.
 
 Schema (`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):
 

@@ -264,7 +264,9 @@ lands:
   `public_code_search` added on 2026-07-21 was traced to a comparative tool
   survey rather than an owner request and removed the same day. The survey is
   reference material only; any future public-code SaaS dependency or LSP
-  lifecycle work requires a fresh product decision (closed backlog 19).
+  lifecycle work requires a fresh product decision (closed backlog 19 —
+  note this closed only the unrequested Sourcegraph tool; LSP itself has
+  never been evaluated, so nothing was decided for or against it).
 - **Agent history budget + tool-result-aware eviction** (backlog 64).
   Surfaced when a dispatched worker's first turn read ~99k tokens and
   evicted its own task instruction (fixed-60k history budget on a 256k

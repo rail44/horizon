@@ -60,6 +60,16 @@ rolling summary を使う。まず意味判定を要しない圧縮を行う形�
 
 ## Horizon の決定
 
+> **後日の変更（2026-07-25）。** 以下のうち 2 点はその後の実測で覆った。
+> `fs.grep` の context 返却は撤回され、grep は所在（path + line_number）
+> のみを返す（`d74a75e`）— 実測で context 行は所在の約 5 倍のコストを
+> 持ち、後続の read と重なったのは 16% だけだった
+> （`agent-read-navigation-prior-art-2026-07-25.md` と roadmap の
+> context-consumption 項を参照）。また provider projection の
+> exact-duplicate 除去と early soft prune は、履歴 pruning 一式の撤去
+> （`162967f`、オーナー決定）とともに削除された。read の bounds と
+> prompt routing は現行のまま。
+
 今回の slice は次を導入する。
 
 - `fs.read`: default 500 lines、explicit maximum 2,000 lines、本文 50,000
