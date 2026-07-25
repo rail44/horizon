@@ -23,6 +23,11 @@ uuid = { version = "1.18", features = ["v4"] }
 schemars = { version = "1", features = ["uuid1"] }
 tempfile = "3"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
+# Enables the `mock.approval_required` / `mock.boundary_crossing` test
+# fixtures in `horizon-agent`'s tool catalog so sessiond's own unit tests
+# and the e2e integration suite can exercise approval/boundary-crossing
+# paths without those tools ever being advertised to a real provider.
+horizon-agent = { path = "../horizon-agent", features = ["test-fixtures"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

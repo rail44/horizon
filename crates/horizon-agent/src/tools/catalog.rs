@@ -32,8 +32,9 @@ pub fn definitions() -> Vec<Definition> {
                 Requires an absolute path. Use fs.grep to locate specific content before \
                 reading a large file, and fs.glob when the file path is unknown. Pass \
                 offset/limit to continue through a file; the result stops at 50,000 content \
-                characters and returns next_offset. Read independent known files in parallel, \
-                and prefer one useful window over many tiny adjacent slices."
+                characters and returns next_offset. Each line is truncated at 2,000 \
+                characters. Read independent known files in parallel, and prefer one useful \
+                window over many tiny adjacent slices."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -94,8 +95,9 @@ pub fn definitions() -> Vec<Definition> {
             description: "Locate specific text before reading a file. Search one file or all \
                 files under a directory with a regular expression, optionally restricted by \
                 glob. Requires an absolute base path; results are capped, with the total \
-                match count reported. Request a small context window when matching lines alone \
-                are insufficient."
+                match count reported. Traversal stops at 64 MiB of scanned file bytes or \
+                20,000 files. Request a small context window when matching lines alone are \
+                insufficient."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -302,6 +304,7 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
+        #[cfg(any(test, feature = "test-fixtures"))]
         Definition {
             id: "mock.approval_required".to_string(),
             title: "Mock Approval Required".to_string(),
@@ -312,6 +315,7 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::RequireApproval,
         },
+        #[cfg(any(test, feature = "test-fixtures"))]
         // Test-only, mirroring `mock.approval_required` above: this fixture
         // exercises the judge's human-gated boundary path independently of
         // the production web tools and their transport setup

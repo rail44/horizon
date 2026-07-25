@@ -9,6 +9,13 @@ edition = "2021"
 # workspace) but needs no system library — use on machines without a
 # prebuilt/distro libduckdb. See AGENTS.md "Build setup".
 bundled-duckdb = ["duckdb/bundled"]
+# Exposes the `mock.approval_required` and `mock.boundary_crossing` test
+# fixtures in `tools::catalog::definitions`. Off in production builds so
+# these tools are never advertised to a real model provider. Tests inside
+# `horizon-agent` get them automatically via `cfg(test)`; downstream crates
+# that need them for integration tests can enable this feature in their
+# dev-dependencies.
+test-fixtures = []
 
 [dependencies]
 anyhow = "1.0"
