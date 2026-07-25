@@ -88,30 +88,22 @@ Machines without a system libduckdb can build with
 compiles DuckDB from source instead (slow — it's the single largest
 compile unit in this workspace).
 
-Every worktree of this repo (main checkout, `git worktree` clones,
-`.claude/worktrees/agent-*` workers) shares one build cache: the tracked
-`.cargo/config.toml` sets `build.build-dir` to a path under `CARGO_HOME`
-(`{cargo-cache-home}/horizon-build-dir`), so intermediate build artifacts
-for crates.io/git dependencies (the bulk of a from-scratch build) are
-built once and reused by every worktree, while final artifacts (the
-binaries) stay in each worktree's own `target/`. No manual setup needed —
-the config is checked in. Concurrent builds across worktrees are safe
-from corruption (cargo's own advisory lock serializes overlapping
-writers) but will queue behind each other on a cold cache; this is an
-accepted tradeoff for the disk/CPU savings. Caveat (backlog 43): while
-a sibling worktree rebuilds the same workspace crate, cargo can wrongly
-reuse a stale "Fresh" artifact carrying the *other* worktree's version
-of that crate — symptoms are a phantom E0432 on an export that grep
-confirms exists, cross-crate builds failing while `cargo check -p
-<crate>` passes, or a surprising workspace test count. Fix: `cargo
-clean -p <crate>` (or touch the crate's sources) and rerun. If a second
-post-clean rerun fails differently (concurrent sibling builds can
-re-poison mid-build), bypass the shared cache deterministically:
-`CARGO_BUILD_BUILD_DIR=$PWD/target-local-build cargo nextest run ...`
-(one cold build of external deps, then immune; delete the dir when done
-— details in backlog 43). This makes the old worker convention of reflinking the
-main checkout's `target/` into a fresh worktree mostly redundant for the
-heavy artifacts (only the now-small per-worktree `target/` benefits).
+Every worktree of this repo shares one build cache: the tracked
+`.cargo/config.toml` points `build.build-dir` at
+`{cargo-cache-home}/horizon-build-dir`, so crates.io/git dependencies —
+the bulk of a from-scratch build — are built once and reused everywhere.
+No manual setup; the config is checked in. Concurrent builds serialize on
+cargo's build-dir lock rather than corrupting each other.
+
+Cargo does **not** key this workspace's own crates per worktree, though:
+two checkouts produce the same artifact filename for all 20 test/bin
+units, so the last writer wins and every other worktree silently runs its
+binary (backlog 43 — that is where the "phantom E0432 on an export that
+exists" and flapping test counts came from). The gate therefore rebuilds
+the workspace's own crates before running; `hooks/pre-commit` does this
+for you, and it is free in practice because the expensive half is the
+dependencies. Run the gate through the hook, or `cargo clean -p` the
+workspace crates first if you invoke it by hand.
 
 ## Configuration
 

@@ -124,62 +124,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     operability gap) and the hello error surface in
     `crates/horizon-session-protocol`. Recorded 2026-07-19.
 
-43. **Shared build-dir serves stale lib artifacts across worktrees —
-    phantom E0432 on freshly-added exports.** Observed twice on
-    2026-07-18: a workspace-wide test build resolved
-    `horizon_terminal_core` against a stale cached rlib missing the
-    just-added `DEFAULT_SCROLLBACK_LINES` export (first in a worker
-    worktree mid-task, then in the main checkout right after merging —
-    the second occurrence made a pre-commit gate fail on code that was
-    correct). `cargo clean -p horizon-terminal-core` fixes it
-    immediately both times. Same shared-`build.build-dir` family as
-    items 36/40 but a different shape (lib fingerprint/rmeta staleness,
-    not binary uplift or env-baked paths). Diagnostic signature: E0432
-    on an import that grep confirms exists, while `cargo check -p
-    <crate>` alone passes. Workaround is cheap; root-causing (cargo
-    fingerprint interaction with concurrent worktree builds) is open.
-    Also process-relevant: plain `git merge` commits bypass the
-    pre-commit hook, so a merge integrating such a false-negative (or a
-    real breakage) can reach main ungated — the project session now
-    runs the gate manually between merge and push.
-    *Second signature confirmed same day*: while two workers rebuilt
-    `horizon-agent` concurrently, `cargo nextest run --workspace` in one
-    worktree repeatedly linked a stale `horizon_agent` rlib carrying the
-    *other worktree's* API ("Fresh" misdetermination), while `cargo
-    check -p horizon-agent` alone stayed correct; `find -name '*.rs'
-    -exec touch` + rerun fixed it each time. A stale *test binary* can
-    also misreport the workspace test COUNT — successive gate runs on
-    the same tree flapped between 998 and 1008 until a `cargo clean -p`
-    of the churned crates settled the true count — so a count that
-    disagrees between runs is itself the diagnostic, and neither reading
-    is trustworthy without a clean rebuild of the crates in flux.
-    AGENTS.md's build-dir section now carries the caveat.
-    *Sixth occurrence, worst shape yet (2026-07-19)*: a sibling
-    worktree's WORK-IN-PROGRESS semantics (an unmerged redesign of the
-    zero-tab persistence invariant) leaked through a stale
-    `horizon-workspace` rlib into main-checkout test runs, making a
-    main test fail "deterministically" — and `git stash`-based
-    clean-tree verification does NOT catch this (stash restores source,
-    not the artifact cache). Only `cargo clean -p <crate>` of the
-    leaked crate tells the truth. A "deterministic" cross-crate failure
-    contradicting a recent green run should be treated as this bug
-    until a post-clean rerun says otherwise.
-    *Escalation + deterministic escape hatch (2026-07-20)*: on a night
-    with many sibling worktrees on divergent bases (several sessions +
-    dogfooding worktrees) and at least one concurrent nextest, `cargo
-    clean -p` whack-a-mole LOST repeatedly — a full clean of every
-    workspace crate got re-poisoned mid-build by a sibling's concurrent
-    output (four false-red gate failures in one hour, each with a
-    different stale crate: wrong `CONTRACT_VERSION` values 7 and 8,
-    phantom-missing `SetColorScheme`, phantom-missing
-    `TerminalFrame::text()` reported as "field, not a method"). The
-    deterministic way out: run the gate with
-    `CARGO_BUILD_BUILD_DIR=$PWD/target-local-build` (worktree-private
-    build dir bypassing the shared cache — one cold build of external
-    deps, ~6.6GB, then immune; delete the dir before handing the
-    worktree back). Worth reaching for as soon as a *second* clean
-    -p rerun fails differently.
-
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
     made approval attribution and proposal bodies follow the most

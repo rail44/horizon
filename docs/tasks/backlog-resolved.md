@@ -1010,3 +1010,65 @@ full resolution/closing records.
     against the model's real context window, and `context_length_exceeded`
     is handled nowhere, so an overflowed session fails every subsequent turn
     with no recovery path) is recorded there as open.
+
+43. **[RESOLVED 2026-07-25] Shared build-dir serves another worktree's
+    artifacts — phantom E0432, flapping test counts, "deterministic"
+    failures on unchanged sources.** Six occurrences 2026-07-18..20 (a
+    stale `horizon_terminal_core` missing a just-added export; a stale
+    `horizon_agent` carrying a sibling's API; workspace test counts
+    flapping 998/1008; an unmerged worktree's WIP semantics failing a
+    main test; four false-red gates in one hour, one of which put main
+    red for about an hour because `git merge` bypasses the pre-commit
+    hook). `cargo clean -p <crate>` cleared each one, which is why the
+    original entry treated it as a mystery to be worked around rather
+    than a defect to fix.
+
+    **Root cause (2026-07-25).** The tracked `.cargo/config.toml` shares
+    one `build.build-dir` across every worktree. That genuinely dedupes
+    dependencies — measured: 26 worktrees had built into it and external
+    crates averaged 3.87 copies rather than 26, so ~85% of
+    external-dependency builds are avoided, and a warm workspace
+    `cargo check` runs in seconds. But cargo does **not** key this
+    workspace's own crates per worktree. Running `cargo nextest list
+    --workspace` in two checkouts of the same commit returns *identical*
+    artifact paths for all 20 test/bin units (0 correctly separated):
+
+        COLLIDES  horizon        horizon-6b27c14c4b819467
+        COLLIDES  horizon_agent  horizon_agent-200d171a1ed56949
+        ... (20/20)
+
+    So the last writer owns the file and every other worktree's cargo
+    reports "Fresh" (0.40s) and runs *that* binary — with its
+    `env!("CARGO_MANIFEST_DIR")`, its `include_str!` contents, and its
+    code. Confirmed directly: after a throwaway worktree at
+    `/home/satoshi/wt-probe` built and was deleted, the main checkout's
+    test binary had `/home/satoshi/wt-probe` baked in, so
+    `config.example.toml` was read from a path that no longer existed
+    and parsed as empty. Every symptom above follows: a missing export
+    means the binary predates it; a flapping count means two checkouts
+    alternately winning; `cargo clean -p` "fixes" it by making *this*
+    checkout the last writer; `cargo check -p <crate>` passes because it
+    rebuilds that unit; `git stash` verification misses it because
+    stashing restores sources, not artifacts.
+
+    Deterministic repro (3/3): gate main green, then `git worktree add`
+    → `cargo nextest run --workspace --no-run` → `git worktree remove`
+    → gate main again. It fails. Note the 60-cycle attempt that came
+    first and found nothing: it churned both worktrees every iteration,
+    so each run made itself the last writer. The failure needs one side
+    to be *Fresh* while the other's artifact sits there — which is
+    exactly what happens when Horizon auto-removes a terminated agent
+    session's clean worktree.
+
+    **Fix.** `hooks/pre-commit` now `cargo clean -p`s every workspace
+    crate (list derived from `cargo metadata`, so it can't drift) before
+    the gate builds anything. Dependencies stay shared, this checkout's
+    crates are always rebuilt from its own sources. Measured free:
+    `cargo nextest run --workspace` takes 20s either way, and the whole
+    hook is 46s. Rejected alternatives: dropping the shared build-dir
+    (loses the 85%); `build-dir = "{cargo-cache-home}/.../{workspace-path-hash}"`
+    (separates dependencies too — cargo has no template that splits
+    dependencies from workspace crates); sccache (verified working here —
+    same worktree with the build-dir wiped goes 307s → 72s at a 100%
+    Rust hit rate — but 0% across worktrees, because its key follows the
+    build directory and source paths).
