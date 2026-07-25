@@ -202,6 +202,17 @@ fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
 /// (client detached or connection died), so the entry is dropped lazily.
 type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<AgentWireEvent>>>;
 
+/// In-process observers of a session's `contract::Event` stream, installed
+/// alongside (never instead of) the client-facing [`AgentSubscribers`]
+/// above. The only one today is an `agent.explore` waiter subscribing to
+/// the exploration session it just spawned (`docs/agent-explore-design.md`
+/// decision 5: "the wait is an event subscription"). Crossbeam rather than
+/// tokio because the waiter is a plain OS thread, like every other session
+/// thread here; unbounded so a session thread's send never blocks on it.
+/// A failed send means the waiter is gone, so the entry is dropped lazily,
+/// exactly as the client subscribers are.
+type EventTaps = Mutex<HashMap<SessionId, Sender<Event>>>;
+
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-sessiond` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
@@ -220,6 +231,8 @@ pub(crate) struct SessiondState {
     sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
     agent_subscribers: AgentSubscribers,
+    /// See [`EventTaps`].
+    event_taps: EventTaps,
     /// The current connection's host-tool request bridge (the local half of
     /// `HubHello::host_tools`), installed by the hub's `hello` and cleared
     /// when the connection ends — connection-global, unlike the
@@ -278,6 +291,7 @@ impl SessiondState {
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
             agent_subscribers: Mutex::new(HashMap::new()),
+            event_taps: Mutex::new(HashMap::new()),
             host_tools_outgoing: Mutex::new(None),
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
@@ -379,6 +393,96 @@ impl SessiondState {
             entry.parent_session_id = parent_session_id;
             entry.worktree = Some(worktree);
         }
+    }
+
+    /// Installs an in-process observer of `session_id`'s event stream and
+    /// returns its receiving half -- see [`EventTaps`]. Called *before*
+    /// [`spawn_session_thread`] for the session being observed, so not even
+    /// its first `StateChanged(Created)` can be missed.
+    fn install_event_tap(&self, session_id: SessionId) -> Receiver<Event> {
+        let (tx, rx) = unbounded();
+        lock_unpoisoned(&self.event_taps).insert(session_id, tx);
+        rx
+    }
+
+    fn remove_event_tap(&self, session_id: SessionId) {
+        lock_unpoisoned(&self.event_taps).remove(&session_id);
+    }
+
+    /// Routes a `Command` to `session_id`'s thread, reporting whether there
+    /// was a live session to route it to. [`Connection::route_command`]
+    /// turns a miss into a log line; [`SessiondExplorationHost::terminate`]
+    /// deliberately ignores one -- an exploration session that already
+    /// ended on its own needs no shutdown.
+    fn send_command(&self, session_id: SessionId, command: Command) -> bool {
+        let sender = self
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .map(|entry| entry.inbound.clone());
+        match sender {
+            Some(sender) => sender.send(command).is_ok(),
+            None => false,
+        }
+    }
+}
+
+/// `horizon-agent`'s `agent.explore` seam (`docs/agent-explore-design.md`),
+/// implemented against this daemon's own session hosting: spawn a peer
+/// session, subscribe to its events, terminate it. One is built per
+/// requesting session in [`run_session`] and installed on its
+/// `ToolSessionState`, carrying that session's provider and resolved
+/// workspace root so an exploration always runs where its requester does.
+///
+/// **Peer, not child** (decision 2): the exploration is spawned with no
+/// spawn source and `isolate: false`, so it shares the requester's exact
+/// working tree -- including an isolated requester's worktree, whose
+/// uncommitted state is precisely the view mid-task exploration needs --
+/// and records no derivation edge. The derivation tree stays pure code
+/// genealogy (`docs/session-relationship-design.md`: only isolation creates
+/// an edge).
+struct SessiondExplorationHost {
+    state: Arc<SessiondState>,
+    /// The requesting session's provider, so an exploration is answered by
+    /// the same model family the requester is talking to.
+    provider_id: ProviderId,
+    /// The requesting session's own resolved root -- post-isolation, so an
+    /// isolated requester's exploration reads that worktree and not the
+    /// daemon's cwd.
+    workspace_root: Option<PathBuf>,
+}
+
+impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
+    fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
+        let session_id = SessionId::new();
+        // Subscribe first, spawn second: the tap has to exist before the
+        // session's thread can emit anything.
+        let events = self.state.install_event_tap(session_id);
+        spawn_session_thread(
+            self.state.clone(),
+            session_id,
+            self.provider_id.clone(),
+            Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
+            self.workspace_root.clone(),
+            None,
+            false,
+            None,
+            Vec::new(),
+        );
+        if !self
+            .state
+            .send_command(session_id, Command::UserMessage { text: prompt })
+        {
+            self.state.remove_event_tap(session_id);
+            return Err("the exploration session ended before it could be asked".to_string());
+        }
+        Ok(horizon_agent::tools::StartedExploration { session_id, events })
+    }
+
+    fn terminate(&self, session_id: SessionId) {
+        self.state.remove_event_tap(session_id);
+        self.state.send_command(session_id, Command::Shutdown);
     }
 }
 
@@ -614,6 +718,9 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
     // one drowned out the genuinely interesting "resumed session" lines
     // right next to it.
     let mut skipped_terminated = 0usize;
+    // Counted the same way, for the same reason -- see
+    // [`terminate_orphaned_exploration`].
+    let mut terminated_explorations = 0usize;
 
     for (session_id, mut session_records) in by_session {
         session_records.sort_by_key(|record| record.sequence);
@@ -677,6 +784,22 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             continue;
         }
 
+        if role_id
+            .as_ref()
+            .is_some_and(horizon_agent::roles::is_exploration)
+        {
+            terminate_orphaned_exploration(
+                &writer,
+                session_id,
+                &provider_id,
+                role_id.as_ref(),
+                persisted_context.as_ref(),
+                &frame,
+            );
+            terminated_explorations += 1;
+            continue;
+        }
+
         if frame.is_turn_in_flight() {
             // Mirrors what a live `Command::Cancel` does (`providers::rig::
             // session`, `providers::mock`): finish every still-outstanding
@@ -732,6 +855,72 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
         eprintln!(
             "horizon-sessiond: skipped resume of {skipped_terminated} already-terminated \
              session(s)"
+        );
+    }
+
+    if terminated_explorations > 0 {
+        eprintln!(
+            "horizon-sessiond: terminated {terminated_explorations} orphaned exploration \
+             session(s) instead of resuming them"
+        );
+    }
+}
+
+/// `docs/agent-explore-design.md` decision 8: an exploration session is
+/// meaningless without the `agent.explore` call that was folding its
+/// events, and that waiter died with the previous process. So a
+/// never-completed exploration found in the log is committed as terminated
+/// rather than re-adopted -- otherwise it would come back as a live session
+/// nothing is listening to, burning a provider budget on a question whose
+/// asker is gone.
+///
+/// No wire field distinguishes these: the explore role id alone identifies
+/// them (`roles::is_exploration`), which is why this whole decision cost
+/// the session wire nothing.
+///
+/// The terminal sequence mirrors the interrupted-turn fixup right below its
+/// call site: every still-outstanding tool call is closed as cancelled
+/// first (nothing survives to answer it), then an explanatory error, then
+/// the turn's own end if one was in flight, then `Terminated` -- the state
+/// [`session_is_dead`] reads, so a *later* restart skips this session
+/// entirely instead of doing this again.
+fn terminate_orphaned_exploration(
+    writer: &WriterHandle,
+    session_id: SessionId,
+    provider_id: &ProviderId,
+    role_id: Option<&RoleId>,
+    persisted_context: Option<&PersistedSessionContext>,
+    frame: &AgentFrame,
+) {
+    let mut closing: Vec<Event> = outstanding_tool_call_ids(frame)
+        .into_iter()
+        .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
+        .collect();
+    closing.push(Event::Error(AgentError {
+        message: "Exploration session terminated on daemon restart: the `agent.explore` call \
+                  waiting on it did not survive."
+            .to_string(),
+    }));
+    if frame.is_turn_in_flight() {
+        closing.push(Event::TurnEnded(TurnEndReason::Failed));
+    }
+    closing.push(Event::StateChanged(SessionState::Terminated));
+
+    let mut appender = Appender::new(
+        writer.clone(),
+        session_id,
+        Some(provider_id.clone()),
+        role_id.cloned(),
+    );
+    if let Some(context) = persisted_context.cloned() {
+        appender = appender.with_session_context(context);
+    }
+    if let Err(error) =
+        appender.append_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
+    {
+        eprintln!(
+            "horizon-sessiond: failed to record termination of orphaned exploration session \
+             {session_id:?}: {error}"
         );
     }
 }
@@ -849,18 +1038,8 @@ impl Connection {
     /// thread. A miss (unknown session id -- stale/mistargeted envelope) is
     /// logged and dropped rather than panicking.
     pub(crate) fn route_command(&self, session_id: SessionId, command: Command) {
-        let sender = self
-            .state
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .map(|entry| entry.inbound.clone());
-        match sender {
-            Some(sender) => {
-                let _ = sender.send(command);
-            }
-            None => eprintln!("horizon-sessiond: command for unknown session {session_id:?}"),
+        if !self.state.send_command(session_id, command) {
+            eprintln!("horizon-sessiond: command for unknown session {session_id:?}");
         }
     }
 
@@ -895,12 +1074,26 @@ impl Connection {
         self.state.skipped_lines_summary()
     }
 
+    /// Every session a client may see. Exploration sessions
+    /// (`docs/agent-explore-design.md` decision 3: "invisible to the UI")
+    /// are withheld: they are never attached to a pane, they live only as
+    /// long as the `agent.explore` call waiting on them, and offering one
+    /// in the session manager's attach list would invite a user into a
+    /// read-only session that is about to be terminated under them. They
+    /// remain fully first-class in the event log and DuckDB projection,
+    /// which is where their cost is actually measured.
     pub(crate) fn session_list(&self) -> Vec<SessionSummary> {
         self.state
             .sessions
             .lock()
             .unwrap()
             .iter()
+            .filter(|(_, entry)| {
+                !entry
+                    .role_id
+                    .as_ref()
+                    .is_some_and(horizon_agent::roles::is_exploration)
+            })
             .map(|(session_id, entry)| SessionSummary {
                 session_id: *session_id,
                 provider_id: entry.provider_id.clone(),
@@ -983,12 +1176,30 @@ impl Connection {
 /// on the next attach anyway). A failed send means the subscriber's bridge
 /// is gone, so its entry is removed rather than kept as a dead letter box.
 fn send_session_event(state: &SessiondState, session_id: SessionId, event: AgentWireEvent) {
+    if let AgentWireEvent::Event(event) = &event {
+        send_to_event_tap(state, session_id, event);
+    }
     let mut subscribers = lock_unpoisoned(&state.agent_subscribers);
     if subscribers
         .get(&session_id)
         .is_some_and(|tx| tx.send(event).is_err())
     {
         subscribers.remove(&session_id);
+    }
+}
+
+/// Mirrors one `contract::Event` to `session_id`'s in-process observer, if
+/// one is installed -- see [`EventTaps`]. Only the `Event` variant is
+/// mirrored: the other [`AgentWireEvent`]s are UI-facing ephemera (progress
+/// previews, the model chip, the resolved-root correction) with nothing a
+/// waiter could fold.
+fn send_to_event_tap(state: &SessiondState, session_id: SessionId, event: &Event) {
+    let mut taps = lock_unpoisoned(&state.event_taps);
+    if taps
+        .get(&session_id)
+        .is_some_and(|tx| tx.send(event.clone()).is_err())
+    {
+        taps.remove(&session_id);
     }
 }
 
@@ -1292,13 +1503,31 @@ fn run_session(
     // writer is configured -- see `JudgeHandle::new`.
     let judge = JudgeHandle::new(state.agent_config.rig.base_url.clone(), state.writer());
 
+    // `agent.explore`'s daemon capability (`docs/agent-explore-design.md`).
+    // Withheld from an exploration session itself: its role allowlist
+    // already omits `agent.explore` (decision 4), and withholding the host
+    // too means a recursion is impossible rather than merely unadvertised.
+    let exploration: Option<Arc<dyn horizon_agent::tools::ExplorationHost>> = if role_id
+        .as_ref()
+        .is_some_and(horizon_agent::roles::is_exploration)
+    {
+        None
+    } else {
+        Some(Arc::new(SessiondExplorationHost {
+            state: state.clone(),
+            provider_id: provider_id.clone(),
+            workspace_root: workspace_root.clone(),
+        }))
+    };
+
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
         .with_skills(SkillRegistry::discover(&skill_root))
         .with_config_path(state.config_path.clone())
         .with_domain_policy(domains)
         .with_network_proxy(network)
-        .with_judge(judge);
+        .with_judge(judge)
+        .with_exploration_host(exploration);
     let persisted_context = PersistedSessionContext {
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,
@@ -2052,6 +2281,268 @@ mod tests {
                  `provider_request_finished` at {location}: frame reducer invariant failed"
             )
         );
+    }
+
+    fn open_test_event_log(label: &str) -> (tempfile::TempDir, PathBuf, WriterHandle) {
+        let dir = tempfile::tempdir().expect("create event log directory");
+        let path = dir.path().join(format!("{label}.jsonl"));
+        let (writer, init_rx) = WriterHandle::open(&path);
+        match init_rx.recv().expect("writer startup outcome") {
+            horizon_agent::persistence::event_log::WriterInit::Ready(_) => {}
+            horizon_agent::persistence::event_log::WriterInit::Failed(error) => {
+                panic!("writer startup failed: {error}")
+            }
+        }
+        (dir, path, writer)
+    }
+
+    fn append_started_turn(
+        writer: &WriterHandle,
+        session_id: SessionId,
+        provider_id: &ProviderId,
+        role_id: Option<RoleId>,
+    ) {
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            Some(provider_id.clone()),
+            role_id,
+        );
+        appender
+            .append_provider_events(
+                vec![
+                    Event::StateChanged(SessionState::Created),
+                    Event::MessageCommitted(horizon_agent::contract::Message {
+                        role: horizon_agent::contract::MessageRole::User,
+                        text: "find the emit sites".to_string(),
+                    }),
+                    Event::StateChanged(SessionState::Running),
+                ]
+                .into_iter()
+                .map(ProviderEvent::from)
+                .collect(),
+            )
+            .expect("append a mid-turn session");
+    }
+
+    fn persisted_events(path: &Path, session_id: SessionId) -> Vec<Event> {
+        horizon_agent::persistence::event_log::read(path)
+            .expect("read event log")
+            .records
+            .into_iter()
+            .filter(|record| record.session_id == session_id)
+            .map(|record| record.event)
+            .collect()
+    }
+
+    /// `docs/agent-explore-design.md` decision 8: an exploration session
+    /// whose `agent.explore` waiter died with the previous daemon process is
+    /// committed as terminated rather than resumed -- while an ordinary
+    /// session left mid-turn in exactly the same shape still resumes.
+    #[test]
+    fn daemon_resume_terminates_a_never_completed_exploration_instead_of_adopting_it() {
+        let (_dir, path, writer) = open_test_event_log("explore-resume");
+        let state = judge_test_state();
+        state.set_writer(Some(writer.clone()));
+
+        // The mock provider: a resumed session's thread parks on its command
+        // channel without touching a network provider.
+        let provider_id = ProviderId("builtin.agent.mock".to_string());
+        let explore_id = SessionId::new();
+        let ordinary_id = SessionId::new();
+        append_started_turn(
+            &writer,
+            explore_id,
+            &provider_id,
+            Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
+        );
+        append_started_turn(&writer, ordinary_id, &provider_id, None);
+        writer.flush().expect("flush seeded records");
+
+        let records = horizon_agent::persistence::event_log::read(&path)
+            .expect("read seeded event log")
+            .records;
+        resume_persisted_sessions(&state, records);
+        writer.flush().expect("flush resume fixups");
+
+        let live: Vec<SessionId> = state.sessions.lock().unwrap().keys().copied().collect();
+        assert!(
+            !live.contains(&explore_id),
+            "an orphaned exploration session must never be spawned again: {live:?}"
+        );
+        assert!(
+            live.contains(&ordinary_id),
+            "an ordinary mid-turn session must still resume: {live:?}"
+        );
+
+        let explore_events = persisted_events(&path, explore_id);
+        assert!(
+            explore_events.contains(&Event::TurnEnded(TurnEndReason::Failed)),
+            "the exploration's interrupted turn must be closed: {explore_events:?}"
+        );
+        assert!(
+            explore_events.contains(&Event::StateChanged(SessionState::Terminated)),
+            "the exploration must be durably terminated: {explore_events:?}"
+        );
+        assert!(
+            explore_events
+                .iter()
+                .any(|event| matches!(event, Event::Error(error) if error
+                    .message
+                    .contains("agent.explore"))),
+            "the termination must say why: {explore_events:?}"
+        );
+
+        // A later restart reads that `Terminated` and skips the session
+        // entirely, rather than re-terminating it on every boot.
+        let records = horizon_agent::persistence::event_log::read(&path)
+            .expect("read event log again")
+            .records;
+        let before = persisted_events(&path, explore_id).len();
+        let fresh_state = judge_test_state();
+        fresh_state.set_writer(Some(writer.clone()));
+        resume_persisted_sessions(&fresh_state, records);
+        writer.flush().expect("flush the second resume");
+        assert_eq!(
+            persisted_events(&path, explore_id).len(),
+            before,
+            "a second restart must add nothing for an already-terminated exploration"
+        );
+    }
+
+    /// The whole `agent.explore` seam against the *real* daemon
+    /// implementation rather than a stub: an `agent.explore` call spawns a
+    /// genuine peer session here, its user message reaches that session's
+    /// provider, its events come back through the event tap, and the
+    /// session is shut down once its report has landed. Hermetic -- the
+    /// exploration runs on the mock provider, so no network and no event
+    /// log are involved.
+    #[test]
+    fn agent_explore_spawns_a_real_peer_session_and_shuts_it_down() {
+        let state = judge_test_state();
+        let requester_id = SessionId::new();
+        let (results_tx, results_rx) = unbounded::<ToolCompletion>();
+        let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
+            Arc::new(SessiondExplorationHost {
+                state: state.clone(),
+                provider_id: ProviderId("builtin.agent.mock".to_string()),
+                workspace_root: None,
+            });
+        let tool_state = ToolSessionState::for_current_dir(
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        )
+        .with_exploration_host(Some(host));
+        register_session_runtime(
+            requester_id,
+            tool_state.clone(),
+            LiveState::with_disabled_persistence(),
+            results_tx,
+        );
+
+        let execution = horizon_agent::tools::execute_agent_tool(
+            &SessiondHostTools {
+                state: state.clone(),
+            },
+            &tool_state,
+            requester_id,
+            &horizon_agent::contract::ToolCallRequest {
+                call_id: ToolCallId("explore-e2e".to_string()),
+                tool_id: "agent.explore".to_string(),
+                input: serde_json::json!({ "prompt": "where is the emit site?" }).into(),
+            },
+        );
+        assert!(
+            matches!(execution, horizon_agent::tools::Execution::Started(_)),
+            "the requester's loop must stay responsive while the exploration runs: {execution:?}"
+        );
+
+        let completion = results_rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the exploration's completion must arrive");
+        let ToolCompletion::Finished(result) = completion else {
+            panic!("expected a finished exploration completion, got {completion:?}")
+        };
+        assert!(!result.is_error, "{result:?}");
+        let report = result.output["report"]
+            .as_str()
+            .expect("a report")
+            .to_string();
+        assert!(
+            report.contains("where is the emit site?"),
+            "the exploration must have answered the forwarded prompt, got: {report}"
+        );
+        let explore_id = SessionId::from_uuid(
+            result.output["session_id"]
+                .as_str()
+                .expect("the spawned session id")
+                .parse()
+                .expect("a uuid"),
+        );
+        assert_ne!(explore_id, requester_id);
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while state.sessions.lock().unwrap().contains_key(&explore_id)
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            !state.sessions.lock().unwrap().contains_key(&explore_id),
+            "a finished exploration session must be terminated, not left hosted"
+        );
+        assert!(
+            !lock_unpoisoned(&state.event_taps).contains_key(&explore_id),
+            "its event subscription must be released with it"
+        );
+
+        unregister_session_runtime(requester_id);
+    }
+
+    /// Decision 3, "invisible to the UI": a live exploration session is
+    /// hosted exactly like any other, but is withheld from the client's
+    /// session list so it can never be offered as something to attach to.
+    #[test]
+    fn a_live_exploration_session_is_withheld_from_the_client_session_list() {
+        let state = judge_test_state();
+        let provider_id = ProviderId("builtin.agent.mock".to_string());
+        let explore_id = SessionId::new();
+        let ordinary_id = SessionId::new();
+
+        spawn_session_thread(
+            state.clone(),
+            explore_id,
+            provider_id.clone(),
+            Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+        );
+        spawn_session_thread(
+            state.clone(),
+            ordinary_id,
+            provider_id,
+            None,
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+        );
+
+        assert!(
+            state.sessions.lock().unwrap().contains_key(&explore_id),
+            "the exploration session is still a first-class hosted session"
+        );
+        let listed: Vec<SessionId> = Connection::new(state)
+            .session_list()
+            .into_iter()
+            .map(|summary| summary.session_id)
+            .collect();
+        assert!(!listed.contains(&explore_id), "{listed:?}");
+        assert!(listed.contains(&ordinary_id), "{listed:?}");
     }
 
     #[test]

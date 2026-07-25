@@ -456,6 +456,40 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
+        // `agent.explore` (`tools::explore`, `docs/agent-explore-design.md`)
+        // is auto-allowed like every other read tool -- the session it
+        // spawns can only read, and only inside the requester's own
+        // workspace root -- but it is the one auto-allowed tool that does
+        // *not* finish synchronously: `tools::execution::execute_agent_tool`
+        // routes it to `Execution::Started`, and its result arrives later on
+        // the session's async completion channel, like `bash`'s.
+        Definition {
+            id: "agent.explore".to_string(),
+            title: "Explore in a Parallel Session".to_string(),
+            description: "Delegate an open-ended, multi-file exploration to a parallel read-only \
+                session sharing this workspace. Use it when locating or understanding code would \
+                take several rounds of grep/glob/read whose outputs you do not need verbatim \
+                afterwards; state the question and the exact deliverable (paths, line numbers, \
+                facts). For one to three known files, read them directly instead. Returns the \
+                exploration's final report."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["prompt"],
+                "properties": {
+                    "prompt": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 16384,
+                        "description": "The exploration question and the exact deliverable you \
+                            want back. The exploration session sees this and nothing else from \
+                            your conversation, so restate whatever context it needs.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
         Definition {
             id: "skill.read".to_string(),
             title: "Read Skill".to_string(),
