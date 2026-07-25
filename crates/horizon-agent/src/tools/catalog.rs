@@ -92,12 +92,12 @@ pub fn definitions() -> Vec<Definition> {
         Definition {
             id: "fs.grep".to_string(),
             title: "Search File Contents".to_string(),
-            description: "Locate specific text before reading a file. Search one file or all \
-                files under a directory with a regular expression, optionally restricted by \
-                glob. Requires an absolute base path; results are capped, with the total \
-                match count reported. Traversal stops at 64 MiB of scanned file bytes or \
-                20,000 files. Request a small context window when matching lines alone are \
-                insufficient."
+            description: "Find where text occurs. Search one file or all files under a \
+                directory with a regular expression, optionally restricted by glob. Returns \
+                one `path` + `line_number` per match — locations, not content — plus the \
+                total match count. Read what a location says with fs.read, passing offset \
+                and limit around the reported line. Requires an absolute base path. \
+                Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -119,13 +119,7 @@ pub fn definitions() -> Vec<Definition> {
                     "limit": {
                         "type": "integer",
                         "minimum": 1,
-                        "description": "Maximum number of matches to return. Defaults to 100.",
-                    },
-                    "context": {
-                        "type": "integer",
-                        "minimum": 0,
-                        "maximum": 10,
-                        "description": "Context lines to return before and after each match. Defaults to 0; maximum 10.",
+                        "description": "Maximum number of match locations to return. Defaults to 100.",
                     },
                 }
             }),

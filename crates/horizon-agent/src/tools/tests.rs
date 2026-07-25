@@ -869,7 +869,7 @@ fn fs_grep_rejects_invalid_regex() {
 }
 
 #[test]
-fn fs_grep_searches_one_file_and_returns_requested_context() {
+fn fs_grep_searches_one_file_and_returns_locations_only() {
     let root = temp_workspace("grep-one-file-context");
     let file = root.join("target.txt");
     fs::write(
@@ -894,56 +894,27 @@ fn fs_grep_searches_one_file_and_returns_requested_context() {
     assert_eq!(output["total_matches"], 1);
     assert_eq!(output["matches"][0]["path"], file.display().to_string());
     assert_eq!(output["matches"][0]["line_number"], 3);
-    assert_eq!(output["matches"][0]["context_before"][0]["line_number"], 2);
-    assert_eq!(output["matches"][0]["context_before"][0]["line"], "before");
-    assert_eq!(output["matches"][0]["context_after"][0]["line_number"], 4);
-    assert_eq!(output["matches"][0]["context_after"][0]["line"], "after");
-}
-
-#[test]
-fn fs_grep_truncates_wide_match_and_context_lines() {
-    let root = temp_workspace("grep-line-cap");
-    let file = root.join("wide.txt");
-    fs::write(
-        &file,
-        format!(
-            "{}\nTODO:{}\n{}",
-            "b".repeat(2500),
-            "m".repeat(2500),
-            "a".repeat(2500)
-        ),
-    )
-    .unwrap();
-    let tool_state = ToolSessionState::new(root);
-
-    let output = fs_tools::execute_auto(
-        &tool_state,
-        "fs.grep",
-        &json!({
-            "base_path": file.display().to_string(),
-            "pattern": "TODO",
-            "context": 1
-        }),
-    )
-    .expect("fs.grep is auto-executed");
-
-    for value in [
-        &output["matches"][0]["line"],
-        &output["matches"][0]["context_before"][0]["line"],
-        &output["matches"][0]["context_after"][0]["line"],
-    ] {
-        let line = value.as_str().unwrap();
-        assert!(line.contains("[line truncated]"));
-        assert!(line.chars().count() < 2100);
-    }
+    // A location carries nothing else: no matching line, no surrounding
+    // context. `fs.read` answers what the line says.
+    assert!(output["matches"][0]["line"].is_null());
+    assert!(output["matches"][0]["context_before"].is_null());
+    assert!(output["matches"][0]["context_after"].is_null());
+    // A `context` argument is now inert, and says so rather than being
+    // silently ignored.
+    assert!(output["note"]
+        .as_str()
+        .unwrap()
+        .contains("`context` is no longer accepted"));
 }
 
 #[test]
 fn fs_grep_caps_the_complete_tool_result() {
     let root = temp_workspace("grep-output-cap");
     let file = root.join("many-wide-matches.txt");
-    let content = (1..=100)
-        .map(|line| format!("TODO {line} {}", "x".repeat(2100)))
+    // Locations are small, so the cap only bites at scale: one match per
+    // line, each carrying a long absolute path.
+    let content = (1..=2000)
+        .map(|line| format!("TODO {line}"))
         .collect::<Vec<_>>()
         .join("\n");
     fs::write(&file, content).unwrap();
@@ -955,14 +926,14 @@ fn fs_grep_caps_the_complete_tool_result() {
         &json!({
             "base_path": file.display().to_string(),
             "pattern": "TODO",
-            "limit": 100
+            "limit": 2000
         }),
     )
     .expect("fs.grep is auto-executed");
 
     assert!(output.to_string().chars().count() <= 50_000);
-    assert_eq!(output["total_matches"], 100);
-    assert!(output["returned_count"].as_u64().unwrap() < 100);
+    assert_eq!(output["total_matches"], 2000);
+    assert!(output["returned_count"].as_u64().unwrap() < 2000);
     assert_eq!(output["truncated"], true);
     assert!(output["note"].as_str().unwrap().contains("output cap"));
 }

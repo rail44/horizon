@@ -10,8 +10,15 @@ use super::safety::resolve_path;
 use super::traverse;
 use crate::tools::state::ToolSessionState;
 
-const MAX_CONTEXT_LINES: usize = 10;
-const MAX_RESULT_LINE_CHARS: usize = 2000;
+/// A match is reported as a location, never as content: `fs.grep` answers
+/// "where is this?" and `fs.read` answers "what does it say?". Returning
+/// the matching line (let alone surrounding context) makes the first
+/// question's answer cost as much as the second's — measured on this
+/// repository, one `WaitingForUser` search returns 5,008 bytes as
+/// locations, 12,948 with the matching lines, and 67,423 with three lines
+/// of context each. SWE-agent reached the same conclusion for a different
+/// reason: "showing the model more context about each match proved to be
+/// too confusing for the model" (`docs/research/`, 2026-07-25 survey).
 const MAX_OUTPUT_CHARS: usize = 50_000;
 
 struct GrepResults {
@@ -22,24 +29,19 @@ struct GrepResults {
     output_capped: bool,
 }
 
-fn render_line(line_number: usize, line: &str) -> Value {
-    let mut excerpt: String = line.chars().take(MAX_RESULT_LINE_CHARS).collect();
-    if line.chars().count() > MAX_RESULT_LINE_CHARS {
-        excerpt.push_str(" …[line truncated]");
-    }
+fn render_location(path: &Path, line_number: usize) -> Value {
     json!({
+        "path": path.display().to_string(),
         "line_number": line_number,
-        "line": excerpt,
     })
 }
 
-fn scan_file(path: &Path, regex: &Regex, limit: usize, context: usize, results: &mut GrepResults) {
+fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults) {
     let Ok(content) = fs::read_to_string(path) else {
         return; // Skip binary/non-UTF-8 files rather than erroring.
     };
     results.bytes_read += content.len() as u64;
-    let lines: Vec<&str> = content.lines().collect();
-    for (index, line) in lines.iter().enumerate() {
+    for (index, line) in content.lines().enumerate() {
         if !regex.is_match(line) {
             continue;
         }
@@ -47,26 +49,7 @@ fn scan_file(path: &Path, regex: &Regex, limit: usize, context: usize, results: 
         if results.matches.len() >= limit || results.output_capped {
             continue;
         }
-        let before_start = index.saturating_sub(context);
-        let after_end = index.saturating_add(context + 1).min(lines.len());
-        let context_before = lines[before_start..index]
-            .iter()
-            .enumerate()
-            .map(|(position, line)| render_line(before_start + position + 1, line))
-            .collect::<Vec<_>>();
-        let context_after = lines[index + 1..after_end]
-            .iter()
-            .enumerate()
-            .map(|(position, line)| render_line(index + position + 2, line))
-            .collect::<Vec<_>>();
-        let rendered_match = render_line(index + 1, line);
-        let candidate = json!({
-            "path": path.display().to_string(),
-            "line_number": rendered_match["line_number"],
-            "line": rendered_match["line"],
-            "context_before": context_before,
-            "context_after": context_after,
-        });
+        let candidate = render_location(path, index + 1);
         let candidate_chars = candidate.to_string().chars().count();
         if results.rendered_chars.saturating_add(candidate_chars) > MAX_OUTPUT_CHARS {
             results.output_capped = true;
@@ -91,10 +74,6 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
         .unwrap_or(tool_state.tools_config().fs.grep_result_limit)
         .max(1);
-    let requested_context = input.get("context").and_then(Value::as_u64).unwrap_or(0);
-    let context = usize::try_from(requested_context)
-        .unwrap_or(usize::MAX)
-        .min(MAX_CONTEXT_LINES);
 
     let base = match resolve_path(tool_state, base_arg) {
         Ok(path) => path,
@@ -135,7 +114,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
             .is_none_or(|matcher| matcher.is_match(base.file_name().unwrap_or_default()));
         if matches_filter {
             visited = 1;
-            scan_file(&base, &regex, limit, context, &mut results);
+            scan_file(&base, &regex, limit, &mut results);
         }
     } else {
         for entry in traverse::walk(&base) {
@@ -158,7 +137,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
                     continue;
                 }
             }
-            scan_file(entry.path(), &regex, limit, context, &mut results);
+            scan_file(entry.path(), &regex, limit, &mut results);
         }
     }
 
@@ -171,10 +150,12 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
             "Returned matches stopped at the {MAX_OUTPUT_CHARS}-character output cap; narrow the path or pattern."
         ));
     }
-    if requested_context > MAX_CONTEXT_LINES as u64 {
-        notes.push(format!(
-            "`context` was capped at {MAX_CONTEXT_LINES} lines."
-        ));
+    if input.get("context").is_some() {
+        notes.push(
+            "`context` is no longer accepted: fs.grep returns locations only. \
+             Use fs.read with offset/limit around a reported line."
+                .to_string(),
+        );
     }
 
     // `rendered_chars` bounds match bodies while scanning. Measure the final
