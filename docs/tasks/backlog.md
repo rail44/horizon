@@ -316,12 +316,6 @@ entries live in `backlog-resolved.md` keeping their original numbers
     child's pid post-spawn (racy but adequate). Recorded 2026-07-19
     from the leg-3 review.
 
-57. **`new-agent` should print the created session id (at least under
-    `--json`).** The CLI dogfooding loop (`.claude/skills/
-    horizon-dogfood/SKILL.md`) has to infer the new session via
-    `horizon sessions --json` right after spawning — racy if two
-    spawns interleave. Echoing the created id in the invoke response
-    closes the loop cleanly. Small, additive. Recorded 2026-07-19.
 
 59. **Resolved for proxy-domain and Linux `openat`/`openat2` denials
     2026-07-21; other syscall families remain.** Tier-1's former "denial ->

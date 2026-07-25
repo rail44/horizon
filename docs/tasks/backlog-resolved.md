@@ -1072,3 +1072,19 @@ full resolution/closing records.
     same worktree with the build-dir wiped goes 307s → 72s at a 100%
     Rust hit rate — but 0% across worktrees, because its key follows the
     build directory and source paths).
+
+
+57. *(resolved 2026-07-25, `0ede3cb`)* **`new-agent` should print the created session id (at least under
+    `--json`).** The CLI dogfooding loop (`.claude/skills/
+    horizon-dogfood/SKILL.md`) has to infer the new session via
+    `horizon sessions --json` right after spawning — racy if two
+    spawns interleave. Echoing the created id in the invoke response
+    closes the loop cleanly. Small, additive. Recorded 2026-07-19.
+    Resolved: `EnvelopeBody::Ok` gained an optional `session_id`, set only
+    by `new-terminal`/`new-agent`/`new-config-agent`; wire parsing tolerates
+    both a null payload from an older peer and an absent field, so neither
+    direction breaks. CLI prints it in human mode and under `--json`.
+    Implemented by a Horizon agent session during dogfooding and reviewed
+    before merge — the dogfooding loop's own spawn-then-diff workaround
+    (`.claude/skills/horizon-dogfood/SKILL.md`) can now be retired.
+
