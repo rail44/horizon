@@ -96,8 +96,10 @@ pub fn definitions() -> Vec<Definition> {
                 directory with a regular expression, optionally restricted by glob. Returns \
                 one `path` + `line_number` per match — locations, not content — plus the \
                 total match count. Read what a location says with fs.read, passing offset \
-                and limit around the reported line. Requires an absolute base path. \
-                Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
+                and limit around the reported line. For an open-ended exploration that \
+                would take several rounds of searching and reading, delegate to \
+                agent.explore instead and keep only its report. Requires an absolute base \
+                path. Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
