@@ -311,6 +311,20 @@ lands:
   `mock.*` test fixtures). Note that the observed 62% cache-hit rate was
   measured while pruning was still active; no session has run since it was
   removed, so the current baseline is unmeasured.
+  **Direction chosen 2026-07-25 (owner consultation):** the mock fixtures
+  left the production catalog (`d1bac65`) and `fs.grep` now answers
+  where-not-what (`d74a75e`, −28% tool output on the replayed brief), but
+  two same-brief sessions still died at the model's context ceiling —
+  exploration fragments accumulating in a monotonic history are the
+  structural cause. The chosen remedy is **parallel exploration sessions**
+  (`agent.explore`, `docs/agent-explore-design.md`): open-ended
+  exploration runs in a disposable read-only peer session sharing the
+  requester's workspace_root, and only its final report enters the
+  requester's history. Semantic-navigation alternatives (LSP tools,
+  ast-grep, repo maps, SWE-agent-style viewers) were surveyed and set
+  aside for now — current evidence favors plain agent-driven retrieval,
+  and the 2024-era ACI findings are too weak a basis (owner assessment).
+  Dispatched to a worker 2026-07-25.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,
