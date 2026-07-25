@@ -14,15 +14,12 @@ cargo fmt --all -- --check
 # silently runs it — a sibling's code, or a deleted worktree's baked-in
 # CARGO_MANIFEST_DIR. Rebuilding our own crates makes the gate measure
 # this checkout. Dependencies stay cached, so this costs ~nothing.
-# Crate list comes from cargo rather than a hardcoded one so it can't
-# drift as crates are added or renamed.
-echo "pre-commit: cargo clean -p <workspace crates>"
-clean_args=""
-for name in $(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[].name'); do
-  clean_args="$clean_args -p $name"
-done
-# shellcheck disable=SC2086  # intentional word splitting: many -p flags
-cargo clean $clean_args
+# Touching the sources rather than `cargo clean -p`: both force the
+# rebuild, but clean also deletes this worktree's finished binaries from
+# `target/`, which breaks `cargo run` and leaves Horizon with no
+# `horizon-sessiond` to respawn.
+echo "pre-commit: touch workspace sources (force rebuild from this checkout)"
+git ls-files -z '*.rs' | xargs -0 touch
 
 echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"
 cargo clippy --workspace --all-targets --locked -- -D warnings
