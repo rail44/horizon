@@ -167,7 +167,7 @@ mod tests {
     #[test]
     fn handshake_acks_a_matching_control_version() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -191,7 +191,7 @@ mod tests {
     #[test]
     fn handshake_rejects_a_version_mismatch_and_closes() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -214,7 +214,7 @@ mod tests {
     #[test]
     fn handshake_rejects_a_non_hello_first_message() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -237,7 +237,7 @@ mod tests {
     #[test]
     fn invoke_after_handshake_is_forwarded_to_the_executor_with_the_id_echoed() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -257,7 +257,7 @@ mod tests {
         let reply = recv(&mut client);
 
         assert_eq!(reply.id, 42);
-        assert!(matches!(reply.body, EnvelopeBody::Ok));
+        assert!(matches!(reply.body, EnvelopeBody::Ok { session_id: None }));
         assert!(matches!(
             EXECUTOR.seen.lock().unwrap().as_slice(),
             [ControlRequest::Invoke(invoke)] if invoke.command == "new-terminal"
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn query_after_handshake_is_forwarded_to_the_executor() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -301,7 +301,7 @@ mod tests {
     #[test]
     fn an_unrecognized_request_kind_gets_an_error_reply_without_closing_the_connection() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -328,7 +328,7 @@ mod tests {
         );
         let reply = recv(&mut client);
         assert_eq!(reply.id, 3);
-        assert!(matches!(reply.body, EnvelopeBody::Ok));
+        assert!(matches!(reply.body, EnvelopeBody::Ok { session_id: None }));
 
         drop(client);
         handle.join().unwrap().unwrap();
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn multiple_requests_each_get_their_own_id_echoed_in_order() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn clean_disconnect_after_handshake_ends_the_loop_without_error() {
         static EXECUTOR: StubExecutor = StubExecutor {
-            response: EnvelopeBody::Ok,
+            response: EnvelopeBody::Ok { session_id: None },
             seen: std::sync::Mutex::new(Vec::new()),
         };
         let (mut client, handle) = spawn_connection(&EXECUTOR);

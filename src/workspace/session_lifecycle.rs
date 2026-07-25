@@ -1042,7 +1042,7 @@ impl WorkspaceShell {
         isolate: Option<bool>,
         window: &mut Window,
         cx: &mut Context<Self>,
-    ) -> Result<(), String> {
+    ) -> Result<String, String> {
         if self.restoring_workspace {
             return Err("workspace restore is still in progress".to_string());
         }
@@ -1078,7 +1078,7 @@ impl WorkspaceShell {
         if activate {
             self.focus_active(window, cx);
         }
-        Ok(())
+        Ok(session_id.as_uuid().to_string())
     }
 }
 

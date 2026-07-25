@@ -94,7 +94,19 @@ fn parse_line(line: &str) -> Result<Envelope, WireError> {
         "query" => EnvelopeBody::Query(serde_json::from_value::<Query>(raw.payload)?),
         "hello_ack" => EnvelopeBody::HelloAck(serde_json::from_value::<HelloAck>(raw.payload)?),
         "rejected" => EnvelopeBody::Rejected(serde_json::from_value::<Rejected>(raw.payload)?),
-        "ok" => EnvelopeBody::Ok,
+        "ok" => {
+            #[derive(Deserialize)]
+            struct OkPayload {
+                #[serde(default)]
+                session_id: Option<String>,
+            }
+            let session_id = if raw.payload.is_null() {
+                None
+            } else {
+                serde_json::from_value::<OkPayload>(raw.payload)?.session_id
+            };
+            EnvelopeBody::Ok { session_id }
+        }
         "error" => EnvelopeBody::Error(serde_json::from_value::<ErrorMessage>(raw.payload)?),
         "sessions" => EnvelopeBody::Sessions(serde_json::from_value::<Sessions>(raw.payload)?),
         "state" => EnvelopeBody::State(serde_json::from_value::<State>(raw.payload)?),
@@ -138,7 +150,7 @@ mod tests {
             EnvelopeBody::Rejected(Rejected {
                 reason: "control version mismatch".to_string(),
             }),
-            EnvelopeBody::Ok,
+            EnvelopeBody::Ok { session_id: None },
             EnvelopeBody::Error(ErrorMessage {
                 message: "no such session".to_string(),
             }),
@@ -263,6 +275,6 @@ mod tests {
             .unwrap()
             .expect("envelope should parse despite the unrecognized field");
         assert_eq!(envelope.id, 3);
-        assert_eq!(envelope.body, EnvelopeBody::Ok);
+        assert_eq!(envelope.body, EnvelopeBody::Ok { session_id: None });
     }
 }

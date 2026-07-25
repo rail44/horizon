@@ -14,8 +14,12 @@ pub fn render(body: &EnvelopeBody, json: bool, out: &mut impl Write) {
         return;
     }
     match body {
-        EnvelopeBody::Ok => {
-            let _ = writeln!(out, "OK");
+        EnvelopeBody::Ok { session_id } => {
+            if let Some(session_id) = session_id {
+                let _ = writeln!(out, "OK {session_id}");
+            } else {
+                let _ = writeln!(out, "OK");
+            }
         }
         EnvelopeBody::Sessions(sessions) => render_sessions(sessions, out),
         EnvelopeBody::State(state) => render_state(state, out),
@@ -96,7 +100,23 @@ mod tests {
 
     #[test]
     fn ok_renders_as_ok() {
-        assert_eq!(rendered(&EnvelopeBody::Ok, false), "OK\n");
+        assert_eq!(
+            rendered(&EnvelopeBody::Ok { session_id: None }, false),
+            "OK\n"
+        );
+    }
+
+    #[test]
+    fn ok_with_created_session_id_renders_id() {
+        assert_eq!(
+            rendered(
+                &EnvelopeBody::Ok {
+                    session_id: Some("s-1".to_string())
+                },
+                false
+            ),
+            "OK s-1\n"
+        );
     }
 
     #[test]
