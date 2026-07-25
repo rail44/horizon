@@ -326,7 +326,16 @@ lands:
   ast-grep, repo maps, SWE-agent-style viewers) were surveyed and set
   aside for now — current evidence favors plain agent-driven retrieval,
   and the 2024-era ACI findings are too weak a basis (owner assessment).
-  Dispatched to a worker 2026-07-25.
+  **`agent.explore` LANDED 2026-07-26** (merge `280730a`; implemented by a
+  worker — the first Opus 5 worker trial, 333k tokens, gate green on the
+  first hand-back — and reviewed before integration): `EXPLORE_ROLE`
+  (read-only allowlist, turn cap 25, doubles as the restart-cleanup
+  identity so the wire is unchanged), the `ExplorationHost` seam on
+  `ToolSessionState`, event-tap subscription as the only wait mechanism,
+  exploration sessions excluded from the client session list. The
+  comparative measurement (third run of the `WaitingForUser` brief vs the
+  two context-ceiling deaths) is the next step and pends a runtime
+  reload.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,

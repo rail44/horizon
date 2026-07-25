@@ -383,7 +383,17 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     // Fallback end-of-turn signal for a provider that does
                     // not emit `TurnEnded` at all. The rig provider always
                     // emits it first (`apply_turn_outcome`), so this only
-                    // ever fires for one that doesn't.
+                    // ever fires for one that doesn't. One caveat kept on
+                    // record: rig ALSO emits `WaitingForUser` mid-turn in
+                    // two measured shapes (the startup/`Initialize` pair,
+                    // and approval-gated async-tool boundaries — backlog
+                    // 47). Both are unreachable in a v1 exploration (the
+                    // host never sends `Initialize` after the user message,
+                    // approvals cannot occur, every allowed tool is
+                    // synchronous, and explorations are never resumed) —
+                    // but if explorations ever gain an async or
+                    // approval-capable tool, this arm becomes a premature-
+                    // completion hazard and must be revisited.
                     Event::StateChanged(SessionState::WaitingForUser) if turn_started => {
                         break match report {
                             Some(_) => Terminal::Completed,

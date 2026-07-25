@@ -16,9 +16,12 @@ use crate::tools::state::ToolSessionState;
 /// question's answer cost as much as the second's — measured on this
 /// repository, one `WaitingForUser` search returns 5,008 bytes as
 /// locations, 12,948 with the matching lines, and 67,423 with three lines
-/// of context each. SWE-agent reached the same conclusion for a different
-/// reason: "showing the model more context about each match proved to be
-/// too confusing for the model" (`docs/research/`, 2026-07-25 survey).
+/// of context each — and in the session that motivated the change, only
+/// 16% of the context lines grep returned were ever revisited by a later
+/// read. Current harnesses draw the same line (Claude Code defaults to
+/// file paths, OpenCode returns bare matching lines); the fuller
+/// measurement record is `docs/research/` 2026-07-25 plus the roadmap's
+/// context-consumption entry.
 const MAX_OUTPUT_CHARS: usize = 50_000;
 
 struct GrepResults {
