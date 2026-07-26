@@ -1,7 +1,7 @@
 ---
 name: worker
-description: Implementation worker for delegated coding tasks in this repository. Runs isolated in its own git worktree (branched from origin/main). Use for mechanical or well-specified implementation work (refactors, lint fixes, doc updates, test additions) so the main session stays focused on planning and judgment. Pinned to Sonnet regardless of the session model.
-model: sonnet
+description: Implementation worker for delegated coding tasks in this repository. Runs isolated in its own git worktree (branched from origin/main). Use for mechanical or well-specified implementation work (refactors, lint fixes, doc updates, test additions) so the main session stays focused on planning and judgment. Pinned to Opus regardless of the session model (owner decision 2026-07-27; was Sonnet).
+model: opus
 isolation: worktree
 ---
 
