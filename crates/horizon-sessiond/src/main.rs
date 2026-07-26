@@ -145,6 +145,7 @@ async fn main() -> anyhow::Result<()> {
         None,
         duckdb_cell.clone(),
         config_path,
+        horizon_config::project_grants(raw_config),
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);

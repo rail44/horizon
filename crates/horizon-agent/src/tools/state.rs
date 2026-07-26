@@ -60,9 +60,19 @@ struct Inner {
     /// back to an over-broad root that would confine nothing.
     workspace_root: Option<PathBuf>,
     recorded_mtimes: RefCell<HashMap<PathBuf, SystemTime>>,
-    /// Additive, session-local filesystem grants approved after structured
-    /// containment denials. Snapshotted before each bash job is queued.
-    filesystem_denials: RefCell<Vec<horizon_sandbox::FilesystemDenial>>,
+    /// Additive, session-local filesystem grants this session's sandboxed
+    /// calls run with, snapshotted before each bash job is queued. Two
+    /// sources feed it, and both are enforced identically: the trees
+    /// `[grants]` names for this session's project, injected at spawn (see
+    /// [`ToolSessionState::with_filesystem_grants`]), and whatever a human
+    /// or the judge approved after a containment denial (see
+    /// [`ToolSessionState::approve_filesystem_grants`]). Stored as grants
+    /// rather than as the denials that triggered them: an approved grant is
+    /// generally *not* one attempted path's own resolution -- it is the
+    /// shaped common ancestor of several
+    /// (`horizon_sandbox::suggest_grants`), and a config-injected tree
+    /// never had a denial at all.
+    filesystem_grants: RefCell<Vec<horizon_sandbox::FilesystemGrant>>,
     /// The `bash` tool's tracked working directory
     /// (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh process per
     /// call, with `cd` persisted across calls by the harness rather than a
@@ -211,7 +221,7 @@ impl ToolSessionState {
             inner: Rc::new(Inner {
                 workspace_root,
                 recorded_mtimes: RefCell::new(HashMap::new()),
-                filesystem_denials: RefCell::new(Vec::new()),
+                filesystem_grants: RefCell::new(Vec::new()),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
                 recall,
@@ -407,27 +417,58 @@ impl ToolSessionState {
         self.inner.workspace_root.as_deref()
     }
 
+    /// Seeds this session's grant list with the trees its project's
+    /// `[grants]` entry names, so every sandboxed call in the session
+    /// starts with them writable and a write inside one is never a boundary
+    /// crossing. Same construction-time-only safety contract as
+    /// [`Self::with_skills`]/[`Self::with_config_path`]: the one production
+    /// call site is `horizon-sessiond`'s `session::run_session`, which is
+    /// also the only place that can resolve this session's project root.
+    ///
+    /// Grants that no longer revalidate are dropped here rather than
+    /// stored: a `[grants]` entry naming a directory that has since been
+    /// deleted or replaced must not travel any further than the config
+    /// load that read it.
+    pub fn with_filesystem_grants(mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.filesystem_grants = RefCell::new(
+                grants
+                    .into_iter()
+                    .filter(|grant| horizon_sandbox::revalidate_grant(grant).is_ok())
+                    .collect(),
+            );
+        }
+        self
+    }
+
+    /// The grants merged into the next sandboxed spawn's policy, each
+    /// re-checked against the live filesystem first -- a grant whose target
+    /// disappeared, changed kind, or became over-broad simply drops out
+    /// instead of widening anything.
     pub(crate) fn filesystem_grants_snapshot(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
         self.inner
-            .filesystem_denials
+            .filesystem_grants
             .borrow()
             .iter()
-            .filter(|denial| horizon_sandbox::revalidate_filesystem_denial(denial).is_ok())
-            .map(|denial| denial.grant.clone())
+            .filter(|grant| horizon_sandbox::revalidate_grant(grant).is_ok())
+            .cloned()
             .collect()
     }
 
-    pub(crate) fn approve_filesystem_denials(
+    /// Adds approved grants to this session's list, after revalidating
+    /// every one of them. Fails closed as a unit: if any grant no longer
+    /// holds up, none are stored.
+    pub(crate) fn approve_filesystem_grants(
         &self,
-        denials: &[horizon_sandbox::FilesystemDenial],
+        grants: &[horizon_sandbox::FilesystemGrant],
     ) -> Result<(), horizon_sandbox::SandboxError> {
-        for denial in denials {
-            horizon_sandbox::revalidate_filesystem_denial(denial)?;
+        for grant in grants {
+            horizon_sandbox::revalidate_grant(grant)?;
         }
-        let mut approved = self.inner.filesystem_denials.borrow_mut();
-        for denial in denials {
-            if !approved.contains(denial) {
-                approved.push(denial.clone());
+        let mut approved = self.inner.filesystem_grants.borrow_mut();
+        for grant in grants {
+            if !approved.contains(grant) {
+                approved.push(grant.clone());
             }
         }
         Ok(())

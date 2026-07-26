@@ -274,6 +274,114 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     let _ = std::fs::remove_file(&path);
 }
 
+// --- [grants]: project-scoped tree grants -------------------------------
+
+#[test]
+fn load_from_path_parses_project_grants() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-grants-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        r##"
+            [[grants.project]]
+            root = "/src/project"
+            trees = ["/src/caches/one", "/src/caches/two"]
+
+            [[grants.project]]
+            root = "/src/other"
+            trees = ["/src/caches/other"]
+        "##,
+    )
+    .unwrap();
+
+    let loaded = load_from_path(Some(&path));
+
+    assert_eq!(loaded.grants.project.len(), 2);
+    assert_eq!(loaded.grants.project[0].root, "/src/project");
+    assert_eq!(
+        loaded.grants.project[0].trees,
+        vec!["/src/caches/one".to_string(), "/src/caches/two".to_string()]
+    );
+    assert_eq!(
+        crate::grants::trees_for_project(
+            &project_grants(&loaded),
+            std::path::Path::new("/src/project")
+        ),
+        vec![
+            PathBuf::from("/src/caches/one"),
+            PathBuf::from("/src/caches/two"),
+        ]
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn an_overbroad_tree_is_dropped_at_load_rather_than_failing_the_file() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-grants-overbroad-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        r##"
+            [[grants.project]]
+            root = "/src/project"
+            trees = ["/", "/usr", "/src/caches/one"]
+        "##,
+    )
+    .unwrap();
+
+    let loaded = load_from_path(Some(&path));
+
+    assert_eq!(
+        crate::grants::trees_for_project(
+            &project_grants(&loaded),
+            std::path::Path::new("/src/project")
+        ),
+        vec![PathBuf::from("/src/caches/one")],
+        "the refused trees drop out; the file still loads"
+    );
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn a_file_without_a_grants_section_grants_nothing() {
+    let loaded = load_from_path(None);
+    assert!(loaded.grants.project.is_empty());
+    assert!(project_grants(&loaded).is_empty());
+}
+
+/// Drift guard for `config.example.toml` (repo root): the example file must
+/// stay default-locked, so every `[grants]` line it shows has to be
+/// commented out -- an active `[[grants.project]]` there would hand a real
+/// grant to anyone who copied the file verbatim. Companion to
+/// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
+#[test]
+fn config_example_toml_documents_grants_without_activating_any() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("..")
+        .join("config.example.toml");
+    let contents = std::fs::read_to_string(&path).expect("config.example.toml must be readable");
+    assert!(
+        contents.contains("[[grants.project]]"),
+        "the example file must document the section"
+    );
+
+    let parsed = contents
+        .parse::<toml::Value>()
+        .expect("config.example.toml must be valid TOML");
+    let grants = parsed.get("grants");
+    assert!(
+        grants.is_none(),
+        "config.example.toml must not activate any grant, found {grants:?}"
+    );
+}
+
 // --- [theme] text_contrast: lenient number parsing ----------------------
 
 #[test]

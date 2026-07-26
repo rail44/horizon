@@ -200,6 +200,52 @@ magenta = "#c678dd"
 cyan = "#56b6c2"
 
 # ---------------------------------------------------------------------------
+# [grants] — per-project filesystem trees agent sessions may write to.
+#
+# An agent session's `bash` runs sandboxed: its own isolated worktree is
+# writable and everything else is not. That is right for the session's own
+# edits, but a build toolchain reaches well outside it on essentially every
+# invocation (package caches, lock files, shared build directories), and
+# those paths differ from run to run — so a session that has to ask for each
+# one stalls unpredictably instead of finishing.
+#
+# A [[grants.project]] entry says, once, which directories developing THIS
+# project legitimately writes to. Sessions of that project start with those
+# trees already writable, so reaching them is no longer a boundary crossing
+# and never produces an approval prompt.
+#
+#   root  — the project's main-repository toplevel (the directory `git
+#           rev-parse --show-toplevel` reports). A session working in an
+#           isolated worktree Horizon created under `.horizon/worktrees/`
+#           resolves back to this same root, so isolated sessions inherit
+#           the project's grants automatically. Matched exactly: naming a
+#           parent directory does NOT cover the projects beneath it.
+#   trees — directories granted read-write, recursively. A leading "~/" is
+#           expanded against $HOME.
+#
+# Refused with a warning on stderr (and ignored): a tree that is $HOME
+# itself, "/", or a system directory such as /usr, /etc, /var, /tmp. Those
+# would put the sandbox's whole purpose inside the grant.
+#
+# This lives here, in YOUR config file, and deliberately not in the
+# repository: a tracked project file would let a repository you cloned widen
+# its own authority the moment you opened an agent session in it. Nothing in
+# Horizon writes this section for you — the approval flow can add a grant to
+# a running session, but only you can make one persistent. Keep the list
+# short and deliberate; a tree grant includes any tool configuration living
+# inside it, which can influence later runs of that tool.
+#
+# Applied at session spawn only. Existing sessions keep the grants they
+# started with; "Reload Session Runtime" picks changes up for new ones —
+# same lifecycle as [provider].
+#
+# Commented out: there is no built-in default, and an active entry here
+# would grant real access to anyone who copied this file verbatim.
+# [[grants.project]]
+# root  = "/home/you/src/github.com/you/your-project"
+# trees = ["~/.cargo"]
+
+# ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these
 # any more (the whole section retired 2026-07-18), but the event log's and
 # DuckDB projection's paths are still relocatable via env var:

@@ -223,15 +223,9 @@ pub(crate) fn annotate_network_denials(
 }
 
 /// Records that an approved `bash` call ran once with the host process's
-/// ordinary authority after a sandbox boundary crossing. This is deliberately
-/// distinct from a narrow filesystem grant: the observed denials explain why
-/// mediation started, but do not bound what the one approved execution could
-/// access.
-pub(crate) fn annotate_host_execution_approval(
-    output: &mut Value,
-    source: &str,
-    denials: &[horizon_sandbox::FilesystemDenial],
-) {
+/// ordinary authority -- an [`ApprovalKind::Standard`] approve, the only
+/// path that still does this.
+pub(crate) fn annotate_host_execution_approval(output: &mut Value, source: &str) {
     if let Some(map) = output.as_object_mut() {
         map.insert("host_execution_approved".to_string(), Value::Bool(true));
         map.insert(
@@ -242,16 +236,53 @@ pub(crate) fn annotate_host_execution_approval(
             "approval_source".to_string(),
             Value::String(source.to_string()),
         );
+    }
+}
+
+/// Records that a sandboxed `bash` call was rerun with an approved
+/// filesystem grant (`docs/containment-denial-narrow-grants-design.md`'s
+/// 2026-07-26 decision). `approved_filesystem_grants` is what actually
+/// bounds the execution; `approval_trigger_paths` are the mediated attempts
+/// that prompted the request and bound nothing -- the two are recorded
+/// under separate keys so a reader is never invited to confuse evidence
+/// with authority.
+pub(crate) fn annotate_filesystem_grant_approval(
+    output: &mut Value,
+    source: &str,
+    grants: &[horizon_sandbox::FilesystemGrant],
+    trigger_paths: &[PathBuf],
+) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "approval_scope".to_string(),
+            Value::String("filesystem_grant".to_string()),
+        );
+        map.insert(
+            "approval_source".to_string(),
+            Value::String(source.to_string()),
+        );
+        map.insert(
+            "approved_filesystem_grants".to_string(),
+            Value::Array(grants.iter().map(grant_json).collect()),
+        );
         map.insert(
             "approval_trigger_paths".to_string(),
             Value::Array(
-                denials
+                trigger_paths
                     .iter()
-                    .map(|denial| Value::String(denial.attempted_path.display().to_string()))
+                    .map(|path| Value::String(path.display().to_string()))
                     .collect(),
             ),
         );
     }
+}
+
+fn grant_json(grant: &horizon_sandbox::FilesystemGrant) -> Value {
+    serde_json::json!({
+        "path": grant.path.display().to_string(),
+        "access": format!("{:?}", grant.access),
+        "scope": format!("{:?}", grant.scope),
+    })
 }
 
 pub(crate) fn annotate_git_operation_approval(output: &mut Value, writable_roots: &[PathBuf]) {

@@ -206,6 +206,18 @@ impl LiveState {
         }
     }
 
+    /// Restates this session's effective filesystem authority in the
+    /// event-log context stamped onto every later record -- called after an
+    /// approval adds a grant, so the log answers "what could this session
+    /// reach when that event was written?" rather than only "what did it
+    /// start with?". See
+    /// `event_log::PersistedSessionContext::filesystem_grants`.
+    pub(crate) fn record_filesystem_grants(&self, grants: &[horizon_sandbox::FilesystemGrant]) {
+        if let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() {
+            appender.borrow_mut().set_filesystem_grants(grants.to_vec());
+        }
+    }
+
     /// The session's current accumulated frame. Used outside tests too:
     /// `horizon-sessiond`'s `fold_bash_completion`
     /// (`crates/horizon-sessiond/src/session.rs`) reads this to check

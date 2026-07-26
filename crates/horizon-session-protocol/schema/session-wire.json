@@ -123,13 +123,20 @@
         },
         {
           "additionalProperties": false,
-          "description": "A sandboxed `bash` call crossed a filesystem boundary whose complete\nrequirements cannot be derived ahead of time. Approval authorizes the\nSAME call to run once with the host process's ordinary authority;\nlater calls start sandboxed again. The observed grants may still be\nretained session-locally to reduce repeat denials, but they are not a\ncomplete description of what the approved host execution may access.\n\nThe variant name predates the host-execution behavior and remains\nstable so existing event-log records continue to deserialize.",
+          "description": "A sandboxed `bash` call was refused access to paths outside its\nworkspace. Approval adds `grants` to this session and reruns the\nSAME call **still sandboxed**; denying forwards `prior_result` as-is\n(the call already ran, and its output already reflects the refusal).\n\n`denials` are the raw mediated attempts -- evidence, shown to the\napprover as the trigger. `grants` is what approval actually buys:\nthe shaped suggestion (`horizon_sandbox::suggest_grants`, one tree\nat the attempts' narrowest common ancestor, clamped), which is\ngenerally *not* the same as the per-attempt grants inside `denials`.\n\nBoth the variant name and `denials` predate the 2026-07-26\nproject-scoped-tree-grants decision\n(`docs/containment-denial-narrow-grants-design.md`) and stay put so\nexisting event-log records keep deserializing. `grants` is\n`#[serde(default)]` for the same reason: a request persisted by the\n2026-07-24 host-execution build reads back with none, and an empty\ngrant list fails closed at approval rather than silently reviving\nunsandboxed execution.",
           "properties": {
             "FilesystemDenialRetry": {
               "properties": {
                 "denials": {
                   "items": {
                     "$ref": "#/$defs/FilesystemDenial"
+                  },
+                  "type": "array"
+                },
+                "grants": {
+                  "default": [],
+                  "items": {
+                    "$ref": "#/$defs/FilesystemGrant"
                   },
                   "type": "array"
                 },

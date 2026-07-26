@@ -249,13 +249,15 @@ pub(crate) fn start_approval_gate(
 
 fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApprovalContext {
     match kind {
-        ApprovalKind::FilesystemDenialRetry { denials, .. } => JudgeApprovalContext {
-            requested_filesystem_grants: denials
-                .iter()
-                .map(|denial| denial.grant.clone())
-                .collect(),
+        // The judge is asked about what approval actually buys -- the
+        // shaped grants -- not about the raw attempts that triggered the
+        // request, and no longer about host execution: this retry stays
+        // sandboxed (`docs/containment-denial-narrow-grants-design.md`'s
+        // 2026-07-26 decision).
+        ApprovalKind::FilesystemDenialRetry { grants, .. } => JudgeApprovalContext {
+            requested_filesystem_grants: grants.clone(),
             requested_domains: Vec::new(),
-            host_execution_requested: true,
+            host_execution_requested: false,
         },
         ApprovalKind::GitOperation { writable_roots } => JudgeApprovalContext {
             requested_filesystem_grants: writable_roots
@@ -585,9 +587,19 @@ mod tests {
                 scope: horizon_sandbox::FilesystemGrantScope::File,
             },
         };
+        // The judge is asked about the shaped grant approval would actually
+        // add -- deliberately not the per-attempt grant inside `denials`,
+        // which is evidence only -- and no longer about host execution: a
+        // filesystem retry stays sandboxed.
+        let shaped = horizon_sandbox::FilesystemGrant {
+            path: std::env::temp_dir(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        };
         let context = trusted_approval_context(
             &ApprovalKind::FilesystemDenialRetry {
                 denials: vec![denial.clone()],
+                grants: vec![shaped.clone()],
                 prior_result: crate::contract::ToolCallResult::new(
                     crate::contract::ToolCallId("call-context".to_string()),
                     serde_json::json!({}),
@@ -595,12 +607,13 @@ mod tests {
             },
             "bash",
         );
-        assert_eq!(
+        assert_eq!(context.requested_filesystem_grants, vec![shaped]);
+        assert_ne!(
             context.requested_filesystem_grants,
             vec![denial.grant.clone()]
         );
         assert!(context.requested_domains.is_empty());
-        assert!(context.host_execution_requested);
+        assert!(!context.host_execution_requested);
 
         let expected_domains = vec!["example.com".to_string()];
         let context = trusted_approval_context(
@@ -776,6 +789,7 @@ mod tests {
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
         let expected = candidate(ApprovalKind::FilesystemDenialRetry {
             denials: Vec::new(),
+            grants: Vec::new(),
             prior_result: crate::contract::ToolCallResult::new(
                 crate::contract::ToolCallId("call-1".to_string()),
                 serde_json::json!({}),

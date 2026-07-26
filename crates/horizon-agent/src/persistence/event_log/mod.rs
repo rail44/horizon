@@ -32,6 +32,18 @@ pub struct PersistedSessionContext {
     pub workspace_root: Option<PathBuf>,
     pub isolated_worktree: bool,
     pub parent_session_id: Option<SessionId>,
+    /// The filesystem authority this session's sandboxed calls actually
+    /// ran with (`docs/containment-denial-narrow-grants-design.md`'s
+    /// 2026-07-26 decision): the trees `[grants]` injected at spawn, plus
+    /// anything approved since. Every later record carries the current
+    /// value, so the log states what a session could reach at the point
+    /// each event was written rather than only what it started with.
+    ///
+    /// `#[serde(default)]` for the same reason the whole context is: a
+    /// record written before this field existed reads back with an empty
+    /// list, which is exactly what such a session had.
+    #[serde(default)]
+    pub filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -252,6 +264,7 @@ mod tolerant_read_tests {
                 workspace_root: Some(PathBuf::from("/tmp/future-worktree")),
                 isolated_worktree: true,
                 parent_session_id: Some(parent_session_id),
+                filesystem_grants: Vec::new(),
             }),
             "tolerant event decoding must preserve host placement metadata"
         );
@@ -342,6 +355,11 @@ mod tests {
             workspace_root: Some(PathBuf::from("/tmp/session-worktree")),
             isolated_worktree: true,
             parent_session_id: Some(SessionId::new()),
+            filesystem_grants: vec![horizon_sandbox::FilesystemGrant {
+                path: PathBuf::from("/tmp/session-cache"),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            }],
         };
         let mut appender = Appender::new(
             writer.clone(),
@@ -382,6 +400,105 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(path);
+    }
+
+    /// The audit half of `docs/containment-denial-narrow-grants-design.md`'s
+    /// 2026-07-26 decision: the log must state what filesystem authority a
+    /// session ran with. Records written before a grant was approved keep
+    /// the authority that was actually in force when they were written;
+    /// records after it carry the widened set.
+    #[test]
+    fn a_grant_approved_mid_session_restates_the_authority_on_later_records_only() {
+        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
+        let session_id = SessionId::new();
+        let (writer, _init_rx) = WriterHandle::open(&path);
+        let configured = horizon_sandbox::FilesystemGrant {
+            path: PathBuf::from("/tmp/configured-tree"),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        };
+        let approved = horizon_sandbox::FilesystemGrant {
+            path: PathBuf::from("/tmp/approved-tree"),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        };
+        let mut appender = Appender::new(writer.clone(), session_id, None, None)
+            .with_session_context(PersistedSessionContext {
+                workspace_root: Some(PathBuf::from("/tmp/session-worktree")),
+                isolated_worktree: true,
+                parent_session_id: None,
+                filesystem_grants: vec![configured.clone()],
+            });
+
+        let message = |text: &str| {
+            ProviderEvent::from(Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: text.to_string(),
+            }))
+        };
+        appender
+            .append_provider_events(vec![message("before")])
+            .expect("append before");
+        appender.set_filesystem_grants(vec![configured.clone(), approved.clone()]);
+        appender
+            .append_provider_events(vec![message("after")])
+            .expect("append after");
+        writer.flush().expect("flush");
+
+        let report = read(&path).expect("read");
+        assert_eq!(report.records.len(), 2);
+        assert_eq!(
+            report.records[0]
+                .session_context
+                .as_ref()
+                .map(|context| context.filesystem_grants.clone()),
+            Some(vec![configured.clone()]),
+            "records written before the approval must not claim the wider authority"
+        );
+        assert_eq!(
+            report.records[1]
+                .session_context
+                .as_ref()
+                .map(|context| context.filesystem_grants.clone()),
+            Some(vec![configured, approved])
+        );
+
+        let _ = std::fs::remove_file(path);
+    }
+
+    /// A record written before this field existed reads back with no
+    /// grants -- which is exactly the authority such a session had.
+    #[test]
+    fn a_pre_grants_session_context_decodes_with_no_filesystem_grants() {
+        let session_id = SessionId::new();
+        let line = serde_json::json!({
+            "schema": AGENT_EVENT_LOG_SCHEMA,
+            "version": AGENT_EVENT_LOG_VERSION,
+            "event_id": Uuid::new_v4().to_string(),
+            "sequence": 7,
+            "session_id": session_id,
+            "turn_id": null,
+            "provider_id": null,
+            "session_context": {
+                "workspace_root": "/tmp/legacy-worktree",
+                "isolated_worktree": true,
+                "parent_session_id": null,
+            },
+            "event_kind": "message_committed",
+            "event": { "message_committed": { "role": "user", "text": "hi" } },
+            "provider_payload": null,
+            "created_at_unix_ms": 0,
+        })
+        .to_string();
+
+        let record = decode_record_tolerantly(&line).expect("legacy record must decode");
+        assert_eq!(
+            record
+                .session_context
+                .expect("legacy context")
+                .filesystem_grants,
+            Vec::new()
+        );
     }
 
     /// Round-trips the provider-request lifecycle markers

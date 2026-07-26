@@ -47,6 +47,7 @@
 //! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
 //!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
 
+pub mod grants;
 mod warnings;
 
 use std::collections::HashMap;
@@ -54,6 +55,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use serde::Deserialize;
+
+pub use grants::{ProjectGrant, RawGrantsConfig, RawProjectGrant};
 
 /// Overrides the config file path outright, bypassing the XDG/home lookup
 /// below entirely. Primarily for tests and for running multiple Horizon
@@ -82,6 +85,10 @@ pub struct RawConfig {
     pub keybindings: HashMap<String, String>,
     /// `[theme]`: the app's one color scheme. See [`RawThemeConfig`].
     pub theme: RawThemeConfig,
+    /// `[grants]`: per-project filesystem trees agent sessions may write
+    /// to. See the [`grants`] module doc for why this is user-owned config
+    /// rather than anything the repository or the approval flow can write.
+    pub grants: RawGrantsConfig,
 }
 
 /// `[provider]`: model selection and base URL for the built-in rig/OpenAI
@@ -277,6 +284,26 @@ fn non_empty(value: Option<String>) -> Option<String> {
     value.filter(|value| !value.is_empty())
 }
 
+/// This process's `$HOME`, for `[grants]`' `~` expansion. Borrowed from
+/// `horizon_sandbox` rather than re-read here so the expansion and the
+/// "is this tree `$HOME` itself?" refusal always agree about what `$HOME`
+/// is. Unlike [`resolve_config_path`] this is *not* `#[cfg(test)]`-gated:
+/// it never resolves the developer's real config file, and the pure
+/// `grants::resolve` (which every expansion test drives directly) takes
+/// `home` as an argument anyway.
+fn home_dir() -> Option<PathBuf> {
+    horizon_sandbox::home_dir()
+}
+
+/// Every validated `[[grants.project]]` entry -- what `horizon-sessiond`
+/// consults at session spawn to decide which trees this session's project
+/// may write to (`grants::trees_for_project`). Entries this crate refused
+/// (over-broad, unexpandable) are already dropped, having warned on stderr
+/// when the file was read.
+pub fn project_grants(config: &RawConfig) -> Vec<ProjectGrant> {
+    grants::resolve(&config.grants.project, home_dir().as_deref()).0
+}
+
 /// The outcome of trying to read and parse the config file at some path,
 /// before either [`load_from_path`] (startup: every non-success case folds
 /// into `RawConfig::default()` plus a stderr warning) or [`reload_from_path`]
@@ -316,11 +343,17 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
     match parse(&contents) {
         Ok(config) => {
             // Retired/unrecognized-key warnings (`[agent]`/`[provider]`/
-            // `[terminal]`/`[ui]` -- see `warnings`' module doc) run here,
-            // once per successful parse, so both `load_from_path` (startup)
-            // and `reload_from_path` (`Reload Config`) get them through this
-            // one shared call site.
+            // `[terminal]`/`[ui]`/`[grants]` -- see `warnings`' module doc)
+            // run here, once per successful parse, so both
+            // `load_from_path` (startup) and `reload_from_path` (`Reload
+            // Config`) get them through this one shared call site.
             warnings::warn(&contents);
+            // `[grants]`' *value* validation (over-broad trees, unexpandable
+            // `~`) can't be done by name-walking the raw table, so it runs
+            // beside it, off the same successful parse.
+            for warning in grants::resolve(&config.grants.project, home_dir().as_deref()).1 {
+                eprintln!("horizon config: {warning}");
+            }
             ConfigRead::Parsed(Box::new(config))
         }
         Err(error) => {

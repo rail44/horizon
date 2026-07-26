@@ -273,6 +273,17 @@ pub(crate) struct SessiondState {
     /// `horizon_config::resolved_path`: no `HOME`/`XDG_CONFIG_HOME` to fall
     /// back to.
     config_path: Option<PathBuf>,
+    /// Validated `[[grants.project]]` entries from the same config load
+    /// (`main`'s `horizon_config::project_grants` call) --
+    /// `docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+    /// decision. Threaded through here rather than re-read from
+    /// `horizon_config::load()` at each session spawn for the same reason
+    /// `config_path` is: one config load per process, and this crate's own
+    /// tests must never observe the developer's real `~/.config/horizon/
+    /// config.toml` (`horizon_config`'s `#[cfg(test)]` gate is that crate's
+    /// own, and does not apply to test binaries here). Empty at every test
+    /// construction site.
+    project_grants: Vec<horizon_config::ProjectGrant>,
 }
 
 impl SessiondState {
@@ -283,6 +294,7 @@ impl SessiondState {
         writer: Option<WriterHandle>,
         duckdb_cell: SharedDuckdbStore,
         config_path: Option<PathBuf>,
+        project_grants: Vec<horizon_config::ProjectGrant>,
     ) -> Self {
         Self {
             providers,
@@ -298,6 +310,7 @@ impl SessiondState {
             skipped_lines_summary: Mutex::new(None),
             duckdb_cell,
             config_path,
+            project_grants,
         }
     }
 
@@ -1342,6 +1355,59 @@ fn tool_session_state_for(
     }
 }
 
+/// The `[grants]` trees this session's project entitles it to, as sandbox
+/// grants ready to inject (`docs/containment-denial-narrow-grants-design.md`'s
+/// 2026-07-26 decision).
+///
+/// Two steps, both refusable: resolve `workspace_root` to its project (the
+/// repository toplevel -- a derived worktree resolves to the repository it
+/// came from, see `worktree::project_root`), then look that project up in
+/// the user's config. A session with no workspace root, no repository, or
+/// no matching `[[grants.project]]` entry gets nothing extra, which is
+/// exactly the behavior that existed before this section did.
+///
+/// Every tree becomes a `ReadWrite` `DirectoryTree` grant -- the shape the
+/// decision fixes -- and is revalidated here so a config entry naming a
+/// directory that has since been deleted, replaced, or become over-broad
+/// never reaches a sandbox policy.
+fn configured_filesystem_grants(
+    state: &Arc<SessiondState>,
+    workspace_root: Option<&Path>,
+) -> Vec<horizon_sandbox::FilesystemGrant> {
+    let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
+        return Vec::new();
+    };
+    grants_for_project(&state.project_grants, &project_root)
+}
+
+/// The pure half of [`configured_filesystem_grants`], split out so the
+/// config-entry-to-sandbox-grant mapping is testable without a session,
+/// a daemon, or a config file.
+fn grants_for_project(
+    project_grants: &[horizon_config::ProjectGrant],
+    project_root: &Path,
+) -> Vec<horizon_sandbox::FilesystemGrant> {
+    horizon_config::grants::trees_for_project(project_grants, project_root)
+        .into_iter()
+        .map(|path| horizon_sandbox::FilesystemGrant {
+            path,
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        })
+        .filter(|grant| match horizon_sandbox::revalidate_grant(grant) {
+            Ok(()) => true,
+            Err(error) => {
+                eprintln!(
+                    "horizon-sessiond: ignoring configured grant {} for project {}: {error}",
+                    grant.path.display(),
+                    project_root.display()
+                );
+                false
+            }
+        })
+        .collect()
+}
+
 /// Returns the directory repository-local skills must be discovered from.
 /// This deliberately mirrors `SessionEnvironment::for_workspace_root`: an
 /// explicit, host-resolved session root wins, otherwise both the prompt and
@@ -1579,8 +1645,18 @@ fn run_session(
         }))
     };
 
+    // `[grants]`, resolved once per session at spawn
+    // (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+    // decision). Injected into the sandbox policy from the start, so a
+    // write inside one of this project's granted trees is simply not a
+    // boundary crossing and never reaches the judge or a human. Live
+    // sessions are unaffected by later config edits; `Reload Session
+    // Runtime` picks changes up for new ones, same lifecycle as
+    // `[provider]`.
+    let filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
     let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
         .with_isolated_worktree(isolated)
+        .with_filesystem_grants(filesystem_grants.clone())
         .with_skills(SkillRegistry::discover(&skill_root))
         .with_config_path(state.config_path.clone())
         .with_domain_policy(domains)
@@ -1596,6 +1672,10 @@ fn run_session(
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,
         parent_session_id: isolated.then_some(spawn_source_session_id).flatten(),
+        // What authority this session actually started with. A grant
+        // approved later restates this on every subsequent record (see
+        // `LiveState::record_filesystem_grants`).
+        filesystem_grants,
     };
     let live_state = match state.writer() {
         Some(writer) => LiveState::with_event_log_context_and_history(
@@ -2155,19 +2235,41 @@ fn fold_filesystem_denied(
     let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
         return;
     };
-    let reason = denials
+    let attempted = denials
         .iter()
-        .map(|denial| {
+        .map(|denial| denial.attempted_path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    // The shaping is generic over path structure only -- see
+    // `horizon_sandbox::suggest_grants`. Sessiond supplies the two facts it
+    // owns (this session's workspace root, this account's `$HOME`) and
+    // nothing about what command was run.
+    let grants = horizon_sandbox::suggest_grants(
+        &denials,
+        session_workspace_root(state, session_id).as_deref(),
+        horizon_sandbox::home_dir().as_deref(),
+    );
+    let offered = grants
+        .iter()
+        .map(|grant| {
             format!(
-                "attempted {} (suggested {:?} {:?} access to {})",
-                denial.attempted_path.display(),
-                denial.grant.access,
-                denial.grant.scope,
-                denial.grant.path.display()
+                "{:?} {:?} access to {}",
+                grant.access,
+                grant.scope,
+                grant.path.display()
             )
         })
         .collect::<Vec<_>>()
         .join("; ");
+    // The prompt states what approval actually buys. It used to offer whole
+    // -call host authority; it now offers exactly these grants, and the
+    // command still runs sandboxed with them (`docs/containment-denial-
+    // narrow-grants-design.md`'s 2026-07-26 decision).
+    let reason = format!(
+        "`bash` was refused access outside its workspace: attempted {attempted}. \
+         Grant {offered} to this session and retry the same call, still sandboxed? \
+         The grant lasts for this session only."
+    );
     begin_reissued_approval(
         state,
         live_state,
@@ -2175,17 +2277,31 @@ fn fold_filesystem_denied(
         original_request,
         ApprovalRequest {
             call_id,
-            reason: format!(
-                "`bash` crossed the filesystem sandbox boundary: {reason}. \
-                 Run this same call once with the host process's ordinary authority? \
-                 Later calls start sandboxed again."
-            ),
+            reason,
             kind: ApprovalKind::FilesystemDenialRetry {
                 denials,
+                grants,
                 prior_result: result,
             },
         },
     );
+}
+
+/// This session's confinement root, as recorded when it started -- the
+/// workspace half of the suggestion shaping's input. `None` for a session
+/// with no root (or one sessiond no longer tracks), in which case every
+/// attempt is treated as outside, which is the conservative reading.
+fn session_workspace_root(state: &Arc<SessiondState>, session_id: SessionId) -> Option<PathBuf> {
+    let root = state
+        .sessions
+        .lock()
+        .unwrap()
+        .get(&session_id)
+        .and_then(|entry| entry.workspace_root.clone())?;
+    // Canonical on both sides or the containment test is meaningless: the
+    // supervisor reports resolved paths, and this entry holds whatever the
+    // spawn was given.
+    std::fs::canonicalize(root).ok()
 }
 
 /// A `Command` envelope arriving from Horizon for this session.
@@ -2298,6 +2414,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ))
     }
 
@@ -3048,6 +3165,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -3151,6 +3269,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -3194,8 +3313,74 @@ mod tests {
         );
     }
 
+    // --- [grants]: project-scoped tree grants ---------------------------
+
     #[test]
-    fn fold_filesystem_denial_requests_one_call_of_host_execution() {
+    fn a_configured_tree_becomes_a_read_write_directory_grant_for_its_project() {
+        let tree = tempfile::tempdir().expect("create temp tree");
+        let canonical_tree = std::fs::canonicalize(tree.path()).unwrap();
+        let (entries, warnings) = horizon_config::grants::resolve(
+            &[horizon_config::RawProjectGrant {
+                root: "/src/project".to_string(),
+                trees: vec![canonical_tree.display().to_string()],
+            }],
+            Some(std::path::Path::new("/home/someone")),
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+
+        assert_eq!(
+            grants_for_project(&entries, std::path::Path::new("/src/project")),
+            vec![horizon_sandbox::FilesystemGrant {
+                path: canonical_tree,
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            }]
+        );
+    }
+
+    #[test]
+    fn a_project_with_no_configured_entry_gets_no_grants() {
+        let (entries, _) = horizon_config::grants::resolve(
+            &[horizon_config::RawProjectGrant {
+                root: "/src/project".to_string(),
+                trees: vec!["/src/cache".to_string()],
+            }],
+            None,
+        );
+
+        assert!(grants_for_project(&entries, std::path::Path::new("/src/elsewhere")).is_empty());
+    }
+
+    #[test]
+    fn a_configured_tree_that_no_longer_exists_is_dropped_before_it_reaches_a_policy() {
+        let tree = tempfile::tempdir().expect("create temp tree");
+        let path = std::fs::canonicalize(tree.path()).unwrap();
+        let (entries, _) = horizon_config::grants::resolve(
+            &[horizon_config::RawProjectGrant {
+                root: "/src/project".to_string(),
+                trees: vec![path.display().to_string()],
+            }],
+            None,
+        );
+        assert_eq!(
+            grants_for_project(&entries, std::path::Path::new("/src/project")).len(),
+            1
+        );
+
+        drop(tree);
+
+        assert!(
+            grants_for_project(&entries, std::path::Path::new("/src/project")).is_empty(),
+            "a stale config entry must not become a sandbox grant"
+        );
+    }
+
+    /// Folds one `FilesystemDenied` completion and returns the approval
+    /// request it produced, so the shaping tests below differ only in the
+    /// attempts they feed in.
+    fn approval_for_denials(
+        denials: Vec<horizon_sandbox::FilesystemDenial>,
+    ) -> horizon_agent::contract::ApprovalRequest {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
         let state = Arc::new(SessiondState::new(
             ProviderRegistry::builtin_with_config(
@@ -3206,14 +3391,13 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
         let connection = Connection::new(state.clone());
         let mut outgoing_rx = connection.subscribe_agent(session_id);
         let call_id = ToolCallId("bash-filesystem-denied".to_string());
-        let attempted = std::path::PathBuf::from("/outside/new.txt");
-        let grant_path = std::path::PathBuf::from("/outside");
         live_state.extend_provider_events(
             vec![
                 Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
@@ -3227,14 +3411,6 @@ mod tests {
             .into_iter()
             .map(Into::into),
         );
-        let denial = horizon_sandbox::FilesystemDenial {
-            attempted_path: attempted.clone(),
-            grant: horizon_sandbox::FilesystemGrant {
-                path: grant_path.clone(),
-                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
-            },
-        };
         let (commands_tx, commands_rx) = unbounded::<Command>();
 
         fold_bash_completion(
@@ -3244,36 +3420,110 @@ mod tests {
             session_id,
             ToolCompletion::FilesystemDenied {
                 call_id: call_id.clone(),
-                denials: vec![denial.clone()],
+                denials,
                 result: ToolCallResult::new(call_id.clone(), serde_json::json!({ "exit_code": 0 })),
             },
         );
 
         let forwarded = drain_events(&mut outgoing_rx);
-        let approval = forwarded
-            .iter()
-            .find_map(|event| match event {
-                Event::ApprovalRequested(request) => Some(request),
-                _ => None,
-            })
-            .expect("filesystem approval request");
-        assert!(approval.reason.contains(&attempted.display().to_string()));
-        assert!(approval.reason.contains(&grant_path.display().to_string()));
-        assert!(approval
-            .reason
-            .contains("host process's ordinary authority"));
-        assert!(approval
-            .reason
-            .contains("Later calls start sandboxed again"));
-        assert!(matches!(
-            &approval.kind,
-            ApprovalKind::FilesystemDenialRetry { denials, .. } if denials == &vec![denial]
-        ));
         assert_eq!(
             forwarded.last(),
             Some(&Event::StateChanged(SessionState::WaitingForApproval))
         );
         assert!(commands_rx.try_recv().is_err());
+        forwarded
+            .iter()
+            .find_map(|event| match event {
+                Event::ApprovalRequested(request) => Some(request.clone()),
+                _ => None,
+            })
+            .expect("filesystem approval request")
+    }
+
+    fn tree_denial(attempted: &std::path::Path) -> horizon_sandbox::FilesystemDenial {
+        horizon_sandbox::FilesystemDenial {
+            attempted_path: attempted.to_path_buf(),
+            grant: horizon_sandbox::FilesystemGrant {
+                path: attempted
+                    .parent()
+                    .expect("attempt has a parent")
+                    .canonicalize()
+                    .expect("parent exists"),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            },
+        }
+    }
+
+    /// Issue 009's shape end to end: several refused attempts under one
+    /// cache directory become a single tree grant at that directory, and
+    /// the prompt offers exactly that -- no longer whole-call host
+    /// authority.
+    #[test]
+    fn fold_filesystem_denial_offers_one_tree_at_the_attempts_common_ancestor() {
+        let cache = tempfile::tempdir().expect("create temp cache");
+        let canonical = std::fs::canonicalize(cache.path()).unwrap();
+        let nested = canonical.join("build").join("debug");
+        std::fs::create_dir_all(&nested).unwrap();
+        let first = canonical.join(".package-cache-mutate");
+        let second = nested.join(".build-lock");
+
+        let approval = approval_for_denials(vec![tree_denial(&first), tree_denial(&second)]);
+
+        assert!(approval.reason.contains(&first.display().to_string()));
+        assert!(approval.reason.contains(&second.display().to_string()));
+        assert!(
+            approval.reason.contains("still sandboxed"),
+            "the prompt must say the retry stays contained: {}",
+            approval.reason
+        );
+        assert!(
+            !approval.reason.contains("host process"),
+            "the prompt must no longer offer host authority: {}",
+            approval.reason
+        );
+        let ApprovalKind::FilesystemDenialRetry {
+            denials, grants, ..
+        } = &approval.kind
+        else {
+            panic!("expected a filesystem-denial retry: {:?}", approval.kind);
+        };
+        assert_eq!(denials.len(), 2, "the attempts stay recorded as evidence");
+        assert_eq!(
+            grants,
+            &vec![horizon_sandbox::FilesystemGrant {
+                path: canonical,
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            }]
+        );
+    }
+
+    /// The clamp: attempts whose only shared ancestor is a system root
+    /// produce per-attempt grants rather than an offer no one should
+    /// accept.
+    #[test]
+    fn fold_filesystem_denial_falls_back_when_no_honest_ancestor_exists() {
+        let attempted = std::path::PathBuf::from("/outside/new.txt");
+        let denial = horizon_sandbox::FilesystemDenial {
+            attempted_path: attempted.clone(),
+            grant: horizon_sandbox::FilesystemGrant {
+                path: std::path::PathBuf::from("/outside"),
+                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            },
+        };
+
+        let approval = approval_for_denials(vec![denial.clone()]);
+
+        let ApprovalKind::FilesystemDenialRetry { grants, .. } = &approval.kind else {
+            panic!("expected a filesystem-denial retry: {:?}", approval.kind);
+        };
+        assert_eq!(
+            grants,
+            &vec![denial.grant],
+            "an unresolvable ancestor keeps the per-attempt grant instead of widening"
+        );
     }
 
     #[test]
@@ -3388,6 +3638,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -3439,6 +3690,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -3509,6 +3761,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ))
     }
 

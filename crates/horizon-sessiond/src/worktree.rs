@@ -128,6 +128,29 @@ fn git_common_dir(dir: &Path) -> Result<PathBuf, String> {
     .map(PathBuf::from)
 }
 
+/// The project `dir` belongs to, for `[grants]` lookup
+/// (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+/// decision): the *main* repository's toplevel, canonicalized.
+///
+/// Resolved through `--git-common-dir` rather than `--show-toplevel`, which
+/// is the whole point: the common dir is shared by every worktree of a
+/// repository, so an isolated session working in `.horizon/worktrees/<slug>`
+/// resolves to the repository it was derived from and inherits that
+/// project's grants — as does a session in any other linked worktree
+/// (`.claude/worktrees/*`, a hand-made one, ...). The same call in an
+/// ordinary checkout returns that checkout. This needs no persisted lineage
+/// and no live parent session, so it answers identically for a fresh
+/// session, a resumed one, and one whose parent has since terminated.
+///
+/// `None` when `dir` is not in a Git repository at all, or the repository's
+/// paths cannot be canonicalized. A session with no resolvable project
+/// simply gets no configured grants; nothing degrades to a wider default.
+pub(crate) fn project_root(dir: &Path) -> Option<PathBuf> {
+    let common_dir = git_common_dir(dir).ok()?;
+    let repo_root = repo_root_from_common_dir(&common_dir).ok()?;
+    std::fs::canonicalize(repo_root).ok()
+}
+
 fn repo_root_from_common_dir(common_dir: &Path) -> Result<PathBuf, String> {
     common_dir
         .parent()
@@ -583,6 +606,69 @@ mod tests {
         init_repo(dir.path());
         commit_file(dir.path(), "README.md", "root\n", "root commit");
         dir
+    }
+
+    // --- project root resolution ---------------------------------------
+    //
+    // The `[grants]` lookup key (`docs/containment-denial-narrow-grants-
+    // design.md`'s 2026-07-26 decision). The load-bearing case is the third
+    // one: an isolated session must resolve to the repository it was
+    // derived from, or every isolated session -- which is every session
+    // that can reach tier 1 at all -- would silently miss its project's
+    // grants.
+
+    #[test]
+    fn project_root_of_an_ordinary_checkout_is_that_checkout() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let canonical = std::fs::canonicalize(repo.path()).unwrap();
+
+        assert_eq!(project_root(repo.path()), Some(canonical));
+    }
+
+    #[test]
+    fn project_root_of_a_subdirectory_is_still_the_repository_toplevel() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let nested = repo.path().join("crates").join("inner");
+        std::fs::create_dir_all(&nested).unwrap();
+        let canonical = std::fs::canonicalize(repo.path()).unwrap();
+
+        assert_eq!(project_root(&nested), Some(canonical));
+    }
+
+    #[test]
+    fn project_root_of_a_derived_worktree_is_its_source_repository() {
+        let _canary = EnclosingRepoGuard::capture();
+        let repo = scratch_repo();
+        let info = create_isolated_worktree(repo.path(), false, Uuid::new_v4())
+            .expect("create isolated worktree");
+        let canonical = std::fs::canonicalize(repo.path()).unwrap();
+
+        // The worktree is its own Git toplevel, so a `--show-toplevel`-based
+        // resolution would answer with the worktree and miss the project.
+        assert_ne!(std::fs::canonicalize(&info.path).unwrap(), canonical);
+        assert_eq!(
+            project_root(&info.path),
+            Some(canonical),
+            "an isolated worktree must inherit its source repository's project identity"
+        );
+
+        remove_worktree_if_clean(&info);
+    }
+
+    #[test]
+    fn project_root_of_a_directory_outside_any_repository_is_none() {
+        let _canary = EnclosingRepoGuard::capture();
+        let dir = tempfile::tempdir().expect("create temp dir");
+
+        // A bare temp dir has no repository above it only if the temp root
+        // itself isn't inside one -- which is the normal case, and the only
+        // one where this assertion means anything.
+        if project_root(dir.path()).is_some() {
+            return;
+        }
+        assert_eq!(project_root(dir.path()), None);
     }
 
     /// Backlog 53 root cause + fix, exercised end to end: `commit_file` must

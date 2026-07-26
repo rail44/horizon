@@ -2115,23 +2115,48 @@ fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
 
 // --- approval wiring: filesystem-denial retry ----------------------------
 
+/// The 2026-07-26 replacement for the host-execution retry
+/// (`docs/containment-denial-narrow-grants-design.md`): approving a
+/// filesystem denial adds a scoped grant and reruns the call **still
+/// sandboxed**. Proves all three halves at once -- the approved tree is
+/// writable, the run is still contained (`sandboxed: true`), and a path
+/// outside the granted tree is still refused afterwards.
 #[cfg(target_os = "linux")]
 #[test]
-fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontains() {
+fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
     let workspace = temp_workspace("filesystem-retry-workspace");
     let outside = temp_workspace("filesystem-retry-outside");
-    let target = outside.join("approved.txt");
-    let sibling = outside.join("sibling.txt");
-    let later = outside.join("later.txt");
-    fs::write(&target, "before").unwrap();
+    let cache = outside.join("cache");
+    fs::create_dir(&cache).unwrap();
+    let attempted = cache.join("lock");
+    let written = cache.join("written.txt");
+    let ungranted = outside.join("ungranted.txt");
+
+    // The supervisor's shape for a refused create under an existing
+    // directory: the attempted leaf doesn't exist, so the per-attempt grant
+    // is its nearest existing parent.
     let denial = horizon_sandbox::FilesystemDenial {
-        attempted_path: target.clone(),
+        attempted_path: attempted.clone(),
         grant: horizon_sandbox::FilesystemGrant {
-            path: target.canonicalize().unwrap(),
+            path: cache.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-            scope: horizon_sandbox::FilesystemGrantScope::File,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
         },
     };
+    let grants = horizon_sandbox::suggest_grants(
+        std::slice::from_ref(&denial),
+        Some(&workspace),
+        horizon_sandbox::home_dir().as_deref(),
+    );
+    assert_eq!(
+        grants,
+        vec![horizon_sandbox::FilesystemGrant {
+            path: cache.canonicalize().unwrap(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        }]
+    );
+
     let tool_state = ToolSessionState::new(workspace).with_isolated_worktree(true);
     let session_id = SessionId::new();
     let live_state = LiveState::new();
@@ -2147,11 +2172,7 @@ fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontai
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({
-            "command": format!(
-                "printf approved > {}; printf blocked > {} || true",
-                target.display(),
-                sibling.display()
-            )
+            "command": format!("printf approved > {}", written.display())
         })
         .into(),
     };
@@ -2162,9 +2183,10 @@ fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontai
     );
     let approval = ApprovalRequest {
         call_id: call_id.clone(),
-        reason: "run this call once with host authority".to_string(),
+        reason: "grant the cache tree and retry, still sandboxed".to_string(),
         kind: ApprovalKind::FilesystemDenialRetry {
             denials: vec![denial.clone()],
+            grants: grants.clone(),
             prior_result,
         },
     };
@@ -2173,27 +2195,39 @@ fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontai
     assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
-        .expect("host retry completion");
+        .expect("sandboxed retry completion");
     let result = expect_finished(completion);
-    assert_eq!(result.output["sandboxed"], false);
-    assert_eq!(result.output["host_execution_approved"], true);
-    assert_eq!(result.output["approval_scope"], "host_execution_once");
+    assert_eq!(
+        result.output["sandboxed"], true,
+        "an approved filesystem grant must not disengage the sandbox"
+    );
+    assert!(
+        result.output.get("host_execution_approved").is_none(),
+        "this retry never runs with host authority: {:?}",
+        result.output
+    );
+    assert_eq!(result.output["approval_scope"], "filesystem_grant");
     assert_eq!(result.output["approval_source"], "judge");
     assert_eq!(result.output["auto_approved"], true);
     assert_eq!(result.output["policy_tier"], "judge");
     assert_eq!(
-        result.output["approval_trigger_paths"],
-        json!([denial.attempted_path.display().to_string()])
+        result.output["approved_filesystem_grants"][0]["path"],
+        json!(cache.canonicalize().unwrap().display().to_string())
     );
-    assert_eq!(fs::read_to_string(&target).unwrap(), "approved");
-    assert_eq!(fs::read_to_string(&sibling).unwrap(), "blocked");
-    assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
+    assert_eq!(
+        result.output["approval_trigger_paths"],
+        json!([denial.attempted_path.display().to_string()]),
+        "the attempts stay recorded as evidence, separately from the grant"
+    );
+    assert_eq!(fs::read_to_string(&written).unwrap(), "approved");
+    assert_eq!(tool_state.filesystem_grants_snapshot(), grants);
 
+    // Still contained: a sibling of the granted tree is not covered by it.
     let later_request = ToolCallRequest {
         call_id: ToolCallId("bash-filesystem-later".to_string()),
         tool_id: "bash".to_string(),
         input: json!({
-            "command": format!("printf later > {}", later.display())
+            "command": format!("printf later > {}", ungranted.display())
         })
         .into(),
     };
@@ -2206,14 +2240,141 @@ fn judge_approved_filesystem_retry_runs_one_whole_call_on_the_host_then_recontai
         .expect("later sandboxed completion");
     match completion {
         BashCompletion::FilesystemDenied { denials, .. } => {
-            assert!(denials.iter().any(|item| item.attempted_path == later));
+            assert!(denials.iter().any(|item| item.attempted_path == ungranted));
         }
-        other => panic!("the next call must start sandboxed again: {other:?}"),
+        other => panic!("a path outside the granted tree must still be refused: {other:?}"),
     }
-    assert!(!later.exists());
+    assert!(!ungranted.exists());
 
     unregister_session_runtime(session_id);
     fs::remove_dir_all(outside).unwrap();
+}
+
+/// The trees `[grants]` names for a project are injected at spawn, so a
+/// write inside one is simply not a boundary crossing -- it never produces
+/// a `FilesystemDenied` completion, and therefore never reaches the judge
+/// or a human. This is the whole point of issue 009's fix.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
+    let workspace = temp_workspace("configured-grant-workspace");
+    let granted = temp_workspace("configured-grant-tree");
+    let ungranted = temp_workspace("configured-grant-other");
+    let inside = granted.join("written.txt");
+    let outside = ungranted.join("written.txt");
+
+    let tool_state = ToolSessionState::new(workspace)
+        .with_isolated_worktree(true)
+        .with_filesystem_grants(vec![horizon_sandbox::FilesystemGrant {
+            path: granted.canonicalize().unwrap(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        }]);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+
+    let request = ToolCallRequest {
+        call_id: ToolCallId("bash-configured-grant".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": format!("printf granted > {}", inside.display())
+        })
+        .into(),
+    };
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::Started(_)
+    ));
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("configured-grant completion");
+    let result = expect_finished(completion);
+    assert_eq!(result.output["sandboxed"], true);
+    assert_eq!(
+        result.output["auto_approved"], true,
+        "a write inside a configured tree stays tier-1 auto-approved: {:?}",
+        result.output
+    );
+    assert_eq!(fs::read_to_string(&inside).unwrap(), "granted");
+
+    // The grant is exactly the configured tree, not "outside the workspace".
+    let other_request = ToolCallRequest {
+        call_id: ToolCallId("bash-configured-grant-other".to_string()),
+        tool_id: "bash".to_string(),
+        input: json!({
+            "command": format!("printf nope > {}", outside.display())
+        })
+        .into(),
+    };
+    assert!(matches!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &other_request),
+        Execution::Started(_)
+    ));
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("ungranted completion");
+    assert!(
+        matches!(completion, BashCompletion::FilesystemDenied { .. }),
+        "an unconfigured directory must still be a boundary crossing"
+    );
+    assert!(!outside.exists());
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(granted).unwrap();
+    fs::remove_dir_all(ungranted).unwrap();
+}
+
+#[test]
+fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
+    let tool_state = dummy_tool_state();
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state, live_state.clone(), bash_results_tx);
+    let call_id = ToolCallId("bash-filesystem-no-grant".to_string());
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": "echo must-not-run" }).into(),
+    };
+    // Exactly the shape a request persisted by the host-execution-era build
+    // deserializes into: denials, but no grants.
+    let frame = live_state.extend_events([
+        Event::ToolCallRequested(request),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "legacy host-execution request".to_string(),
+            kind: ApprovalKind::FilesystemDenialRetry {
+                denials: Vec::new(),
+                grants: Vec::new(),
+                prior_result: ToolCallResult::new(call_id.clone(), json!({ "is_error": true })),
+            },
+        }),
+    ]);
+
+    let outcome = resolve_approval(&frame, session_id, call_id, ApprovalDecision::Approve);
+    let ApprovalOutcome::Executed { command, .. } = outcome else {
+        panic!("an approval with no grant must fail closed: {outcome:?}");
+    };
+    let Command::ToolCallResult(result) = command else {
+        panic!("expected a ToolCallResult");
+    };
+    assert_eq!(result.output["is_error"], true);
+    assert!(result.output["message"]
+        .as_str()
+        .unwrap()
+        .contains("names no grant"));
+    assert!(bash_results_rx
+        .recv_timeout(Duration::from_millis(200))
+        .is_err());
+    unregister_session_runtime(session_id);
 }
 
 #[test]
@@ -2240,6 +2401,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
             reason: "host execution required".to_string(),
             kind: ApprovalKind::FilesystemDenialRetry {
                 denials: Vec::new(),
+                grants: Vec::new(),
                 prior_result: prior_result.clone(),
             },
         }),
@@ -2264,36 +2426,39 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
 }
 
 #[test]
-fn filesystem_grant_snapshot_drops_a_retargeted_symlink() {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::symlink;
+fn filesystem_grant_snapshot_drops_a_grant_whose_target_stopped_being_enforceable() {
+    let root = temp_workspace("filesystem-grant-revalidation");
+    let tree = root.join("tree");
+    fs::create_dir(&tree).unwrap();
+    let tool_state = ToolSessionState::new(root.clone());
+    let grant = horizon_sandbox::FilesystemGrant {
+        path: tree.canonicalize().unwrap(),
+        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+    };
+    tool_state.approve_filesystem_grants(&[grant]).unwrap();
+    assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
 
-        let root = temp_workspace("filesystem-grant-retarget");
-        let first = root.join("first.txt");
-        let second = root.join("second.txt");
-        let link = root.join("current.txt");
-        fs::write(&first, "first").unwrap();
-        fs::write(&second, "second").unwrap();
-        symlink(&first, &link).unwrap();
-        let tool_state = ToolSessionState::new(root.clone());
-        let denial = horizon_sandbox::FilesystemDenial {
-            attempted_path: link.clone(),
-            grant: horizon_sandbox::FilesystemGrant {
-                path: first.canonicalize().unwrap(),
-                access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
-                scope: horizon_sandbox::FilesystemGrantScope::File,
-            },
-        };
-        tool_state.approve_filesystem_denials(&[denial]).unwrap();
-        assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
+    // Grants name canonical paths, so a symlink cannot be retargeted
+    // underneath one; what a snapshot must still catch is the approved
+    // target itself ceasing to be what was approved.
+    fs::remove_dir(&tree).unwrap();
+    fs::write(&tree, "now a file").unwrap();
 
-        fs::remove_file(&link).unwrap();
-        symlink(&second, &link).unwrap();
+    assert!(tool_state.filesystem_grants_snapshot().is_empty());
+    fs::remove_dir_all(root).unwrap();
+}
 
-        assert!(tool_state.filesystem_grants_snapshot().is_empty());
-        fs::remove_dir_all(root).unwrap();
-    }
+#[test]
+fn an_overbroad_grant_is_never_stored_even_if_an_approval_names_it() {
+    let tool_state = dummy_tool_state();
+    let refused = horizon_sandbox::FilesystemGrant {
+        path: std::path::PathBuf::from("/usr"),
+        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+    };
+    assert!(tool_state.approve_filesystem_grants(&[refused]).is_err());
+    assert!(tool_state.filesystem_grants_snapshot().is_empty());
 }
 
 // --- approval wiring: domain-denial retry (leg 4b) -------------------------

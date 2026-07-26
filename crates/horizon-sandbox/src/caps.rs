@@ -143,10 +143,13 @@ pub(crate) fn build_with_grants(
 }
 
 pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
+    // The over-broad-tree clamp is re-applied here, immediately before the
+    // capability set is built, rather than trusted from wherever the grant
+    // was shaped or stored -- the design's "checked again ... before every
+    // queued spawn" rule.
     if crate::grant::is_protected(&grant.path)
-        || (grant.access == FilesystemGrantAccess::ReadWrite
-            && grant.scope == FilesystemGrantScope::DirectoryTree
-            && grant.path == Path::new("/"))
+        || (crate::grant::is_writable_tree(grant)
+            && crate::grant::is_overbroad_tree(&grant.path, crate::grant::home_dir().as_deref()))
     {
         return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
     }
