@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Build verification in an isolated worktree non-deterministically demands human approval
-status: open
+status: resolved
 severity: high
 area: agent, sandbox
 ---
@@ -95,3 +95,20 @@ unattended agent should not stall on a routine build in one run out of three.
   DirectoryTree` on `~/.cargo` in some refusals; the approval granularity
   just doesn't follow. Tree-level grants for `CARGO_HOME` + the shared
   build dir look like the only shape that converges.
+
+## Resolution (2026-07-26)
+
+Project-scoped tree grants (`docs/containment-denial-narrow-grants-design.md`,
+"2026-07-26 decision"; merged as the change following `e166804`). Root
+cause was the grant shape: per-path File grants can never converge for a
+build toolchain whose fingerprint paths embed source hashes. Now a
+user-owned `[[grants.project]]` entry in `config.toml` (keyed by
+repository root, inherited by derived worktrees via the git common dir)
+injects DirectoryTree grants at session spawn, so in-tree writes are
+never boundary crossings; interactive denials suggest the narrowest
+common ancestor with home/system-root clamps; and an approved retry runs
+sandboxed with the grant instead of once with full host authority
+(`346497f` reverted). No command- or language-specific enumeration
+anywhere (owner constraint). Verification pending: the next gate-running
+dogfooding session with the grant in place should stall zero times
+(baseline: one to four stalls per gate).
