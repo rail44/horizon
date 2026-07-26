@@ -714,6 +714,94 @@ fn fs_edit_stale_after_external_modification_is_error() {
         .contains("changed on disk"));
 }
 
+#[test]
+fn fs_edit_repeat_of_already_applied_edit_returns_already_applied() {
+    // The dangerous resubmission case: `new_string` contains `old_string`,
+    // so the post-edit file still matches `old_string` and a naive repeat
+    // would duplicate code. The tool must surface the repeat instead.
+    let root = temp_workspace("edit-repeat");
+    let target = root.join("file.txt");
+    fs::write(&target, "fn foo() {}\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    );
+
+    let edit = json!({
+        "path": target.display().to_string(),
+        "old_string": "fn foo() {}",
+        "new_string": "fn foo() {\n    // body\n}",
+    });
+
+    let first = fs_tools::execute_approved(&tool_state, "fs.edit", &edit);
+    assert!(!is_error(&first));
+    assert_eq!(first["replaced"], true);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "fn foo() {\n    // body\n}\n"
+    );
+
+    let second = fs_tools::execute_approved(&tool_state, "fs.edit", &edit);
+    assert!(!is_error(&second));
+    assert_eq!(second["replaced"], false);
+    assert_eq!(second["already_applied"], true);
+    // Content must not be duplicated.
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "fn foo() {\n    // body\n}\n"
+    );
+}
+
+#[test]
+fn fs_edit_allows_identical_edit_after_intervening_change() {
+    // A legitimate re-application: the same old/new pair is requested again,
+    // but the file has changed in between so the edit is genuinely new work.
+    let root = temp_workspace("edit-reapply");
+    let target = root.join("file.txt");
+    fs::write(&target, "start\nwrap\nend\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    );
+
+    let edit = json!({
+        "path": target.display().to_string(),
+        "old_string": "wrap",
+        "new_string": "wrap done",
+    });
+
+    let first = fs_tools::execute_approved(&tool_state, "fs.edit", &edit);
+    assert!(!is_error(&first));
+    assert_eq!(first["replaced"], true);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "start\nwrap done\nend\n"
+    );
+
+    // Something (externally, or another tool) reverts the file.
+    fs::write(&target, "start\nwrap\nend\n").unwrap();
+    bump_mtime(&target);
+    // A real caller would read the file again before editing; do so to
+    // satisfy the staleness gate.
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    );
+
+    let second = fs_tools::execute_approved(&tool_state, "fs.edit", &edit);
+    assert!(!is_error(&second));
+    assert_eq!(second["replaced"], true);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "start\nwrap done\nend\n"
+    );
+}
+
 // --- fs.patch --------------------------------------------------------------
 
 #[test]

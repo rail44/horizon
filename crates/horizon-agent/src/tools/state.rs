@@ -63,6 +63,13 @@ struct Inner {
     /// Additive, session-local filesystem grants approved after structured
     /// containment denials. Snapshotted before each bash job is queued.
     filesystem_denials: RefCell<Vec<horizon_sandbox::FilesystemDenial>>,
+    /// Session-local history of successful `fs.edit` applications, used to
+    /// detect a byte-identical resubmission that would otherwise silently
+    /// apply twice (e.g. when `new_string` contains `old_string`). Each entry
+    /// records the resolved path, the exact `old_string`/`new_string`, and a
+    /// hash of the file content immediately after that edit. See
+    /// `docs/agent-tools-design.md`, "Edit Semantics".
+    applied_edits: RefCell<Vec<(PathBuf, String, String, u64)>>,
     /// The `bash` tool's tracked working directory
     /// (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh process per
     /// call, with `cd` persisted across calls by the harness rather than a
@@ -211,6 +218,7 @@ impl ToolSessionState {
             inner: Rc::new(Inner {
                 workspace_root,
                 recorded_mtimes: RefCell::new(HashMap::new()),
+                applied_edits: RefCell::new(Vec::new()),
                 filesystem_denials: RefCell::new(Vec::new()),
                 bash_cwd: Arc::new(Mutex::new(bash_cwd)),
                 tools,
@@ -475,6 +483,50 @@ impl ToolSessionState {
 
     pub(crate) fn forget_mtime(&self, path: &Path) {
         self.inner.recorded_mtimes.borrow_mut().remove(path);
+    }
+
+    /// Records that `old_string` -> `new_string` was successfully applied to
+    /// `path`, along with a hash of the file content immediately after the
+    /// edit, so a later identical call can be recognized as a repeat when the
+    /// file is still in exactly that post-edit state.
+    pub(crate) fn record_applied_edit(
+        &self,
+        path: PathBuf,
+        old: String,
+        new: String,
+        post_content_hash: u64,
+    ) {
+        self.inner
+            .applied_edits
+            .borrow_mut()
+            .push((path, old, new, post_content_hash));
+    }
+
+    /// Returns the post-edit content hash of a prior identical `fs.edit` on
+    /// `path` if one was recorded this session.
+    pub(crate) fn applied_edit_hash(&self, path: &Path, old: &str, new: &str) -> Option<u64> {
+        self.inner
+            .applied_edits
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(p, o, n, _)| p == path && o == old && n == new)
+            .map(|(_, _, _, hash)| *hash)
+    }
+
+    /// A stable, process-independent 64-bit hash for edit-deduplication. It
+    /// only needs to distinguish the content snapshots produced by the edits
+    /// in this session; it is not stored outside the process.
+    pub(crate) fn hash_content(content: &str) -> u64 {
+        // FNV-1a with the canonical 64-bit offset and prime.
+        const FNV_OFFSET: u64 = 0xcbf29ce484222325;
+        const FNV_PRIME: u64 = 0x0100000001b3;
+        let mut hash = FNV_OFFSET;
+        for byte in content.as_bytes() {
+            hash ^= *byte as u64;
+            hash = hash.wrapping_mul(FNV_PRIME);
+        }
+        hash
     }
 
     /// Clones out the shared handle to bash's tracked cwd, so the
