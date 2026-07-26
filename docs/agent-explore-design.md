@@ -123,3 +123,101 @@ success criteria are requester headroom and completion.
 Parallel fan-out of several explorations, background/asynchronous
 explore, recursion, write-capable delegates, a cheaper model override for
 exploration sessions, and inter-agent messaging.
+
+---
+
+## Addendum (2026-07-26): follow-up turns, fork seeding, and the measurement plan
+
+The first measured runs (four runs of the `WaitingForUser` brief; see the
+roadmap's context-consumption entry) established: routing fixed adoption
+at the task's entry point only; the one delegation's report was accurate
+for the question asked but the question omitted the requester's own
+measured evidence, so the requester — correctly — distrusted the
+conclusion and re-explored by hand. Prompt guidance ("include your
+observations") is a silent-failure control: non-compliance is invisible
+until a report collides with data downstream. Two structural mechanisms
+are added instead, to be **measured against each other**, not decided by
+argument. Their shared premise: what a delegate inherits occupies its
+context window; what it does not inherit must be told.
+
+### B. Follow-up turns
+
+`agent.explore` gains an optional `session_id` input. When present, the
+prompt is sent as a further user message to that still-alive exploration
+session and the call waits for that session's next turn to end; when
+absent, behavior is unchanged (fresh spawn). Rationale, from run 4: the
+requester demonstrably *noticed* the report/evidence contradiction in its
+reasoning; what it lacked was a cheap repair action, so it fell back to
+re-reading everything itself. A follow-up lands the contradiction — which
+itself carries exactly the missing evidence — on a session that already
+holds the relevant files in its history.
+
+- **Lifetime**: an exploration session now survives its first completed
+  turn and is terminated when the requester's own turn ends (completed,
+  failed, cancelled, or the requester session going away). One scope, no
+  idle orphans. Daemon-restart cleanup is unchanged: every exploration
+  session is terminated on resume.
+- Each follow-up call installs a fresh event tap; the fold logic is the
+  turn-scoped fold already in place.
+- Failure of a follow-up (unknown/terminated session id) resolves as an
+  ordinary error tool result naming the fresh-spawn alternative.
+
+### C. Fork seeding (owner direction, simplified from history-rollback)
+
+An exploration session may be seeded with **a copy of the requester's
+history so far**, so the delegate sees everything the requester sees —
+the structural answer to the evidence gap. No in-session rollback, no
+replay marks: the fork child is an ordinary exploration session whose
+initial `rig_history` is reconstructed from the requester's persisted
+events (the same event-to-history mapping session resume already uses).
+Discard-on-completion is plain termination; the requester is untouched.
+
+- **Tail sanitization is mandatory**: at delegation time the requester's
+  persisted event stream ends mid-turn, with at least one tool call (the
+  `agent.explore` call itself) lacking a result. Seeding must close or
+  drop unpaired calls, or the provider rejects the history.
+- **Ceiling inheritance is the known cost**: the child's exploration room
+  is (model window − requester's current size). Fresh spawns always have
+  ~190k; a fork forked at 150k has ~46k. This is the tradeoff being
+  measured, not a defect.
+- **Cache expectation — grounded, and deliberately pessimistic.** Request
+  #0 `cached_input_tokens` across eight same-brief sessions in the
+  existing log: three hits of exactly 2,432 tokens, five zeros. So
+  synthetic.new does share prefix cache across sessions, but unreliably
+  (routing-dependent), and only up to the first byte of divergence.
+  A same-preamble fork variant (advertise the parent's full toolset,
+  enforce read-only at the execution layer, steer via a trailing message)
+  would make the shared prefix span the whole seeded history — but given
+  the observed unreliability it cannot be justified on cache grounds
+  alone and is **deferred**; v1 implements the restricted-advertisement
+  child and pays one uncached ingest of the seed.
+- Mode is selected by the harness, not the model: an environment-only
+  switch (`HORIZON_EXPLORE_SEED=fresh|fork`, default `fresh`), following
+  the `HORIZON_AGENT_EVENT_LOG` convention. Model-visible parameters
+  would confound the adoption measurement.
+
+### Independent observation worth its own follow-up
+
+The 2,432-token sharing ceiling exists because the system prompt renders
+the per-session working directory *before* the large stable sections
+(repository instructions, 16.8KB, identical for every session). Ordering
+the preamble stable-first / variable-last would let all sessions share
+most of the preamble opportunistically. Separate change, separately
+measurable; not part of this slice.
+
+### Measurement plan
+
+Same brief (backlog 48's duplicate-`fs.edit` investigation, with the
+measured evidence embedded in the brief per the run-4 lesson), one run
+per arm to start, judged qualitatively like the four `WaitingForUser`
+runs:
+
+| arm | seeding | follow-up available |
+|---|---|---|
+| fresh | `fresh` | yes |
+| fork  | `fork`  | yes |
+
+Metrics per arm: adoption (initial and follow-up), requester context
+peak, completion, requester+delegate total and uncached tokens, and
+whether the delegate's report reconciles the embedded evidence without a
+manual redo.
