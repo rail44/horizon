@@ -69,7 +69,18 @@ const SECTIONS: &[Section] = &[
         retired_keys: RetiredKeys::Named(&["window_width", "window_height"]),
         retired_reason: "retired 2026-07-18; fixed to a built-in default",
     },
+    Section {
+        name: "grants",
+        known_keys: &["project"],
+        retired_keys: RetiredKeys::Named(&[]),
+        retired_reason: "",
+    },
 ];
+
+/// Keys a single `[[grants.project]]` entry recognizes. Checked separately
+/// from [`SECTIONS`], which only walks a top-level table's own keys and so
+/// can't see inside an array of tables.
+const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees"];
 
 /// Pure collection of warning strings for `contents` -- factored out from
 /// [`warn`] so tests can assert on the returned strings instead of
@@ -104,7 +115,36 @@ fn collect_warnings(contents: &str) -> Vec<String> {
             }
         }
     }
+    warnings.extend(project_grant_warnings(&root));
     warnings.sort();
+    warnings
+}
+
+/// Probable-typo warnings for keys inside each `[[grants.project]]` entry.
+/// A typo here is worth naming for the same reason it is in a plain
+/// section: serde's `#[serde(default)]` would otherwise turn a misspelled
+/// `tree = [...]` into a silently empty grant list.
+fn project_grant_warnings(root: &toml::Table) -> Vec<String> {
+    let Some(toml::Value::Array(entries)) = root.get("grants").and_then(|grants| match grants {
+        toml::Value::Table(table) => table.get("project"),
+        _ => None,
+    }) else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for entry in entries {
+        let toml::Value::Table(entry) = entry else {
+            continue;
+        };
+        for key in entry.keys() {
+            if !PROJECT_GRANT_KEYS.contains(&key.as_str()) {
+                warnings.push(format!(
+                    "[[grants.project]]: unrecognized key {key:?}, ignoring (see \
+                     config.example.toml for the recognized names)"
+                ));
+            }
+        }
+    }
     warnings
 }
 
@@ -193,6 +233,32 @@ mod tests {
     #[test]
     fn an_empty_file_warns_about_nothing() {
         assert!(collect_warnings("").is_empty());
+    }
+
+    #[test]
+    fn a_well_formed_grants_section_warns_about_nothing() {
+        let warnings = collect_warnings(
+            "[[grants.project]]\nroot = \"/src/project\"\ntrees = [\"/src/cache\"]\n",
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    }
+
+    #[test]
+    fn an_unrecognized_key_inside_grants_warns_as_a_probable_typo() {
+        let warnings = collect_warnings("[grants]\nprojects = []\n");
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("projects"));
+        assert!(warnings[0].contains("unrecognized"));
+    }
+
+    #[test]
+    fn an_unrecognized_key_inside_a_project_entry_warns_as_a_probable_typo() {
+        let warnings = collect_warnings(
+            "[[grants.project]]\nroot = \"/src/project\"\ntree = [\"/src/cache\"]\n",
+        );
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("tree"));
+        assert!(warnings[0].contains("unrecognized"));
     }
 
     #[test]

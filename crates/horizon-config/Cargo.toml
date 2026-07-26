@@ -9,6 +9,14 @@ edition = "2021"
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
+# `[grants]` validation only: the "which absolute paths are too broad to
+# hand out as a writable tree" rule is one security predicate, and the
+# sandbox crate that enforces it at spawn time owns it
+# (`horizon_sandbox::is_overbroad_tree`). Duplicating the list here so this
+# crate could stay dependency-free would let the file-validation and
+# enforcement halves drift apart silently. No sandbox type appears in this
+# crate's own public surface -- see `grants`' module doc.
+horizon-sandbox = { path = "../horizon-sandbox" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

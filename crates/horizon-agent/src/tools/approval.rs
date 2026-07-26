@@ -7,9 +7,7 @@ use crate::contract::{
 use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
-use crate::tools::bash::{
-    HostExecutionApproval, HostExecutionApprovalSource, SandboxedApprovalOrigin,
-};
+use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
 use crate::tools::state::{session_runtime, SessionRuntime};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -102,7 +100,7 @@ pub fn resolve_approval(
         session_id,
         &call_id,
         &decision,
-        HostExecutionApprovalSource::Human,
+        ApprovalSource::Human,
     ) {
         return outcome;
     }
@@ -150,7 +148,7 @@ pub fn resolve_auto_approval(
             request,
             &ApprovalDecision::Approve,
             candidate.approval.kind.clone(),
-            HostExecutionApprovalSource::Judge,
+            ApprovalSource::Judge,
         )
     } else if request.tool_id == "web_fetch" {
         resolve_web_fetch(
@@ -170,7 +168,7 @@ fn try_execute(
     session_id: SessionId,
     call_id: &ToolCallId,
     decision: &ApprovalDecision,
-    approval_source: HostExecutionApprovalSource,
+    approval_source: ApprovalSource,
 ) -> Option<ApprovalOutcome> {
     let request = frame.tool_call_request(call_id)?;
     if !is_horizon_executed_tool(&request.tool_id) {
@@ -311,20 +309,19 @@ fn resolve_synchronous_tool(
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
 /// but an approve only *starts* the command — see `ApprovalOutcome::
-/// Started`. Domain-denial retries and pre-execution
-/// [`ApprovalKind::GitOperation`] grants keep the rerun sandboxed.
-/// Filesystem-denial and [`ApprovalKind::Standard`] approvals run only that
-/// call with the host process's ordinary authority.
-/// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed;
-/// new filesystem denials carry observed paths as the approval trigger, not
-/// as a complete bound on the approved execution.
+/// Started`. Domain-denial retries, filesystem-denial retries, and
+/// pre-execution [`ApprovalKind::GitOperation`] grants all keep the rerun
+/// sandboxed — an approval buys scoped, contained access, never an
+/// unconfined execution. Only [`ApprovalKind::Standard`] still runs on the
+/// host, which is what that kind has always meant.
+/// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed.
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
     kind: ApprovalKind,
-    approval_source: HostExecutionApprovalSource,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     match kind {
         ApprovalKind::DomainDenialRetry {
@@ -340,18 +337,18 @@ fn resolve_bash(
         ),
         ApprovalKind::FilesystemDenialRetry {
             denials,
+            grants,
             prior_result,
-        } => {
-            let approval = HostExecutionApproval::new(approval_source, denials);
-            resolve_host_execution_retry(
-                session_id,
-                runtime,
-                request,
-                decision,
-                prior_result,
-                approval,
-            )
-        }
+        } => resolve_filesystem_denial_retry(
+            session_id,
+            runtime,
+            request,
+            decision,
+            denials,
+            grants,
+            prior_result,
+            approval_source,
+        ),
         ApprovalKind::GitOperation { writable_roots } => {
             resolve_git_operation(session_id, runtime, request, decision, writable_roots)
         }
@@ -459,7 +456,7 @@ fn resolve_standard_bash(
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
-    approval_source: HostExecutionApprovalSource,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
@@ -478,7 +475,7 @@ fn resolve_standard_bash(
                 request.input.0.clone(),
                 runtime.tool_state.bash_cwd_handle(),
                 runtime.tool_state.bash_config(),
-                HostExecutionApproval::new(approval_source, Vec::new()),
+                HostExecutionApproval::new(approval_source),
                 runtime.async_results.clone(),
             );
 
@@ -490,33 +487,63 @@ fn resolve_standard_bash(
     }
 }
 
-fn resolve_host_execution_retry(
+/// A sandboxed `bash` call was refused paths outside its workspace
+/// (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+/// decision). Like a domain-denial retry, the call already ran to
+/// completion, so a deny simply forwards `prior_result` -- there is nothing
+/// left to execute.
+///
+/// An approve adds `grants` (the shaped suggestion; see
+/// [`ApprovalKind::FilesystemDenialRetry`]) to this session and reruns the
+/// same call **still sandboxed**. This replaced the 2026-07-24 answer of
+/// running the call once with the host process's full authority: for the
+/// case that actually drove approvals -- a build toolchain reaching its
+/// caches -- the narrow grant converges while whole-call host execution
+/// bought strictly more authority than the grant it declined to make.
+///
+/// Fails closed both ways: an approval carrying no grants (an old
+/// host-execution-era request replayed against this build) and one whose
+/// grants no longer revalidate both forward the prior result rather than
+/// running anything.
+#[allow(clippy::too_many_arguments)]
+fn resolve_filesystem_denial_retry(
     session_id: SessionId,
     runtime: &SessionRuntime,
     request: &ToolCallRequest,
     decision: &ApprovalDecision,
+    denials: Vec<horizon_sandbox::FilesystemDenial>,
+    grants: Vec<horizon_sandbox::FilesystemGrant>,
     prior_result: ToolCallResult,
-    approval: HostExecutionApproval,
+    approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
-        let events = vec![Event::ToolCallFinished(prior_result.clone())];
-        let frame = runtime
-            .live_state
-            .extend_provider_events(events.clone().into_iter().map(Into::into));
-        return ApprovalOutcome::Executed {
-            events,
-            frame,
-            command: Command::ToolCallResult(prior_result),
-        };
+        return forward_prior_result(runtime, prior_result);
     }
-
-    // Preserve any still-valid narrow grants as a session-local optimization
-    // for later sandboxed calls. The approval itself authorizes this whole
-    // call, so a stale proposal only prevents persistence; it does not turn
-    // the approved retry back into another incremental-denial loop.
-    let _ = runtime
-        .tool_state
-        .approve_filesystem_denials(approval.trigger_denials());
+    if grants.is_empty() {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            "This filesystem approval names no grant to retry with; refusing to run the call \
+             without one.",
+        );
+    }
+    // Re-resolved here, at approval application, and again by the sandbox
+    // itself immediately before the queued process spawns.
+    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
+        return unstarted_error(
+            runtime,
+            &request.call_id,
+            &format!("Approved filesystem grants could not be revalidated: {error}"),
+        );
+    }
+    let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+        return forward_prior_result(runtime, prior_result);
+    };
+    // The audit answer to "what filesystem authority did this session run
+    // with": every grant it holds now, config-injected and approved alike.
+    runtime
+        .live_state
+        .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
 
     let call_id = request.call_id.clone();
     let events = vec![
@@ -526,16 +553,39 @@ fn resolve_host_execution_retry(
     let frame = runtime
         .live_state
         .extend_provider_events(events.clone().into_iter().map(Into::into));
-    bash::spawn_approved_host(
+    bash::spawn_sandboxed(
         session_id,
         call_id,
         request.input.0.clone(),
         runtime.tool_state.bash_cwd_handle(),
         runtime.tool_state.bash_config(),
-        approval,
+        workspace_root.to_path_buf(),
+        runtime.tool_state.network_proxy(),
+        SandboxedApprovalOrigin::FilesystemGrant {
+            source: approval_source,
+            grants,
+            trigger_paths: denials
+                .iter()
+                .map(|denial| denial.attempted_path.clone())
+                .collect(),
+        },
+        runtime.tool_state.filesystem_grants_snapshot(),
+        None,
         runtime.async_results.clone(),
     );
     ApprovalOutcome::Started { events, frame }
+}
+
+fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) -> ApprovalOutcome {
+    let events = vec![Event::ToolCallFinished(prior_result.clone())];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    ApprovalOutcome::Executed {
+        events,
+        frame,
+        command: Command::ToolCallResult(prior_result),
+    }
 }
 
 /// A tier-1 sandboxed `bash` call's network egress was refused for

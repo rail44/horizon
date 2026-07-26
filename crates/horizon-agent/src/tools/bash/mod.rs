@@ -38,8 +38,8 @@ use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::frame::AgentFrame;
 use crate::policy::{
-    annotate_auto_approval, annotate_domain_approval, annotate_git_operation_approval,
-    annotate_host_execution_approval, annotate_sandboxed,
+    annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
+    annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
 };
 use crate::tools::network::SessionNetworkProxy;
 
@@ -112,16 +112,30 @@ pub(crate) enum SandboxedApprovalOrigin {
     ManualDomainRetry { domains: Vec<String> },
     /// A human approved the validated Git metadata roots for this call.
     ManualGitOperation,
+    /// A filesystem-denial retry (`docs/containment-denial-narrow-grants-
+    /// design.md`'s 2026-07-26 decision): `grants` is the scoped authority
+    /// this rerun actually received, and `trigger_paths` the mediated
+    /// attempts that prompted the request. Stated separately because they
+    /// are different claims -- the grants bound the execution, the trigger
+    /// paths only explain why it was offered.
+    FilesystemGrant {
+        source: ApprovalSource,
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
+        trigger_paths: Vec<PathBuf>,
+    },
 }
 
+/// Who decided an approval -- the enforcing judge or a human. Both produce
+/// the same trusted effect; recording which is an audit requirement, not a
+/// policy input.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum HostExecutionApprovalSource {
+pub(crate) enum ApprovalSource {
     Human,
     Judge,
 }
 
-impl HostExecutionApprovalSource {
-    fn label(self) -> &'static str {
+impl ApprovalSource {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Human => "human",
             Self::Judge => "judge",
@@ -129,25 +143,20 @@ impl HostExecutionApprovalSource {
     }
 }
 
+/// An [`ApprovalKind::Standard`](crate::contract::ApprovalKind::Standard)
+/// `bash` approval: the one remaining path that runs a call with the host
+/// process's ordinary authority, which is what an ordinary bash approval
+/// has always meant. Filesystem-denial retries no longer come through here
+/// -- they rerun sandboxed with an explicit grant instead (see
+/// [`SandboxedApprovalOrigin::FilesystemGrant`]).
 #[derive(Clone, Debug)]
 pub(crate) struct HostExecutionApproval {
-    source: HostExecutionApprovalSource,
-    trigger_denials: Vec<horizon_sandbox::FilesystemDenial>,
+    source: ApprovalSource,
 }
 
 impl HostExecutionApproval {
-    pub(crate) fn new(
-        source: HostExecutionApprovalSource,
-        trigger_denials: Vec<horizon_sandbox::FilesystemDenial>,
-    ) -> Self {
-        Self {
-            source,
-            trigger_denials,
-        }
-    }
-
-    pub(crate) fn trigger_denials(&self) -> &[horizon_sandbox::FilesystemDenial] {
-        &self.trigger_denials
+    pub(crate) fn new(source: ApprovalSource) -> Self {
+        Self { source }
     }
 }
 
@@ -226,12 +235,8 @@ fn spawn_host(
                 // additional scope and source markers below.
                 annotate_sandboxed(&mut output, false);
                 if let Some(approval) = &approval {
-                    annotate_host_execution_approval(
-                        &mut output,
-                        approval.source.label(),
-                        &approval.trigger_denials,
-                    );
-                    if approval.source == HostExecutionApprovalSource::Judge {
+                    annotate_host_execution_approval(&mut output, approval.source.label());
+                    if approval.source == ApprovalSource::Judge {
                         annotate_auto_approval(
                             &mut output,
                             "judge",
@@ -370,6 +375,26 @@ pub fn spawn_sandboxed(
                             annotate_domain_approval(&mut result.output, domains)
                         }
                         SandboxedApprovalOrigin::ManualGitOperation => {}
+                        SandboxedApprovalOrigin::FilesystemGrant {
+                            source,
+                            grants,
+                            trigger_paths,
+                        } => {
+                            annotate_filesystem_grant_approval(
+                                &mut result.output,
+                                source.label(),
+                                grants,
+                                trigger_paths,
+                            );
+                            if *source == ApprovalSource::Judge {
+                                annotate_auto_approval(
+                                    &mut result.output,
+                                    "judge",
+                                    "judge approved a scoped filesystem grant for a \
+                                     sandboxed retry",
+                                );
+                            }
+                        }
                     }
                 }
                 completion

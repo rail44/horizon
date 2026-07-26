@@ -45,6 +45,17 @@ impl Appender {
         self
     }
 
+    /// Updates the filesystem authority stamped onto every *later* record.
+    /// A grant approved mid-session widens what the session can reach from
+    /// that point on, so the records written after it must say so -- the
+    /// records before it are already correct and are never rewritten. A
+    /// no-op for an appender with no context at all (legacy fixtures).
+    pub fn set_filesystem_grants(&mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) {
+        if let Some(context) = self.session_context.as_mut() {
+            context.filesystem_grants = grants;
+        }
+    }
+
     pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
         for event in events {
             let turn_id = self.turn_tracker.turn_id_for_event(&event.event);

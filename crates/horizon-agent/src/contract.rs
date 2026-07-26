@@ -626,17 +626,29 @@ pub enum ApprovalKind {
         domains: Vec<String>,
         prior_result: ToolCallResult,
     },
-    /// A sandboxed `bash` call crossed a filesystem boundary whose complete
-    /// requirements cannot be derived ahead of time. Approval authorizes the
-    /// SAME call to run once with the host process's ordinary authority;
-    /// later calls start sandboxed again. The observed grants may still be
-    /// retained session-locally to reduce repeat denials, but they are not a
-    /// complete description of what the approved host execution may access.
+    /// A sandboxed `bash` call was refused access to paths outside its
+    /// workspace. Approval adds `grants` to this session and reruns the
+    /// SAME call **still sandboxed**; denying forwards `prior_result` as-is
+    /// (the call already ran, and its output already reflects the refusal).
     ///
-    /// The variant name predates the host-execution behavior and remains
-    /// stable so existing event-log records continue to deserialize.
+    /// `denials` are the raw mediated attempts -- evidence, shown to the
+    /// approver as the trigger. `grants` is what approval actually buys:
+    /// the shaped suggestion (`horizon_sandbox::suggest_grants`, one tree
+    /// at the attempts' narrowest common ancestor, clamped), which is
+    /// generally *not* the same as the per-attempt grants inside `denials`.
+    ///
+    /// Both the variant name and `denials` predate the 2026-07-26
+    /// project-scoped-tree-grants decision
+    /// (`docs/containment-denial-narrow-grants-design.md`) and stay put so
+    /// existing event-log records keep deserializing. `grants` is
+    /// `#[serde(default)]` for the same reason: a request persisted by the
+    /// 2026-07-24 host-execution build reads back with none, and an empty
+    /// grant list fails closed at approval rather than silently reviving
+    /// unsandboxed execution.
     FilesystemDenialRetry {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
+        #[serde(default)]
+        grants: Vec<horizon_sandbox::FilesystemGrant>,
         prior_result: ToolCallResult,
     },
     /// One or more Horizon-derived public domains must be added to this

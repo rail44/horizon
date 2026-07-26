@@ -57,6 +57,7 @@ mod tmpdir;
 
 pub use error::SandboxError;
 pub use grant::revalidate_denial as revalidate_filesystem_denial;
+pub use grant::{home_dir, is_overbroad_tree, revalidate_grant, suggest_grants};
 pub use policy::{
     ContainmentDenials, FilesystemDenial, FilesystemGrant, FilesystemGrantAccess,
     FilesystemGrantScope, HelperPolicy, NetworkDenial, NetworkPolicy, ReadableScope, SandboxPolicy,

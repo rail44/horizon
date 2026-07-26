@@ -450,6 +450,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
         ));
         Hub::new(Connection::new(state), TerminalHost::new(), "test-sessiond")
     }
