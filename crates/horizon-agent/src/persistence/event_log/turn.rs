@@ -22,16 +22,22 @@ impl TurnTracker {
 
         let turn_id = self.current_turn_id.clone();
 
-        if matches!(
-            event,
-            Event::StateChanged(
-                SessionState::WaitingForUser
-                    | SessionState::WaitingForApproval
-                    | SessionState::Cancelled
-                    | SessionState::Failed
-                    | SessionState::Terminated
+        // A turn ends at the provider's explicit boundary (`TurnEnded`) or
+        // when the session reaches a terminal state. `WaitingForUser` is the
+        // post-turn idle state and is therefore also a boundary marker, but
+        // `WaitingForApproval` is mid-turn: the user is still inside the same
+        // turn while deciding on a tool call.
+        if matches!(event, Event::TurnEnded(_))
+            || matches!(
+                event,
+                Event::StateChanged(
+                    SessionState::WaitingForUser
+                        | SessionState::Cancelled
+                        | SessionState::Failed
+                        | SessionState::Terminated
+                )
             )
-        ) {
+        {
             self.current_turn_id = None;
         }
 

@@ -1961,14 +1961,14 @@ fn fold_finished_bash_result(
     // hasn't been folded yet -- so it's excluded explicitly rather than
     // re-reading the frame after folding.
     //
-    // If nothing else is outstanding, `WaitingForUser` is still not
-    // necessarily the last word: `commands_tx.send` below hands the result
-    // to the provider, which may still be mid-turn (more model output
-    // pending) and will emit its own `StateChanged` once it resumes --
-    // exactly as it already could race this state before this fix. That's
-    // the session loop's own turn-level state to own; this function only
-    // has to stop lying about the one thing it *does* know here: whether an
-    // approval is still actionable.
+    // If nothing else is actionable, the turn is still running: the result
+    // is about to be handed back to the provider via `commands_tx.send`,
+    // which will run another completion. Reporting `WaitingForUser` here
+    // would tell observers the turn finished and would make the persistence
+    // turn tracker close the turn prematurely. `Running` keeps the stop
+    // button enabled and the composer in the "running" placeholder until
+    // the provider itself emits `TurnEnded` and the real `WaitingForUser`
+    // at the turn boundary.
     let approval_still_pending = frame
         .actionable_pending_approval_call_ids()
         .into_iter()
@@ -1976,7 +1976,7 @@ fn fold_finished_bash_result(
     let trailing_state = if approval_still_pending {
         SessionState::WaitingForApproval
     } else {
-        SessionState::WaitingForUser
+        SessionState::Running
     };
 
     let events = vec![
@@ -2652,9 +2652,10 @@ mod tests {
             recovery_turn_ids[0].turn_id, recovery_turn_ids[1].turn_id,
             "Error and TurnEnded must identify the same failed turn"
         );
-        assert_eq!(
-            recovery_turn_ids[1].turn_id, recovery_turn_ids[2].turn_id,
-            "the terminal state must close the same failed turn"
+        assert!(
+            recovery_turn_ids[2].turn_id.is_none(),
+            "TurnEnded is the turn boundary; the following terminal state is \
+             outside the closed turn"
         );
     }
 
@@ -2869,9 +2870,11 @@ mod tests {
     /// `WaitingForUser` -- exactly the dishonest-state bug the backlog item
     /// describes (status line blanks, stop button vanishes, while a
     /// decision is still actionable). Once the second call is also approved
-    /// and finishes, the state must finally settle on `WaitingForUser`.
+    /// and finishes, the state must stay `Running`: the result is handed
+    /// back to the provider and the turn continues, so `WaitingForUser` is
+    /// reserved for the real turn boundary (`TurnEnded` + provider state).
     #[test]
-    fn fold_bash_completion_reports_waiting_for_approval_while_a_sibling_approval_is_pending() {
+    fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
         use horizon_agent::contract::{ApprovalRequest, ToolCallResult};
 
         let agent_config = AgentConfig::from_env_and_provider(None, None);
@@ -2962,9 +2965,71 @@ mod tests {
         let forwarded = drain_events(&mut outgoing_rx);
         assert_eq!(
             forwarded.last(),
-            Some(&Event::StateChanged(SessionState::WaitingForUser)),
-            "every approval is resolved now, so the reported state must finally \
-             be WaitingForUser, got: {forwarded:?}"
+            Some(&Event::StateChanged(SessionState::Running)),
+            "every approval is resolved but the turn is still running, so the \
+             reported state must stay Running, got: {forwarded:?}"
+        );
+    }
+
+    /// A finished async tool call with no remaining approvals must not flip
+    /// the reported state to `WaitingForUser`: the result is being forwarded
+    /// to the provider and the turn continues. This is the state-level half of
+    /// the bug where mid-turn `WaitingForUser` emissions made the persistence
+    /// turn tracker close a single unfinished turn repeatedly.
+    #[test]
+    fn fold_bash_completion_reports_running_when_no_approval_is_pending() {
+        use horizon_agent::contract::ToolCallResult;
+
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+        ));
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let call_id = ToolCallId("bash-1".to_string());
+
+        live_state.extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::Running),
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        let (commands_tx, _commands_rx) = unbounded::<Command>();
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            ToolCompletion::Finished(ToolCallResult::new(
+                call_id.clone(),
+                serde_json::json!({ "exit_code": 0 }),
+            )),
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        assert_eq!(
+            forwarded.last(),
+            Some(&Event::StateChanged(SessionState::Running)),
+            "no approval is pending, so the finished tool must leave the turn \
+             running, got: {forwarded:?}"
         );
     }
 
