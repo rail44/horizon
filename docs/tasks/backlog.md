@@ -72,15 +72,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     ever show the same shape.
 
 
-48. **Model resubmits byte-identical `fs.edit` calls it already
-    applied.** In the worst same-file run (22 consecutive edits, session
-    `05254b6a`), 3 calls were exact duplicates of an earlier
-    `old_string`+`new_string` 10–18 minutes later — one even reusing the
-    same provider `call_id` — i.e. the model lost track of an edit that
-    had already landed. Candidate fixes live on the tool-feedback side
-    (e.g. a clearer "already applied / old_string absent because you
-    already changed it" result) rather than the approval side. Related:
-    42/47. Recorded 2026-07-19 from the event-log analysis.
+
 
 50. **Decide `Reload Session Runtime`'s residual auto-reseed.** The
     2026-07-19 empty-workspace correction removed auto-reseed from every

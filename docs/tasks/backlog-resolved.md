@@ -1127,3 +1127,25 @@ full resolution/closing records.
     message, so post-continue events carry `turn_id=null` exactly as
     they did before this fix.
 
+
+
+48. *(resolved 2026-07-26, merge of `horizon/541d9f08`)* **Model resubmits byte-identical `fs.edit` calls it already
+    applied.** In the worst same-file run (22 consecutive edits, session
+    `05254b6a`), 3 calls were exact duplicates of an earlier
+    `old_string`+`new_string` 10–18 minutes later — one even reusing the
+    same provider `call_id` — i.e. the model lost track of an edit that
+    had already landed. Candidate fixes live on the tool-feedback side
+    (e.g. a clearer "already applied / old_string absent because you
+    already changed it" result) rather than the approval side. Related:
+    42/47. Recorded 2026-07-19 from the event-log analysis.
+    Resolved: the second application passed the staleness gate because
+    `fs.edit` refreshes the recorded mtime after its own write, and it
+    succeeded because the pair's `new_string` contained `old_string`, so
+    `replacen` matched again — silent duplication. `fs.edit` now records
+    each applied (path, old, new) with a hash of the resulting content
+    and returns `already_applied: true` while the file remains in that
+    post-edit state; an intervening change restores the normal path.
+    Found and fixed by agent session `541d9f08` in one run on an
+    evidence-embedded brief: 40 requests, 97,796-token peak, one
+    approval, zero delegation needed.
+
