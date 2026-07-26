@@ -625,3 +625,89 @@ The filesystem delivery decision was resolved in favor of the Linux
 `openat`/`openat2` incident-complete slice first, with explicit residual
 limitations. Comprehensive syscall mediation and real-Mac denial evidence
 remain follow-ups rather than prerequisites for that bounded claim.
+
+## 2026-07-26 decision: project-scoped tree grants (issue 009)
+
+Owner consultation, superseding the 2026-07-24/25 retry shape for the
+case it measurably cannot serve. Evidence (issue 009 and the 2026-07-25/26
+dogfooding runs): build verification stalls one to four times per gate,
+every stall names a different path set, and per-path `File` grants can
+never converge for a build toolchain because fingerprint paths embed
+source hashes — the next edit invalidates the grant. The
+`346497f` retry answers each approval with one full-host-authority,
+unsandboxed execution: the approval buys *more* authority than the narrow
+grant it declined to generalize.
+
+Three constraints fixed by the owner:
+
+1. **No command- or language-specific enumeration.** No "cargo →
+   CARGO_HOME" tables anywhere; every rule below is generic over paths.
+2. **The authorization is project-scoped**, not per-spawn and not
+   machine-global: needing `~/.cargo` is a property of developing *this*
+   project, and belongs to the project's configuration.
+3. **Repository content must never grant.** A tracked policy file would
+   let a cloned repository expand its own authority (confused deputy).
+   Project grants therefore live in the **user-owned** `config.toml`,
+   keyed by project root — direnv's allow model, not VS Code's tracked
+   settings.
+
+### Design
+
+**`[grants]` in `config.toml`** (user-owned, hand-edited or written by a
+small CLI verb — never by the approval flow in v1):
+
+```toml
+[[grants.project]]
+root  = "/home/satoshi/src/github.com/rail44/horizon"
+trees = ["~/.cargo"]
+```
+
+- `root` identifies the project by its main-repository toplevel. A
+  session whose `workspace_root` is a derived worktree
+  (`.horizon/worktrees/*`) resolves to its source repository's root via
+  the persisted session context, so isolated sessions inherit the
+  project's grants.
+- `trees` are `ReadWrite` `DirectoryTree` grants injected into the
+  session's sandbox config **at spawn**: writes inside them are never
+  boundary crossings, so they reach neither the judge nor a human.
+- Validation on load, warn-and-ignore (the config crate's existing
+  warning channel): a tree at `$HOME` itself, `/`, or a system root is
+  refused; `~` expands against `$HOME` like the persistence paths do.
+- Applied at session spawn only. Live sessions are unaffected by config
+  edits; `Reload Session Runtime` picks changes up for new sessions —
+  same lifecycle as `[provider]`.
+
+**Suggestion shaping, generic (interactive path, for trees not yet in
+config):** when a containment denial's attempted paths lie outside the
+workspace, the suggested grant is one `DirectoryTree` at the **narrowest
+common ancestor** of the attempted paths — clamped: never `$HOME`, `/`,
+or a system root (those fall back to per-path `File` suggestions). A
+single attempted path suggests its parent directory. No tool knowledge:
+`~/.cargo/.package-cache-mutate` + `~/.cargo/horizon-build-dir/...`
+generalize to `~/.cargo` by path shape alone.
+
+**Retry stays sandboxed.** `346497f`'s run-once-on-host answer is
+replaced by re-running the call sandboxed with the approved grant added
+(the pre-`346497f` narrow-grant machinery, with the tree shape above).
+An approval now buys scoped, contained access instead of one unconfined
+execution. Approved grants keep the existing session-local persistence.
+
+**Audit.** The session's effective grants (config-injected and
+interactively approved) are recorded in its persisted session context,
+so the event log states what filesystem authority a session ran with.
+
+### Residual risk, stated
+
+A `~/.cargo` tree grant includes `~/.cargo/config.toml`: writes there
+can influence *future host-side* cargo invocations (wrapper/linker
+injection). This is strictly narrower than today's approved retry (full
+host authority for the whole command), and excluding config-like files
+would reintroduce tool-specific enumeration. The risk is accepted as the
+owner's informed per-project choice; the grant list is user-owned and
+short.
+
+### Measurement
+
+After landing: re-run a gate-running dogfooding brief with the project
+grant in place — expected stalls: zero (today: one to four per gate).
+Track alongside backlog 65.
