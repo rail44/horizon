@@ -75,9 +75,12 @@ The measurement and prior-art basis for the read/grep bounds is recorded in
 The industry has converged on exact-string replacement with uniqueness
 enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 
-- `old_string` must match **exactly** and **uniquely**. Zero matches and
-  multiple matches are `is_error` results with actionable text ("found 3
-  matches — include more surrounding context"), never a silent first-match.
+- `old_string` must match **exactly**. Zero matches and multiple matches are
+  `is_error` results with actionable text. By default, `old_string` must also
+  match **uniquely** ("found 3 matches — include more surrounding context");
+  set `replace_all: true` to replace every occurrence instead. A successful
+  result always includes `occurrences`, the number of replacements performed
+  (1 in default mode).
 - **Staleness gate, enforced mechanically:** a file must have been read in
   this session, and its mtime must be unchanged since that read, or the edit
   is rejected ("file changed on disk — read it again"). Read-before-edit is a

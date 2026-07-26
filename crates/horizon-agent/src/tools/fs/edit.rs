@@ -18,6 +18,10 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(new_string) = input.get("new_string").and_then(Value::as_str) else {
         return error_output("fs.edit requires a `new_string` string argument");
     };
+    let replace_all = input
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     if old_string.is_empty() {
         return error_output("`old_string` must not be empty");
     }
@@ -55,13 +59,17 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
             "`old_string` not found in `{path_arg}` — check the exact text (including whitespace) and try again"
         ));
     }
-    if match_count > 1 {
+    if match_count > 1 && !replace_all {
         return error_output(format!(
-            "found {match_count} matches for `old_string` in `{path_arg}` — include more surrounding context to make it unique"
+            "found {match_count} matches for `old_string` in `{path_arg}` — include more surrounding context to make it unique, or set `replace_all: true` to replace every occurrence"
         ));
     }
 
-    let updated = content.replacen(old_string, new_string, 1);
+    let updated = if replace_all {
+        content.replace(old_string, new_string)
+    } else {
+        content.replacen(old_string, new_string, 1)
+    };
     if let Err(error) = fs::write(&resolved, &updated) {
         return error_output(format!("failed to write `{path_arg}`: {error}"));
     }
@@ -73,5 +81,6 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     json!({
         "path": path_arg,
         "replaced": true,
+        "occurrences": match_count,
     })
 }

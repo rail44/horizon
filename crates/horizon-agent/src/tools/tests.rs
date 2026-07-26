@@ -673,6 +673,7 @@ fn fs_edit_success_updates_mtime_and_allows_chained_edit() {
         &json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
     );
     assert!(!is_error(&first));
+    assert_eq!(first["occurrences"], 1);
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello there");
 
     // No re-read in between: the edit above must have refreshed the
@@ -712,6 +713,64 @@ fn fs_edit_stale_after_external_modification_is_error() {
         .as_str()
         .unwrap()
         .contains("changed on disk"));
+}
+
+#[test]
+fn fs_edit_replace_all_replaces_every_occurrence_and_reports_count() {
+    let root = temp_workspace("edit-replace-all");
+    let target = root.join("file.txt");
+    fs::write(&target, "dup dup dup").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    );
+
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "path": target.display().to_string(),
+            "old_string": "dup",
+            "new_string": "replaced",
+            "replace_all": true,
+        }),
+    );
+
+    assert!(!is_error(&output));
+    assert_eq!(output["occurrences"], 3);
+    assert_eq!(
+        fs::read_to_string(&target).unwrap(),
+        "replaced replaced replaced"
+    );
+}
+
+#[test]
+fn fs_edit_zero_matches_is_error_even_with_replace_all() {
+    let root = temp_workspace("edit-replace-all-zero");
+    let target = root.join("file.txt");
+    fs::write(&target, "hello world").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    fs_tools::execute_auto(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": target.display().to_string() }),
+    );
+
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "path": target.display().to_string(),
+            "old_string": "not present",
+            "new_string": "x",
+            "replace_all": true,
+        }),
+    );
+
+    assert!(is_error(&output));
+    assert!(output["message"].as_str().unwrap().contains("not found"));
 }
 
 // --- fs.patch --------------------------------------------------------------
