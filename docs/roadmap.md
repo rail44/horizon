@@ -340,8 +340,18 @@ lands:
   point, with an accurate report whose question omitted the requester's
   own measured evidence — so the requester re-explored by hand. Follow-up
   turns and fork seeding (the two structural answers, design addendum
-  2026-07-26) landed with the next merge; the two-arm measurement on the
-  backlog-48 brief (`HORIZON_EXPLORE_SEED=fresh|fork`) is the next step.
+  2026-07-26) landed with the next merge.
+  **Reverted 2026-07-27 (owner decision):** both removed again — they were
+  getting in the way of fixing turn-folding behavior and discussing its
+  design, and a T-callid dogfooding campaign separately found the
+  fork-seeded arm broke outright under `hf:MiniMaxAI/MiniMax-M3` (a
+  provider 400 on the fork-cloned history shape) while both fresh-mode
+  explorations that hit the iteration cap returned only a generic error
+  with the work discarded. `agent.explore` is back to one-shot,
+  fresh-seeded, spawn-and-wait; iteration-cap exhaustion now forces one
+  tools-disabled wrap-up completion and returns the partial report as a
+  success (`RoleDefinition::summarize_on_cap`, OpenCode/Hermes precedent).
+  See `docs/agent-explore-design.md`'s dated addendum for the full record.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,

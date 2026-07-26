@@ -221,3 +221,90 @@ Metrics per arm: adoption (initial and follow-up), requester context
 peak, completion, requester+delegate total and uncached tokens, and
 whether the delegate's report reconciles the embedded evidence without a
 manual redo.
+
+---
+
+## Addendum (2026-07-27): follow-up and fork seeding removed; capped runs now summarize
+
+Owner decision, verbatim: 「委譲についてforkと会話継続を削りましょうか。動作を
+直しつつ(ターン畳み込みの)設計を相談するうえで邪魔になるので」 -- both
+addendum B (follow-up turns) and addendum C (fork seeding) got in the way
+of fixing turn-folding behavior and discussing its design, so both are
+removed. `agent.explore` returns to v1's shape: one-shot, fresh-seeded,
+spawn-and-wait. Concretely:
+
+- **Fork seeding is gone.** `HORIZON_EXPLORE_SEED`, `tools::explore::
+  SeedMode`, `ExplorationHost::start`'s `seed_history` parameter,
+  `contract::StartSession::seed_history`, and `tools::explore::
+  sanitize_seed_history` are all removed. Every exploration starts from
+  nothing but its prompt.
+- **Follow-up is gone.** `ExplorationHost::follow_up`, `agent.explore`'s
+  `session_id` input, and the "an exploration outlives the turn it
+  answered" lifetime rule (addendum B) are removed along with it.
+  `tools::explore`'s `Input` is the prompt alone. An exploration session is
+  now torn down the moment its own turn ends (or immediately on
+  cancellation) -- it never outlives the call that spawned it, so the
+  `live()` bookkeeping that used to defer teardown until the *requester's*
+  turn ended is gone too.
+- **Motivating evidence for removing fork seeding specifically**
+  (`docs/research/agent-ceiling-death-autopsy-2026-07-26.md`): under
+  `hf:MiniMaxAI/MiniMax-M3`, the one fork-seeded exploration in that
+  campaign died instantly with a provider 400 ("Error applying chat
+  template for MiniMaxAI…") -- the fork-cloned history shape violates that
+  model's chat template. A structural mechanism that breaks outright on at
+  least one model is not a foundation to build the turn-folding work on.
+
+### Iteration-cap exhaustion is now a partial success, not a bare error
+
+The same autopsy found both fresh-mode explorations in the campaign hit
+the 25-iteration cap and returned only a generic error -- 91 tool calls of
+real exploration work (42 and 49 tool calls respectively) discarded, with
+no report at all. `docs/research/agent-context-reduction-prior-art-2026-
+07-26.md` §4 surveyed prior art for this exact moment: neither OpenCode
+nor Hermes hard-errors on a step/iteration cap. OpenCode injects a
+`MAX_STEPS_PROMPT` ("tools disabled, summarize what's been achieved,
+remaining tasks, recommendations") and forces a text-only final turn;
+Hermes appends a synthetic user message ("You've reached the maximum
+number of tool-calling iterations allowed... provide a final response
+summarizing what you've found and accomplished so far, without calling
+any more tools") and runs one toolless completion. Both preserve partial
+work as the returned result; neither treats the cap as a failure.
+
+Horizon now does the same, gated by role rather than left to the model's
+own judgment or a prompt-only convention:
+
+- `roles::RoleDefinition` gained a `summarize_on_cap: bool` field, `true`
+  for `EXPLORE_ROLE` (an exploration's whole job is one delegated report,
+  so a capped run should still return whatever it found) and `false`
+  everywhere else (unchanged behavior for `CONFIG_ROLE` and role-less
+  sessions).
+- When the rig turn loop's iteration-cap guard trips
+  (`providers::rig::session::halt_turn_loop`) for a role with
+  `summarize_on_cap`, it runs one forced completion
+  (`run_cap_summary_turn`) with every tool definition withheld
+  (`RigAgentConfig::allowed_tool_ids` overridden to an empty list) and a
+  synthetic user message asking the model to stop and summarize --
+  relevant files with paths and line numbers, its best partial answer, and
+  what remains unknown. The real, already-executed tool result that
+  tripped the guard is folded into history first, exactly where an
+  ordinary tool-driven turn would put it.
+- If that wrap-up succeeds, the summary is committed as an ordinary
+  assistant message and the turn ends as `TurnEnded(HaltedByIterationCap)`
+  with the summary as the session's final message -- no different, from
+  the requester's side, than an exploration that happened to finish on its
+  own. If the wrap-up itself fails (provider error) or gets cancelled,
+  `rig_history` is rolled back to exactly where it stood before the
+  attempt and the session falls back to the original halt behavior
+  (`pending_halt_result` stashed for `Command::ContinueTurn`) -- current
+  (pre-2026-07-27) behavior, unchanged.
+- `tools::explore`'s `Outcome::into_output` treats a report alongside
+  `HaltedByIterationCap` as success (`is_error: false`) with an explicit
+  `capped: true` marker, so the caller can tell "capped but still useful"
+  apart from an ordinary completed report. Without a report (the wrap-up
+  never ran or produced nothing), the cap still resolves as an ordinary
+  error -- with no "ask a narrower question" wording anymore, since
+  follow-up no longer exists to act on it.
+- Doom-loop halts are unaffected: forcing another completion on a model
+  that just proved it repeats itself is not the same bet as forcing one on
+  a model that ran out of turns making genuine progress, so
+  `summarize_on_cap` only applies to `GuardHalt::IterationCapExceeded`.

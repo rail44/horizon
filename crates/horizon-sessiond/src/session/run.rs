@@ -60,7 +60,6 @@ pub(super) fn run_session(
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
-    seed_history: Vec<Event>,
     phase: &Cell<SessionLoopPhase>,
 ) {
     // Resolved *before* starting the provider session (below) so the real,
@@ -99,7 +98,6 @@ pub(super) fn run_session(
         session_id,
         role_id.clone(),
         workspace_root.clone(),
-        seed_history,
     ) else {
         // `ProviderRegistry::start_session` returns `None` for either an
         // unknown `provider_id` or an unresolvable `role_id` (see its own
@@ -204,12 +202,7 @@ pub(super) fn run_session(
         .with_domain_policy(domains)
         .with_network_proxy(network)
         .with_judge(judge)
-        .with_exploration_host(exploration)
-        // The single seam that consults `HORIZON_EXPLORE_SEED`
-        // (`docs/agent-explore-design.md`'s 2026-07-26 addendum C): read once
-        // per session start, so a `Reload Session Runtime` picks up a change
-        // without a full restart, and carried as a plain value from here on.
-        .with_exploration_seed_mode(horizon_agent::tools::SeedMode::from_env());
+        .with_exploration_host(exploration);
     let persisted_context = PersistedSessionContext {
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,

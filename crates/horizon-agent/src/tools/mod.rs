@@ -19,7 +19,7 @@ pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // because `horizon-sessiond` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network
 // proxy and judge handles this module also exposes.
-pub use explore::{ExplorationHost, SeedMode, StartedExploration};
+pub use explore::{ExplorationHost, StartedExploration};
 // `execute_agent_tool`/`Execution` are re-exported fully `pub` (not
 // `pub(crate)`) specifically so `tests/tier1_network_containment.rs` --
 // an integration test, hence external to this crate -- can drive the real

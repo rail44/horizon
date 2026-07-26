@@ -49,20 +49,6 @@ pub fn process_agent_provider_event(
         crate::tools::explore::cancel_if_running(session_id, &result.call_id);
     }
 
-    // The requester's own turn end is an exploration session's lifetime
-    // boundary (`docs/agent-explore-design.md`'s 2026-07-26 addendum B): an
-    // exploration survives the turn it answered so the requester can follow
-    // up on it within that turn, and dies with the turn -- completed,
-    // failed, cancelled, or halted, all of which reach here as `TurnEnded`
-    // (`providers::rig::session::apply_turn_outcome`). The requester's
-    // session going away instead is covered by
-    // `state::unregister_session_runtime`. A cancelled turn's explorations
-    // are already gone via the `ToolCallFinished` hook above; the live set
-    // makes this a no-op for them rather than a second teardown.
-    if matches!(event, Event::TurnEnded(_)) {
-        crate::tools::explore::terminate_session_explorations(session_id);
-    }
-
     let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)
         .into_iter()
         .enumerate()

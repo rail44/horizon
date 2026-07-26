@@ -68,18 +68,6 @@ pub struct StartSession {
     /// (`providers::rig::session::session_extra_sections`) both reflect the
     /// session's actual root instead of the daemon's `cwd`.
     pub workspace_root: Option<PathBuf>,
-    /// Already-committed events this session's *provider* history starts
-    /// from, instead of the session's own persisted history. Non-empty only
-    /// for a fork-seeded exploration session (`docs/agent-explore-design.md`'s
-    /// 2026-07-26 addendum C), where it is a sanitized copy of the
-    /// requesting session's stream -- see `tools::explore::
-    /// sanitize_seed_history`, which is what makes it provider-valid despite
-    /// being captured mid-turn. Deliberately distinct from a resumed
-    /// session's history: these events belong to *another* session, so they
-    /// seed only what the model sees, never this session's own event log or
-    /// live frame.
-    #[serde(default)]
-    pub seed_history: Vec<Event>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -817,7 +805,6 @@ impl ProviderRegistry {
         session_id: SessionId,
         role_id: Option<RoleId>,
         workspace_root: Option<PathBuf>,
-        seed_history: Vec<Event>,
     ) -> Option<SessionHandle> {
         if let Some(role_id) = &role_id {
             crate::roles::resolve(role_id)?;
@@ -828,7 +815,6 @@ impl ProviderRegistry {
                 provider_id: provider_id.clone(),
                 role_id,
                 workspace_root,
-                seed_history,
             })
         })
     }
