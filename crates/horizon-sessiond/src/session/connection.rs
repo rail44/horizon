@@ -107,7 +107,6 @@ impl Connection {
             new.isolate,
             None,
             Vec::new(),
-            Vec::new(),
         );
     }
 
@@ -276,7 +275,6 @@ mod tests {
             false,
             None,
             Vec::new(),
-            Vec::new(),
         );
         spawn_session_thread(
             state.clone(),
@@ -287,7 +285,6 @@ mod tests {
             None,
             false,
             None,
-            Vec::new(),
             Vec::new(),
         );
 

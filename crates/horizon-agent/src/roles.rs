@@ -84,6 +84,19 @@ pub struct RoleDefinition {
     /// module doc's v2 update), so a repository skill can override an
     /// embedded one even for a role.
     pub skill_ids: &'static [&'static str],
+    /// Whether hitting the iteration cap runs one forced, tools-disabled
+    /// completion (an injected "stop and summarize" instruction) before the
+    /// turn loop halts, instead of halting straight away
+    /// (`providers::rig::session::halt_turn_loop`). `false` preserves the
+    /// original "stash the real result, wait for Continue" behavior.
+    /// Deliberately role-scoped rather than a config knob or a prompt-only
+    /// convention (`docs/research/agent-context-reduction-prior-
+    /// art-2026-07-26.md` §4's OpenCode/Hermes precedent: neither leaves it
+    /// to the model) -- set for [`EXPLORE_ROLE`], whose whole job is a
+    /// single delegated report, so a capped run should still return
+    /// whatever it found rather than a bare error
+    /// (`docs/agent-explore-design.md`'s 2026-07-27 addendum).
+    pub summarize_on_cap: bool,
 }
 
 /// Horizon's configuration assistant: the first role -- the concrete
@@ -114,6 +127,7 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     iteration_cap: None,
     include_repository_instructions: false,
     skill_ids: &["horizon-config"],
+    summarize_on_cap: false,
 };
 
 const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assistant: you help \
@@ -173,6 +187,7 @@ pub const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     iteration_cap: Some(EXPLORE_ITERATION_CAP),
     include_repository_instructions: true,
     skill_ids: &[],
+    summarize_on_cap: true,
 };
 
 const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: another agent asked \
@@ -260,6 +275,15 @@ mod tests {
         assert_eq!(CONFIG_ROLE.iteration_cap, None);
     }
 
+    #[test]
+    fn config_role_does_not_summarize_on_cap() {
+        let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+        assert!(
+            !role.summarize_on_cap,
+            "only a role whose whole job is one delegated report opts into the forced wrap-up"
+        );
+    }
+
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
     /// toolset is exactly the three read-only tools, and `agent.explore`
     /// itself is absent so recursion cannot be expressed at all.
@@ -320,6 +344,16 @@ mod tests {
             "an exploration reads the requester's own repository and wants its instructions"
         );
         assert_eq!(role.model, None, "v1 has no cheap-model override");
+    }
+
+    /// `docs/agent-explore-design.md`'s 2026-07-27 addendum: a capped
+    /// exploration must still return whatever it found instead of a bare
+    /// error, so the explore role opts into the forced wrap-up completion.
+    #[test]
+    fn explore_role_summarizes_on_cap() {
+        let role =
+            resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).expect("the explore role must resolve");
+        assert!(role.summarize_on_cap);
     }
 
     #[test]

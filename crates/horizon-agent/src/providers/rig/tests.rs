@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::completion::{
     await_provider_phase, openai_turn_additional_params, partial_assistant_message,
@@ -410,131 +410,6 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
     assert!(matches!(&messages[3], RigMessage::Assistant { .. }));
 }
 
-/// `docs/agent-explore-design.md`'s 2026-07-26 addendum C, at the point the
-/// seed actually becomes what the model sees: a session started with a
-/// `seed_history` reports *those* messages as its loaded history, without
-/// consulting its own (empty) persisted history at all.
-#[test]
-fn a_seeded_session_starts_from_the_seed_history_rather_than_its_own() {
-    let provider = Provider::new(
-        RigAgentConfig {
-            openai_enabled: false,
-            ..Default::default()
-        },
-        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
-    );
-    let seed_history = crate::tools::explore::sanitize_seed_history(&[
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text: "fix the duplicate write".to_string(),
-        }),
-        Event::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId("read-1".to_string()),
-            tool_id: "fs.read".to_string(),
-            input: serde_json::json!({ "path": "src/edit.rs" }).into(),
-        }),
-        Event::ToolCallFinished(ToolCallResult::new(
-            ToolCallId("read-1".to_string()),
-            serde_json::json!({ "text": "fn edit() {}" }),
-        )),
-        // The mid-turn tail: the `agent.explore` call being served.
-        Event::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId("explore-1".to_string()),
-            tool_id: "agent.explore".to_string(),
-            input: serde_json::json!({ "prompt": "where else?" }).into(),
-        }),
-    ]);
-
-    let handle = AgentProvider::start_session(
-        &provider,
-        StartSession {
-            session_id: SessionId::new(),
-            provider_id: AgentProvider::provider_id(&provider),
-            role_id: Some(RoleId(crate::roles::EXPLORE_ROLE_ID.to_string())),
-            workspace_root: None,
-            seed_history,
-        },
-    );
-
-    let rx = handle.events();
-    recv(&rx); // StateChanged(Created)
-    let ProviderEvent {
-        event: Event::MessageCommitted(initialization),
-        ..
-    } = recv(&rx)
-    else {
-        panic!("the second startup event is the initialization message");
-    };
-    assert!(
-        initialization
-            .text
-            .contains("Loaded 3 persisted Rig history"),
-        "the three paired seed messages must become the session's history, and the unpaired \
-         `agent.explore` call must not: {}",
-        initialization.text
-    );
-}
-
-/// The sanitized seed maps to a provider-valid message list: every
-/// assistant tool call has a matching tool result, and there is no orphan
-/// of either kind -- the property the mid-turn capture would otherwise
-/// break.
-#[test]
-fn a_sanitized_seed_maps_to_paired_rig_tool_calls_and_results() {
-    let events = vec![
-        Event::MessageCommitted(AgentMessage {
-            role: MessageRole::User,
-            text: "fix the duplicate write".to_string(),
-        }),
-        Event::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId("read-1".to_string()),
-            tool_id: "fs.read".to_string(),
-            input: serde_json::json!({}).into(),
-        }),
-        Event::ToolCallFinished(ToolCallResult::new(
-            ToolCallId("read-1".to_string()),
-            serde_json::json!({ "text": "fn edit() {}" }),
-        )),
-        Event::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId("explore-1".to_string()),
-            tool_id: "agent.explore".to_string(),
-            input: serde_json::json!({}).into(),
-        }),
-    ];
-
-    let messages =
-        rig_messages_from_horizon_events(&crate::tools::explore::sanitize_seed_history(&events));
-
-    let mut calls: Vec<String> = Vec::new();
-    let mut results: Vec<String> = Vec::new();
-    for message in &messages {
-        match message {
-            RigMessage::Assistant { content, .. } => {
-                for item in content.iter() {
-                    if let AssistantContent::ToolCall(call) = item {
-                        calls.push(call.id.clone());
-                    }
-                }
-            }
-            RigMessage::User { content } => {
-                for item in content.iter() {
-                    if let UserContent::ToolResult(result) = item {
-                        results.push(result.id.clone());
-                    }
-                }
-            }
-            other => panic!("the mapping never produces {other:?}"),
-        }
-    }
-    assert_eq!(calls, vec!["read-1".to_string()]);
-    assert_eq!(results, calls, "every call must have exactly one result");
-    assert_eq!(
-        rig_messages_from_horizon_events(&events).len(),
-        messages.len() + 1,
-        "the unsanitized history is what would have carried the unpaired call"
-    );
-}
-
 /// `load_rig_history` reads through the *shared* `Arc<Mutex<Store>>` handle
 /// -- never a fresh `Store::open` of the same path (see that function's and
 /// `SharedDuckdbStore`'s doc comments for why a second independent open is
@@ -747,8 +622,8 @@ fn turn_loop_guard_reset_clears_fingerprint_window() {
     );
 }
 
-#[test]
-fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls() {
+#[tokio::test]
+async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls() {
     // Assistant turn requested two tool calls: A (whose real result just
     // arrived and tripped the guard) and B (still outstanding).
     let call_a = rig_workspace_snapshot_call();
@@ -786,17 +661,31 @@ fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls() {
         guard.record_tool_turn();
     }
     let (tx, rx) = crossbeam_channel::unbounded();
+    // Unused by this test: `role` is `None`, so `halt_turn_loop` never
+    // reaches the code that would actually run a turn on these.
+    let (_commands_tx, mut commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
+    let mut inbox: VecDeque<Command> = VecDeque::new();
+    let config = RigAgentConfig::default();
+    let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
+    let extra_sections: Vec<String> = Vec::new();
 
     halt_turn_loop(
         GuardHalt::IterationCapExceeded,
         &mut guard,
+        &mut commands,
+        &mut inbox,
+        &config,
+        &environment,
+        &extra_sections,
+        None,
         &tx,
         &mut pending_halt_result,
         &mut history,
         &arrived,
         &mut pending,
         &mut cancelled,
-    );
+    )
+    .await;
 
     // The arrived result is *not* folded into history here -- it's stashed
     // for `Command::ContinueTurn`/a later `Command::UserMessage` to fold in
@@ -908,17 +797,33 @@ fn start_fallback_rig_session_with_config(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
+    start_fallback_rig_session_with_role(config, None)
+}
+
+/// Like [`start_fallback_rig_session_with_config`], but also resolves
+/// `role_id` through the real `Provider::start_session` -- the entry point
+/// `role_adjusted_config` runs on, so a role's overrides (iteration cap,
+/// `summarize_on_cap`) actually apply to the spawned session's turn loop.
+fn start_fallback_rig_session_with_role(
+    config: RigAgentConfig,
+    role_id: Option<RoleId>,
+) -> (
+    crossbeam_channel::Sender<Command>,
+    crossbeam_channel::Receiver<ProviderEvent>,
+) {
     let provider = Provider::new(
         config,
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
-    let handle = provider.start_session(StartSession {
-        session_id: SessionId::new(),
-        provider_id: AgentProvider::provider_id(&provider),
-        role_id: None,
-        workspace_root: None,
-        seed_history: Vec::new(),
-    });
+    let handle = AgentProvider::start_session(
+        &provider,
+        StartSession {
+            session_id: SessionId::new(),
+            provider_id: AgentProvider::provider_id(&provider),
+            role_id,
+            workspace_root: None,
+        },
+    );
     let tx = handle.sender();
     let rx = handle.events();
 
@@ -1045,6 +950,93 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     assert_eq!(
         recv(&rx).event,
         Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+/// `docs/agent-explore-design.md`'s 2026-07-27 addendum, end to end through
+/// the real session loop: a role that opts in
+/// (`RoleDefinition::summarize_on_cap`, set for `EXPLORE_ROLE`) gets one
+/// forced, tools-disabled completion when it hits its iteration cap instead
+/// of halting cold -- the summary lands as an ordinary assistant message
+/// right before `TurnEnded(HaltedByIterationCap)`, and nothing is left
+/// stashed for `Command::ContinueTurn` to resume (the forced turn already
+/// settled the halt).
+#[test]
+fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
+    let (tx, rx) = start_fallback_rig_session_with_role(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
+        },
+        Some(RoleId(crate::roles::EXPLORE_ROLE_ID.to_string())),
+    );
+    let cap = crate::roles::EXPLORE_ROLE
+        .iteration_cap
+        .expect("the explore role sets a tighter cap");
+
+    let _ = tx.send(Command::UserMessage {
+        text: "snapshot please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    let call_id = match recv(&rx).event {
+        Event::ToolCallRequested(request) => request.call_id,
+        other => panic!("expected a tool call request, got {other:?}"),
+    };
+
+    for i in 0..cap {
+        let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call_id.clone(),
+            serde_json::json!({ "loop_again": true, "n": i }),
+        )));
+        assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+        assert!(matches!(
+            recv(&rx).event,
+            Event::ToolCallRequested(request) if request.call_id == call_id
+        ));
+    }
+
+    // The next tool-driven turn exceeds the cap. `summarize_on_cap` runs a
+    // forced completion (tools disabled) with the real, already-executed
+    // result folded in first -- the deterministic fallback responder never
+    // sees "snapshot"/"multi tool" in the injected instruction, so it falls
+    // through to its plain-text reply, which becomes the report.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_id.clone(),
+        serde_json::json!({ "loop_again": true, "n": "final" }),
+    )));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(
+        matches!(
+            recv(&rx).event,
+            Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
+                if text.contains("turn limit")
+        ),
+        "the forced wrap-up's summary must be committed as an ordinary assistant message"
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+
+    // Nothing was stashed -- the forced summary already resolved the halt,
+    // so Continue has nothing to resume.
+    let _ = tx.send(Command::ContinueTurn);
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a halt that already ran its forced summary must leave nothing for Continue to resume"
     );
 }
 
@@ -1707,7 +1699,6 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             provider_id: AgentProvider::provider_id(&provider),
             role_id: Some(RoleId("config".to_string())),
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
 
@@ -1858,7 +1849,6 @@ fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_ses
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: Some(isolated_root.clone()),
-        seed_history: Vec::new(),
     };
 
     let environment = session_environment(&request);
@@ -1878,7 +1868,6 @@ fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: None,
-        seed_history: Vec::new(),
     };
 
     let environment = session_environment(&request);

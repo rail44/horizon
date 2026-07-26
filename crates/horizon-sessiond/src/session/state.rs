@@ -257,17 +257,6 @@ impl SessiondState {
         lock_unpoisoned(&self.event_taps).remove(&session_id);
     }
 
-    /// The role of a session this process still hosts live, if any. Read by
-    /// [`super::exploration::SessiondExplorationHost::follow_up`] to refuse a model-supplied
-    /// session id that does not name a live exploration.
-    pub(super) fn session_role(&self, session_id: SessionId) -> Option<RoleId> {
-        self.sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .and_then(|entry| entry.role_id.clone())
-    }
-
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. [`super::connection::Connection::route_command`]
     /// turns a miss into a log line; [`super::exploration::SessiondExplorationHost::terminate`]

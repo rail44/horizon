@@ -129,9 +129,7 @@ implemented once, in `crates/horizon-config`, so every process that loads
 the file gets them. `crates/horizon-agent`'s event log/DuckDB-projection
 paths keep an environment-only override
 (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
-all; `HORIZON_EXPLORE_SEED=fresh|fork` (measurement switch for
-`agent.explore`'s seeding, `docs/agent-explore-design.md` addendum) is
-environment-only likewise.
+all.
 
 Config is applied at startup only, with these exceptions: `Reload Config`
 (palette / `reload-config` keybinding id / CLI `horizon reload-config`)

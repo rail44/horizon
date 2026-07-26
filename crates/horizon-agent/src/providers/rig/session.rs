@@ -21,7 +21,6 @@ use crate::{
     tools::cancelled_tool_call_result,
 };
 
-use super::mapping::rig_messages_from_horizon_events;
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
     load_rig_history, rig_initialization_message, rig_tool_result_message, ToolCallDescriptor,
@@ -47,7 +46,6 @@ pub(super) fn spawn_rig_session(
     let environment = session_environment(&request);
     let provider_id = request.provider_id;
     let session_id = request.session_id;
-    let seed_history = request.seed_history;
 
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
@@ -60,17 +58,8 @@ pub(super) fn spawn_rig_session(
             // here (or through a fresh `Store::open`) is exactly the
             // resumed-session bug this fixed -- a session's own real history
             // silently not showing up.
-            // A fork-seeded session (`StartSession::seed_history`) starts
-            // from another session's stream rather than its own persisted
-            // one, which by construction is empty -- it has never run. The
-            // seed is already sanitized by the requester side; mapping it is
-            // the same event-to-message step a resume takes.
-            let rig_history = if seed_history.is_empty() {
-                let duckdb_store = duckdb_cell.wait();
-                load_rig_history(duckdb_store.as_ref(), session_id)
-            } else {
-                rig_messages_from_horizon_events(&seed_history)
-            };
+            let duckdb_store = duckdb_cell.wait();
+            let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
             let extra_sections = session_extra_sections(&environment, &config, role);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -104,6 +93,7 @@ pub(super) fn spawn_rig_session(
                 config,
                 environment,
                 extra_sections,
+                role,
                 rig_history,
             ));
         });
@@ -203,6 +193,7 @@ async fn run_session_loop(
     config: RigAgentConfig,
     environment: SessionEnvironment,
     extra_sections: Vec<String>,
+    role: Option<&'static RoleDefinition>,
     mut rig_history: Vec<Message>,
 ) {
     let mut commands = bridge_commands(commands_rx);
@@ -335,13 +326,20 @@ async fn run_session_loop(
                     halt_turn_loop(
                         halt,
                         &mut guard,
+                        &mut commands,
+                        &mut inbox,
+                        &config,
+                        &environment,
+                        &extra_sections,
+                        role,
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
-                    );
+                    )
+                    .await;
                     continue;
                 }
 
@@ -359,13 +357,20 @@ async fn run_session_loop(
                     halt_turn_loop(
                         halt,
                         &mut guard,
+                        &mut commands,
+                        &mut inbox,
+                        &config,
+                        &environment,
+                        &extra_sections,
+                        role,
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
-                    );
+                    )
+                    .await;
                     continue;
                 }
 
@@ -413,13 +418,20 @@ async fn run_session_loop(
                     halt_turn_loop(
                         halt,
                         &mut guard,
+                        &mut commands,
+                        &mut inbox,
+                        &config,
+                        &environment,
+                        &extra_sections,
+                        role,
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
-                    );
+                    )
+                    .await;
                     continue;
                 }
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
@@ -778,16 +790,30 @@ pub(super) fn tool_result_fingerprint(
 ///
 /// The result that tripped the guard (`arrived_result`) is *real*: its tool
 /// already executed (an `fs.write` is already on disk) and the app already
-/// surfaced its genuine `ToolCallFinished`. It is deliberately *not* folded
-/// into `rig_history` here — `pending_halt_result` stashes it instead, the
-/// same way an ordinary tool-driven turn treats a batch's last-landed
-/// result: as the *next* turn's prompt (see [`fold_batched_tool_result`]'s
-/// doc comment), not a pre-pushed history entry. `Command::ContinueTurn`
-/// consumes it to resume; `Command::UserMessage` flushes it into history
-/// first if the user types past the halt instead. Any *other*
-/// still-pending calls in the batch (only possible on the doom-loop path —
-/// see the module doc) are cancelled immediately with the same helpers
-/// `Command::Cancel` uses, since those never get a second chance to land.
+/// surfaced its genuine `ToolCallFinished`. Any *other* still-pending calls
+/// in the batch (only possible on the doom-loop path — see the module doc)
+/// are cancelled immediately with the same helpers `Command::Cancel` uses,
+/// since those never get a second chance to land.
+///
+/// For an iteration-cap halt on a role that opts in
+/// (`RoleDefinition::summarize_on_cap`, e.g. `EXPLORE_ROLE` -- see
+/// `docs/agent-explore-design.md`'s 2026-07-27 addendum and
+/// `docs/research/agent-context-reduction-prior-art-2026-07-26.md` §4's
+/// OpenCode/Hermes precedent), [`run_cap_summary_turn`] first folds
+/// `arrived_result` into `rig_history` and runs one forced, tools-disabled
+/// completion asking the model to summarize instead of stopping cold. If
+/// that succeeds, the turn ends right there with the summary already
+/// committed as the session's final message for this turn. Every other
+/// case (doom loop, a role that doesn't opt in, or the wrap-up completion
+/// itself failing) falls back to the original behavior: `arrived_result` is
+/// deliberately *not* folded into `rig_history` here — `pending_halt_result`
+/// stashes it instead, the same way an ordinary tool-driven turn treats a
+/// batch's last-landed result: as the *next* turn's prompt (see
+/// [`fold_batched_tool_result`]'s doc comment), not a pre-pushed history
+/// entry. `Command::ContinueTurn` consumes it to resume; `Command::
+/// UserMessage` flushes it into history first if the user types past the
+/// halt instead.
+///
 /// Resets the guard and returns the session to `WaitingForUser` either way
 /// (Continue re-enters the loop with a fresh guard, exactly like a new
 /// `Command::UserMessage` would).
@@ -796,9 +822,15 @@ pub(super) fn tool_result_fingerprint(
 /// `pending_tool_calls` (the session loop does this when it looks up the
 /// call's descriptor).
 #[allow(clippy::too_many_arguments)]
-pub(super) fn halt_turn_loop(
+pub(super) async fn halt_turn_loop(
     halt: GuardHalt,
     guard: &mut TurnLoopGuard,
+    commands: &mut UnboundedReceiver<Command>,
+    inbox: &mut VecDeque<Command>,
+    config: &RigAgentConfig,
+    environment: &SessionEnvironment,
+    extra_sections: &[String],
+    role: Option<&'static RoleDefinition>,
     events_tx: &Sender<ProviderEvent>,
     pending_halt_result: &mut Option<ToolCallResult>,
     rig_history: &mut Vec<Message>,
@@ -806,8 +838,6 @@ pub(super) fn halt_turn_loop(
     pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
     cancelled_call_ids: &mut HashSet<ToolCallId>,
 ) {
-    *pending_halt_result = Some(arrived_result.clone());
-
     cancel_outstanding_tool_calls(
         events_tx,
         rig_history,
@@ -815,7 +845,93 @@ pub(super) fn halt_turn_loop(
         cancelled_call_ids,
     );
 
+    let summarized = halt == GuardHalt::IterationCapExceeded
+        && role.is_some_and(|role| role.summarize_on_cap)
+        && run_cap_summary_turn(
+            commands,
+            inbox,
+            config,
+            environment,
+            extra_sections,
+            rig_history,
+            arrived_result,
+            events_tx,
+        )
+        .await;
+
+    if !summarized {
+        *pending_halt_result = Some(arrived_result.clone());
+    }
+
     guard.reset();
     let _ = events_tx.send(Event::TurnEnded(halt.turn_end_reason()).into());
     let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+}
+
+/// The instruction injected as a synthetic user message ahead of a forced
+/// cap wrap-up completion — the Hermes/OpenCode shape
+/// (`docs/research/agent-context-reduction-prior-art-2026-07-26.md` §4):
+/// stop calling tools and report what was found instead of hard-erroring
+/// with the work discarded.
+const CAP_SUMMARY_INSTRUCTION: &str = "You have reached the turn limit for this task. Stop here \
+     and summarize, without calling any more tools: the relevant files you found (with paths and \
+     line numbers), your best partial answer to the question you were asked, and what remains \
+     unknown.";
+
+/// Runs one forced, tools-disabled completion for an iteration-cap halt on a
+/// role that opts into it (`RoleDefinition::summarize_on_cap`) -- see
+/// `halt_turn_loop`'s doc comment for the surrounding decision.
+///
+/// Folds `arrived_result` -- the real, already-executed result that tripped
+/// the guard -- into `rig_history` first (exactly where an ordinary
+/// tool-driven turn would put it), then runs one more completion with every
+/// tool definition withheld (`RigAgentConfig::allowed_tool_ids` overridden
+/// to an empty list, which `rig_tool_definitions` turns into "advertise
+/// nothing"), so the model cannot keep exploring even if it tries.
+///
+/// Returns whether the wrap-up produced a completion at all. `false`
+/// (provider failure, or the turn getting cancelled mid-wrap-up) truncates
+/// `rig_history` back to exactly what the caller passed in -- no half step
+/// -- so `halt_turn_loop`'s ordinary fallback (stash `arrived_result` for
+/// `Continue`/a new `UserMessage`) stays correct rather than double-folding
+/// it. Truncating to a recorded length, rather than popping a fixed count,
+/// is deliberate: `complete_rig_turn` pushes a different number of messages
+/// depending on how far the wrap-up got (zero on a provider-request error,
+/// two -- the prompt and a partial assistant message -- on cancellation).
+#[allow(clippy::too_many_arguments)]
+async fn run_cap_summary_turn(
+    commands: &mut UnboundedReceiver<Command>,
+    inbox: &mut VecDeque<Command>,
+    config: &RigAgentConfig,
+    environment: &SessionEnvironment,
+    extra_sections: &[String],
+    rig_history: &mut Vec<Message>,
+    arrived_result: &ToolCallResult,
+    events_tx: &Sender<ProviderEvent>,
+) -> bool {
+    let baseline_len = rig_history.len();
+    rig_history.push(rig_tool_result_message(arrived_result));
+
+    let mut wrap_up_config = config.clone();
+    wrap_up_config.allowed_tool_ids = Some(Vec::new());
+
+    let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+    let outcome = run_cancellable_turn(
+        commands,
+        inbox,
+        &wrap_up_config,
+        environment,
+        extra_sections,
+        rig_history,
+        Message::user(CAP_SUMMARY_INSTRUCTION),
+        events_tx,
+        || deterministic_rig_response(CAP_SUMMARY_INSTRUCTION),
+    )
+    .await;
+
+    if outcome.failed || outcome.cancelled {
+        rig_history.truncate(baseline_len);
+        return false;
+    }
+    true
 }

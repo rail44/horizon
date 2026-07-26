@@ -17,7 +17,6 @@ fn mock_agent_emits_initial_session_events() {
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
 
@@ -684,7 +683,6 @@ fn mock_agent_accepts_tool_call_result_command() {
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
     let tx = handle.sender();
@@ -720,7 +718,6 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
     let tx = handle.sender();
@@ -817,7 +814,6 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
     let tx = handle.sender();
@@ -871,7 +867,6 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             provider_id: agent::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
-            seed_history: Vec::new(),
         },
     );
     let tx = handle.sender();
@@ -1134,7 +1129,7 @@ fn provider_registry_starts_builtin_provider() {
     let registry = agent::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
-        .start_session(&provider_id, SessionId::new(), None, None, Vec::new())
+        .start_session(&provider_id, SessionId::new(), None, None)
         .expect("builtin provider");
 
     let first = handle.events().recv().expect("first event");

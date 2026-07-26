@@ -190,7 +190,6 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             false,
             restored_worktree,
             events,
-            Vec::new(),
         );
     }
 

@@ -73,10 +73,6 @@ pub(super) fn spawn_session_thread(
     isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
-    // Another session's stream to seed this one's *provider* history from,
-    // empty for every session except a fork-seeded exploration -- see
-    // `contract::StartSession::seed_history`.
-    seed_history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
@@ -118,7 +114,6 @@ pub(super) fn spawn_session_thread(
                 inbound_rx,
                 replay_rx,
                 history,
-                seed_history,
                 &phase,
             );
         });
