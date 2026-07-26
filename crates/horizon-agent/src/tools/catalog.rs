@@ -473,7 +473,10 @@ pub fn definitions() -> Vec<Definition> {
                 take several rounds of grep/glob/read whose outputs you do not need verbatim \
                 afterwards; state the question and the exact deliverable (paths, line numbers, \
                 facts). For one to three known files, read them directly instead. Returns the \
-                exploration's final report."
+                exploration's final report, plus the exploration's session id: pass that id back \
+                as `session_id` to ask the same exploration a follow-up question -- it still has \
+                everything it read in its own context, so correcting or extending a report is far \
+                cheaper than exploring again."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -487,6 +490,15 @@ pub fn definitions() -> Vec<Definition> {
                         "description": "The exploration question and the exact deliverable you \
                             want back. The exploration session sees this and nothing else from \
                             your conversation, so restate whatever context it needs.",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Optional. The `session_id` returned by an earlier \
+                            `agent.explore` call in this turn: sends `prompt` to that same \
+                            exploration as a follow-up question instead of starting a new one. \
+                            Use it when its report was incomplete or conflicts with what you \
+                            know -- say what conflicts. Explorations do not outlive the turn \
+                            that started them; omit this to start a fresh one.",
                     },
                 }
             }),

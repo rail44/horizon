@@ -35,11 +35,34 @@
 //! [`cancel_if_running`] through `tools::processing` -- the same hook
 //! `bash::kill_if_running` and `web::cancel_if_running` hang on -- and that
 //! terminates the exploration session.
+//!
+//! **Lifetime (2026-07-26 addendum B).** An exploration session outlives the
+//! turn it answered: a later call naming its `session_id` sends a follow-up
+//! user message to that same session, which still holds the files it read in
+//! its own history. The scope is the *requester's* turn -- `TurnEnded` on
+//! the requesting session terminates every exploration it still has alive
+//! (see [`terminate_session_explorations`], driven from `tools::processing`
+//! next to the cancellation hook above), as does the requester's session
+//! going away ([`cancel_session`]). The live-exploration map ([`live`]) is
+//! the single owner of that teardown, so "terminate exactly once" is a
+//! property of removing an entry from it rather than of any one code path's
+//! care.
+//!
+//! **Fork seeding (2026-07-26 addendum C).** Under [`SeedMode::Fork`] the
+//! spawned session's initial provider history is a copy of the requester's
+//! own, reconstructed from the requester's live event stream (the same
+//! event-to-history mapping session resume uses) and tail-sanitized by
+//! [`sanitize_seed_history`] -- the requester's stream is captured mid-turn,
+//! so tool calls still awaiting results can be sitting in it, and a history
+//! carrying one of those is a history no provider will accept. The mode is
+//! chosen by the harness, never by the model: `horizon-sessiond` reads
+//! `HORIZON_EXPLORE_SEED` once per session and installs the result on
+//! `ToolSessionState`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crossbeam_channel::{Receiver, Sender};
 use serde_json::{json, Value};
@@ -52,6 +75,58 @@ use crate::tools::state::{session_runtime, ToolSessionState};
 use crate::tools::{Execution, ToolCompletion};
 
 pub(crate) const TOOL_ID: &str = "agent.explore";
+
+/// Selects whether a fresh exploration starts empty or inherits a copy of
+/// the requester's history (`docs/agent-explore-design.md`'s 2026-07-26
+/// addendum C). Environment-only and harness-selected on purpose: a
+/// model-visible parameter would confound the adoption measurement the two
+/// modes exist to be compared by.
+pub const SEED_MODE_VAR: &str = "HORIZON_EXPLORE_SEED";
+
+/// What a fresh exploration session's provider history starts as. See
+/// [`SEED_MODE_VAR`]; follow-up calls are unaffected (they continue a
+/// session that already has whatever history it was started with).
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SeedMode {
+    /// The v1 behavior: the exploration starts with an empty history and
+    /// sees only the prompt.
+    #[default]
+    Fresh,
+    /// The exploration starts from a sanitized copy of the requester's
+    /// history, so it sees the evidence the requester saw. Costs the
+    /// requester's current context size out of the delegate's own window.
+    Fork,
+}
+
+impl SeedMode {
+    /// Reads [`SEED_MODE_VAR`]. The one place in the process that consults
+    /// the environment for this: everything downstream takes the mode as a
+    /// value, which is what keeps it testable without mutating a
+    /// process-global.
+    pub fn from_env() -> Self {
+        match std::env::var(SEED_MODE_VAR) {
+            Ok(raw) => Self::parse(&raw).unwrap_or_else(|| {
+                eprintln!(
+                    "horizon-agent: ignoring unrecognized {SEED_MODE_VAR}=`{raw}` (expected \
+                     `fresh` or `fork`); exploration sessions start fresh"
+                );
+                Self::Fresh
+            }),
+            Err(_) => Self::Fresh,
+        }
+    }
+
+    /// `None` for a value this build doesn't know -- the caller decides what
+    /// to do about it. An empty/whitespace value reads as the default rather
+    /// than as an error, matching how an unset variable behaves.
+    fn parse(raw: &str) -> Option<Self> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "fresh" => Some(Self::Fresh),
+            "fork" => Some(Self::Fork),
+            _ => None,
+        }
+    }
+}
 
 /// A running exploration session, as handed back by the daemon.
 pub struct StartedExploration {
@@ -80,14 +155,31 @@ pub struct StartedExploration {
 /// parent/child terms.
 pub trait ExplorationHost: Send + Sync {
     /// Spawns a read-only exploration session and sends `prompt` as its
-    /// first (and only) user message. `Err` carries a message suitable for
-    /// the model to read as the tool's error result.
-    fn start(&self, prompt: String) -> Result<StartedExploration, String>;
+    /// first user message. `seed_history` is the exploration's initial
+    /// provider history -- empty under [`SeedMode::Fresh`], a sanitized copy
+    /// of the requester's own under [`SeedMode::Fork`]; the host is
+    /// responsible only for handing it to the provider, never for producing
+    /// or validating it. `Err` carries a message suitable for the model to
+    /// read as the tool's error result.
+    fn start(&self, prompt: String, seed_history: Vec<Event>)
+        -> Result<StartedExploration, String>;
+
+    /// Sends `prompt` as a further user message to an exploration session
+    /// started earlier by [`Self::start`] and installs a fresh subscription
+    /// on its events, so the caller can fold that session's *next* turn.
+    /// `Err` for a session that is no longer running (or was never an
+    /// exploration), which the tool surfaces as an ordinary error result.
+    fn follow_up(
+        &self,
+        session_id: SessionId,
+        prompt: String,
+    ) -> Result<StartedExploration, String>;
 
     /// Terminates a session started by [`Self::start`] and releases its
-    /// event subscription. Called exactly once per successful start,
-    /// whether the exploration finished, failed, or was cancelled. A
-    /// no-op for a session that has already ended on its own.
+    /// event subscription. Called exactly once per successful start --
+    /// when the requester's turn ends, is cancelled, or the requesting
+    /// session goes away. A no-op for a session that has already ended on
+    /// its own.
     fn terminate(&self, session_id: SessionId);
 }
 
@@ -103,8 +195,8 @@ pub(crate) fn start(
     session_id: SessionId,
     request: &ToolCallRequest,
 ) -> Execution {
-    let prompt = match prompt_from_input(&request.input) {
-        Ok(prompt) => prompt,
+    let input = match Input::parse(&request.input) {
+        Ok(input) => input,
         Err(message) => return synchronous_error(request, message, None),
     };
     let Some(runtime) = session_runtime(session_id) else {
@@ -121,16 +213,44 @@ pub(crate) fn start(
             None,
         );
     };
-    let started = match host.start(prompt) {
-        Ok(started) => started,
-        Err(message) => {
-            return synchronous_error(
-                request,
-                format!("could not start an exploration session: {message}"),
-                None,
-            )
+
+    let mut note = None;
+    let started = match input.follow_up {
+        Some(target) => {
+            if !is_live(session_id, target) {
+                return synchronous_error(request, no_such_exploration(target), Some(target));
+            }
+            match host.follow_up(target, input.prompt) {
+                Ok(started) => started,
+                Err(message) => {
+                    // The session died between the last turn and this call:
+                    // drop it from the live set so a repeat attempt fails the
+                    // same way rather than routing to a corpse.
+                    take_live(session_id, target);
+                    return synchronous_error(
+                        request,
+                        format!("{message}; {FRESH_SPAWN_ALTERNATIVE}"),
+                        Some(target),
+                    );
+                }
+            }
+        }
+        None => {
+            let (seed, seed_note) = seed_history(tool_state, &runtime.live_state);
+            note = seed_note;
+            match host.start(input.prompt, seed) {
+                Ok(started) => started,
+                Err(message) => {
+                    return synchronous_error(
+                        request,
+                        format!("could not start an exploration session: {message}"),
+                        None,
+                    )
+                }
+            }
         }
     };
+    register_live(session_id, started.session_id, host.clone());
 
     let call_id = request.call_id.clone();
     let (cancel_tx, cancel_rx) = crossbeam_channel::bounded::<()>(1);
@@ -143,6 +263,7 @@ pub(crate) fn start(
             RegisteredExploration {
                 generation,
                 cancel: cancel_tx,
+                exploration_id: started.session_id,
             },
         )
     {
@@ -161,14 +282,23 @@ pub(crate) fn start(
             report: None,
             error: None,
         });
-        // An exploration session is meaningless without its waiter, so it is
-        // torn down on every path out of the fold -- completion, failure,
-        // cancellation, and a panic in the fold itself.
-        host.terminate(explore_session_id);
+        // Addendum B: an exploration whose turn merely *ended* outlives it,
+        // so the requester can follow up on a session that still holds what
+        // it read; the requester's own turn end -- or its cancellation,
+        // already handled by `cancel_if_running` -- terminates it. One that
+        // ended in a state it cannot answer from is torn down right here
+        // instead: leaving it alive would let a follow-up park forever on a
+        // session that will never emit another turn end, and the requester's
+        // turn cannot end while that follow-up is in flight.
+        if outcome.terminal.leaves_the_session_unusable() {
+            if let Some(exploration) = take_live(session_id, explore_session_id) {
+                exploration.terminate();
+            }
+        }
         if finish_registration(session_id, &call_id, generation) {
             let _ = result_tx.send(ToolCompletion::Finished(ToolCallResult::new(
                 call_id,
-                outcome.into_output(explore_session_id),
+                outcome.into_output(explore_session_id, note),
             )));
         }
     });
@@ -180,12 +310,13 @@ pub(crate) fn start(
 }
 
 /// Cancels the exploration behind `call_id`, if this session has one in
-/// flight. Called for every provider-originated `ToolCallFinished` (see
-/// `tools::processing`) -- a cancelled turn's synthetic result is exactly
-/// the signal that a still-running exploration must be terminated. Removing
-/// the registration first is what makes the waiter's own
-/// [`finish_registration`] return `false`, so a cancelled call never folds a
-/// second, contradictory result on top of the synthetic one.
+/// flight, and terminates the session it was waiting on. Called for every
+/// provider-originated `ToolCallFinished` (see `tools::processing`) -- a
+/// cancelled turn's synthetic result is exactly the signal that a
+/// still-running exploration is unwanted. Removing the registration first is
+/// what makes the waiter's own [`finish_registration`] return `false`, so a
+/// cancelled call never folds a second, contradictory result on top of the
+/// synthetic one.
 pub(crate) fn cancel_if_running(session_id: SessionId, call_id: &ToolCallId) {
     let registered = registry()
         .lock()
@@ -193,12 +324,27 @@ pub(crate) fn cancel_if_running(session_id: SessionId, call_id: &ToolCallId) {
         .remove(&(session_id, call_id.clone()));
     if let Some(registered) = registered {
         let _ = registered.cancel.try_send(());
+        if let Some(exploration) = take_live(session_id, registered.exploration_id) {
+            exploration.terminate();
+        }
     }
 }
 
-/// Cancels every exploration this session still has in flight -- called
-/// from `unregister_session_runtime` when the requesting session itself
-/// goes away, mirroring `web::cancel_session`.
+/// Terminates every exploration session `session_id` still has alive.
+/// Called for the requester's own `Event::TurnEnded` (see
+/// `tools::processing`) -- addendum B's lifetime rule: an exploration is
+/// scoped to the turn that asked for it, whether that turn completed,
+/// failed, or was halted, so no idle orphan survives into the next one.
+pub(crate) fn terminate_session_explorations(session_id: SessionId) {
+    for exploration in take_all_live(session_id) {
+        exploration.terminate();
+    }
+}
+
+/// Cancels every exploration this session still has in flight and
+/// terminates every one it still has alive -- called from
+/// `unregister_session_runtime` when the requesting session itself goes
+/// away, mirroring `web::cancel_session`.
 pub(crate) fn cancel_session(session_id: SessionId) {
     let mut explorations = registry()
         .lock()
@@ -213,17 +359,138 @@ pub(crate) fn cancel_session(session_id: SessionId) {
             let _ = registered.cancel.try_send(());
         }
     }
+    drop(explorations);
+    terminate_session_explorations(session_id);
 }
 
-fn prompt_from_input(input: &Value) -> Result<String, String> {
-    let prompt = input
-        .get("prompt")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`prompt` is required and must be a string".to_string())?;
-    if prompt.trim().is_empty() {
-        return Err("`prompt` must not be empty".to_string());
+/// What the model may say. `session_id` turns the call into a follow-up on
+/// an exploration this session already started (addendum B); absent, the
+/// call spawns a fresh one, which is v1's only behavior.
+struct Input {
+    prompt: String,
+    follow_up: Option<SessionId>,
+}
+
+impl Input {
+    fn parse(input: &Value) -> Result<Self, String> {
+        let prompt = input
+            .get("prompt")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "`prompt` is required and must be a string".to_string())?;
+        if prompt.trim().is_empty() {
+            return Err("`prompt` must not be empty".to_string());
+        }
+        let follow_up = match input.get("session_id") {
+            None | Some(Value::Null) => None,
+            Some(Value::String(raw)) => {
+                Some(SessionId::from_uuid(raw.trim().parse().map_err(|_| {
+                    format!("`session_id` is not a session id; {FRESH_SPAWN_ALTERNATIVE}")
+                })?))
+            }
+            Some(_) => {
+                return Err(format!(
+                    "`session_id` must be the id string returned by an earlier call; \
+                     {FRESH_SPAWN_ALTERNATIVE}"
+                ))
+            }
+        };
+        Ok(Self {
+            prompt: prompt.to_string(),
+            follow_up,
+        })
     }
-    Ok(prompt.to_string())
+}
+
+const FRESH_SPAWN_ALTERNATIVE: &str =
+    "omit `session_id` to start a fresh exploration for this question";
+
+fn no_such_exploration(session_id: SessionId) -> String {
+    format!(
+        "no exploration session `{}` is alive for this session (it was never started here, or it \
+         ended with an earlier turn); {FRESH_SPAWN_ALTERNATIVE}",
+        session_id.as_uuid()
+    )
+}
+
+/// The initial provider history a fresh exploration is spawned with, plus a
+/// note for the tool result when a requested fork could not be honored.
+/// Seeding never fails the call: an empty seed degrades to exactly the
+/// [`SeedMode::Fresh`] behavior, said out loud so a measurement run isn't
+/// silently mis-attributed to the wrong arm.
+fn seed_history(
+    tool_state: &ToolSessionState,
+    live_state: &crate::live::LiveState,
+) -> (Vec<Event>, Option<String>) {
+    if tool_state.exploration_seed_mode() != SeedMode::Fork {
+        return (Vec::new(), None);
+    }
+    let seed = sanitize_seed_history(&live_state.events());
+    if seed.is_empty() {
+        return (
+            Vec::new(),
+            Some(
+                "this session had no history to copy, so the exploration started fresh".to_string(),
+            ),
+        );
+    }
+    (seed, None)
+}
+
+/// Makes `events` safe to replay as another session's initial provider
+/// history (addendum C's mandatory tail sanitization).
+///
+/// The requester's stream is captured mid-turn, so it can end with tool
+/// calls that have no result: an asynchronous `bash` or `web` call still
+/// running, or another member of the same parallel batch this
+/// `agent.explore` call arrived in. Mapped naively (`providers::rig::
+/// mapping::rig_messages_from_horizon_events`) each becomes an assistant
+/// tool-call message with no matching tool result, which providers reject
+/// outright. (The `agent.explore` call being served is *not* among them, as
+/// it happens: `horizon-sessiond`'s `handle_provider_event` folds a
+/// processed batch into `LiveState` only after `tools::processing` returns,
+/// so this runs one fold before its own request lands. That ordering is not
+/// something to rely on -- it is exactly the kind of invariant that quietly
+/// inverts -- so the unpaired tail is handled generally rather than by
+/// special-casing one call id.)
+///
+/// The shape chosen here is **drop, not close**: an unpaired
+/// `ToolCallRequested` is removed rather than given a synthetic result. A
+/// synthetic result would have to invent what the call returned -- and for
+/// the in-flight `agent.explore` call the honest answer is "the session
+/// reading this", which is neither useful context nor something to steer the
+/// delegate with. Dropping loses nothing the delegate can act on and makes
+/// the postcondition provable: every surviving call has exactly one
+/// surviving result, in that order. Orphan results (a `ToolCallFinished`
+/// with no request before it) and duplicate members of either kind are
+/// dropped for the same reason. Everything else -- messages, errors --
+/// passes through untouched, so a fork sees exactly what a resume of the
+/// requester would.
+pub(crate) fn sanitize_seed_history(events: &[Event]) -> Vec<Event> {
+    let mut dropped: HashSet<usize> = HashSet::new();
+    let mut pending: HashMap<ToolCallId, usize> = HashMap::new();
+    for (index, event) in events.iter().enumerate() {
+        match event {
+            Event::ToolCallRequested(request) => {
+                // A second request for a call id still awaiting its result
+                // supersedes the first, which can now never be paired.
+                if let Some(superseded) = pending.insert(request.call_id.clone(), index) {
+                    dropped.insert(superseded);
+                }
+            }
+            Event::ToolCallFinished(result) if pending.remove(&result.call_id).is_none() => {
+                dropped.insert(index);
+            }
+            _ => {}
+        }
+    }
+    dropped.extend(pending.into_values());
+
+    events
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| !dropped.contains(index))
+        .map(|(_, event)| event.clone())
+        .collect()
 }
 
 fn synchronous_error(
@@ -273,6 +540,25 @@ enum Terminal {
     Panicked(String),
 }
 
+impl Terminal {
+    /// Whether the exploration session is in no state to answer a follow-up
+    /// -- either it is gone, or it is parked somewhere no further turn end
+    /// will ever come from. The waiter tears those down immediately rather
+    /// than leaving them for the requester's turn end (see its call site:
+    /// a follow-up onto one of these would block the very turn end that
+    /// would have cleaned it up). `TurnEnded` is deliberately absent: a
+    /// turn that ended -- failed, cancelled, or capped -- leaves the session
+    /// back at `WaitingForUser`, and following up on a capped exploration
+    /// with a narrower question is exactly the repair decision 7 asks for.
+    fn leaves_the_session_unusable(&self) -> bool {
+        match self {
+            Self::Approval | Self::Terminated | Self::Disconnected | Self::Panicked(_) => true,
+            // Cancelled has already been torn down by `cancel_if_running`.
+            Self::Completed | Self::TurnEnded(_) | Self::Cancelled => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Outcome {
     terminal: Terminal,
@@ -288,10 +574,13 @@ struct Outcome {
 }
 
 impl Outcome {
-    fn into_output(self, session_id: SessionId) -> Value {
+    fn into_output(self, session_id: SessionId, note: Option<String>) -> Value {
         let mut output = json!({ "session_id": session_id.as_uuid().to_string() });
         let map = output.as_object_mut().expect("json object");
         let failure = self.failure_message();
+        if let Some(note) = note {
+            map.insert("note".to_string(), Value::String(note));
+        }
         if let Some(report) = self.report {
             map.insert("report".to_string(), Value::String(report));
         }
@@ -422,12 +711,83 @@ type ExplorationKey = (SessionId, ToolCallId);
 struct RegisteredExploration {
     generation: u64,
     cancel: Sender<()>,
+    /// The session this call's waiter is folding, so cancelling the call can
+    /// terminate it without going through the waiter thread.
+    exploration_id: SessionId,
 }
 
 fn registry() -> &'static Mutex<HashMap<ExplorationKey, RegisteredExploration>> {
     static REGISTRY: OnceLock<Mutex<HashMap<ExplorationKey, RegisteredExploration>>> =
         OnceLock::new();
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// One exploration session that is still alive, with the host that can
+/// terminate it.
+struct LiveExploration {
+    session_id: SessionId,
+    host: Arc<dyn ExplorationHost>,
+}
+
+impl LiveExploration {
+    fn terminate(self) {
+        self.host.terminate(self.session_id);
+    }
+}
+
+/// Every exploration session still alive, grouped by the session that
+/// started it (addendum B). Separate from [`registry`], which tracks
+/// *in-flight calls*: an exploration outlives the call that spawned it and
+/// can serve several of them, so ownership of its teardown has to live
+/// somewhere the call's waiter thread does not.
+///
+/// This is the single place a `terminate` originates from. Every path
+/// (turn end, cancellation, requester death, an unusable terminal state)
+/// removes the entry first and terminates second, so "exactly once" holds
+/// without any path having to know about the others.
+fn live() -> &'static Mutex<HashMap<SessionId, Vec<LiveExploration>>> {
+    static LIVE: OnceLock<Mutex<HashMap<SessionId, Vec<LiveExploration>>>> = OnceLock::new();
+    LIVE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_live() -> std::sync::MutexGuard<'static, HashMap<SessionId, Vec<LiveExploration>>> {
+    live()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+fn register_live(requester: SessionId, exploration: SessionId, host: Arc<dyn ExplorationHost>) {
+    let mut live = lock_live();
+    let entries = live.entry(requester).or_default();
+    if !entries.iter().any(|entry| entry.session_id == exploration) {
+        entries.push(LiveExploration {
+            session_id: exploration,
+            host,
+        });
+    }
+}
+
+fn is_live(requester: SessionId, exploration: SessionId) -> bool {
+    lock_live()
+        .get(&requester)
+        .is_some_and(|entries| entries.iter().any(|entry| entry.session_id == exploration))
+}
+
+fn take_live(requester: SessionId, exploration: SessionId) -> Option<LiveExploration> {
+    let mut live = lock_live();
+    let entries = live.get_mut(&requester)?;
+    let position = entries
+        .iter()
+        .position(|entry| entry.session_id == exploration)?;
+    let taken = entries.remove(position);
+    if entries.is_empty() {
+        live.remove(&requester);
+    }
+    Some(taken)
+}
+
+fn take_all_live(requester: SessionId) -> Vec<LiveExploration> {
+    lock_live().remove(&requester).unwrap_or_default()
 }
 
 fn next_generation() -> u64 {
