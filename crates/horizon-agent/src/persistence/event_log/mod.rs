@@ -328,7 +328,8 @@ mod tolerant_read_tests {
 mod tests {
     use super::*;
     use crate::contract::{
-        Event, Message, MessageDelta, MessageRole, ProviderEvent, ProviderRequestSent, SessionState,
+        Event, Message, MessageDelta, MessageRole, ProviderEvent, ProviderRequestSent,
+        SessionState, TurnEndReason,
     };
     use uuid::Uuid;
 
@@ -717,5 +718,70 @@ mod tests {
             tracker.turn_id_for_event(&Event::StateChanged(SessionState::Running)),
             None
         );
+    }
+
+    #[test]
+    fn turn_tracker_keeps_turn_open_across_waiting_for_approval() {
+        let mut tracker = TurnTracker::new();
+        let user_turn = tracker.turn_id_for_event(&Event::MessageCommitted(Message {
+            role: MessageRole::User,
+            text: "question".to_string(),
+        }));
+        assert!(user_turn.is_some());
+
+        // A tool-call approval is mid-turn, not a boundary.
+        assert_eq!(
+            tracker.turn_id_for_event(&Event::StateChanged(SessionState::WaitingForApproval)),
+            user_turn
+        );
+        assert_eq!(
+            tracker.turn_id_for_event(&Event::ToolCallFinished(
+                crate::contract::ToolCallResult::new(
+                    crate::contract::ToolCallId("call-1".to_string()),
+                    serde_json::json!({ "approved": true }),
+                )
+            )),
+            user_turn
+        );
+
+        // The provider's explicit turn boundary is what finally closes it.
+        assert_eq!(
+            tracker.turn_id_for_event(&Event::TurnEnded(TurnEndReason::Completed)),
+            user_turn
+        );
+        assert_eq!(
+            tracker.turn_id_for_event(&Event::StateChanged(SessionState::WaitingForUser)),
+            None
+        );
+    }
+
+    #[test]
+    fn turn_tracker_closes_on_terminal_state_changes() {
+        let mut tracker = TurnTracker::new();
+        let user_turn = tracker.turn_id_for_event(&Event::MessageCommitted(Message {
+            role: MessageRole::User,
+            text: "question".to_string(),
+        }));
+        assert!(user_turn.is_some());
+
+        for terminal in [
+            SessionState::Cancelled,
+            SessionState::Failed,
+            SessionState::Terminated,
+        ] {
+            let mut fresh = TurnTracker::new();
+            let turn = fresh.turn_id_for_event(&Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "question".to_string(),
+            }));
+            assert_eq!(
+                fresh.turn_id_for_event(&Event::StateChanged(terminal)),
+                turn
+            );
+            assert_eq!(
+                fresh.turn_id_for_event(&Event::StateChanged(SessionState::Running)),
+                None
+            );
+        }
     }
 }
