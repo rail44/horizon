@@ -108,6 +108,17 @@ entries live in `backlog-resolved.md` keeping their original numbers
     operability gap) and the hello error surface in
     `crates/horizon-session-protocol`. Recorded 2026-07-19.
 
+65. **Verify `replace_all` retires the bash editing escapes.** Baseline,
+    nineteen days of logs to 2026-07-26: 272 `fs.edit` calls, 9 editing
+    operations escaped to bash (`perl -i` ×5, `sed -i` ×3, one python
+    rewrite) because a global replacement could not be expressed, plus 2
+    multiple-match errors. After `fs.edit` gained `replace_all` +
+    `occurrences` (merge `6cbb24e`), re-measure over a comparable window:
+    the escapes should drop to ~0 and multi-match errors should convert
+    to `replace_all` uses. If escapes persist, the routing (tool
+    description) is the next suspect, not the capability. Recorded
+    2026-07-26.
+
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)
     made approval attribution and proposal bodies follow the most
