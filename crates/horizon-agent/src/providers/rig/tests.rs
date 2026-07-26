@@ -95,6 +95,41 @@ fn openai_turns_explicitly_enable_parallel_tool_calls() {
     );
 }
 
+/// Exercises the same `rig_core` builder call
+/// `rig_openai_turn_streaming` makes (`model.completion_request(..)
+/// .max_tokens(config.max_output_tokens)`) with a locally-built client --
+/// pure object construction, no network I/O -- to prove the explicit
+/// `max_tokens` (`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`, `agent::config`) is
+/// actually carried onto the request rig-core builds, not just present on
+/// `RigAgentConfig`. Before the 2026-07-27 audit this was unset entirely;
+/// see `docs/research/agent-ceiling-death-autopsy-2026-07-26.md` for why
+/// that mattered.
+#[test]
+fn openai_turn_completion_request_carries_the_explicit_max_tokens() {
+    use rig_core::client::CompletionClient;
+    use rig_core::completion::CompletionModel;
+
+    let config = RigAgentConfig {
+        openai_enabled: true,
+        model: "test-model".to_string(),
+        ..Default::default()
+    };
+    let client = rig_core::providers::openai::CompletionsClient::builder()
+        .api_key("test-key")
+        .build()
+        .expect("client construction performs no network I/O");
+    let model = client.completion_model(&config.model);
+    let request = model
+        .completion_request(RigMessage::user("hi"))
+        .max_tokens(config.max_output_tokens)
+        .build();
+
+    assert_eq!(
+        request.max_tokens,
+        Some(crate::config::DEFAULT_AGENT_MAX_OUTPUT_TOKENS)
+    );
+}
+
 #[test]
 fn openai_stream_final_usage_emits_cached_input_event() {
     let response =

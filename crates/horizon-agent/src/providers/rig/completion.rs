@@ -224,6 +224,7 @@ async fn rig_openai_turn_streaming(
         .messages(history)
         .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
         .preamble(system_prompt(environment, extra_sections))
+        .max_tokens(config.max_output_tokens)
         .additional_params(openai_turn_additional_params())
         .stream();
     let mut stream = match await_provider_phase(

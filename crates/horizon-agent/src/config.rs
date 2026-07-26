@@ -19,9 +19,21 @@
 //! load()` call) resolves them from the file first. Every other former
 //! `[agent]`/`[provider]` file knob (tool caps, turn-loop guard
 //! thresholds, stream-flush cadence, history/instructions budgets,
-//! `temperature`/`max_tokens`) is now a fixed built-in constant -- see
-//! each `DEFAULT_*` constant below. `event_log_path`/`state_db_path`
-//! similarly lost their file keys; `HORIZON_AGENT_EVENT_LOG`/
+//! `max_tokens`) is now a fixed built-in constant -- see each `DEFAULT_*`
+//! constant below. `max_tokens` is [`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`],
+//! sent explicitly on every agent completion request as of a 2026-07-27
+//! audit (`docs/research/agent-ceiling-death-autopsy-2026-07-26.md`):
+//! before that audit this sentence's claim was false for `max_tokens` --
+//! nothing was sent at all, not even a fixed value, and the retired
+//! `[provider] max_tokens` config key's removal had silently become "no
+//! `max_tokens` control of any kind" rather than "a fixed built-in one".
+//! `temperature`/`top_p` remain that way today: this crate still sends
+//! neither on agent completions (both stay unset on the request the same
+//! way `max_tokens` used to), so the provider's own default applies --
+//! there is no Horizon-side constant standing in for the retired
+//! `[provider] temperature` key, and the same audit found no vendor
+//! guidance strong enough to justify adding one. `event_log_path`/
+//! `state_db_path` similarly lost their file keys; `HORIZON_AGENT_EVENT_LOG`/
 //! `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default remain the
 //! only override path.
 
@@ -158,6 +170,37 @@ pub(crate) const DEFAULT_STREAM_FLUSH_CHARS: usize = 320;
 /// request's fixed preamble, so this cap bounds a cost paid once per turn
 /// for the whole session.
 pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
+/// Explicit `max_tokens` sent on every agent completion request (`rig_core`'s
+/// `CompletionRequestBuilder::max_tokens`, wired in
+/// `providers::rig::completion::rig_openai_turn_streaming`). Before the
+/// 2026-07-27 audit this was left unset entirely, which on an
+/// OpenAI-compatible backend means "let the backend pick" rather than
+/// "unbounded" -- and the backend Horizon has been dogfooding against
+/// (synthetic.new) turned out to pick expensively. Its own
+/// `GET /openai/v1/models` response declares `context_length: 262144` and
+/// `max_output_length: 65536` for both models exercised in the campaign
+/// (`hf:moonshotai/Kimi-K2.7-Code` and `hf:MiniMaxAI/MiniMax-M3`, verified
+/// live 2026-07-27), and five independent agent-session deaths in that
+/// campaign all hit a provider 400 within about 1% of exactly
+/// `262144 - 65536 = 196608` input tokens -- consistent with (not proven
+/// to be) the backend reserving the model's full declared max output
+/// whenever `max_tokens` is omitted. See
+/// `docs/research/agent-ceiling-death-autopsy-2026-07-26.md`'s 2026-07-27
+/// section for the full audit, including why `temperature`/`top_p` are
+/// deliberately NOT given the same treatment.
+///
+/// 32,768 is chosen from the same campaign's own shape: per-round output
+/// there was <=~3k tokens except for rare larger file-writes, so this
+/// leaves ample headroom for any single turn while reclaiming roughly half
+/// of the previously-reserved-but-unused 65,536-token budget (~33k tokens)
+/// as input runway. It also happens to match Moonshot's own hosted API's
+/// documented default for this exact model ("Default to be 32k aka
+/// 32768", `platform.kimi.ai`'s Kimi K2.7 Code quickstart, 2026-07-27) --
+/// notable corroboration, though Horizon talks to synthetic.new (a
+/// third-party vLLM/SGLang-style host), not Moonshot's own endpoint, so
+/// that match isn't taken as a guarantee of synthetic.new's actual
+/// default-selection behavior.
+pub(crate) const DEFAULT_AGENT_MAX_OUTPUT_TOKENS: u64 = 32_768;
 
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
@@ -252,6 +295,11 @@ pub struct RigAgentConfig {
     /// spawn_rig_session` when it builds that section via
     /// `instructions::extra_sections`.
     pub repository_instructions_cap_chars: usize,
+    /// Explicit `max_tokens` sent on every agent completion request via
+    /// `rig_core`'s `CompletionRequestBuilder::max_tokens` -- see
+    /// [`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`] for why this exists and how
+    /// 32,768 was chosen. Always that constant.
+    pub max_output_tokens: u64,
     /// Restricts which tool ids `providers::rig::completion::
     /// rig_tool_definitions` advertises to the provider. `None` (the only
     /// value [`Self::from_env_and_provider`] itself ever produces -- this
@@ -277,6 +325,7 @@ impl Default for RigAgentConfig {
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
+            max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
             allowed_tool_ids: None,
         }
     }
@@ -293,6 +342,7 @@ impl RigAgentConfig {
             stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
+            max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
             allowed_tool_ids: None,
         }
     }
@@ -600,6 +650,7 @@ mod tests {
             config.repository_instructions_cap_chars,
             DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS
         );
+        assert_eq!(config.max_output_tokens, DEFAULT_AGENT_MAX_OUTPUT_TOKENS);
         assert_eq!(config.allowed_tool_ids, None);
     }
 
