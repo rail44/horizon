@@ -1148,4 +1148,12 @@ full resolution/closing records.
     Found and fixed by agent session `541d9f08` in one run on an
     evidence-embedded brief: 40 requests, 97,796-token peak, one
     approval, zero delegation needed.
+    Amended same day (owner decision): the repeat-detection mechanism was
+    removed again — no surveyed implementation carries one, three
+    occurrences in nineteen days do not justify novel tool surface, and
+    the gate catches double-application downstream. The root-cause
+    knowledge (the mtime-refresh pass-through and the insertion-shaped
+    hazard) is kept in `docs/agent-tools-design.md`'s Edit Semantics. The
+    `replace_all` gap identified in the same survey is the follow-up that
+    actually addresses the measured bash-editing escapes.
 

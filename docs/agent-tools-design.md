@@ -83,16 +83,16 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
   is rejected ("file changed on disk — read it again"). Read-before-edit is a
   harness invariant, not prompt discipline. Note that `fs.edit` itself
   records the mtime it leaves behind, so a subsequent edit is allowed without
-  an intervening `fs.read`; this is intentional, but it means a resubmitted
-  identical edit can pass the staleness gate.
-- **Repeat detection:** the tool records every successful `fs.edit`'s path,
-  `old_string`, `new_string`, and a hash of the resulting file content. If an
-  identical edit is requested again while the file is still in exactly that
-  post-edit state, the call returns `{"already_applied": true,
-  "replaced": false}` instead of silently applying the same change twice.
-  This prevents duplication when `new_string` contains `old_string`, while
-  still allowing a legitimate re-application after an intervening change has
-  moved the file out of that state.
+  an intervening `fs.read`; this is intentional (it is what lets edits chain
+  without a read round trip per edit), but it means a resubmitted identical
+  edit passes the gate — and when `new_string` contains `old_string`
+  (insertion-shaped edits), the resubmission matches again and silently
+  applies twice. Root-caused 2026-07-26 (backlog 48); a session-local
+  repeat-detection guard was implemented, then removed by owner decision the
+  same day — no surveyed implementation carries one, three occurrences in
+  nineteen days did not justify novel surface area, and the quality gate
+  catches the consequence downstream. The knowledge stays; the mechanism
+  does not.
 - No fuzzy-match fallback in v1. Gemini ships a four-tier fuzzy cascade;
   Claude Code deliberately ships none. Start strict, collect failure data,
   add leniency only if the data demands it.
