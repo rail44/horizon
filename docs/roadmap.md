@@ -333,9 +333,15 @@ lands:
   identity so the wire is unchanged), the `ExplorationHost` seam on
   `ToolSessionState`, event-tap subscription as the only wait mechanism,
   exploration sessions excluded from the client session list. The
-  comparative measurement (third run of the `WaitingForUser` brief vs the
-  two context-ceiling deaths) is the next step and pends a runtime
-  reload.
+  comparative measurement ran 2026-07-26: the fourth run of the brief was
+  the first to complete (98 requests, peak 187,970 of 196,608) and located
+  the true mid-turn `WaitingForUser` emitter (sessiond's async-tool fold —
+  backlog 47, fixed in `25544ad`). Delegation happened once, at the entry
+  point, with an accurate report whose question omitted the requester's
+  own measured evidence — so the requester re-explored by hand. Follow-up
+  turns and fork seeding (the two structural answers, design addendum
+  2026-07-26) landed with the next merge; the two-arm measurement on the
+  backlog-48 brief (`HORIZON_EXPLORE_SEED=fresh|fork`) is the next step.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,
