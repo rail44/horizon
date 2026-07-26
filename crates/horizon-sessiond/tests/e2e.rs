@@ -286,7 +286,9 @@ impl SessiondProcess {
             .arg(&socket_path)
             .env("HORIZON_CONFIG", &missing_config_path)
             .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-            .env("HORIZON_AGENT_STATE_DB", &state_db_path);
+            .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null");
         match resume_delay_ms {
             Some(delay_ms) => {
                 command.env(TEST_RESUME_DELAY_MS_VAR, delay_ms.to_string());
@@ -331,6 +333,8 @@ impl SessiondProcess {
             .env("HORIZON_CONFIG", &missing_config_path)
             .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
             .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove(TEST_RESUME_DELAY_MS_VAR)
             .env(
                 TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
@@ -370,6 +374,8 @@ impl SessiondProcess {
             .env("HORIZON_CONFIG", &missing_config_path)
             .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
             .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
             .env_remove(TEST_RESUME_DELAY_MS_VAR)
             .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
             .stderr(Stdio::piped());
@@ -745,6 +751,8 @@ fn run_fixture_git(dir: &Path, args: &[&str]) {
             command.env_remove(key);
         }
     }
+    command.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    command.env("GIT_CONFIG_SYSTEM", "/dev/null");
     let output = command
         .output()
         .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
@@ -2054,6 +2062,8 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
         .env("HORIZON_CONFIG", &missing_config_path)
         .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
         .env("HORIZON_AGENT_STATE_DB", &state_db_path)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove(TEST_RESUME_DELAY_MS_VAR)
         .stderr(Stdio::piped());
     let mut second = spawn_sessiond(&mut second_command);

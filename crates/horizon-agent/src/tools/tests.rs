@@ -53,6 +53,14 @@ fn run_fixture_git(cwd: &Path, args: &[&str]) -> std::process::Output {
             command.env_remove(name);
         }
     }
+    // Hermetic against the machine's global/system git config too: a global
+    // core.hooksPath (observed live: a hook chain invoking a proto-shimmed
+    // npm) turns every fixture commit into a multi-second external toolchain
+    // invocation and, under full-suite parallelism, into a >60s hang. The
+    // GIT_* strip above cannot catch this -- hooksPath comes from config
+    // files, not the environment. Sibling of the backlog-53 GIT_DIR fix.
+    command.env("GIT_CONFIG_GLOBAL", "/dev/null");
+    command.env("GIT_CONFIG_SYSTEM", "/dev/null");
     let output = command.output().expect("run fixture git command");
     assert!(
         output.status.success(),

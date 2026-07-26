@@ -3731,6 +3731,8 @@ mod tests {
             for (key, _) in std::env::vars() {
                 if key.starts_with("GIT_") {
                     cmd.env_remove(key);
+                    cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+                    cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
                 }
             }
         }

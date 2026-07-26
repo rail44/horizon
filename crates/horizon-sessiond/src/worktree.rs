@@ -421,6 +421,14 @@ mod tests {
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(dir).args(args);
         scrub_git_env(&mut cmd);
+        // Tests are additionally hermetic against the machine's global and
+        // system git config (a global core.hooksPath was observed turning
+        // fixture commits into >60s toolchain invocations under full-suite
+        // parallelism); production run_git deliberately is not -- the
+        // daemon operates on the owner's real repository, where the
+        // owner's config is intent, and the repo-local hooksPath governs.
+        cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
+        cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
         let status = cmd
             .status()
             .unwrap_or_else(|error| panic!("failed to run git {args:?}: {error}"));
