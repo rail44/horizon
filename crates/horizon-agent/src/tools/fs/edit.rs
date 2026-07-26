@@ -49,6 +49,25 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
     };
 
+    // If this exact edit was already applied and the file is still in the
+    // state it left behind, a repeat would either be a no-op (old_string no
+    // longer present) or, worse, duplicate code (new_string contains
+    // old_string). Surface that explicitly instead of silently applying again.
+    if let Some(stored_hash) = tool_state.applied_edit_hash(&resolved, old_string, new_string) {
+        if stored_hash == ToolSessionState::hash_content(&content) {
+            return json!({
+                "path": path_arg,
+                "replaced": false,
+                "already_applied": true,
+                "message": format!(
+                    "this exact edit (`old_string` -> `new_string`) was already applied to `{path_arg}`; \
+                     the file is still in the post-edit state it produced. \
+                     Read the file if you want to confirm the current content."
+                ),
+            });
+        }
+    }
+
     let match_count = content.matches(old_string).count();
     if match_count == 0 {
         return error_output(format!(
@@ -65,6 +84,13 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     if let Err(error) = fs::write(&resolved, &updated) {
         return error_output(format!("failed to write `{path_arg}`: {error}"));
     }
+
+    tool_state.record_applied_edit(
+        resolved.clone(),
+        old_string.to_string(),
+        new_string.to_string(),
+        ToolSessionState::hash_content(&updated),
+    );
 
     if let Ok(mtime) = fs::metadata(&resolved).and_then(|metadata| metadata.modified()) {
         tool_state.record_mtime(resolved.clone(), mtime);
