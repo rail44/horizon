@@ -24,7 +24,9 @@ git ls-files -z '*.rs' | while IFS= read -r -d '' f; do
   # deletion is staged) must not be resurrected as an empty file — that
   # produced E0761 (module found at both session.rs and session/mod.rs)
   # during the session-module split.
-  [ -e "$f" ] && touch "$f"
+  if [ -e "$f" ]; then
+    touch "$f"
+  fi
 done
 
 echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"

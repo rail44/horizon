@@ -1072,7 +1072,17 @@ full resolution/closing records.
     same worktree with the build-dir wiped goes 307s → 72s at a 100%
     Rust hit rate — but 0% across worktrees, because its key follows the
     build directory and source paths).
-
+    *Residual hazard observed live 2026-07-26:* the pre-commit rebuild
+    fixes freshness at gate *start*, but a sibling worktree's build
+    running *during* a gate still overwrites the shared final artifact —
+    a worker watched `target/debug/horizon-sandbox-helper` flip between
+    its own build and a sibling's (different md5 and size) mid
+    `cargo nextest run`, so sandbox tests can execute another branch's
+    helper. Operational rule until a structural fix exists: do not run
+    the main checkout's gate concurrently with a worker's gate. Same
+    day, the hook's source-touch was fixed for refactors: it resurrected
+    deleted-but-unstaged tracked files as empty files (E0761 during the
+    session-module split).
 
 57. *(resolved 2026-07-25, `0ede3cb`)* **`new-agent` should print the created session id (at least under
     `--json`).** The CLI dogfooding loop (`.claude/skills/
