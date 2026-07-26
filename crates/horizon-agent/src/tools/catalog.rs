@@ -154,9 +154,11 @@ pub fn definitions() -> Vec<Definition> {
         Definition {
             id: "fs.edit".to_string(),
             title: "Edit File".to_string(),
-            description: "Replace one exact, unique occurrence of `old_string` with \
-                `new_string` in an existing file. The file must have been read in this \
-                session with no changes on disk since; `old_string` must match exactly once."
+            description: "Replace one or more exact occurrences of `old_string` with \
+                `new_string` in an existing file. By default (`replace_all: false`) \
+                `old_string` must match exactly once; set `replace_all: true` to replace \
+                every occurrence. The file must have been read in this session with no \
+                changes on disk since."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -169,11 +171,15 @@ pub fn definitions() -> Vec<Definition> {
                     },
                     "old_string": {
                         "type": "string",
-                        "description": "Exact text to replace. Must match exactly once in the file.",
+                        "description": "Exact text to replace. Must match exactly once in the file unless `replace_all` is true.",
                     },
                     "new_string": {
                         "type": "string",
                         "description": "Replacement text.",
+                    },
+                    "replace_all": {
+                        "type": "boolean",
+                        "description": "If true, replace every occurrence of `old_string` in the file. Defaults to false (exactly one match required).",
                     },
                 }
             }),
