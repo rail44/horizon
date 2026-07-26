@@ -168,6 +168,12 @@ struct Inner {
     /// `agent.explore` resolve to an actionable error result rather than a
     /// silent no-op.
     exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
+    /// Whether a fresh exploration this session starts inherits a copy of
+    /// this session's history (`docs/agent-explore-design.md`'s 2026-07-26
+    /// addendum C). Resolved from the environment once per session by
+    /// `horizon-sessiond` and installed here, so nothing downstream of that
+    /// one seam reads a process-global.
+    exploration_seed_mode: crate::tools::explore::SeedMode,
 }
 
 impl ToolSessionState {
@@ -216,6 +222,7 @@ impl ToolSessionState {
                 domains: SessionDomainPolicy::default(),
                 judge: None,
                 exploration: None,
+                exploration_seed_mode: crate::tools::explore::SeedMode::default(),
             }),
         }
     }
@@ -341,6 +348,23 @@ impl ToolSessionState {
         &self,
     ) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
         self.inner.exploration.clone()
+    }
+
+    /// Installs this session's exploration seeding mode after construction
+    /// -- see [`Inner::exploration_seed_mode`]'s doc comment. Same
+    /// construction-time-only safety contract as
+    /// [`Self::with_exploration_host`].
+    pub fn with_exploration_seed_mode(mut self, mode: crate::tools::explore::SeedMode) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.exploration_seed_mode = mode;
+        }
+        self
+    }
+
+    /// This session's exploration seeding mode -- defaults to
+    /// [`crate::tools::explore::SeedMode::Fresh`], v1's only behavior.
+    pub(crate) fn exploration_seed_mode(&self) -> crate::tools::explore::SeedMode {
+        self.inner.exploration_seed_mode
     }
 
     /// v1 workspace root: the process's current directory at session start,

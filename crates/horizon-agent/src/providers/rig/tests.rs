@@ -375,6 +375,131 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
     assert!(matches!(&messages[3], RigMessage::Assistant { .. }));
 }
 
+/// `docs/agent-explore-design.md`'s 2026-07-26 addendum C, at the point the
+/// seed actually becomes what the model sees: a session started with a
+/// `seed_history` reports *those* messages as its loaded history, without
+/// consulting its own (empty) persisted history at all.
+#[test]
+fn a_seeded_session_starts_from_the_seed_history_rather_than_its_own() {
+    let provider = Provider::new(
+        RigAgentConfig {
+            openai_enabled: false,
+            ..Default::default()
+        },
+        crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+    );
+    let seed_history = crate::tools::explore::sanitize_seed_history(&[
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "fix the duplicate write".to_string(),
+        }),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("read-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({ "path": "src/edit.rs" }).into(),
+        }),
+        Event::ToolCallFinished(ToolCallResult::new(
+            ToolCallId("read-1".to_string()),
+            serde_json::json!({ "text": "fn edit() {}" }),
+        )),
+        // The mid-turn tail: the `agent.explore` call being served.
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("explore-1".to_string()),
+            tool_id: "agent.explore".to_string(),
+            input: serde_json::json!({ "prompt": "where else?" }).into(),
+        }),
+    ]);
+
+    let handle = AgentProvider::start_session(
+        &provider,
+        StartSession {
+            session_id: SessionId::new(),
+            provider_id: AgentProvider::provider_id(&provider),
+            role_id: Some(RoleId(crate::roles::EXPLORE_ROLE_ID.to_string())),
+            workspace_root: None,
+            seed_history,
+        },
+    );
+
+    let rx = handle.events();
+    recv(&rx); // StateChanged(Created)
+    let ProviderEvent {
+        event: Event::MessageCommitted(initialization),
+        ..
+    } = recv(&rx)
+    else {
+        panic!("the second startup event is the initialization message");
+    };
+    assert!(
+        initialization
+            .text
+            .contains("Loaded 3 persisted Rig history"),
+        "the three paired seed messages must become the session's history, and the unpaired \
+         `agent.explore` call must not: {}",
+        initialization.text
+    );
+}
+
+/// The sanitized seed maps to a provider-valid message list: every
+/// assistant tool call has a matching tool result, and there is no orphan
+/// of either kind -- the property the mid-turn capture would otherwise
+/// break.
+#[test]
+fn a_sanitized_seed_maps_to_paired_rig_tool_calls_and_results() {
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "fix the duplicate write".to_string(),
+        }),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("read-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({}).into(),
+        }),
+        Event::ToolCallFinished(ToolCallResult::new(
+            ToolCallId("read-1".to_string()),
+            serde_json::json!({ "text": "fn edit() {}" }),
+        )),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("explore-1".to_string()),
+            tool_id: "agent.explore".to_string(),
+            input: serde_json::json!({}).into(),
+        }),
+    ];
+
+    let messages =
+        rig_messages_from_horizon_events(&crate::tools::explore::sanitize_seed_history(&events));
+
+    let mut calls: Vec<String> = Vec::new();
+    let mut results: Vec<String> = Vec::new();
+    for message in &messages {
+        match message {
+            RigMessage::Assistant { content, .. } => {
+                for item in content.iter() {
+                    if let AssistantContent::ToolCall(call) = item {
+                        calls.push(call.id.clone());
+                    }
+                }
+            }
+            RigMessage::User { content } => {
+                for item in content.iter() {
+                    if let UserContent::ToolResult(result) = item {
+                        results.push(result.id.clone());
+                    }
+                }
+            }
+            other => panic!("the mapping never produces {other:?}"),
+        }
+    }
+    assert_eq!(calls, vec!["read-1".to_string()]);
+    assert_eq!(results, calls, "every call must have exactly one result");
+    assert_eq!(
+        rig_messages_from_horizon_events(&events).len(),
+        messages.len() + 1,
+        "the unsanitized history is what would have carried the unpaired call"
+    );
+}
+
 /// `load_rig_history` reads through the *shared* `Arc<Mutex<Store>>` handle
 /// -- never a fresh `Store::open` of the same path (see that function's and
 /// `SharedDuckdbStore`'s doc comments for why a second independent open is
@@ -757,6 +882,7 @@ fn start_fallback_rig_session_with_config(
         provider_id: AgentProvider::provider_id(&provider),
         role_id: None,
         workspace_root: None,
+        seed_history: Vec::new(),
     });
     let tx = handle.sender();
     let rx = handle.events();
@@ -1546,6 +1672,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             provider_id: AgentProvider::provider_id(&provider),
             role_id: Some(RoleId("config".to_string())),
             workspace_root: None,
+            seed_history: Vec::new(),
         },
     );
 
@@ -1696,6 +1823,7 @@ fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_ses
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: Some(isolated_root.clone()),
+        seed_history: Vec::new(),
     };
 
     let environment = session_environment(&request);
@@ -1715,6 +1843,7 @@ fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: None,
+        seed_history: Vec::new(),
     };
 
     let environment = session_environment(&request);

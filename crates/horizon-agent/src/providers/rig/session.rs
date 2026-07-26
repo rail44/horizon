@@ -21,6 +21,7 @@ use crate::{
     tools::cancelled_tool_call_result,
 };
 
+use super::mapping::rig_messages_from_horizon_events;
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
     load_rig_history, rig_initialization_message, rig_tool_result_message, ToolCallDescriptor,
@@ -46,6 +47,7 @@ pub(super) fn spawn_rig_session(
     let environment = session_environment(&request);
     let provider_id = request.provider_id;
     let session_id = request.session_id;
+    let seed_history = request.seed_history;
 
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
@@ -58,8 +60,17 @@ pub(super) fn spawn_rig_session(
             // here (or through a fresh `Store::open`) is exactly the
             // resumed-session bug this fixed -- a session's own real history
             // silently not showing up.
-            let duckdb_store = duckdb_cell.wait();
-            let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
+            // A fork-seeded session (`StartSession::seed_history`) starts
+            // from another session's stream rather than its own persisted
+            // one, which by construction is empty -- it has never run. The
+            // seed is already sanitized by the requester side; mapping it is
+            // the same event-to-message step a resume takes.
+            let rig_history = if seed_history.is_empty() {
+                let duckdb_store = duckdb_cell.wait();
+                load_rig_history(duckdb_store.as_ref(), session_id)
+            } else {
+                rig_messages_from_horizon_events(&seed_history)
+            };
             let extra_sections = session_extra_sections(&environment, &config, role);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()

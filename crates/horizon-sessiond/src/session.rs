@@ -409,6 +409,17 @@ impl SessiondState {
         lock_unpoisoned(&self.event_taps).remove(&session_id);
     }
 
+    /// The role of a session this process still hosts live, if any. Read by
+    /// [`SessiondExplorationHost::follow_up`] to refuse a model-supplied
+    /// session id that does not name a live exploration.
+    fn session_role(&self, session_id: SessionId) -> Option<RoleId> {
+        self.sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .and_then(|entry| entry.role_id.clone())
+    }
+
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. [`Connection::route_command`]
     /// turns a miss into a log line; [`SessiondExplorationHost::terminate`]
@@ -454,7 +465,11 @@ struct SessiondExplorationHost {
 }
 
 impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
-    fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
+    fn start(
+        &self,
+        prompt: String,
+        seed_history: Vec<Event>,
+    ) -> Result<horizon_agent::tools::StartedExploration, String> {
         let session_id = SessionId::new();
         // Subscribe first, spawn second: the tap has to exist before the
         // session's thread can emit anything.
@@ -469,6 +484,7 @@ impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
             false,
             None,
             Vec::new(),
+            seed_history,
         );
         if !self
             .state
@@ -476,6 +492,40 @@ impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
         {
             self.state.remove_event_tap(session_id);
             return Err("the exploration session ended before it could be asked".to_string());
+        }
+        Ok(horizon_agent::tools::StartedExploration { session_id, events })
+    }
+
+    /// Addendum B: a follow-up is just another user message to a session
+    /// that is still hosted, plus a fresh tap so the caller folds the *next*
+    /// turn from its start (the previous call's tap died with its waiter).
+    ///
+    /// The role check is the boundary guard: `session_id` originates in a
+    /// model-authored tool call, and this method is the point where such an
+    /// id becomes a `UserMessage` delivered to a session. `tools::explore`
+    /// already refuses ids it did not itself start for this requester, so
+    /// this is unreachable in practice -- which is precisely why it is
+    /// cheap to also make it unreachable structurally.
+    fn follow_up(
+        &self,
+        session_id: SessionId,
+        prompt: String,
+    ) -> Result<horizon_agent::tools::StartedExploration, String> {
+        if !self
+            .state
+            .session_role(session_id)
+            .as_ref()
+            .is_some_and(horizon_agent::roles::is_exploration)
+        {
+            return Err("that session is not a live exploration session".to_string());
+        }
+        let events = self.state.install_event_tap(session_id);
+        if !self
+            .state
+            .send_command(session_id, Command::UserMessage { text: prompt })
+        {
+            self.state.remove_event_tap(session_id);
+            return Err("that exploration session is no longer running".to_string());
         }
         Ok(horizon_agent::tools::StartedExploration { session_id, events })
     }
@@ -577,6 +627,10 @@ fn spawn_session_thread(
     isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
+    // Another session's stream to seed this one's *provider* history from,
+    // empty for every session except a fork-seeded exploration -- see
+    // `contract::StartSession::seed_history`.
+    seed_history: Vec<Event>,
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
@@ -618,6 +672,7 @@ fn spawn_session_thread(
                 inbound_rx,
                 replay_rx,
                 history,
+                seed_history,
                 &phase,
             );
         });
@@ -848,6 +903,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             false,
             restored_worktree,
             events,
+            Vec::new(),
         );
     }
 
@@ -1030,6 +1086,7 @@ impl Connection {
             new.spawn_source_session_id,
             new.isolate,
             None,
+            Vec::new(),
             Vec::new(),
         );
     }
@@ -1395,6 +1452,7 @@ fn run_session(
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
+    seed_history: Vec<Event>,
     phase: &Cell<SessionLoopPhase>,
 ) {
     // Resolved *before* starting the provider session (below) so the real,
@@ -1433,6 +1491,7 @@ fn run_session(
         session_id,
         role_id.clone(),
         workspace_root.clone(),
+        seed_history,
     ) else {
         // `ProviderRegistry::start_session` returns `None` for either an
         // unknown `provider_id` or an unresolvable `role_id` (see its own
@@ -1527,7 +1586,12 @@ fn run_session(
         .with_domain_policy(domains)
         .with_network_proxy(network)
         .with_judge(judge)
-        .with_exploration_host(exploration);
+        .with_exploration_host(exploration)
+        // The single seam that consults `HORIZON_EXPLORE_SEED`
+        // (`docs/agent-explore-design.md`'s 2026-07-26 addendum C): read once
+        // per session start, so a `Reload Session Runtime` picks up a change
+        // without a full restart, and carried as a plain value from here on.
+        .with_exploration_seed_mode(horizon_agent::tools::SeedMode::from_env());
     let persisted_context = PersistedSessionContext {
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,
@@ -2413,12 +2477,13 @@ mod tests {
     /// The whole `agent.explore` seam against the *real* daemon
     /// implementation rather than a stub: an `agent.explore` call spawns a
     /// genuine peer session here, its user message reaches that session's
-    /// provider, its events come back through the event tap, and the
-    /// session is shut down once its report has landed. Hermetic -- the
+    /// provider, its events come back through the event tap, a follow-up
+    /// call reaches the *same* session (addendum B), and the session is
+    /// shut down when the requester's turn ends. Hermetic -- the
     /// exploration runs on the mock provider, so no network and no event
     /// log are involved.
     #[test]
-    fn agent_explore_spawns_a_real_peer_session_and_shuts_it_down() {
+    fn agent_explore_spawns_a_real_peer_session_follows_up_and_shuts_it_down() {
         let state = judge_test_state();
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
@@ -2433,37 +2498,49 @@ mod tests {
             RecallContext::default(),
         )
         .with_exploration_host(Some(host));
+        let live_state = LiveState::with_disabled_persistence();
         register_session_runtime(
             requester_id,
             tool_state.clone(),
-            LiveState::with_disabled_persistence(),
+            live_state.clone(),
             results_tx,
         );
 
-        let execution = horizon_agent::tools::execute_agent_tool(
-            &SessiondHostTools {
-                state: state.clone(),
-            },
-            &tool_state,
-            requester_id,
-            &horizon_agent::contract::ToolCallRequest {
-                call_id: ToolCallId("explore-e2e".to_string()),
-                tool_id: "agent.explore".to_string(),
-                input: serde_json::json!({ "prompt": "where is the emit site?" }).into(),
-            },
+        let explore = |call_id: &str, input: serde_json::Value| {
+            horizon_agent::tools::execute_agent_tool(
+                &SessiondHostTools {
+                    state: state.clone(),
+                },
+                &tool_state,
+                requester_id,
+                &horizon_agent::contract::ToolCallRequest {
+                    call_id: ToolCallId(call_id.to_string()),
+                    tool_id: "agent.explore".to_string(),
+                    input: input.into(),
+                },
+            )
+        };
+        let await_report = || {
+            let completion = results_rx
+                .recv_timeout(Duration::from_secs(30))
+                .expect("the exploration's completion must arrive");
+            let ToolCompletion::Finished(result) = completion else {
+                panic!("expected a finished exploration completion, got {completion:?}")
+            };
+            assert!(!result.is_error, "{result:?}");
+            result
+        };
+
+        let execution = explore(
+            "explore-e2e",
+            serde_json::json!({ "prompt": "where is the emit site?" }),
         );
         assert!(
             matches!(execution, horizon_agent::tools::Execution::Started(_)),
             "the requester's loop must stay responsive while the exploration runs: {execution:?}"
         );
 
-        let completion = results_rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the exploration's completion must arrive");
-        let ToolCompletion::Finished(result) = completion else {
-            panic!("expected a finished exploration completion, got {completion:?}")
-        };
-        assert!(!result.is_error, "{result:?}");
+        let result = await_report();
         let report = result.output["report"]
             .as_str()
             .expect("a report")
@@ -2480,6 +2557,46 @@ mod tests {
                 .expect("a uuid"),
         );
         assert_ne!(explore_id, requester_id);
+        assert!(
+            state.sessions.lock().unwrap().contains_key(&explore_id),
+            "the exploration must outlive the turn it answered, so a follow-up can reach it"
+        );
+
+        // Addendum B: the follow-up lands on the same session, not a new one.
+        let execution = explore(
+            "explore-e2e-2",
+            serde_json::json!({
+                "prompt": "and the consumer side?",
+                "session_id": explore_id.as_uuid().to_string(),
+            }),
+        );
+        assert!(
+            matches!(execution, horizon_agent::tools::Execution::Started(_)),
+            "{execution:?}"
+        );
+        let follow_up = await_report();
+        assert_eq!(
+            follow_up.output["session_id"],
+            serde_json::json!(explore_id.as_uuid().to_string())
+        );
+        assert!(
+            follow_up.output["report"]
+                .as_str()
+                .expect("a report")
+                .contains("and the consumer side?"),
+            "{follow_up:?}"
+        );
+
+        // The requester's own turn end is what finally terminates it.
+        let processing = horizon_agent::tools::process_agent_provider_event(
+            &SessiondHostTools {
+                state: state.clone(),
+            },
+            &tool_state,
+            requester_id,
+            ProviderEvent::from(Event::TurnEnded(TurnEndReason::Completed)),
+        );
+        live_state.extend_provider_events(processing.horizon_events);
 
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         while state.sessions.lock().unwrap().contains_key(&explore_id)
@@ -2489,7 +2606,7 @@ mod tests {
         }
         assert!(
             !state.sessions.lock().unwrap().contains_key(&explore_id),
-            "a finished exploration session must be terminated, not left hosted"
+            "the requester's turn end must terminate the exploration, not leave it hosted"
         );
         assert!(
             !lock_unpoisoned(&state.event_taps).contains_key(&explore_id),
@@ -2497,6 +2614,48 @@ mod tests {
         );
 
         unregister_session_runtime(requester_id);
+    }
+
+    /// The host-side boundary guard: `session_id` reaches `follow_up`
+    /// straight from a model-authored tool call, so the one place it turns
+    /// into a delivered `UserMessage` refuses anything that is not a live
+    /// exploration session -- an ordinary session's id included.
+    #[test]
+    fn a_follow_up_to_a_session_that_is_not_an_exploration_is_refused() {
+        use horizon_agent::tools::ExplorationHost;
+
+        let state = judge_test_state();
+        let ordinary_id = SessionId::new();
+        spawn_session_thread(
+            state.clone(),
+            ordinary_id,
+            ProviderId("builtin.agent.mock".to_string()),
+            None,
+            None,
+            None,
+            false,
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
+
+        let host = SessiondExplorationHost {
+            state: state.clone(),
+            provider_id: ProviderId("builtin.agent.mock".to_string()),
+            workspace_root: None,
+        };
+
+        for target in [ordinary_id, SessionId::new()] {
+            let outcome = host.follow_up(target, "leak into this session".to_string());
+            assert!(
+                outcome.is_err(),
+                "only a live exploration session may be followed up on"
+            );
+            assert!(
+                !lock_unpoisoned(&state.event_taps).contains_key(&target),
+                "a refused follow-up must not leave a tap behind"
+            );
+        }
     }
 
     /// Decision 3, "invisible to the UI": a live exploration session is
@@ -2519,6 +2678,7 @@ mod tests {
             false,
             None,
             Vec::new(),
+            Vec::new(),
         );
         spawn_session_thread(
             state.clone(),
@@ -2529,6 +2689,7 @@ mod tests {
             None,
             false,
             None,
+            Vec::new(),
             Vec::new(),
         );
 
