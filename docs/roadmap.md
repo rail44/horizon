@@ -364,6 +364,28 @@ lands:
   `"explore"`. This also revised the 2026-07-07 "no workflow prescriptions"
   prompt decision to "no *unmeasured* workflow prescriptions" — see
   `prompt.rs`'s module doc.
+  **Async `task` LANDED 2026-07-28** (`docs/agent-async-task-design.md`,
+  now marked implemented): the launch is non-blocking and returns
+  `{session_id, description, status: "started"}`; a finished child's report
+  is *pushed* — drained before the requester's next provider round as one
+  coalesced notification message, or, if the turn already ended, as the
+  synthetic input of a turn the completion starts by itself
+  (`Event::TurnEnded` stays the only turn boundary). The notification is a
+  user-role plain-text message on the provider side (template-safe against
+  M3's mapping-only tool-call arguments) but a distinct
+  `MessageRole::TaskNotification` in the event log, so it never masquerades
+  as a human turn — the one wire change, and the reason
+  `SESSION_PROTOCOL_VERSION` went 13 → 14. Children are now session-scoped:
+  they survive `cancel-turn` and die with the requesting session; at most 3
+  run at once, and a fourth launch is refused with the running ones named.
+  `task_output(session_id)` fetches a full report (ownership-checked,
+  advertised only alongside `task`). The daemon-side plumbing is now the
+  named `session::subscription` seam — "subscribe to another session's
+  stop/blocking events" — so approval forwarding for future write-capable
+  children is one more event kind on it rather than a new seam. The
+  measured routing clause took its second amendment, again only in the
+  report-return sentence. **Not yet measured**: the design's measurement
+  plan (rerun T-callid, baseline 追補 4's `f89f0780`) is still outstanding.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,
@@ -410,13 +432,6 @@ lands:
   `close_range(CLOSE_RANGE_CLOEXEC)` on Linux, bounded `fcntl` loop on
   macOS/BSD — which also fixes upstream #7742/#7893; Horizon consumes
   it via `[patch.crates-io]`). Item stays open tracking that work.
-  **Next: async `task` (designed 2026-07-28,
-  `docs/agent-async-task-design.md`)** — background children with push
-  notification delivery (mainstream shape, owner decision after the
-  join-tool draft was rejected as off-distribution), session-scoped
-  lifetime, `task_output` fetch, concurrency cap 3, all plumbed through
-  the blocking/stop-event subscription abstraction; v1 children stay
-  read-only so approvals remain structurally impossible.
 
 
 - **Terminal presentation wave** — all five slices merged 2026-07-18

@@ -470,3 +470,50 @@ files; never delegate the implementation itself" in place of "Start
 implementing only after its report returns". Both edits are additive and
 terminal: every measured word from cells C3/C5/C7b is untouched, so this
 does not re-open the probe's result.
+
+---
+
+## Addendum (2026-07-28): `task` is asynchronous; spawn-and-wait is gone
+
+Implemented per `docs/agent-async-task-design.md` (owner-approved
+2026-07-28), which is the scope record for this change and carries the
+reasoning; this addendum records only what it means for the decisions
+above.
+
+- **Decision 1's "waits for its turn to finish" is void.** `task` returns
+  immediately with `{session_id, description, status: "started"}`. Its
+  report reaches the requester as a *notification message* injected before
+  a later provider round, or as the synthetic input of a turn the
+  completion starts by itself. There is no blocking path left in the tool,
+  and no `Execution::Started`: the launch call resolves synchronously with
+  its receipt.
+- **Decision 5's event subscription survives and is now named.** The
+  waiter still folds the child's event stream until it reaches a terminal
+  state; what changed is where the result goes (a per-requester queue plus
+  a wake, instead of the requester's `async_results` channel). The
+  daemon-side plumbing moved into
+  `crates/horizon-sessiond/src/session/subscription.rs`, documented as the
+  general "subscribe to another session's stop/blocking events" seam that
+  approval forwarding for future write-capable children extends with one
+  more event kind.
+- **Decision 6's "cancellation propagates" is deliberately reversed.**
+  Children are session-scoped, not turn-scoped: `cancel-turn` leaves them
+  running (mainstream behavior — interrupting the requester must not
+  vaporize in-flight investigation), and only the requesting session ending
+  terminates them. `tools::explore::cancel_if_running` is gone from
+  `tools::processing` accordingly.
+- **New: a concurrency cap of 3** per requester, and a **`task_output`**
+  fetch tool (ownership-checked; advertised only alongside `task`, through
+  the same allowlist seam `DELEGATION_ROUTING_SECTION` rides).
+- **Decision 8's restart cleanup is unchanged**: still keyed on the explore
+  role id alone, still terminating never-completed children on resume.
+- **The measured routing clause takes its second amendment**, again
+  confined to the final report-return sentence: "Keep working while it
+  runs; its report will arrive as a notification, and you implement the
+  changes yourself in this session — task agents cannot write files; never
+  delegate the implementation itself." The two orienting bans (cells C5 and
+  C7b) stay byte-identical, so the probe's result is still not re-opened.
+- **Wire**: `contract::MessageRole::TaskNotification` marks a delivered
+  notification in the event log, and its placement before the
+  `#[serde(other)] Unknown` catch-all is what required
+  `SESSION_PROTOCOL_VERSION` 13 → 14.

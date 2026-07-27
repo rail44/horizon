@@ -490,6 +490,31 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
             if result.id == request.call_id.0)));
 }
 
+/// A persisted background-`task` notification replays to the provider as a
+/// plain user-role text message -- exactly what the live injection sent
+/// (`session::inject_task_notification`). Replaying it as anything else
+/// would change the model's view of its own past between a live turn and a
+/// resumed one, and the *only* reason the role is distinct at all is
+/// persistence and the transcript.
+#[test]
+fn a_task_notification_replays_to_the_provider_as_a_user_message() {
+    let events = vec![Event::MessageCommitted(AgentMessage {
+        role: MessageRole::TaskNotification,
+        text: "task \"map the emit sites\" completed".to_string(),
+    })];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_eq!(messages.len(), 1);
+    assert!(
+        matches!(&messages[0], RigMessage::User { content }
+            if matches!(content.first_ref(), UserContent::Text(text)
+                if text.text == "task \"map the emit sites\" completed")),
+        "got {:?}",
+        messages[0]
+    );
+}
+
 #[test]
 fn appends_cancelled_tool_results_after_assistant_tool_call_message() {
     let tool_call = rig_workspace_snapshot_call();
@@ -991,6 +1016,21 @@ fn start_fallback_rig_session_with_role(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
+    start_fallback_rig_session_as(config, role_id, SessionId::new())
+}
+
+/// Like [`start_fallback_rig_session_with_role`], but with the session's
+/// own id chosen by the caller -- what the background-`task` delivery tests
+/// need, since a notification is queued *against* a session id and the
+/// session loop drains it by that id.
+fn start_fallback_rig_session_as(
+    config: RigAgentConfig,
+    role_id: Option<RoleId>,
+    session_id: SessionId,
+) -> (
+    crossbeam_channel::Sender<Command>,
+    crossbeam_channel::Receiver<ProviderEvent>,
+) {
     let provider = Provider::new(
         config,
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
@@ -998,7 +1038,7 @@ fn start_fallback_rig_session_with_role(
     let handle = AgentProvider::start_session(
         &provider,
         StartSession {
-            session_id: SessionId::new(),
+            session_id,
             provider_id: AgentProvider::provider_id(&provider),
             role_id,
             workspace_root: None,
@@ -2210,4 +2250,300 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
     );
 
     let _ = std::fs::remove_dir_all(&cwd);
+}
+
+/// `task_output` rides the same conditional seam as `task` itself
+/// (`docs/agent-async-task-design.md` decision 3, "advertise it only
+/// alongside `task`"): a session that cannot launch a task can never own
+/// one to read, so the fetch tool must not be offered to it either.
+#[test]
+fn task_output_is_advertised_only_alongside_task() {
+    let names = |allowed: Option<&[String]>| {
+        rig_tool_definitions(allowed)
+            .into_iter()
+            .map(|definition| definition.name)
+            .collect::<Vec<_>>()
+    };
+
+    let unrestricted = names(None);
+    assert!(unrestricted.iter().any(|name| name == "task"));
+    assert!(unrestricted.iter().any(|name| name == "task_output"));
+
+    let explore_role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        .expect("the explore role must resolve");
+    let explore_config = role_adjusted_config(&RigAgentConfig::default(), Some(explore_role));
+    let explore = names(explore_config.allowed_tool_ids.as_deref());
+    assert!(
+        !explore.iter().any(|name| name == "task"),
+        "a task child cannot recurse: {explore:?}"
+    );
+    assert!(
+        !explore.iter().any(|name| name == "task_output"),
+        "and it owns no tasks to read either: {explore:?}"
+    );
+
+    // An allowlist that names `task_output` but not `task` still gets
+    // neither -- the rule is about ownership, not about spelling.
+    let inconsistent = names(Some(&["fs.read".to_string(), "task_output".to_string()]));
+    assert_eq!(inconsistent, vec!["fs.read".to_string()]);
+}
+
+// --- Background `task` delivery (docs/agent-async-task-design.md) ---------
+
+/// Queues a finished background `task` child against `session_id` exactly
+/// the way `tools::explore`'s waiter thread does, and wakes its loop.
+fn deliver_task(session_id: SessionId, description: &str, report: &str) {
+    let child = SessionId::new();
+    crate::tools::explore::deliver_test_completion(
+        session_id,
+        child,
+        description,
+        serde_json::json!({
+            "session_id": child.as_uuid().to_string(),
+            "description": description,
+            "report": report,
+        }),
+    );
+}
+
+/// Decision 2, mid-turn shape: a child finishing while the requester's turn
+/// is still running is injected into that turn's *next* provider round as
+/// exactly one message, and several landing between rounds coalesce into
+/// that one block rather than one message each.
+///
+/// The injected message's role is `MessageRole::TaskNotification`, not
+/// `User`: the provider is sent plain user-role text (see
+/// `tools::explore::notify`'s module doc for why that shape and not a
+/// synthetic tool call), but the event log must not record it as words the
+/// human typed.
+#[test]
+fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
+    let session_id = SessionId::new();
+    let (tx, rx) = start_fallback_rig_session_as(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
+        },
+        None,
+        session_id,
+    );
+
+    // A turn that requests a tool call, so there is a next round to ride.
+    let _ = tx.send(Command::UserMessage {
+        text: "snapshot please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    let call_id = match recv(&rx).event {
+        Event::ToolCallRequested(request) => request.call_id,
+        other => panic!("expected a tool call request, got {other:?}"),
+    };
+
+    deliver_task(
+        session_id,
+        "map the emit sites",
+        "Emitted at session.rs:1747.",
+    );
+    deliver_task(session_id, "list the consumers", "Consumed at frame.rs:88.");
+
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_id,
+        serde_json::json!({ "done": true }),
+    )));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    let notification = match recv(&rx).event {
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::TaskNotification,
+            text,
+        }) => text,
+        other => panic!("expected one task notification message, got {other:?}"),
+    };
+    assert!(
+        notification.contains("map the emit sites"),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("list the consumers"),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("Emitted at session.rs:1747."),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("Consumed at frame.rs:88."),
+        "{notification}"
+    );
+
+    // The round then runs with that notification as its prompt -- the
+    // deterministic fallback echoes whatever it was sent, which is how this
+    // test sees what actually reached the provider.
+    assert!(
+        matches!(
+            recv(&rx).event,
+            Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
+                if text.contains("map the emit sites") && text.contains("list the consumers")
+        ),
+        "the notification must be the message the provider round actually carried"
+    );
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(200))
+            .is_err(),
+        "a drained queue must not produce a second notification for the same completions"
+    );
+}
+
+/// Decision 2, turn-already-ended shape: the completion starts a new turn
+/// automatically, with the notification as that turn's synthetic input.
+/// `Event::TurnEnded` still bounds it exactly like any other turn, so an
+/// external monitor watching only `turn_ended` sees nothing unusual.
+#[test]
+fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
+    let session_id = SessionId::new();
+    let (tx, rx) = start_fallback_rig_session_as(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
+        },
+        None,
+        session_id,
+    );
+
+    let _ = tx.send(Command::UserMessage {
+        text: "hello".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+
+    deliver_task(
+        session_id,
+        "map the emit sites",
+        "Emitted at session.rs:1747.",
+    );
+
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::Running),
+        "a completion with no round left to ride on must start one"
+    );
+    let notification = match recv(&rx).event {
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::TaskNotification,
+            text,
+        }) => text,
+        other => panic!("expected a task notification message, got {other:?}"),
+    };
+    assert!(
+        notification.contains("Emitted at session.rs:1747."),
+        "{notification}"
+    );
+    assert!(
+        matches!(
+            recv(&rx).event,
+            Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
+                if text.contains("Emitted at session.rs:1747.")
+        ),
+        "the auto-turn's input must be the notification itself"
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::TurnEnded(TurnEndReason::Completed),
+        "an auto-started turn is an ordinary turn: TurnEnded still bounds it"
+    );
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+}
+
+/// Delivery waits while a tool call is still outstanding. This is exactly
+/// the `WaitingForApproval` case the design doc's turn-semantics notes call
+/// out: a requester parked on an approval has its batch outstanding until
+/// the human resolves it, so no auto-turn may start alongside the approval
+/// state machine -- the notification rides the round that the approved
+/// call's result triggers instead.
+#[test]
+fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
+    let session_id = SessionId::new();
+    let (tx, rx) = start_fallback_rig_session_as(
+        RigAgentConfig {
+            openai_enabled: false,
+            model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
+        },
+        None,
+        session_id,
+    );
+
+    let _ = tx.send(Command::UserMessage {
+        text: "snapshot please".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    let call_id = match recv(&rx).event {
+        Event::ToolCallRequested(request) => request.call_id,
+        other => panic!("expected a tool call request, got {other:?}"),
+    };
+
+    deliver_task(
+        session_id,
+        "map the emit sites",
+        "Emitted at session.rs:1747.",
+    );
+    assert!(
+        rx.recv_timeout(std::time::Duration::from_millis(300))
+            .is_err(),
+        "nothing may be delivered while the requester still owes a tool result"
+    );
+
+    // Resolving the call is what lets it through.
+    let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
+        call_id,
+        serde_json::json!({ "done": true }),
+    )));
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::TaskNotification,
+            ..
+        })
+    ));
 }

@@ -55,13 +55,21 @@ pub fn execute_agent_tool(
     request: &ToolCallRequest,
 ) -> Execution {
     match permission_for_tool(&request.tool_id) {
-        // `task` is auto-allowed like every other read tool but is
-        // the one that does not finish synchronously: it waits on a whole
-        // parallel session's turn (`tools::explore`), so it takes the
-        // `Execution::Started` path `bash` and the web tools use rather
-        // than `execute_auto_tool`'s "produce a `Value` right now" shape.
+        // `task`/`task_output` are auto-allowed like every other read tool
+        // but need the requesting session's id, which `execute_auto_tool`'s
+        // "produce a `Value` from input alone" shape cannot supply: a launch
+        // is registered against its requester and a fetch is ownership-
+        // checked against it (`tools::explore`). Both still resolve right
+        // here -- a launch is non-blocking since the 2026-07-28
+        // asynchronous cutover (`docs/agent-async-task-design.md`), so
+        // neither takes `bash`'s `Execution::Started` path any more.
         Some(ToolPermission::AutoAllowRead) if request.tool_id == crate::tools::TASK_TOOL_ID => {
             crate::tools::explore::start(tool_state, session_id, request)
+        }
+        Some(ToolPermission::AutoAllowRead)
+            if request.tool_id == crate::tools::TASK_OUTPUT_TOOL_ID =>
+        {
+            crate::tools::explore::output(session_id, request)
         }
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             Execution::Auto(execute_auto_tool(host, tool_state, request))

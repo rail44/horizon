@@ -1,9 +1,45 @@
 # Async `task` — background delegation with push delivery
 
-Status: designed 2026-07-28 (owner-approved shape); not yet implemented.
-Prereqs landed: `task` rename + measured routing clauses + cap-summary
-(`docs/agent-explore-design.md` 2026-07-27 addenda), argument
+Status: designed 2026-07-28 (owner-approved shape); **implemented
+2026-07-28**. Prereqs landed: `task` rename + measured routing clauses +
+cap-summary (`docs/agent-explore-design.md` 2026-07-27 addenda), argument
 double-encoding repair.
+
+Implementation record (what shipped, where):
+
+- `crates/horizon-agent/src/tools/explore.rs` (+ `explore/children.rs`,
+  `explore/notify.rs`) — non-blocking `start`, `task_output`, the
+  per-requester child registry with the cap, the completion queue, and the
+  wake channel.
+- `crates/horizon-sessiond/src/session/subscription.rs` — the named
+  "subscribe to another session's stop/blocking events" seam (decision 6),
+  generalizing the old ad-hoc event tap.
+- `crates/horizon-agent/src/providers/rig/session.rs` — the drain before
+  each provider round (`inject_task_notification`) and the auto-turn wake
+  arm (`Next::TaskWake`).
+- `contract::MessageRole::TaskNotification` marks a delivered notification
+  in the event log so it never masquerades as a human user message; it is
+  the change that required `SESSION_PROTOCOL_VERSION` 13 → 14 (a variant
+  placed before the `#[serde(other)] Unknown` catch-all reorders indices,
+  which the schema checker classifies as a reshape).
+
+The **inline report budget** is
+`tools::explore::notify::INLINE_REPORT_CAP_CHARS` = 4,000 *characters* (not
+bytes — a report is arbitrary UTF-8). Over it, the head is inlined and the
+cut names the exact fetch: `call task_output with session_id "<uuid>" for
+the full report`.
+
+Deviations from the shape below: none. The **notification wire shape** was
+left as an implementation decision by decision 2 and resolved as a
+**user-role message carrying plain text**, emitted as one coalesced block
+per drain. The argument is template safety: MiniMax-M3's chat template
+iterates a tool call's `arguments` as a mapping with no string branch at
+all (the failure that killed session `12fd8d14` and produced
+`replay_safe_tool_arguments`), so anything tool-call-shaped carries a
+standing risk that plain user text does not. Persistence and the transcript
+distinguish it by role; the provider never sees the distinction, and a
+resumed session replays it as the same user message that was originally
+sent.
 
 ## Why
 

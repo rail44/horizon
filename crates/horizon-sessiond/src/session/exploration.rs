@@ -38,9 +38,10 @@ pub(super) struct SessiondExplorationHost {
 impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
     fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
         let session_id = SessionId::new();
-        // Subscribe first, spawn second: the tap has to exist before the
-        // session's thread can emit anything.
-        let events = self.state.install_event_tap(session_id);
+        // Subscribe first, spawn second -- the ordering requirement
+        // `super::subscription` documents: the subscription has to exist
+        // before the session's thread can emit anything.
+        let subscription = self.state.subscribe_to_session(session_id);
         spawn_session_thread(
             self.state.clone(),
             session_id,
@@ -56,14 +57,17 @@ impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
             .state
             .send_command(session_id, Command::UserMessage { text: prompt })
         {
-            self.state.remove_event_tap(session_id);
-            return Err("the exploration session ended before it could be asked".to_string());
+            self.state.unsubscribe_from_session(session_id);
+            return Err("the task session ended before it could be asked".to_string());
         }
-        Ok(horizon_agent::tools::StartedExploration { session_id, events })
+        Ok(horizon_agent::tools::StartedExploration {
+            session_id: subscription.session_id,
+            events: subscription.events,
+        })
     }
 
     fn terminate(&self, session_id: SessionId) {
-        self.state.remove_event_tap(session_id);
+        self.state.unsubscribe_from_session(session_id);
         self.state.send_command(session_id, Command::Shutdown);
     }
 }
@@ -72,26 +76,61 @@ impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
 mod tests {
     use super::*;
     use crate::session::host_tools::SessiondHostTools;
-    use crate::session::state::lock_unpoisoned;
     use crate::session::test_support::judge_test_state;
     use crossbeam_channel::unbounded;
     use horizon_agent::config::AgentToolsConfig;
-    use horizon_agent::contract::ToolCallId;
+    use horizon_agent::contract::{Event, ToolCallId, ToolCallRequest};
     use horizon_agent::live::LiveState;
     use horizon_agent::tools::{
-        register_session_runtime, unregister_session_runtime, RecallContext, ToolCompletion,
-        ToolSessionState,
+        execute_agent_tool, register_session_runtime, unregister_session_runtime, Execution,
+        RecallContext, ToolCompletion, ToolSessionState,
     };
     use std::time::Duration;
 
-    /// The whole `task` seam against the *real* daemon
-    /// implementation rather than a stub: a `task` call spawns a
-    /// genuine peer session here, its user message reaches that session's
-    /// provider, its events come back through the event tap, and the
-    /// session is shut down as soon as its own turn ends -- one-shot,
-    /// spawn-and-wait (2026-07-27), no follow-up to keep it alive for.
-    /// Hermetic -- the exploration runs on the mock provider, so no network
-    /// and no event log are involved.
+    fn call(
+        state: &Arc<crate::session::SessiondState>,
+        tool_state: &ToolSessionState,
+        requester_id: SessionId,
+        call_id: &str,
+        tool_id: &str,
+        input: serde_json::Value,
+    ) -> serde_json::Value {
+        let execution = execute_agent_tool(
+            &SessiondHostTools {
+                state: state.clone(),
+            },
+            tool_state,
+            requester_id,
+            &ToolCallRequest {
+                call_id: ToolCallId(call_id.to_string()),
+                tool_id: tool_id.to_string(),
+                input: input.into(),
+            },
+        );
+        let Execution::Auto(events) = execution else {
+            panic!("`{tool_id}` resolves synchronously, got {execution:?}")
+        };
+        events
+            .into_iter()
+            .find_map(|event| match event {
+                Event::ToolCallFinished(result) => Some(result.output.0),
+                _ => None,
+            })
+            .expect("a ToolCallFinished event")
+    }
+
+    /// The whole `task` seam against the *real* daemon implementation
+    /// rather than a stub: a `task` call spawns a genuine peer session
+    /// here, its user message reaches that session's provider, its events
+    /// come back through the [`crate::session::subscription`] seam, the
+    /// session is shut down as soon as its own turn ends, and the report is
+    /// then fetchable with `task_output`.
+    ///
+    /// The launch itself is asynchronous since 2026-07-28
+    /// (`docs/agent-async-task-design.md`): the call returns a `started`
+    /// receipt at once and nothing lands on `async_results` at all.
+    /// Hermetic -- the child runs on the mock provider, so no network and
+    /// no event log are involved.
     #[test]
     fn task_spawns_a_real_peer_session_and_terminates_it_when_it_finishes() {
         let state = judge_test_state();
@@ -116,64 +155,67 @@ mod tests {
             results_tx,
         );
 
-        let execution = horizon_agent::tools::execute_agent_tool(
-            &SessiondHostTools {
-                state: state.clone(),
-            },
+        let launched = call(
+            &state,
             &tool_state,
             requester_id,
-            &horizon_agent::contract::ToolCallRequest {
-                call_id: ToolCallId("explore-e2e".to_string()),
-                tool_id: "task".to_string(),
-                input: serde_json::json!({
-                    "description": "find the emit site",
-                    "prompt": "where is the emit site?",
-                })
-                .into(),
-            },
+            "task-e2e",
+            "task",
+            serde_json::json!({
+                "description": "find the emit site",
+                "prompt": "where is the emit site?",
+            }),
         );
-        assert!(
-            matches!(execution, horizon_agent::tools::Execution::Started(_)),
-            "the requester's loop must stay responsive while the exploration runs: {execution:?}"
+        assert_eq!(
+            launched["status"],
+            serde_json::json!("started"),
+            "the launch must not block the requester's turn: {launched}"
         );
-
-        let completion = results_rx
-            .recv_timeout(Duration::from_secs(30))
-            .expect("the exploration's completion must arrive");
-        let ToolCompletion::Finished(result) = completion else {
-            panic!("expected a finished exploration completion, got {completion:?}")
-        };
-        assert!(!result.is_error, "{result:?}");
-        let report = result.output["report"]
-            .as_str()
-            .expect("a report")
-            .to_string();
-        assert!(
-            report.contains("where is the emit site?"),
-            "the exploration must have answered the forwarded prompt, got: {report}"
-        );
-        let explore_id = SessionId::from_uuid(
-            result.output["session_id"]
+        let child_id = SessionId::from_uuid(
+            launched["session_id"]
                 .as_str()
                 .expect("the spawned session id")
                 .parse()
                 .expect("a uuid"),
         );
-        assert_ne!(explore_id, requester_id);
+        assert_ne!(child_id, requester_id);
 
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
-        while state.sessions.lock().unwrap().contains_key(&explore_id)
+        while state.sessions.lock().unwrap().contains_key(&child_id)
             && std::time::Instant::now() < deadline
         {
             std::thread::sleep(Duration::from_millis(10));
         }
         assert!(
-            !state.sessions.lock().unwrap().contains_key(&explore_id),
-            "the exploration must be terminated as soon as its own turn ends"
+            !state.sessions.lock().unwrap().contains_key(&child_id),
+            "the task session must be terminated as soon as its own turn ends"
         );
         assert!(
-            !lock_unpoisoned(&state.event_taps).contains_key(&explore_id),
+            !state.has_subscriber(child_id),
             "its event subscription must be released with it"
+        );
+        assert!(
+            results_rx.try_recv().is_err(),
+            "an asynchronous launch delivers nothing on the tool-completion channel"
+        );
+
+        let fetched = call(
+            &state,
+            &tool_state,
+            requester_id,
+            "task-output-e2e",
+            "task_output",
+            serde_json::json!({ "session_id": child_id.as_uuid().to_string() }),
+        );
+        assert_eq!(
+            fetched["status"],
+            serde_json::json!("finished"),
+            "{fetched}"
+        );
+        let report = fetched["report"].as_str().expect("a report");
+        assert!(
+            report.contains("where is the emit site?"),
+            "the task must have answered the forwarded prompt, got: {report}"
         );
 
         unregister_session_runtime(requester_id);

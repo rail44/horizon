@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::Sender;
 
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, Event, ProviderId, ProviderRegistry, SessionId};
@@ -37,17 +37,6 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
 /// (client detached or connection died), so the entry is dropped lazily.
 pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<AgentWireEvent>>>;
 
-/// In-process observers of a session's `contract::Event` stream, installed
-/// alongside (never instead of) the client-facing [`AgentSubscribers`]
-/// above. The only one today is a `task` waiter subscribing to
-/// the exploration session it just spawned (`docs/agent-explore-design.md`
-/// decision 5: "the wait is an event subscription"). Crossbeam rather than
-/// tokio because the waiter is a plain OS thread, like every other session
-/// thread here; unbounded so a session thread's send never blocks on it.
-/// A failed send means the waiter is gone, so the entry is dropped lazily,
-/// exactly as the client subscribers are.
-pub(super) type EventTaps = Mutex<HashMap<SessionId, Sender<Event>>>;
-
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-sessiond` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
@@ -66,8 +55,11 @@ pub(crate) struct SessiondState {
     pub(super) sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pub(super) pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
     pub(super) agent_subscribers: AgentSubscribers,
-    /// See [`EventTaps`].
-    pub(super) event_taps: EventTaps,
+    /// In-process observers of a session's `contract::Event` stream,
+    /// installed alongside (never instead of) the client-facing
+    /// [`AgentSubscribers`] above -- see [`super::subscription`], which owns
+    /// this map's whole vocabulary.
+    pub(super) session_subscriptions: super::subscription::SessionSubscriptions,
     /// The current connection's host-tool request bridge (the local half of
     /// `HubHello::host_tools`), installed by the hub's `hello` and cleared
     /// when the connection ends — connection-global, unlike the
@@ -138,7 +130,7 @@ impl SessiondState {
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
             agent_subscribers: Mutex::new(HashMap::new()),
-            event_taps: Mutex::new(HashMap::new()),
+            session_subscriptions: Mutex::new(HashMap::new()),
             host_tools_outgoing: Mutex::new(None),
             resume_ready: AtomicBool::new(false),
             resume_notify: Notify::new(),
@@ -243,24 +235,10 @@ impl SessiondState {
         }
     }
 
-    /// Installs an in-process observer of `session_id`'s event stream and
-    /// returns its receiving half -- see [`EventTaps`]. Called *before*
-    /// [`super::spawn::spawn_session_thread`] for the session being observed, so not even
-    /// its first `StateChanged(Created)` can be missed.
-    pub(super) fn install_event_tap(&self, session_id: SessionId) -> Receiver<Event> {
-        let (tx, rx) = unbounded();
-        lock_unpoisoned(&self.event_taps).insert(session_id, tx);
-        rx
-    }
-
-    pub(super) fn remove_event_tap(&self, session_id: SessionId) {
-        lock_unpoisoned(&self.event_taps).remove(&session_id);
-    }
-
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. [`super::connection::Connection::route_command`]
     /// turns a miss into a log line; [`super::exploration::SessiondExplorationHost::terminate`]
-    /// deliberately ignores one -- an exploration session that already
+    /// deliberately ignores one -- a task session that already
     /// ended on its own needs no shutdown.
     pub(super) fn send_command(&self, session_id: SessionId, command: Command) -> bool {
         let sender = self
@@ -320,6 +298,8 @@ pub(super) struct SessionEntry {
 mod tests {
     use super::*;
     use crate::session::test_support::state_with_rig_config;
+    use crossbeam_channel::unbounded;
+    use horizon_agent::contract::Event;
 
     /// An id sessiond has never hosted (or has already ended) reports no
     /// directory -- the "no source" case [`crate::worktree::resolve_isolation_source`]

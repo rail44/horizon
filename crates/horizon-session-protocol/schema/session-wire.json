@@ -856,6 +856,11 @@
             "Assistant"
           ],
           "type": "string"
+        },
+        {
+          "const": "TaskNotification",
+          "description": "A system-authored notification injected into the session's own turn\ninput -- today only the background-`task` completion notification\n(`docs/agent-async-task-design.md` decision 2). Deliberately *not*\n[`MessageRole::User`]: the provider is sent a plain user-role text\nmessage (the shape every production chat template can render), but\nthe persisted event log must not claim a human typed it. Every\nconsumer that distinguishes \"who said this\" therefore has to name\nthis variant explicitly rather than folding it into `User`:\n`providers::rig::mapping::rig_messages_from_horizon_events` replays\nit to the provider as a user message (matching what was actually\nsent), while `persistence::event_log::turn::TurnTracker`,\n`frame`'s turn clock, and the transcript view all treat it as\nsystem-authored.",
+          "type": "string"
         }
       ]
     },
@@ -2332,5 +2337,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 13
+  "x-session-protocol-version": 14
 }
