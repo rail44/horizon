@@ -55,14 +55,12 @@ pub fn execute_agent_tool(
     request: &ToolCallRequest,
 ) -> Execution {
     match permission_for_tool(&request.tool_id) {
-        // `agent.explore` is auto-allowed like every other read tool but is
+        // `task` is auto-allowed like every other read tool but is
         // the one that does not finish synchronously: it waits on a whole
         // parallel session's turn (`tools::explore`), so it takes the
         // `Execution::Started` path `bash` and the web tools use rather
         // than `execute_auto_tool`'s "produce a `Value` right now" shape.
-        Some(ToolPermission::AutoAllowRead)
-            if request.tool_id == crate::tools::explore::TOOL_ID =>
-        {
+        Some(ToolPermission::AutoAllowRead) if request.tool_id == crate::tools::TASK_TOOL_ID => {
             crate::tools::explore::start(tool_state, session_id, request)
         }
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {

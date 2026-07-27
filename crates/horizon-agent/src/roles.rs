@@ -152,6 +152,11 @@ const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assist
 /// session with it) and `horizon-sessiond` (which refuses to resume one at
 /// startup and keeps it out of the client-visible session list -- see
 /// [`is_exploration`]).
+///
+/// Unchanged by the 2026-07-27 rename of the model-visible tool id to
+/// `task` (`tools::explore::TOOL_ID`): this string is a persistence and
+/// cleanup identity, written into the event log and matched at daemon
+/// startup, and nothing the model ever sees.
 pub const EXPLORE_ROLE_ID: &str = "explore";
 
 /// The turn budget an exploration session runs with
@@ -163,14 +168,16 @@ pub const EXPLORE_ROLE_ID: &str = "explore";
 const EXPLORE_ITERATION_CAP: u32 = 25;
 
 /// A parallel exploration session (`docs/agent-explore-design.md`): spawned
-/// by another session's `agent.explore` call to answer one open-ended
+/// by another session's `task` call to answer one open-ended
 /// question about the shared workspace, and terminated as soon as it has.
 ///
 /// The allowlist is the whole restriction mechanism: three read-only tools,
 /// every one of them `ToolPermission::AutoAllowRead`, so an exploration can
-/// never reach an approval prompt no human is watching for. `agent.explore`
+/// never reach an approval prompt no human is watching for. `task`
 /// itself is absent, which is what makes recursion structurally impossible
-/// rather than merely discouraged.
+/// rather than merely discouraged -- and, since 2026-07-27, is also what
+/// keeps the prompt's delegation-routing block out of an exploration's own
+/// system prompt (`providers::rig::session::advertises_task_tool`).
 ///
 /// `include_repository_instructions: true`, unlike [`CONFIG_ROLE`]: an
 /// exploration runs against the *requester's own* workspace root and its
@@ -285,7 +292,7 @@ mod tests {
     }
 
     /// `docs/agent-explore-design.md` decision 4: the exploration session's
-    /// toolset is exactly the three read-only tools, and `agent.explore`
+    /// toolset is exactly the three read-only tools, and `task`
     /// itself is absent so recursion cannot be expressed at all.
     #[test]
     fn explore_role_allowlist_is_exactly_the_three_read_only_tools() {
@@ -296,7 +303,7 @@ mod tests {
             .expect("the explore role must restrict its tools");
         assert_eq!(allowed, &["fs.read", "fs.grep", "fs.glob"]);
         for forbidden in [
-            "agent.explore",
+            "task",
             "bash",
             "fs.write",
             "fs.edit",

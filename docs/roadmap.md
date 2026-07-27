@@ -352,6 +352,18 @@ lands:
   tools-disabled wrap-up completion and returns the partial report as a
   success (`RoleDefinition::summarize_on_cap`, OpenCode/Hermes precedent).
   See `docs/agent-explore-design.md`'s dated addendum for the full record.
+  **Renamed to `task` 2026-07-27 (owner decision)**, with the delegation
+  routing rebuilt on the direct-API control probes in
+  `docs/research/agent-delegation-and-batching-probes-2026-07-27.md`: the
+  one intervention that closed adoption for both production models is an
+  explicit ban on orienting with bash/read before delegating, at both the
+  exploration entry (cell C5) and the implementation entry (C7b). Those two
+  clauses ship verbatim as `prompt::DELEGATION_ROUTING_SECTION`, included
+  only for sessions that actually advertise `task`; the input gained a
+  required short `description` label; the internal role id stays
+  `"explore"`. This also revised the 2026-07-07 "no workflow prescriptions"
+  prompt decision to "no *unmeasured* workflow prescriptions" — see
+  `prompt.rs`'s module doc.
 - **Agent #61 dogfooding observability/prompt slice — shipped 2026-07-23.**
   Rig's OpenAI-compatible streaming final response now records exact usage as
   an additive, frame-neutral `ProviderRequestUsage` event (input, output,

@@ -42,7 +42,7 @@
 //! [`events`] fans a session's output out to the attached client and to
 //! in-process taps, [`host_tools`] runs the host round trip, [`approval`] and
 //! [`completion`] own the approval seam and the asynchronous tool folds,
-//! [`exploration`] implements `agent.explore`, and [`panic`] is the session
+//! [`exploration`] implements the `task` tool's daemon seam, and [`panic`] is the session
 //! thread's panic boundary.
 
 mod approval;

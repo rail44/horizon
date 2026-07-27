@@ -133,7 +133,7 @@ impl Requester {
         }
     }
 
-    /// Runs one `agent.explore` call through the same entry point the
+    /// Runs one `task` call through the same entry point the
     /// session loop uses, folding whatever it produces into this session's
     /// live state (as `horizon-sessiond`'s `handle_provider_event` does).
     fn request(&self, call_id: &str, input: serde_json::Value) -> ToolCallId {
@@ -218,7 +218,7 @@ fn a_completed_exploration_returns_only_its_final_report() {
 
     let call_id = requester.request(
         "explore-1",
-        json!({ "prompt": "where are the WaitingForUser emissions?" }),
+        json!({ "description": "map a call site", "prompt": "where are the WaitingForUser emissions?" }),
     );
     let events = host.turn(0);
 
@@ -307,7 +307,10 @@ fn the_requester_session_going_away_terminates_a_still_running_exploration() {
     let explore_session_id = host.session_id;
     let requester = Requester::new(Some(host.clone()));
 
-    requester.request("explore-1", json!({ "prompt": "look around" }));
+    requester.request(
+        "explore-1",
+        json!({ "description": "map a call site", "prompt": "look around" }),
+    );
     let events = host.turn(0);
     events.send(user("look around")).unwrap();
     events.send(assistant("still searching...")).unwrap();
@@ -331,7 +334,10 @@ fn cancelling_the_requesters_turn_terminates_the_exploration_session() {
     let explore_session_id = host.session_id;
     let requester = Requester::new(Some(host.clone()));
 
-    let call_id = requester.request("explore-cancel", json!({ "prompt": "keep looking" }));
+    let call_id = requester.request(
+        "explore-cancel",
+        json!({ "description": "map a call site", "prompt": "keep looking" }),
+    );
     let events = host.turn(0);
     events.send(user("keep looking")).unwrap();
     events.send(assistant("still searching...")).unwrap();
@@ -371,7 +377,10 @@ fn an_approval_in_the_exploration_fails_the_call_immediately() {
     let explore_session_id = host.session_id;
     let requester = Requester::new(Some(host.clone()));
 
-    requester.request("explore-approval", json!({ "prompt": "look around" }));
+    requester.request(
+        "explore-approval",
+        json!({ "description": "map a call site", "prompt": "look around" }),
+    );
     let events = host.turn(0);
     events.send(user("look around")).unwrap();
     events
@@ -412,7 +421,10 @@ fn a_capped_exploration_with_a_forced_summary_is_a_partial_success() {
     let explore_session_id = host.session_id;
     let requester = Requester::new(Some(host.clone()));
 
-    requester.request("explore-capped", json!({ "prompt": "map the module" }));
+    requester.request(
+        "explore-capped",
+        json!({ "description": "map a call site", "prompt": "map the module" }),
+    );
     let events = host.turn(0);
     events.send(user("map the module")).unwrap();
     events
@@ -462,7 +474,10 @@ fn a_capped_exploration_without_a_report_is_still_an_error() {
     let explore_session_id = host.session_id;
     let requester = Requester::new(Some(host.clone()));
 
-    requester.request("explore-capped-bare", json!({ "prompt": "map the module" }));
+    requester.request(
+        "explore-capped-bare",
+        json!({ "description": "map a call site", "prompt": "map the module" }),
+    );
     let events = host.turn(0);
     events.send(user("map the module")).unwrap();
     events
@@ -493,7 +508,10 @@ fn a_terminated_exploration_reports_its_last_error() {
     let (host, terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
 
-    requester.request("explore-dead", json!({ "prompt": "map the module" }));
+    requester.request(
+        "explore-dead",
+        json!({ "description": "map a call site", "prompt": "map the module" }),
+    );
     let events = host.turn(0);
     events.send(user("map the module")).unwrap();
     events
@@ -526,7 +544,7 @@ fn a_session_without_an_exploration_host_fails_the_call_synchronously() {
     let execution = execute_call(
         &requester,
         "explore-nohost",
-        json!({ "prompt": "anything" }),
+        json!({ "description": "map a call site", "prompt": "anything" }),
     );
     let output = finished_output(execution);
     assert_eq!(output["is_error"], json!(true));
@@ -546,9 +564,43 @@ fn an_empty_prompt_is_rejected_without_spawning_anything() {
     let output = finished_output(execute_call(
         &requester,
         "explore-empty",
-        json!({ "prompt": "   " }),
+        json!({ "description": "map a call site", "prompt": "   " }),
     ));
     assert_eq!(output["is_error"], json!(true));
+    assert!(host.started.lock().unwrap().is_empty());
+    assert!(terminated.lock().unwrap().is_empty());
+}
+
+/// The 2026-07-27 two-field input shape: `description` is as required as
+/// `prompt`, so the catalog schema's `required` list is enforced rather
+/// than merely advertised. It is a label, though -- the exploration itself
+/// is seeded with `prompt` alone (asserted below).
+#[test]
+fn a_missing_or_empty_description_is_rejected_without_spawning_anything() {
+    let (host, terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    let missing = finished_output(execute_call(
+        &requester,
+        "explore-no-description",
+        json!({ "prompt": "find the emit sites" }),
+    ));
+    assert_eq!(missing["is_error"], json!(true));
+    assert!(
+        missing["message"]
+            .as_str()
+            .expect("a message")
+            .contains("`description`"),
+        "{missing}"
+    );
+
+    let empty = finished_output(execute_call(
+        &requester,
+        "explore-empty-description",
+        json!({ "description": "  ", "prompt": "find the emit sites" }),
+    ));
+    assert_eq!(empty["is_error"], json!(true));
+
     assert!(host.started.lock().unwrap().is_empty());
     assert!(terminated.lock().unwrap().is_empty());
 }
@@ -560,7 +612,7 @@ fn a_host_that_cannot_spawn_reports_why() {
     let output = finished_output(execute_call(
         &requester,
         "explore-failed-spawn",
-        json!({ "prompt": "look" }),
+        json!({ "description": "map a call site", "prompt": "look" }),
     ));
     assert_eq!(output["is_error"], json!(true));
     assert!(
@@ -573,12 +625,17 @@ fn a_host_that_cannot_spawn_reports_why() {
 }
 
 /// The prompt reaches the exploration session verbatim -- it is the only
-/// context the exploration ever gets.
+/// context the exploration ever gets, `description` included: that field is
+/// a display label for the requester's own transcript, never part of the
+/// exploration's seeding.
 #[test]
 fn the_prompt_is_forwarded_to_the_exploration_session_verbatim() {
     let (host, _terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
-    requester.request("explore-prompt", json!({ "prompt": "find the emit sites" }));
+    requester.request(
+        "explore-prompt",
+        json!({ "description": "map a call site", "prompt": "find the emit sites" }),
+    );
     let events = host.turn(0);
     events.send(user("find the emit sites")).unwrap();
     events
@@ -603,6 +660,7 @@ fn a_stray_session_id_field_is_ignored_and_still_starts_fresh() {
     requester.request(
         "explore-1",
         json!({
+            "description": "map a call site",
             "prompt": "find the emit sites",
             "session_id": SessionId::new().as_uuid().to_string(),
         }),

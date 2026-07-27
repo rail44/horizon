@@ -121,11 +121,13 @@ pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment 
 }
 
 /// Builds the `extra_sections` a session's system prompt is composed from
-/// (`prompt::system_prompt`), in order: the role's own prompt section (if
-/// any), then a skills listing, then repository `AGENTS.md`/`CLAUDE.md`
-/// instructions -- but only when `role.include_repository_instructions`
-/// allows it (`roles::CONFIG_ROLE` sets this `false`; see its own doc
-/// comment for why).
+/// (`prompt::system_prompt`), in order: the delegation-routing block (only
+/// for a session that actually has the `task` tool -- see
+/// [`advertises_task_tool`]), the role's own prompt section (if any), then a
+/// skills listing, then repository `AGENTS.md`/`CLAUDE.md` instructions --
+/// but only when `role.include_repository_instructions` allows it
+/// (`roles::CONFIG_ROLE` sets this `false`; see its own doc comment for
+/// why).
 ///
 /// The skills listing (`skills::SkillRegistry`, composed here from this
 /// session's own cwd -- see `skills`' module doc for the v2 repository
@@ -144,6 +146,9 @@ pub(super) fn session_extra_sections(
 ) -> Vec<String> {
     let skills = crate::skills::SkillRegistry::discover(&environment.cwd);
     let mut sections = Vec::new();
+    if advertises_task_tool(config) {
+        sections.push(crate::prompt::DELEGATION_ROUTING_SECTION.to_string());
+    }
     let include_repository_instructions = match role {
         Some(role) => {
             sections.push(role.prompt_section.to_string());
@@ -166,6 +171,29 @@ pub(super) fn session_extra_sections(
         ));
     }
     sections
+}
+
+/// Whether this session is actually offered the `task` tool, decided from
+/// the same allowlist `completion::rig_tool_definitions` filters the
+/// advertised catalog with -- `config` here is already role-adjusted
+/// (`super::role_adjusted_config`, applied before `spawn_rig_session`), so
+/// `None` means the unrestricted role-less toolset and `Some` is the role's
+/// exact list.
+///
+/// This is the whole conditionality of `prompt::DELEGATION_ROUTING_SECTION`.
+/// The probes measured its wording unhedged ("your FIRST action must be
+/// task"), so the wording keeps no "when it is available" escape clause;
+/// instead the block is simply absent from a prompt whose session has no
+/// such tool. An exploration session is exactly that case: its role allows
+/// `fs.read`/`fs.grep`/`fs.glob` only (`roles::EXPLORE_ROLE`, which
+/// deliberately excludes this tool so explorations cannot recurse), and
+/// instructing it to delegate first would be an instruction it could only
+/// fail.
+fn advertises_task_tool(config: &RigAgentConfig) -> bool {
+    match &config.allowed_tool_ids {
+        Some(allowed) => allowed.iter().any(|id| id == crate::tools::TASK_TOOL_ID),
+        None => true,
+    }
 }
 
 /// Forwards commands from the crossbeam channel (the provider's public,

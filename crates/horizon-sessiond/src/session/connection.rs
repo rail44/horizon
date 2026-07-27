@@ -153,7 +153,7 @@ impl Connection {
     /// Every session a client may see. Exploration sessions
     /// (`docs/agent-explore-design.md` decision 3: "invisible to the UI")
     /// are withheld: they are never attached to a pane, they live only as
-    /// long as the `agent.explore` call waiting on them, and offering one
+    /// long as the `task` call waiting on them, and offering one
     /// in the session manager's attach list would invite a user into a
     /// read-only session that is about to be terminated under them. They
     /// remain fully first-class in the event log and DuckDB projection,

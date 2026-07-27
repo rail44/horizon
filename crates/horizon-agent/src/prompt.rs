@@ -5,20 +5,31 @@
 //! retry nudge, a destructive-action caution list, and — added 2026-07-07
 //! after the prompting survey (`docs/research/agent-prompting.md` Part
 //! 1.4) showed them near-universal even among thin prompts — short
-//! communication and verification norms. No step-by-step workflow
-//! prescriptions — over-prescription measurably harms newer models, and
-//! the environment block is the only part that varies per session. The
-//! norms are deliberately model-agnostic (owner decision, 2026-07-07:
-//! Horizon expects to switch models, so provider-specific prompt lore is
-//! out of scope).
+//! communication and verification norms. The environment block is the only
+//! part that varies per session. The norms are deliberately model-agnostic
+//! (owner decision, 2026-07-07: Horizon expects to switch models, so
+//! provider-specific prompt lore is out of scope).
+//!
+//! **Workflow prescriptions (owner decision, 2026-07-27).** This doc used
+//! to say "no step-by-step workflow prescriptions — over-prescription
+//! measurably harms newer models", model-agnostically (2026-07-07). That is
+//! now narrowed: a workflow prescription is permitted once it has been
+//! *measured* effective against Horizon's production models, and stays out
+//! otherwise. [`DELEGATION_ROUTING_SECTION`] is the first and so far only
+//! one to clear that bar (`docs/research/agent-delegation-and-batching-
+//! probes-2026-07-27.md` cells C5 and C7b, run against both production
+//! models). The model-agnostic stance survives the change: the shipped
+//! wording is the one that worked for *both* models, and no per-model
+//! branching was introduced.
 //!
 //! [`system_prompt`]'s `extra_sections` parameter is a back-compatible
 //! injection point (`docs/research/agent-prompting.md` Part 2.5): an empty
 //! slice reproduces the thin prompt above byte-for-byte, while each
 //! passed-in section is appended verbatim, in order. `instructions::
 //! extra_sections` is its first consumer (repository instruction files,
-//! see that module); a future role/skill mechanism can reuse the same seam
-//! without another signature change.
+//! see that module); `providers::rig::session::session_extra_sections`
+//! composes the role section, the skills listing, and
+//! [`DELEGATION_ROUTING_SECTION`] through the same seam.
 
 use std::path::{Path, PathBuf};
 
@@ -68,6 +79,36 @@ fn is_git_repository(cwd: &Path) -> bool {
     cwd.ancestors().any(|dir| dir.join(".git").exists())
 }
 
+/// The delegation-routing block: how a session that *has* the `task` tool
+/// (`tools::explore`) is told to use it. Not part of the base prompt --
+/// `providers::rig::session::session_extra_sections` appends it only for a
+/// session whose advertised toolset actually contains `task`, so an
+/// exploration session (whose role allows `fs.read`/`fs.grep`/`fs.glob`
+/// and nothing else) is never told to make a call it cannot make.
+///
+/// Both clauses are the measured winners, transplanted verbatim from
+/// `docs/research/agent-delegation-and-batching-probes-2026-07-27.md`: the
+/// exploration-entry clause is cell C5 and the implementation-entry clause
+/// is cell C7b, the only interventions in that probe that closed delegation
+/// adoption for *both* production models. Two properties are load-bearing
+/// and must not be softened without re-measuring: the ban on orienting
+/// first is explicit (imperative tone alone, negative routing on `bash`,
+/// and renaming the tool were each measured insufficient), and the
+/// implementation clause is unconditional -- the earlier conditional
+/// wording ("in an unfamiliar area", cell C7) was measurably used as an
+/// escape hatch. The `when it is available` hedge the old one-line policy
+/// carried is deliberately gone too: conditionality lives in *whether this
+/// section is included*, not in its wording.
+pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
+     - For an open-ended exploration goal, calling task must be your FIRST action — do not run \
+     bash/ls or read files to orient yourself first; the task agent does its own orientation \
+     inside its own session, which costs you nothing.\n\
+     - For any implementation task, your FIRST action must be to delegate the up-front \
+     investigation and planning to the task tool — even when the change targets look already \
+     known or the task statement names concrete components. State the question and the exact \
+     deliverable (relevant files, line numbers, a step plan). Do not grep/read/bash to orient \
+     yourself first. Start implementing only after its report returns.";
+
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any
 /// `extra_sections` appended verbatim (each separated by a blank line) — see
@@ -96,8 +137,6 @@ pub fn system_prompt(environment: &SessionEnvironment, extra_sections: &[String]
          Tool policy:\n\
          - Tools require absolute paths; relative paths are rejected.\n\
          - Prefer targeted reads and searches (grep, glob, line-windowed reads) over dumping whole files.\n\
-         - Delegate open-ended, multi-file exploration to agent.explore when it is available; \
-         keep its report, not a raw read/grep sweep of your own.\n\
          - Use $TMPDIR for temporary files so sandboxed calls do not rely on literal /tmp being writable.\n\
          - If a tool call fails, read the error and retry with adjusted input rather than giving up.\n\
          \n\

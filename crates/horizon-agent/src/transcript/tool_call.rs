@@ -445,6 +445,26 @@ pub fn classify(
             let id = str_field(input, "id").unwrap_or_default().to_string();
             ("Skill".to_string(), Some(id), None, ToolCallKind::Generic)
         }
+        // `task`'s `description` input is a short label the model writes
+        // for exactly this row (`tools::catalog`) -- it is the only place a
+        // delegated task announces what it is doing while it runs, since
+        // the session it spawns is deliberately kept out of the
+        // client-visible session list (`roles::is_exploration`).
+        "task" => {
+            let description = str_field(input, "description")
+                .unwrap_or_default()
+                .to_string();
+            let summary = output.and_then(|output| {
+                (output.get("capped").and_then(Value::as_bool) == Some(true))
+                    .then(|| "capped".to_string())
+            });
+            (
+                "Task".to_string(),
+                Some(description),
+                summary,
+                ToolCallKind::Generic,
+            )
+        }
         other => (other.to_string(), None, None, ToolCallKind::Generic),
     }
 }
@@ -646,6 +666,27 @@ mod tests {
         assert_eq!(views[1].call_id, ToolCallId("b".to_string()));
         assert_eq!(views[1].verb, "Read");
         assert_eq!(views[1].result_summary.as_deref(), Some("40 lines"));
+    }
+
+    /// `task`'s `description` input is what the requester's transcript
+    /// shows while a delegated task runs -- the session it spawns is
+    /// withheld from the client-visible session list, so this row is the
+    /// only place it announces itself. A capped report is labelled as such.
+    #[test]
+    fn a_task_call_is_labelled_with_its_description() {
+        let items = vec![
+            tool_requested(
+                "t",
+                "task",
+                json!({"description": "map the emit sites", "prompt": "where are they?"}),
+            ),
+            tool_finished("t", json!({"report": "session.rs:1747", "capped": true})),
+        ];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].verb, "Task");
+        assert_eq!(views[0].target.as_deref(), Some("map the emit sites"));
+        assert_eq!(views[0].result_summary.as_deref(), Some("capped"));
+        assert!(!views[0].is_error);
     }
 
     #[test]

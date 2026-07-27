@@ -209,7 +209,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
 }
 
 /// `docs/agent-explore-design.md` decision 8: an exploration session is
-/// meaningless without the `agent.explore` call that was folding its
+/// meaningless without the `task` call that was folding its
 /// events, and that waiter died with the previous process. So a
 /// never-completed exploration found in the log is committed as terminated
 /// rather than re-adopted -- otherwise it would come back as a live session
@@ -239,7 +239,7 @@ fn terminate_orphaned_exploration(
         .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
         .collect();
     closing.push(Event::Error(AgentError {
-        message: "Exploration session terminated on daemon restart: the `agent.explore` call \
+        message: "Exploration session terminated on daemon restart: the `task` call \
                   waiting on it did not survive."
             .to_string(),
     }));
@@ -365,7 +365,7 @@ mod tests {
     }
 
     /// `docs/agent-explore-design.md` decision 8: an exploration session
-    /// whose `agent.explore` waiter died with the previous daemon process is
+    /// whose `task` waiter died with the previous daemon process is
     /// committed as terminated rather than resumed -- while an ordinary
     /// session left mid-turn in exactly the same shape still resumes.
     #[test]
@@ -418,7 +418,7 @@ mod tests {
                 .iter()
                 .any(|event| matches!(event, Event::Error(error) if error
                     .message
-                    .contains("agent.explore"))),
+                    .contains("`task`"))),
             "the termination must say why: {explore_events:?}"
         );
 
