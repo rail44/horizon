@@ -314,9 +314,16 @@ async fn rig_openai_turn_streaming(
                     );
                 }
             }
-            StreamedAssistantContent::ToolCall { tool_call, .. } => {
+            StreamedAssistantContent::ToolCall { mut tool_call, .. } => {
                 reasoning_buffer.flush();
                 text_buffer.flush();
+                // The provider payload records the provider's raw emission
+                // (a double-encoded `arguments` string included) as the
+                // forensic record, so it is captured before the repair
+                // below, which only changes what Horizon executes and
+                // replays.
+                let provider_payload = rig_tool_call_provider_payload(&tool_call);
+                repair_double_encoded_tool_arguments(&mut tool_call.function.arguments);
                 let request = rig_tool_call_request(tool_call.clone());
                 requested_tool_call_ids.push(request.call_id.clone());
                 requested_tool_calls.insert(
@@ -328,7 +335,7 @@ async fn rig_openai_turn_streaming(
                 );
                 let _ = events_tx.send(ProviderEvent::with_provider_payload(
                     Event::ToolCallRequested(request),
-                    rig_tool_call_provider_payload(&tool_call),
+                    provider_payload,
                 ));
                 tool_calls.push(tool_call);
             }
@@ -384,9 +391,15 @@ async fn rig_openai_turn_streaming(
     let assistant_message = if cancelled {
         partial_assistant_message(stream.message_id.clone(), &text, tool_calls)
     } else {
+        // `stream.choice` is rig's own aggregation of the same chunks, built
+        // independently of the repaired `tool_calls` above, so it carries the
+        // provider's raw arguments and needs the same normalization before it
+        // becomes history.
+        let mut content = stream.choice.clone();
+        make_tool_call_arguments_replay_safe(&mut content);
         Message::Assistant {
             id: stream.message_id.clone(),
-            content: stream.choice.clone(),
+            content,
         }
     };
 
@@ -457,6 +470,60 @@ fn openai_completions_client(config: &RigAgentConfig) -> anyhow::Result<openai::
     builder.build().map_err(Into::into)
 }
 
+/// Decodes a double-encoded tool-call `arguments` value in place: a JSON
+/// *string* whose content is itself a JSON object becomes that object.
+///
+/// Observed 2026-07-27 from `MiniMaxAI/MiniMax-M3` (session `12fd8d14`),
+/// which emitted a streamed tool call with `arguments` as a string holding
+/// the object. Decoding it lets the call execute exactly as intended
+/// instead of failing input validation for something the model did not
+/// really get wrong.
+///
+/// Anything else is left untouched: a string that does not decode to an
+/// object is a genuinely malformed emission, and the tool's own validation
+/// error is the feedback the model needs.
+pub(super) fn repair_double_encoded_tool_arguments(arguments: &mut serde_json::Value) {
+    let serde_json::Value::String(encoded) = &*arguments else {
+        return;
+    };
+    if let Ok(decoded @ serde_json::Value::Object(_)) =
+        serde_json::from_str::<serde_json::Value>(encoded)
+    {
+        *arguments = decoded;
+    }
+}
+
+/// Forces a tool call's arguments into a JSON object for *history*: the
+/// decoding repair above first, then a bare `{}` for whatever is still not
+/// an object.
+///
+/// The `{}` substitution trades history fidelity for session survival, and
+/// the trade is deliberate. Serving layers render replayed tool calls
+/// through a chat template that iterates `arguments` as a mapping —
+/// MiniMax-M3's has no string branch at all — so one malformed emission
+/// stored verbatim makes *every* later request in that session fail with a
+/// provider 400 (`'str object' has no attribute 'items'`). That is
+/// unrecoverable, because the poison sits in the persisted history: it is
+/// how session `12fd8d14` died on 2026-07-27. Only the provider-facing
+/// replay is rewritten — the model already learned that its input was
+/// malformed from the tool's error result.
+pub(super) fn replay_safe_tool_arguments(arguments: &mut serde_json::Value) {
+    repair_double_encoded_tool_arguments(arguments);
+    if !arguments.is_object() {
+        *arguments = serde_json::Value::Object(serde_json::Map::new());
+    }
+}
+
+/// Applies [`replay_safe_tool_arguments`] to every tool call in an
+/// assistant history message.
+pub(super) fn make_tool_call_arguments_replay_safe(content: &mut OneOrMany<AssistantContent>) {
+    for item in content.iter_mut() {
+        if let AssistantContent::ToolCall(call) = item {
+            replay_safe_tool_arguments(&mut call.function.arguments);
+        }
+    }
+}
+
 /// Builds the assistant history message for a cancelled turn from whatever
 /// streamed before cancellation: the accumulated text (if any) followed by
 /// the tool calls that were already emitted as `ToolCallRequested` events.
@@ -471,10 +538,13 @@ pub(super) fn partial_assistant_message(
     }
     content.extend(tool_calls.into_iter().map(AssistantContent::ToolCall));
 
+    let mut content = OneOrMany::many(content)
+        .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text::new(String::new()))));
+    make_tool_call_arguments_replay_safe(&mut content);
+
     Message::Assistant {
         id: message_id,
-        content: OneOrMany::many(content)
-            .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text::new(String::new())))),
+        content,
     }
 }
 

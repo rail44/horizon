@@ -362,7 +362,11 @@ winners verbatim:
   targets look already known or the task statement names concrete
   components. State the question and the exact deliverable (relevant
   files, line numbers, a step plan). Do not grep/read/bash to orient
-  yourself first. Start implementing only after its report returns."
+  yourself first. Then implement the changes yourself in this session —
+  task agents cannot write files; never delegate the implementation
+  itself." (The final sentence is the 2026-07-27 amendment below; the
+  measured C7b wording ended "Start implementing only after its report
+  returns.")
 
 What the probe ruled out, so it is not tried again without new evidence:
 imperative tone alone (E2i lifted both models but not to saturation),
@@ -415,3 +419,54 @@ workspace-side strings generated per attached pane, "Agent #N"), and an
 exploration session is never attached to a pane and is withheld from the
 client-visible session list by decision 3. A title field would have been
 invisible by construction.
+
+### Post-ship fixes from the first dogfooded session (2026-07-27)
+
+The first real session run under the addendum above died on a provider
+400 (`Error applying chat template for MiniMaxAI/MiniMax-M3 ... 'str
+object' has no attribute 'items'`) and, before that, mis-used the new
+`task` tool. Two fixes, both shipped against that one session
+(`12fd8d14`):
+
+**Double-encoded tool-call arguments (the session killer).** M3 emitted a
+tool call whose `arguments` arrived as a JSON *string containing JSON*
+instead of an object. Horizon stored it verbatim in rig history; on the
+next request the serving layer's M3 chat template iterates
+`arguments.items()`, hit the string, and returned 400 — for every
+subsequent request, since the poison was already in the persisted
+history. M3's template has no string branch; Kimi's tolerates both, so
+the failure is M3-specific while the repair is model-agnostic.
+
+`providers::rig::completion` now normalizes at two points. A streamed
+tool call whose `arguments` is a string that decodes to a JSON object is
+decoded *before* dispatch and before it becomes history
+(`repair_double_encoded_tool_arguments`), so the observed call executes
+as intended instead of failing input validation. Anything still not an
+object when a history message is assembled is replaced with `{}`
+(`replay_safe_tool_arguments`), covering rig's own `stream.choice`
+aggregation, the cancelled-turn `partial_assistant_message` path, and the
+history rebuilt from persisted events on resume
+(`mapping::rig_tool_call_from_request`). The `{}` substitution trades
+history fidelity for session survival deliberately: only the
+provider-facing replay is rewritten, and the model already learned its
+input was malformed from the tool's own error result. The provider
+payload persisted with `ToolCallRequested` still records the raw
+emission.
+
+**`task` is for investigation and planning only.** The same session
+delegated the *implementation* to `task` children twice ("Read the files
+as needed for the changes you make"). Task children are read-only by
+construction (the `fs.read`/`fs.grep`/`fs.glob` whitelist of decision 4),
+so each degenerated into another exploration that spent its turn budget
+producing nothing actionable. The generic `task` name reads as
+write-capable in these models' training distribution, so the constraint
+is now stated rather than implied: the catalog description gains "Task
+agents are read-only — they investigate, locate, and plan, but cannot
+write files or run commands that modify state; implementation happens in
+this session after the report returns", and
+`prompt::DELEGATION_ROUTING_SECTION`'s implementation clause ends "Then
+implement the changes yourself in this session — task agents cannot write
+files; never delegate the implementation itself" in place of "Start
+implementing only after its report returns". Both edits are additive and
+terminal: every measured word from cells C3/C5/C7b is untouched, so this
+does not re-open the probe's result.

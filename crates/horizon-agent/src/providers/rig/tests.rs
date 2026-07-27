@@ -544,6 +544,186 @@ fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
         if call.id == "rig-workspace-snapshot-1"));
 }
 
+// --- Double-encoded tool-call arguments -------------------------------
+//
+// The 2026-07-27 session death (session `12fd8d14`): MiniMax-M3 emitted a
+// tool call whose `arguments` was a JSON *string* holding the JSON object.
+// Stored verbatim, it made every later request in that session fail with a
+// provider 400 (`'str object' has no attribute 'items'`) from the serving
+// layer's chat template, which iterates `arguments` as a mapping.
+
+/// The `HostTools` seam is irrelevant to these tests -- they dispatch
+/// `fs.read`, which this crate implements itself -- so nothing is handled
+/// here and every call falls through to `tools::fs`.
+struct NoHostTools;
+
+impl crate::tools::HostTools for NoHostTools {
+    fn execute_auto(
+        &self,
+        _tool_id: &str,
+        _input: &serde_json::Value,
+    ) -> Option<serde_json::Value> {
+        None
+    }
+}
+
+fn streamed_tool_call(arguments: serde_json::Value) -> ToolCall {
+    ToolCall::new(
+        "call-1".to_string(),
+        ToolFunction::new("fs.read".to_string(), arguments),
+    )
+}
+
+/// Dispatches a streamed tool call the way `rig_openai_turn_streaming`
+/// does (repair, then `rig_tool_call_request`) and returns the tool's
+/// output.
+fn dispatch_repaired_tool_call(root: &std::path::Path, mut call: ToolCall) -> serde_json::Value {
+    super::completion::repair_double_encoded_tool_arguments(&mut call.function.arguments);
+    let request = rig_tool_call_request(call);
+    let execution = crate::tools::execute_agent_tool(
+        &NoHostTools,
+        &crate::tools::ToolSessionState::new(root.to_path_buf()),
+        SessionId::new(),
+        &request,
+    );
+    let crate::tools::Execution::Auto(events) = execution else {
+        panic!("fs.read must execute synchronously");
+    };
+    events
+        .into_iter()
+        .find_map(|event| match event {
+            Event::ToolCallFinished(result) => Some(result.output.0),
+            _ => None,
+        })
+        .expect("expected a ToolCallFinished event")
+}
+
+fn temp_read_fixture(label: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!("horizon-rig-{label}-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&root).expect("create temp dir");
+    let root = root.canonicalize().expect("canonicalize temp dir");
+    let file = root.join("file.txt");
+    std::fs::write(&file, "hello").expect("write fixture file");
+    (root, file)
+}
+
+fn history_tool_call_arguments(message: &RigMessage) -> Vec<serde_json::Value> {
+    let RigMessage::Assistant { content, .. } = message else {
+        panic!("expected an assistant message");
+    };
+    let serialized = serde_json::to_value(content).expect("serialize assistant content");
+    serialized
+        .as_array()
+        .expect("assistant content serializes as a sequence")
+        .iter()
+        .filter_map(|item| item.get("function")?.get("arguments").cloned())
+        .collect()
+}
+
+#[test]
+fn double_encoded_tool_arguments_are_repaired_for_dispatch_and_history() {
+    let (root, file) = temp_read_fixture("double-encoded");
+    let encoded = serde_json::json!({ "path": file.display().to_string() }).to_string();
+    let call = streamed_tool_call(serde_json::Value::String(encoded));
+
+    // Dispatch: the repaired object executes instead of failing input
+    // validation.
+    let output = dispatch_repaired_tool_call(&root, call.clone());
+    assert_ne!(output["is_error"], serde_json::json!(true), "{output}");
+    assert!(output["content"].as_str().unwrap().contains("hello"));
+
+    // History: the assistant message carries the decoded object, not the
+    // string the provider emitted.
+    let message = partial_assistant_message(None, "", vec![call]);
+    assert_eq!(
+        history_tool_call_arguments(&message),
+        vec![serde_json::json!({ "path": file.display().to_string() })]
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn plain_object_tool_arguments_are_left_byte_identical() {
+    let (root, file) = temp_read_fixture("plain-object");
+    let arguments = serde_json::json!({ "path": file.display().to_string() });
+    let call = streamed_tool_call(arguments.clone());
+
+    let mut repaired = call.clone();
+    super::completion::repair_double_encoded_tool_arguments(&mut repaired.function.arguments);
+    assert_eq!(repaired, call, "a well-formed call must pass through");
+
+    let output = dispatch_repaired_tool_call(&root, call.clone());
+    assert_ne!(output["is_error"], serde_json::json!(true), "{output}");
+    assert!(output["content"].as_str().unwrap().contains("hello"));
+
+    let message = partial_assistant_message(None, "", vec![call]);
+    assert_eq!(history_tool_call_arguments(&message), vec![arguments]);
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn unparseable_string_tool_arguments_error_the_tool_but_replay_as_an_empty_object() {
+    let (root, _file) = temp_read_fixture("unparseable");
+    let call = streamed_tool_call(serde_json::Value::String("not json at all".to_string()));
+
+    // The tool reports the malformed input to the model, which is the only
+    // feedback that should reach it.
+    let output = dispatch_repaired_tool_call(&root, call.clone());
+    assert_eq!(output["is_error"], serde_json::json!(true), "{output}");
+
+    // The provider-facing replay is still a mapping, so the next request in
+    // this session survives its chat template.
+    let message = partial_assistant_message(None, "", vec![call.clone()]);
+    assert_eq!(
+        history_tool_call_arguments(&message),
+        vec![serde_json::json!({})]
+    );
+
+    // Same for the streaming aggregation path, which assembles history from
+    // rig's own `stream.choice` rather than the streamed calls.
+    let mut content = OneOrMany::one(AssistantContent::ToolCall(call));
+    super::completion::make_tool_call_arguments_replay_safe(&mut content);
+    assert_eq!(
+        history_tool_call_arguments(&RigMessage::Assistant { id: None, content }),
+        vec![serde_json::json!({})]
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// The history-reload path (`load_rig_history` ->
+/// `rig_messages_from_horizon_events`) normalizes the same way, so a
+/// session whose events were persisted before this repair existed cannot
+/// re-poison itself on resume.
+#[test]
+fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
+    let events = vec![
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::Value::String("{\"path\":\"/tmp/x\"}".to_string()).into(),
+        }),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId("call-2".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::Value::String("not json at all".to_string()).into(),
+        }),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_eq!(
+        history_tool_call_arguments(&messages[0]),
+        vec![serde_json::json!({ "path": "/tmp/x" })]
+    );
+    assert_eq!(
+        history_tool_call_arguments(&messages[1]),
+        vec![serde_json::json!({})]
+    );
+}
+
 // --- Turn-loop guards -------------------------------------------------
 
 #[test]

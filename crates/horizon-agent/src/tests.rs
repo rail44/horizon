@@ -1095,6 +1095,31 @@ fn delegation_routing_section_bans_orienting_before_delegating() {
     );
 }
 
+/// The 2026-07-27 amendment to the implementation clause: a dogfooded
+/// session delegated the implementation itself to `task` children, which
+/// are read-only by construction and so could only explore again until
+/// their budget ran out. The clause now says where implementation happens
+/// and that delegating it is not an option.
+#[test]
+fn delegation_routing_section_keeps_implementation_in_this_session() {
+    let section = crate::prompt::DELEGATION_ROUTING_SECTION;
+
+    assert!(
+        section.contains("Then implement the changes yourself in this session"),
+        "{section}"
+    );
+    assert!(
+        section
+            .contains("task agents cannot write files; never delegate the implementation itself"),
+        "{section}"
+    );
+    assert!(
+        !section.contains("Start implementing only after its report returns"),
+        "the replaced sentence must be gone -- it read as license to delegate the \
+         implementation: {section}"
+    );
+}
+
 #[test]
 fn system_prompt_carries_destructive_action_caution() {
     let prompt = system_prompt(
