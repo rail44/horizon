@@ -120,6 +120,11 @@ impl Store {
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::ProviderRequestUsage(_)
+            // `HistoryCleared` wants no projection row either: it records a
+            // decision about the *provider view*, not transcript/tool state,
+            // and the raw record in `agent_events` is what the rig session's
+            // resume path replays it from (`providers::rig::history`).
+            | Event::HistoryCleared(_)
             | Event::Error(_)
             | Event::Exited(_) => Ok(false),
             // Skew catch-all (`Event::Unknown`'s doc): an event this build

@@ -79,6 +79,10 @@ pub struct Burst {
 /// the same "next-turn delivery is deliberate mid-flight" reasoning
 /// `group_into_turns` already documents.
 ///
+/// One more item closes a burst: a Tier 1 compaction divider
+/// (`AgentFrameItem::HistoryCleared`) -- see the arm that handles it for
+/// why the marker must not be absorbed into a receipt.
+///
 /// A turn with no tool activity at all segments to an empty `Vec` --
 /// nothing worth a receipt for; the text keeps rendering as plain
 /// prose, exactly as it always has.
@@ -124,6 +128,24 @@ pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
             // `TurnEnded` is always the turn's own last item
             // (`group_into_turns`'s invariant), so there's nothing left
             // to scan either way.
+            continue;
+        }
+        // A Tier 1 clearing pass closes the open burst as well, for a
+        // different reason than the two above: it is a *divider*
+        // (`docs/agent-compaction-design.md`'s "transcript に区切りを表示").
+        // Everything before it is what the provider will no longer see in
+        // full, so folding it into the surrounding receipt -- where a burst
+        // range renders as a single row and its interior items never render
+        // individually -- would hide the one marker of that change.
+        if matches!(item, AgentFrameItem::HistoryCleared(_)) {
+            if let Some((start, last)) = open.take() {
+                bursts.push(Burst {
+                    start,
+                    end: last + 1,
+                    closed: true,
+                });
+            }
+            continue;
         }
         // Anything else (an interjected user `Message`, a
         // `ReasoningDelta`, `Error`, `Exited`, ...) never affects burst
@@ -179,6 +201,36 @@ mod tests {
             elapsed: std::time::Duration::ZERO,
         };
         assert!(!thinking_visible_outside_burst(Some(&end)));
+    }
+
+    /// The Tier 1 compaction divider closes the burst it lands in
+    /// (`docs/agent-compaction-design.md`'s "transcript に区切りを表示"):
+    /// a burst range renders as one receipt row and never renders its
+    /// interior items individually, so absorbing the marker would hide the
+    /// only sign that the provider's view of everything above it changed.
+    #[test]
+    fn segment_bursts_closes_the_open_burst_at_a_compaction_divider() {
+        let items = vec![
+            user_message("audit these files"),
+            tool_requested("a", "fs.read", json!({"path": "a.rs"})),
+            tool_finished("a", json!({"total_lines": 10})),
+            history_cleared(&["old-1", "old-2"], 90_000),
+            tool_requested("b", "fs.read", json!({"path": "b.rs"})),
+            tool_finished("b", json!({"total_lines": 5})),
+        ];
+        let bursts = segment_bursts(&items);
+        assert_eq!(bursts.len(), 2, "the divider splits the run in two");
+        assert_eq!((bursts[0].start, bursts[0].end), (1, 3));
+        assert!(bursts[0].closed);
+        assert_eq!((bursts[1].start, bursts[1].end), (4, 6));
+        assert!(
+            !bursts[1].closed,
+            "the trailing burst is still the running one"
+        );
+        assert!(
+            (bursts[0].end..bursts[1].start).contains(&3),
+            "the divider itself sits outside every burst range, so it renders as its own row"
+        );
     }
 
     #[test]

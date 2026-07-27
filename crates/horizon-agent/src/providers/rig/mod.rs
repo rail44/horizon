@@ -1,14 +1,17 @@
+mod clearing;
 mod completion;
 mod history;
 mod mapping;
+mod model_limits;
 mod session;
 mod stream;
 
+use clearing::ClearingState;
 use completion::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
     ToolCallDescriptor, TurnCompletion,
 };
-use history::load_rig_history;
+use history::load_rig_session_history;
 use mapping::{rig_tool_result_message, rig_workspace_snapshot_call};
 use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};

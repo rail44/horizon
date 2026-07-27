@@ -332,7 +332,25 @@ impl DecodeSkipLog {
 /// moved: the whole async-`task` mechanism (launch receipt, notification
 /// queue, wake, `task_output`) is in-process inside `horizon-sessiond` and
 /// crosses no channel.
-pub const SESSION_PROTOCOL_VERSION: u32 = 14;
+/// Version 15: **`Event::HistoryCleared`**
+/// (`docs/agent-compaction-design.md` Tier 1). A compaction pass freezes
+/// which old tool results stop being sent to the provider verbatim, and
+/// that decision has to survive a resume -- so it is a persisted, replayed
+/// event rather than in-memory session state, and
+/// `horizon_agent::contract::Event` gained a variant for it. Exactly the
+/// same mechanical situation as v14: the variant is *placed before* the
+/// enum's `#[serde(other)] Unknown` catch-all, per this workspace's standing
+/// "keep `Unknown` last" convention, which under an index-based codec
+/// (Postbag) shifts `Unknown`'s index; the schema checker classifies that as
+/// a reordering reshape rather than an appended value, and this bump is its
+/// required version marker. Decodability is preserved in the direction that
+/// matters -- an older peer decodes the new event as `Unknown`, which it
+/// already skips (no frame item, no projection row) -- so
+/// [`MIN_SUPPORTED_PROTOCOL_VERSION`] stays 11 and v15↔v11 still negotiate
+/// 11 and interoperate. Nothing else moved: the `/models` lookup, the
+/// provider-view projection, and the cleared set itself all live inside
+/// `horizon-sessiond` and cross no channel.
+pub const SESSION_PROTOCOL_VERSION: u32 = 15;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -357,7 +375,11 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 14;
 /// reads it as `Unknown` (assistant-authored, never user words) and the
 /// newer peer's own `Unknown` arm is unchanged — so the pairing is
 /// tolerantly lossy, not undecodable. See [`SESSION_PROTOCOL_VERSION`]'s
-/// v14 note for why the bump was still required.
+/// v14 note for why the bump was still required. v15
+/// (`Event::HistoryCleared`) is the same shape of change for the same
+/// reason and likewise does not raise this floor: an older peer reads the
+/// new event as `Unknown` and skips it, which costs it only the transcript's
+/// compaction divider -- never a message, a tool call, or a result.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 
 /// The first negotiated version at which the daemon answers

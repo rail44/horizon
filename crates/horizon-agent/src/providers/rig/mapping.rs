@@ -136,6 +136,13 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::ProviderRequestUsage(_)
+            // Tier 1 clearing is a projection, never a rewrite of canonical
+            // history: a resumed session reloads the full tool results here
+            // exactly as an uninterrupted one holds them in memory, and the
+            // cleared set is replayed separately
+            // (`clearing::cleared_call_ids_from_events`) so the *provider
+            // view* comes out identical either way.
+            | Event::HistoryCleared(_)
             | Event::Exited(_)
             | Event::TurnEnded(_)
             | Event::Unknown => None,

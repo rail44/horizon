@@ -26,6 +26,14 @@ pub enum AgentFrameItem {
     /// `agent_frame_from_events`/persisted replay — it never reaches the
     /// event log in the first place (`ProviderEvent::tool_call_progress`).
     ToolCallPreparing(ToolCallProgress),
+    /// A Tier 1 compaction pass's divider row (`Event::HistoryCleared`,
+    /// `docs/agent-compaction-design.md`'s "transcript に区切りを表示"):
+    /// the point in the transcript from which older tool-result bodies stop
+    /// being sent to the provider. Deliberately a visible marker rather than
+    /// a silent projection detail — the transcript keeps showing the full
+    /// results above it, so without the divider the session would look
+    /// unchanged while the model's view of it changed.
+    HistoryCleared(HistoryCleared),
     Error(Error),
     Exited(Exit),
     /// A turn's receipt: the end reason `Event::TurnEnded` carries, plus the
@@ -462,6 +470,13 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
                     usage.cached_input_tokens,
                 ));
             }
+            Event::HistoryCleared(cleared) => {
+                lines.push(format!(
+                    "history cleared: {} tool result(s), {} chars",
+                    cleared.cleared_call_ids.len(),
+                    cleared.recovered_chars,
+                ));
+            }
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),
@@ -620,6 +635,11 @@ pub(crate) fn apply_agent_event_to_frame(
         Event::ProviderRequestFirstToken
         | Event::ProviderRequestFinished
         | Event::ProviderRequestUsage(_) => {}
+        Event::HistoryCleared(cleared) => {
+            frame
+                .items
+                .push(AgentFrameItem::HistoryCleared(cleared.clone()));
+        }
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
         // The turn's receipt: see `Event::TurnEnded`'s doc comment and

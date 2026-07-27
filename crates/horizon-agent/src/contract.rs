@@ -169,6 +169,15 @@ pub enum Event {
     /// it is emitted separately from `ProviderRequestFinished` so providers
     /// which cannot report usage retain the existing lifecycle marker.
     ProviderRequestUsage(ProviderRequestUsage),
+    /// One Tier 1 compaction pass decided which old tool results stop being
+    /// sent to the provider verbatim (`docs/agent-compaction-design.md`
+    /// Tier 1). This event *is* the record of that decision: the cleared set
+    /// is frozen when the pass runs, so replaying this event is what makes a
+    /// resumed session send the identical projection a
+    /// continuously-running one would. Nothing is deleted — the full results
+    /// stay in this very log and in the DuckDB projection, which is what
+    /// makes the placeholder's "re-fetch via recall" pointer honest.
+    HistoryCleared(HistoryCleared),
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —
@@ -176,6 +185,18 @@ pub enum Event {
     /// unknown event: it folds into no frame item and projects into no row.
     #[serde(other)]
     Unknown,
+}
+
+/// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
+/// the pass froze into the session's cleared set, and how many characters of
+/// tool-result text that removed from every subsequent provider request.
+///
+/// `cleared_call_ids` is in history order (oldest first) — the order the
+/// pass walked — so a replayed set is byte-identical to the live one.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct HistoryCleared {
+    pub cleared_call_ids: Vec<ToolCallId>,
+    pub recovered_chars: u64,
 }
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
@@ -233,6 +254,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ProviderRequestFirstToken => "provider_request_first_token",
         Event::ProviderRequestFinished => "provider_request_finished",
         Event::ProviderRequestUsage(_) => "provider_request_usage",
+        Event::HistoryCleared(_) => "history_cleared",
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",

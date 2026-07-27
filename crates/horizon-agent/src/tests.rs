@@ -38,6 +38,43 @@ fn transcript_renderer_keeps_provider_neutral_messages() {
     assert!(transcript.contains("assistant: ready"));
 }
 
+/// `Event::HistoryCleared` is the one compaction signal that reaches a
+/// frontend at all (`docs/agent-compaction-design.md` Tier 1's transparency
+/// requirement): it folds into its own frame item, carrying what the marker
+/// row needs, and leaves everything else in the frame untouched -- the
+/// cleared results are still rendered above it in full, because clearing is
+/// a projection of the *provider* view only.
+#[test]
+fn agent_frame_folds_a_compaction_pass_into_its_own_marker_item() {
+    let cleared = agent::HistoryCleared {
+        cleared_call_ids: vec![
+            agent::ToolCallId("call-0".to_string()),
+            agent::ToolCallId("call-1".to_string()),
+        ],
+        recovered_chars: 90_000,
+    };
+    let finished = agent::ToolCallResult::new(
+        agent::ToolCallId("call-0".to_string()),
+        serde_json::json!({"total_lines": 42}),
+    );
+    let frame = agent_frame_from_events(&[
+        agent::Event::ToolCallFinished(finished.clone()),
+        agent::Event::HistoryCleared(cleared.clone()),
+    ]);
+
+    assert_eq!(
+        frame.items,
+        vec![
+            AgentFrameItem::ToolCallFinished(finished),
+            AgentFrameItem::HistoryCleared(cleared.clone()),
+        ]
+    );
+    assert!(
+        render_agent_transcript(&[agent::Event::HistoryCleared(cleared)])
+            .contains("history cleared: 2 tool result(s), 90000 chars")
+    );
+}
+
 #[test]
 fn agent_frame_keeps_state_and_structured_messages() {
     let frame = agent_frame_from_events(&[

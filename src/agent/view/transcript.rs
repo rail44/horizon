@@ -91,6 +91,10 @@ pub(super) fn build_transcript_rows(
                     | AgentFrameItem::AssistantTextDelta(_)
                     | AgentFrameItem::Error(_)
                     | AgentFrameItem::Exited(_)
+                    // The compaction divider always gets its own row --
+                    // `segment_bursts` closes the surrounding burst at it
+                    // precisely so it can never be swallowed by a receipt.
+                    | AgentFrameItem::HistoryCleared(_)
             ) || matches!(item, AgentFrameItem::ReasoningDelta(_) if span.ended.is_none())
                 || matches!(
                     item,
@@ -422,6 +426,19 @@ impl AgentTranscript {
                     format!("{verb} … ({} bytes streamed)", progress.bytes),
                 ))
             }
+            // The Tier 1 compaction divider. Deliberately terse and muted:
+            // it reports a change to what the *model* sees, not to the
+            // transcript -- every cleared result is still rendered above,
+            // and still re-fetchable through `recall`.
+            AgentFrameItem::HistoryCleared(cleared) => Some(block(
+                "context",
+                theme::text_subtle(),
+                format!(
+                    "cleared {} old tool result(s) (~{} chars) — recoverable via recall",
+                    cleared.cleared_call_ids.len(),
+                    cleared.recovered_chars,
+                ),
+            )),
             AgentFrameItem::Error(error) => {
                 Some(block("error", theme::danger(), format!("{error:?}")))
             }

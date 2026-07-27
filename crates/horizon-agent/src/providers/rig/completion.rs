@@ -25,6 +25,7 @@ use crate::{
 };
 
 use super::{
+    clearing::{history_for_provider_request, ClearingState},
     mapping::{
         horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
         rig_tool_call_provider_payload, rig_tool_call_request,
@@ -130,6 +131,12 @@ pub(super) struct TurnCompletion {
     /// "failed" apart from "completed with nothing to do", which otherwise
     /// look identical (empty tool calls, not cancelled).
     pub(super) failed: bool,
+    /// Input tokens the provider reported for this turn's request, when it
+    /// reported usage at all. Fed to `ClearingState::record_input_tokens` so
+    /// Tier 1's trigger runs off the provider's own measurement rather than
+    /// a byte heuristic (`docs/agent-compaction-design.md`; crush and
+    /// opencode both drive the same decision off actual usage tokens).
+    pub(super) input_tokens: Option<u64>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -140,22 +147,38 @@ pub(super) async fn complete_rig_turn(
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
+    clearing: &mut ClearingState,
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
+    // Tier 1's one execution point: between provider rounds, right before a
+    // request is built (`docs/agent-compaction-design.md`). Being here is
+    // what gives the design's turn-semantics requirements for free -- a
+    // session parked in `WaitingForApproval` is not building a request, and
+    // `Event::TurnEnded` is emitted by the session loop, untouched by
+    // anything below. Ahead of the provider branch rather than inside it:
+    // the deterministic fallback responder stands in for a provider request
+    // too, and a state that never sees reported usage can never cross the
+    // threshold anyway (`ClearingState::over_threshold`).
+    if let Some(cleared) = clearing.run_pass(rig_history) {
+        let _ = events_tx.send(Event::HistoryCleared(cleared).into());
+    }
     if config.openai_enabled {
         match rig_openai_turn_streaming(
             config,
             environment,
             extra_sections,
             prompt.clone(),
-            rig_history.clone(),
+            history_for_provider_request(rig_history, clearing.cleared()),
             events_tx.clone(),
             token,
         )
         .await
         {
             Ok((assistant_message, completion)) => {
+                if let Some(input_tokens) = completion.input_tokens {
+                    clearing.record_input_tokens(input_tokens);
+                }
                 rig_history.push(prompt);
                 rig_history.push(assistant_message);
                 return completion;
@@ -190,6 +213,7 @@ pub(super) async fn complete_rig_turn(
         requested_tool_calls,
         cancelled: false,
         failed: false,
+        input_tokens: None,
     }
 }
 
@@ -214,11 +238,12 @@ async fn rig_openai_turn_streaming(
         .into(),
     );
     let mut request_span = ProviderRequestSpan::new(events_tx.clone());
-    // The provider sees the session's canonical history verbatim: Horizon
-    // keeps no separate, lossily-projected view of it (owner decision
-    // 2026-07-25, `docs/research/agent-context-memory-separation-2026-07-20.md`).
-    // A real context-window overflow is therefore reported by the provider
-    // rather than hidden by Horizon silently discarding older content.
+    // `history` is the *provider view* of canonical history, already
+    // projected through the Tier 1 clearing seam by the caller
+    // (`super::clearing::history_for_provider_request`). Nothing is dropped:
+    // the projection only replaces the bodies of tool results the session's
+    // frozen cleared set names, keeping every call/result pair intact, and
+    // `rig_history` itself still holds the originals.
     let stream_request = model
         .completion_request(prompt)
         .messages(history)
@@ -253,6 +278,7 @@ async fn rig_openai_turn_streaming(
     let mut requested_tool_calls = HashMap::new();
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut cancelled = false;
+    let mut input_tokens = None;
     let mut text_buffer = StreamDeltaBuffer::new(
         events_tx.clone(),
         StreamDeltaKind::AssistantText,
@@ -359,8 +385,11 @@ async fn rig_openai_turn_streaming(
                 }
             },
             StreamedAssistantContent::Final(response) => {
-                let _ = events_tx
-                    .send(provider_request_usage_event_from_openai_final(&response).into());
+                let usage = provider_request_usage_event_from_openai_final(&response);
+                if let Event::ProviderRequestUsage(usage) = &usage {
+                    input_tokens = Some(usage.input_tokens);
+                }
+                let _ = events_tx.send(usage.into());
             }
         }
     }
@@ -410,6 +439,7 @@ async fn rig_openai_turn_streaming(
             requested_tool_calls,
             cancelled,
             failed: false,
+            input_tokens,
         },
     ))
 }

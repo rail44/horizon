@@ -1,9 +1,22 @@
 use rig_core::completion::Message;
 
-use crate::contract::SessionId;
+use crate::contract::{SessionId, ToolCallId};
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 
+use super::clearing::cleared_call_ids_from_events;
 use super::mapping::rig_messages_from_horizon_events;
+
+/// Everything a resumed session has to rebuild from its persisted events:
+/// the canonical Rig history, plus the Tier 1 cleared set frozen by whatever
+/// clearing passes already ran (`super::clearing`'s module doc). The two are
+/// deliberately separate -- history is reloaded in full, and the cleared set
+/// is re-applied on top of it as a projection, so a resumed session sends
+/// the provider exactly what a continuously-running one would.
+#[derive(Debug, Default)]
+pub(super) struct RigSessionHistory {
+    pub(super) messages: Vec<Message>,
+    pub(super) cleared_call_ids: Vec<ToolCallId>,
+}
 
 /// Loads this session's prior history (if any) as Rig messages, through the
 /// *shared* DuckDB store handle -- never a fresh `Store::open` of the same
@@ -17,12 +30,12 @@ use super::mapping::rig_messages_from_horizon_events;
 /// history. `store` is `None` when no DuckDB projection is configured for
 /// this process (or it failed to open/rebuild): callers get an empty
 /// history exactly as before, never a panic or a stale read.
-pub(super) fn load_rig_history(
+pub(super) fn load_rig_session_history(
     store: Option<&DuckdbStoreHandle>,
     session_id: SessionId,
-) -> Vec<Message> {
+) -> RigSessionHistory {
     let Some(store) = store else {
-        return Vec::new();
+        return RigSessionHistory::default();
     };
 
     store
@@ -34,7 +47,10 @@ pub(super) fn load_rig_history(
                 .into_iter()
                 .map(|record| record.event)
                 .collect::<Vec<_>>();
-            rig_messages_from_horizon_events(&events)
+            RigSessionHistory {
+                messages: rig_messages_from_horizon_events(&events),
+                cleared_call_ids: cleared_call_ids_from_events(&events),
+            }
         })
         .unwrap_or_default()
 }

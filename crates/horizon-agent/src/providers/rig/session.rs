@@ -23,8 +23,8 @@ use crate::{
 
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
-    load_rig_history, rig_initialization_message, rig_tool_result_message, ToolCallDescriptor,
-    TurnCompletion,
+    load_rig_session_history, model_limits::model_limits, rig_initialization_message,
+    rig_tool_result_message, ClearingState, ToolCallDescriptor, TurnCompletion,
 };
 
 pub(super) fn spawn_rig_session(
@@ -59,7 +59,9 @@ pub(super) fn spawn_rig_session(
             // resumed-session bug this fixed -- a session's own real history
             // silently not showing up.
             let duckdb_store = duckdb_cell.wait();
-            let rig_history = load_rig_history(duckdb_store.as_ref(), session_id);
+            let persisted = load_rig_session_history(duckdb_store.as_ref(), session_id);
+            let rig_history = persisted.messages;
+            let cleared_call_ids = persisted.cleared_call_ids;
             let extra_sections = session_extra_sections(&environment, &config, role);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
@@ -96,6 +98,7 @@ pub(super) fn spawn_rig_session(
                 extra_sections,
                 role,
                 rig_history,
+                cleared_call_ids,
             ));
         });
         if let Err(report) = outcome {
@@ -197,6 +200,33 @@ fn advertises_task_tool(config: &RigAgentConfig) -> bool {
     }
 }
 
+/// Builds this session's [`ClearingState`] from the provider's declared
+/// model limits.
+///
+/// The deterministic fallback provider never issues a provider request at
+/// all, so it gets a disabled state without asking anyone. Otherwise the
+/// effective window is `context_length − max_output_tokens`
+/// (`docs/agent-compaction-design.md`); when the provider declares no
+/// limits, clearing stays off for the session's whole life and says so
+/// **once**, on stderr -- the design's `/models`-unavailable behavior, with
+/// no guessed fallback window (see `super::model_limits`' module doc).
+async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
+    if !config.openai_enabled {
+        return ClearingState::disabled();
+    }
+    let window = model_limits(config.base_url.as_deref(), &config.model)
+        .await
+        .and_then(|limits| limits.effective_window_tokens(config.max_output_tokens));
+    if window.is_none() {
+        eprintln!(
+            "horizon-agent: `{}` declares no context_length at /models; history clearing is \
+             disabled for this session (docs/agent-compaction-design.md)",
+            config.model
+        );
+    }
+    ClearingState::new(window, config.clearing_threshold_pct)
+}
+
 /// Forwards commands from the crossbeam channel (the provider's public,
 /// synchronous surface — unchanged for callers) onto a tokio channel, so the
 /// async session loop below can `select!` between receiving a command and
@@ -238,7 +268,17 @@ async fn run_session_loop(
     extra_sections: Vec<String>,
     role: Option<&'static RoleDefinition>,
     mut rig_history: Vec<Message>,
+    cleared_call_ids: Vec<ToolCallId>,
 ) {
+    // Tier 1 compaction state (`docs/agent-compaction-design.md`,
+    // `super::clearing`): the discovered window plus whatever clearing
+    // passes this session already froze before it was resumed. Resolved
+    // here, inside the loop's own runtime, rather than before the session's
+    // opening events -- the `/models` lookup is cached per process, but the
+    // first session in a process must not have its "session started"
+    // feedback held behind a network round trip.
+    let mut clearing = discover_clearing_state(&config).await;
+    clearing.seed_cleared(cleared_call_ids);
     let mut commands = bridge_commands(commands_rx);
     // The completion-subscription seam's receiving end for this session
     // (`tools::explore`): signalled whenever one of this session's
@@ -313,6 +353,7 @@ async fn run_session_loop(
                     &mut rig_history,
                     Message::user(text),
                     &events_tx,
+                    &mut clearing,
                     move || deterministic_rig_response(&fallback_text),
                 )
                 .await;
@@ -391,6 +432,7 @@ async fn run_session_loop(
                     &mut rig_history,
                     prompt,
                     &events_tx,
+                    &mut clearing,
                     move || deterministic_rig_response(&fallback_text),
                 )
                 .await;
@@ -447,6 +489,7 @@ async fn run_session_loop(
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
+                        &mut clearing,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
@@ -478,6 +521,7 @@ async fn run_session_loop(
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
+                        &mut clearing,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
@@ -502,6 +546,7 @@ async fn run_session_loop(
                     &mut rig_history,
                     prompt,
                     &events_tx,
+                    &mut clearing,
                     move || match injected {
                         Some(text) => deterministic_rig_response(&text),
                         None => deterministic_tool_result_response(&result),
@@ -548,6 +593,7 @@ async fn run_session_loop(
                         &events_tx,
                         &mut pending_halt_result,
                         &mut rig_history,
+                        &mut clearing,
                         &result,
                         &mut pending_tool_calls,
                         &mut cancelled_call_ids,
@@ -571,6 +617,7 @@ async fn run_session_loop(
                     &mut rig_history,
                     prompt,
                     &events_tx,
+                    &mut clearing,
                     move || match injected {
                         Some(text) => deterministic_rig_response(&text),
                         None => deterministic_tool_result_response(&result),
@@ -658,6 +705,7 @@ async fn run_cancellable_turn(
     rig_history: &mut Vec<Message>,
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
+    clearing: &mut ClearingState,
     fallback: impl FnOnce() -> Message,
 ) -> TurnCompletion {
     let token = CancellationToken::new();
@@ -668,6 +716,7 @@ async fn run_cancellable_turn(
         rig_history,
         prompt,
         events_tx,
+        clearing,
         fallback,
         &token,
     );
@@ -998,6 +1047,7 @@ pub(super) async fn halt_turn_loop(
     events_tx: &Sender<ProviderEvent>,
     pending_halt_result: &mut Option<ToolCallResult>,
     rig_history: &mut Vec<Message>,
+    clearing: &mut ClearingState,
     arrived_result: &ToolCallResult,
     pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
     cancelled_call_ids: &mut HashSet<ToolCallId>,
@@ -1018,6 +1068,7 @@ pub(super) async fn halt_turn_loop(
             environment,
             extra_sections,
             rig_history,
+            clearing,
             arrived_result,
             events_tx,
         )
@@ -1070,6 +1121,7 @@ async fn run_cap_summary_turn(
     environment: &SessionEnvironment,
     extra_sections: &[String],
     rig_history: &mut Vec<Message>,
+    clearing: &mut ClearingState,
     arrived_result: &ToolCallResult,
     events_tx: &Sender<ProviderEvent>,
 ) -> bool {
@@ -1089,6 +1141,7 @@ async fn run_cap_summary_turn(
         rig_history,
         Message::user(CAP_SUMMARY_INSTRUCTION),
         events_tx,
+        clearing,
         || deterministic_rig_response(CAP_SUMMARY_INSTRUCTION),
     )
     .await;

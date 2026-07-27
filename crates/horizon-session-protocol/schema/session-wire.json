@@ -566,6 +566,19 @@
             "ProviderRequestUsage"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One Tier 1 compaction pass decided which old tool results stop being\nsent to the provider verbatim (`docs/agent-compaction-design.md`\nTier 1). This event *is* the record of that decision: the cleared set\nis frozen when the pass runs, so replaying this event is what makes a\nresumed session send the identical projection a\ncontinuously-running one would. Nothing is deleted — the full results\nstay in this very log and in the DuckDB projection, which is what\nmakes the placeholder's \"re-fetch via recall\" pointer honest.",
+          "properties": {
+            "HistoryCleared": {
+              "$ref": "#/$defs/HistoryCleared"
+            }
+          },
+          "required": [
+            "HistoryCleared"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -631,6 +644,27 @@
         "DirectoryTree"
       ],
       "type": "string"
+    },
+    "HistoryCleared": {
+      "description": "Payload for [`Event::HistoryCleared`]: exactly which tool calls' results\nthe pass froze into the session's cleared set, and how many characters of\ntool-result text that removed from every subsequent provider request.\n\n`cleared_call_ids` is in history order (oldest first) — the order the\npass walked — so a replayed set is byte-identical to the live one.",
+      "properties": {
+        "cleared_call_ids": {
+          "items": {
+            "$ref": "#/$defs/ToolCallId"
+          },
+          "type": "array"
+        },
+        "recovered_chars": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "cleared_call_ids",
+        "recovered_chars"
+      ],
+      "type": "object"
     },
     "HostToolRequest": {
       "description": "The agent (child) asking the client to run a host-coupled tool (e.g.\n`workspace.snapshot`) over this same connection -- guardrail 4. Rides\nthe connection-global `HubHello::host_tools` channel; the `request_id`\ncorrelation survives the cutover because the exchange is genuinely\nasynchronous on the daemon side (a session thread blocks on the\nmatching [`HostToolResponse`]).",
@@ -2337,5 +2371,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 14
+  "x-session-protocol-version": 15
 }
