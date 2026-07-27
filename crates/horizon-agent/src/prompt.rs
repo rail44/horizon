@@ -100,9 +100,11 @@ fn is_git_repository(cwd: &Path) -> bool {
 /// carried is deliberately gone too: conditionality lives in *whether this
 /// section is included*, not in its wording.
 ///
-/// Two later amendments, both confined to the clause's **final,
-/// report-return sentence** so every measured word from cells C3/C5/C7b
-/// stays byte-identical and the probe's result is not re-opened:
+/// Three later amendments. The first two are confined to the clause's
+/// **final, report-return sentence**, so every measured word from cells
+/// C3/C5/C7b stays byte-identical and the probe's result is not re-opened;
+/// the third is the first one to also touch the implementation clause's
+/// opening sentence:
 ///
 /// 1. **2026-07-27.** The implementation clause used to end "Start
 ///    implementing only after its report returns", which a dogfooded
@@ -120,6 +122,21 @@ fn is_git_repository(cwd: &Path) -> bool {
 ///    deliberate amendment to the measured clause, and the sentence it
 ///    touches is the same one; the two orienting bans above it are
 ///    untouched.
+/// 3. **2026-07-28, later the same day.** The first validation run of the
+///    asynchronous loop (session 5dd49a85, recorded in
+///    `docs/agent-async-task-design.md`'s measurement plan) drove the whole
+///    mechanism correctly but launched exactly one monolithic task, so
+///    consumption kept the synchronous era's shape. The clause's singular
+///    phrasing ("the up-front investigation and planning") is what selects
+///    that shape, and entry-point prescriptions are the part these models
+///    follow reliably (cells C5/C7b) — so the decomposition is stated in
+///    the entry sentence itself: split the investigation into independent,
+///    narrowly scoped questions and launch them as parallel calls in one
+///    response. The same amendment appends a closing sentence prescribing
+///    *continued* delegation of narrow follow-up questions during
+///    implementation. That closing sentence is a new prescription, not a
+///    measured one: it is to be measured on the next dogfood run, and comes
+///    back out if delegation granularity does not move.
 ///
 /// `tools::catalog`'s `task` description carries the matching amendments.
 pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
@@ -127,12 +144,16 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      bash/ls or read files to orient yourself first; the task agent does its own orientation \
      inside its own session, which costs you nothing.\n\
      - For any implementation task, your FIRST action must be to delegate the up-front \
-     investigation and planning to the task tool — even when the change targets look already \
-     known or the task statement names concrete components. State the question and the exact \
-     deliverable (relevant files, line numbers, a step plan). Do not grep/read/bash to orient \
-     yourself first. Keep working while it runs; its report will arrive as a notification, and \
-     you implement the changes yourself in this session — task agents cannot write files; never \
-     delegate the implementation itself.";
+     investigation and planning to the task tool — split it into independent, narrowly scoped \
+     questions and launch them as parallel task calls in one response (up to 3 run concurrently) \
+     — even when the change targets look already known or the task statement names concrete \
+     components. State the question and the exact deliverable (relevant files, line numbers, a \
+     step plan). Do not grep/read/bash to orient yourself first. Keep working while it runs; its \
+     report will arrive as a notification, and you implement the changes yourself in this \
+     session — task agents cannot write files; never delegate the implementation itself. While \
+     implementing, keep delegating narrow follow-up questions (where is something defined, how \
+     is it used) to task instead of reading through the code yourself — results arrive as \
+     notifications while you keep working.";
 
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any

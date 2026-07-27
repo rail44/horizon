@@ -1131,6 +1131,42 @@ fn delegation_routing_section_keeps_implementation_in_this_session() {
     );
 }
 
+/// The third amendment (2026-07-28): the first async validation run drove
+/// the loop correctly but launched exactly one monolithic task, so the
+/// implementation entry sentence now asks for the investigation to be split
+/// and launched in parallel, and a closing sentence keeps delegation going
+/// during implementation. The closing sentence is an unmeasured
+/// prescription -- pinned here so removing it after the next dogfood run is
+/// a deliberate edit rather than a silent drift.
+#[test]
+fn delegation_routing_section_asks_for_parallel_decomposition() {
+    let section = crate::prompt::DELEGATION_ROUTING_SECTION;
+
+    assert!(
+        section.contains(
+            "split it into independent, narrowly scoped questions and launch them as parallel \
+             task calls in one response (up to 3 run concurrently)"
+        ),
+        "{section}"
+    );
+    assert!(
+        section.contains(
+            "While implementing, keep delegating narrow follow-up questions (where is something \
+             defined, how is it used) to task instead of reading through the code yourself"
+        ),
+        "{section}"
+    );
+    // The decomposition must sit inside the implementation entry, before
+    // the unconditional hedge -- not appended as a separate afterthought.
+    let split = section
+        .find("split it into independent")
+        .expect("decomposition clause must be present");
+    let unconditional = section
+        .find("even when the change targets look already known")
+        .expect("the unconditional hedge must survive");
+    assert!(split < unconditional, "{section}");
+}
+
 #[test]
 fn system_prompt_carries_destructive_action_caution() {
     let prompt = system_prompt(

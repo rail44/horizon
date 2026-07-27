@@ -135,3 +135,19 @@ Rerun T-callid after implementation: task launches per session,
 parallel launches per response (probe-verified capability), requester
 read volume and calls/req, whether the requester survives to the gate
 phase. Before/after baseline is 追補 4's run (f89f0780).
+
+**First validation run (session 5dd49a85, 2026-07-28, M3).** The async
+loop worked end-to-end in production: launch receipt → requester turn
+ended → completion notification (4,405 chars: 4k head plus a
+`task_output` pointer) started an auto-turn → `task_output` fetched the
+full report → batched reads followed. The run nonetheless launched
+exactly ONE task (plus one `task_output`; no follow-up launches during
+implementation), so consumption matched the synchronous era's shape: 110
+requests, death at input 229,212 (the max_tokens-adjusted ceiling),
+calls/req 1.37, first edit at request 18, 28 files +348/−31 with the
+final `cargo check` clean. Conclusion: the mechanism is proven and the
+granularity is unchanged — hence the 2026-07-28 wording amendment to
+`prompt::DELEGATION_ROUTING_SECTION` and the matching `task` description
+(decompose into parallel launches; keep delegating follow-up questions
+while implementing), to be measured on the next dogfood run. The next
+structural lever is compaction (design in progress).

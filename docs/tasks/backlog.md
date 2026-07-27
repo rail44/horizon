@@ -506,3 +506,18 @@ entries live in `backlog-resolved.md` keeping their original numbers
     everything passed once per-package runs rebuilt things. Mechanism
     not fully pinned (build ordering vs. feature unification) — worth
     reproducing before designing the hook hardening.
+
+67. Running background `task` children are invisible to the user
+    (owner observation, 2026-07-28, during the first async-task
+    validation run). The only surface is the transcript's
+    `Task <description>` row at launch; there is no live indicator of
+    in-flight children on the pane, no listing in Manage Sessions
+    (exploration sessions are deliberately excluded from session_list),
+    and no user-facing cancel affordance for an individual child. Now
+    that children survive `cancel-turn` and cross turn boundaries
+    (`docs/agent-async-task-design.md` decision 4), a user can have
+    work running with nothing on screen saying so. Wanted: a pane-level
+    running/completed indicator (the `description` field exists
+    precisely to label this) and probably per-child cancel; design
+    belongs with the UI, not the daemon — the subscription seam already
+    carries the needed events.
