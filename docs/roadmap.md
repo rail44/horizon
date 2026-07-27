@@ -410,6 +410,14 @@ lands:
   `close_range(CLOSE_RANGE_CLOEXEC)` on Linux, bounded `fcntl` loop on
   macOS/BSD — which also fixes upstream #7742/#7893; Horizon consumes
   it via `[patch.crates-io]`). Item stays open tracking that work.
+  **Next: async `task` (designed 2026-07-28,
+  `docs/agent-async-task-design.md`)** — background children with push
+  notification delivery (mainstream shape, owner decision after the
+  join-tool draft was rejected as off-distribution), session-scoped
+  lifetime, `task_output` fetch, concurrency cap 3, all plumbed through
+  the blocking/stop-event subscription abstraction; v1 children stay
+  read-only so approvals remain structurally impossible.
+
 
 - **Terminal presentation wave** — all five slices merged 2026-07-18
   (up to `bd7f52f`, protocol v5): geometric box/block/sextant/braille
