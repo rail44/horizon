@@ -133,14 +133,9 @@ pub(super) fn resolve_and_create_isolated_worktree(
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
     let parent_info =
         spawn_source_session_id.and_then(|source_id| state.session_directory(source_id));
-    let (source_dir, source_is_owned_worktree) =
-        worktree::resolve_isolation_source(parent_info, fallback_dir);
+    let source_dir = worktree::resolve_isolation_source(parent_info, fallback_dir);
 
-    match worktree::create_isolated_worktree(
-        &source_dir,
-        source_is_owned_worktree,
-        session_id.as_uuid(),
-    ) {
+    match worktree::create_isolated_worktree(&source_dir, session_id.as_uuid()) {
         Ok(info) => {
             let root = info.path.clone();
             state.record_isolated_worktree(session_id, spawn_source_session_id, info);
