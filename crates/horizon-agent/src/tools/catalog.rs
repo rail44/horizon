@@ -493,6 +493,12 @@ pub fn definitions() -> Vec<Definition> {
         // mainstream harnesses use, which is the whole reason the design
         // chose this shape over a join-first one
         // (`docs/agent-async-task-design.md`'s "Why", third bullet).
+        //
+        // The decomposition sentence (2026-07-28, later the same day)
+        // matches the routing section's third amendment: the first
+        // validation run of the async loop launched one monolithic task,
+        // so both surfaces now ask for several narrowly scoped launches in
+        // one response. To be measured on the next dogfood run.
         Definition {
             id: "task".to_string(),
             title: "Delegate a Task".to_string(),
@@ -507,8 +513,9 @@ pub fn definitions() -> Vec<Definition> {
                 cannot write files or run commands that modify state; implementation happens in \
                 this session after the report returns. Runs in the background — you will be \
                 notified when it completes; keep working in the meantime; up to 3 may run \
-                concurrently. Returns immediately with the task session's id, which is also how \
-                you re-read its report later with task_output."
+                concurrently. Prefer several narrowly scoped tasks launched in parallel in one \
+                response over a single broad one. Returns immediately with the task session's \
+                id, which is also how you re-read its report later with task_output."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -669,6 +676,17 @@ mod tests {
         assert!(
             task.description
                 .contains("implementation happens in this session after the report returns"),
+            "{}",
+            task.description
+        );
+
+        // The 2026-07-28 decomposition amendment, matching the routing
+        // section's third amendment (`prompt::DELEGATION_ROUTING_SECTION`).
+        assert!(
+            task.description.contains(
+                "Prefer several narrowly scoped tasks launched in parallel in one response over \
+                 a single broad one"
+            ),
             "{}",
             task.description
         );
