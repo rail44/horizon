@@ -55,10 +55,20 @@ messaging need, so it is designed once, here.
      Isolation is what creates the derivation edge: an isolated child
      has a child worktree branched from the parent; a non-isolated
      spawn merely shares a directory and is not a lineage child.
-   - *base ref is derived, not chosen*: root (non-derived) → fresh from
-     `origin/<default>`; derived child → from the parent's worktree
-     HEAD. `fresh` alone is wrong for multi-level work (a child of an
-     agent's worktree must branch from that worktree, not origin/main).
+   - *base ref is derived, not chosen*: every spawn, root or derived,
+     branches from the source session's own working-tree HEAD via
+     `git rev-parse HEAD`. A derived child's source is its parent's
+     owned worktree (so a multi-level chain includes the parent's own
+     commits), and a root spawn's source is the human launcher's own
+     checkout -- including any local commits that have not been pushed
+     to `origin/main` (the "launching session's source commit" rule
+     from issue 006). The repository's `origin/<default>` is *not*
+     consulted at all: when the launcher has unpushed work, that is
+     the state the child must inspect, not a stale `origin/HEAD`.
+     (Prior implementation read `origin/<default>` for the root case
+     and silently dropped any local commits past it -- Agent #67
+     worked from a stale `4b0acac` while its launcher sat at
+     `f32f411`, and reported a retired `fs.read` default as a result.)
    - *isolation's default is an origin property*, mirroring the
      `activate` decision (`docs/cli-control-plane-design.md`): **palette
      origin → default parallel/shared, opt in to isolate; CLI origin →
