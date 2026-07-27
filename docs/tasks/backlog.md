@@ -478,3 +478,31 @@ entries live in `backlog-resolved.md` keeping their original numbers
     horizon-side nibble meanwhile: pass `.featured_colors(...)`
     explicitly to skip the per-render 12-color rebuild from
     `cx.theme()`.
+
+66. The pre-commit hook's touch-based rebuild does not displace every
+    stale artifact from a deleted worktree. Observed 2026-07-27, twice,
+    deterministically: `horizon-config`'s
+    `config_example_toml_documents_grants_without_activating_any` failed
+    under `cargo nextest run --workspace` with "config.example.toml must
+    be readable: NotFound" — the workspace-feature-unified test binary
+    in the shared build dir was compiled inside a since-removed worker
+    worktree, so its baked `CARGO_MANIFEST_DIR` pointed at a deleted
+    path. Touching this checkout's sources (the hook's backlog-43
+    defense) did not force that variant's rebuild; `cargo nextest run
+    -p horizon-config` used a different feature unification and passed,
+    which made the failure look flaky at first. Workaround that worked:
+    `cargo clean -p horizon-config` (safe for lib crates; avoid for
+    crates whose binaries `cargo run` needs). Open: harden the hook —
+    either `cargo clean -p` for workspace lib crates, or teach the gate
+    to detect artifacts whose baked manifest dir no longer exists. Also
+    re-examine today's earlier terminal-e2e gate timeout under this
+    lens before calling it load flakiness.
+    Second wave, same day: after a full `cargo clean -p <every member>`
+    + `cargo build --workspace`, the next gate failed differently —
+    horizon-agent's sandboxed-bash tests and horizon-sandbox's proxy
+    tests spawn `horizon-sandbox-helper` at RUNTIME (resolved via env /
+    current_exe fallback, not a cargo dependency edge), and during that
+    gate the helper was evidently not in place when those tests ran;
+    everything passed once per-package runs rebuilt things. Mechanism
+    not fully pinned (build ordering vs. feature unification) — worth
+    reproducing before designing the hook hardening.
