@@ -160,10 +160,18 @@ pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Val
     })
 }
 
+/// Rebuilds a rig tool call from a persisted `ToolCallRequested` event —
+/// the history-reload path, so the arguments get the same normalization a
+/// live turn applies (see `completion::replay_safe_tool_arguments`).
+/// Without it, a session recorded before that repair existed would
+/// re-poison itself the first time its history was reloaded from the
+/// projection.
 fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
+    let mut arguments = request.input.0.clone();
+    super::completion::replay_safe_tool_arguments(&mut arguments);
     ToolCall::new(
         request.call_id.0.clone(),
-        ToolFunction::new(request.tool_id.clone(), request.input.0.clone()),
+        ToolFunction::new(request.tool_id.clone(), arguments),
     )
 }
 

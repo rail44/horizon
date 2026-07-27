@@ -99,6 +99,15 @@ fn is_git_repository(cwd: &Path) -> bool {
 /// escape hatch. The `when it is available` hedge the old one-line policy
 /// carried is deliberately gone too: conditionality lives in *whether this
 /// section is included*, not in its wording.
+///
+/// One later amendment (2026-07-27), additive and terminal so the measured
+/// prose is untouched: the implementation clause used to end "Start
+/// implementing only after its report returns", which a dogfooded session
+/// read as license to delegate the implementation itself to task children.
+/// Task agents are read-only by construction, so such a child can only
+/// explore again until its budget runs out. The replacement sentence states
+/// where implementation happens and that delegating it is not an option;
+/// `tools::catalog`'s `task` description carries the matching amendment.
 pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      - For an open-ended exploration goal, calling task must be your FIRST action — do not run \
      bash/ls or read files to orient yourself first; the task agent does its own orientation \
@@ -107,7 +116,8 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      investigation and planning to the task tool — even when the change targets look already \
      known or the task statement names concrete components. State the question and the exact \
      deliverable (relevant files, line numbers, a step plan). Do not grep/read/bash to orient \
-     yourself first. Start implementing only after its report returns.";
+     yourself first. Then implement the changes yourself in this session — task agents cannot \
+     write files; never delegate the implementation itself.";
 
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any

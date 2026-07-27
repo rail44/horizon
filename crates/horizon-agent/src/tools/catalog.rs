@@ -478,6 +478,14 @@ pub fn definitions() -> Vec<Definition> {
         // wording plus the self-orientation clause. Its routing counterpart
         // is `prompt::DELEGATION_ROUTING_SECTION`; both were measured
         // together, so change them together.
+        //
+        // The read-only sentence is a later, additive amendment (2026-07-27)
+        // that leaves the measured wording intact: a dogfooded session
+        // delegated the *implementation* to task children twice, which the
+        // read-only whitelist turns into another exploration that burns the
+        // child's turn budget. The generic `task` name reads as
+        // write-capable in these models' training distribution, so the
+        // constraint has to be stated rather than implied.
         Definition {
             id: "task".to_string(),
             title: "Delegate a Task".to_string(),
@@ -488,8 +496,11 @@ pub fn definitions() -> Vec<Definition> {
                 question and the exact deliverable (paths, line numbers, facts, a step plan) in \
                 the prompt. The task agent does its own orientation inside its own session; do \
                 not orient with bash/ls first. For one to three known files, read them directly \
-                instead. Returns the task's final report — capped-out work is still reported, \
-                flagged with `capped` — plus the task session's id for cost attribution."
+                instead. Task agents are read-only — they investigate, locate, and plan, but \
+                cannot write files or run commands that modify state; implementation happens in \
+                this session after the report returns. Returns the task's final report — \
+                capped-out work is still reported, flagged with `capped` — plus the task \
+                session's id for cost attribution."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -605,6 +616,21 @@ mod tests {
         assert!(
             task.description
                 .contains("do not orient with bash/ls first"),
+            "{}",
+            task.description
+        );
+
+        // The 2026-07-27 amendment: the generic `task` name reads as
+        // write-capable, so the read-only constraint and where
+        // implementation happens are stated outright.
+        assert!(
+            task.description.contains("Task agents are read-only"),
+            "{}",
+            task.description
+        );
+        assert!(
+            task.description
+                .contains("implementation happens in this session after the report returns"),
             "{}",
             task.description
         );
