@@ -93,6 +93,7 @@ fn is_known_tool_id(tool_id: &str) -> bool {
             | "recall.search"
             | "recall.read"
             | "skill.read"
+            | "task"
     )
 }
 

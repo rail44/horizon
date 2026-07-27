@@ -308,6 +308,17 @@ Horizon expects to switch providers, so provider-specific prompt lore
 (e.g. Kimi-tuned phrasing, or removing the tool-policy lines on Kimi's
 official advice) is out of scope regardless of its evidence.
 
+**Addendum (2026-07-27).** "No step-by-step workflows" above is narrowed
+to *no unmeasured* ones (owner decision). The delegation-first routing
+block — `prompt::DELEGATION_ROUTING_SECTION`, appended only to sessions
+that advertise the `task` tool — is a workflow prescription, and it ships
+because it was measured effective against both production models
+(`docs/research/agent-delegation-and-batching-probes-2026-07-27.md`, cells
+C5 and C7b; `docs/agent-explore-design.md`'s addendum of the same date is
+the scope record). The model-agnostic constraint above is untouched: the
+shipped wording is the one that worked for both models, with no per-model
+branching. A prescription without that kind of evidence stays out.
+
 ## Config
 
 Provider/model selection and base URL flow through Horizon's single TOML

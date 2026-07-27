@@ -175,7 +175,7 @@ struct Inner {
     /// exploration must share. `None` (every construction site in this
     /// crate's own tests, and deliberately for an exploration session
     /// itself, which must not spawn further explorations) makes
-    /// `agent.explore` resolve to an actionable error result rather than a
+    /// `task` resolve to an actionable error result rather than a
     /// silent no-op.
     exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
 }

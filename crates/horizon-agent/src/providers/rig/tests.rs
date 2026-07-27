@@ -1731,7 +1731,7 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
 /// `docs/agent-explore-design.md`'s first test requirement, at the point
 /// the restriction actually reaches the model: an exploration session
 /// advertises exactly `fs.read`/`fs.grep`/`fs.glob` and nothing else --
-/// notably not `agent.explore` itself, which is what makes recursion
+/// notably not `task` itself, which is what makes recursion
 /// impossible to express rather than merely discouraged.
 #[test]
 fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
@@ -1909,19 +1909,24 @@ fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_r
 
     assert_eq!(
         sections.len(),
-        2,
-        "expected exactly a skills section and a repository-instructions section, got: \
-         {sections:?}"
-    );
-    assert!(
-        sections[0].contains("horizon-config")
-            && sections[0].contains("horizon-cli")
-            && sections[0].contains("skill.read"),
-        "a role-less session must list every available skill, got: {:?}",
-        sections[0]
+        3,
+        "expected exactly a delegation-routing section, a skills section, and a \
+         repository-instructions section, got: {sections:?}"
     );
     assert_eq!(
-        sections[1..],
+        sections[0],
+        crate::prompt::DELEGATION_ROUTING_SECTION,
+        "the delegation-routing block must come first for a session that has `task`"
+    );
+    assert!(
+        sections[1].contains("horizon-config")
+            && sections[1].contains("horizon-cli")
+            && sections[1].contains("skill.read"),
+        "a role-less session must list every available skill, got: {:?}",
+        sections[1]
+    );
+    assert_eq!(
+        sections[2..],
         expected_instructions[..],
         "a role-less session's repository instructions must match \
          instructions::extra_sections exactly"
@@ -1945,10 +1950,45 @@ fn session_extra_sections_lists_a_repository_skill_discovered_from_cwd_for_a_rol
 
     let sections = session_extra_sections(&environment, &config, None);
 
+    // [0] is the delegation-routing block; the skills section follows it.
     assert!(
-        sections[0].contains("my-skill") && sections[0].contains("A repository skill."),
+        sections[1].contains("my-skill") && sections[1].contains("A repository skill."),
         "expected the repository skill in the skills section, got: {:?}",
-        sections[0]
+        sections[1]
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+/// The delegation-routing block (`prompt::DELEGATION_ROUTING_SECTION`,
+/// measured as cells C5/C7b in `docs/research/agent-delegation-and-
+/// batching-probes-2026-07-27.md`) is worded unconditionally -- "your FIRST
+/// action must be task" -- so the *inclusion* has to carry the
+/// conditionality. An ordinary session gets it; an exploration session,
+/// whose role allows three read-only tools and deliberately not `task`,
+/// must never be told to make a call it cannot make.
+#[test]
+fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advertised() {
+    let cwd = git_repo_with_agents_md("delegation-routing");
+    let environment = test_environment(cwd.clone());
+
+    let role_less = session_extra_sections(&environment, &RigAgentConfig::default(), None);
+    assert!(
+        role_less.contains(&crate::prompt::DELEGATION_ROUTING_SECTION.to_string()),
+        "a role-less session advertises `task`, so it must be routed to it: {role_less:?}"
+    );
+
+    let explore_role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        .expect("the explore role must resolve");
+    let explore_config = role_adjusted_config(&RigAgentConfig::default(), Some(explore_role));
+    let explore_sections =
+        session_extra_sections(&environment, &explore_config, Some(explore_role));
+    assert!(
+        !explore_sections
+            .iter()
+            .any(|section| section.contains("FIRST action")),
+        "an exploration session has no `task` tool and must not be told to delegate first: \
+         {explore_sections:?}"
     );
 
     let _ = std::fs::remove_dir_all(&cwd);
@@ -1959,8 +1999,11 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
 ) {
     let cwd = git_repo_with_agents_md("config-role");
     let environment = test_environment(cwd.clone());
-    let config = RigAgentConfig::default();
     let role = resolve(&RoleId("config".to_string())).expect("config role must resolve");
+    // The config a role-bearing session actually runs with -- production
+    // applies this before `spawn_rig_session`, and its `allowed_tool_ids`
+    // is what decides whether the delegation-routing block is included.
+    let config = role_adjusted_config(&RigAgentConfig::default(), Some(role));
 
     let sections = session_extra_sections(&environment, &config, Some(role));
 

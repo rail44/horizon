@@ -168,9 +168,9 @@ pub(super) fn run_session(
     // writer is configured -- see `JudgeHandle::new`.
     let judge = JudgeHandle::new(state.agent_config.rig.base_url.clone(), state.writer());
 
-    // `agent.explore`'s daemon capability (`docs/agent-explore-design.md`).
+    // `task`'s daemon capability (`docs/agent-explore-design.md`).
     // Withheld from an exploration session itself: its role allowlist
-    // already omits `agent.explore` (decision 4), and withholding the host
+    // already omits `task` (decision 4), and withholding the host
     // too means a recursion is impossible rather than merely unadvertised.
     let exploration: Option<Arc<dyn horizon_agent::tools::ExplorationHost>> = if role_id
         .as_ref()

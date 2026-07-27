@@ -1,4 +1,4 @@
-//! `horizon-agent`'s `agent.explore` seam, implemented against this
+//! `horizon-agent`'s `task` seam, implemented against this
 //! daemon's own session hosting.
 
 use std::path::PathBuf;
@@ -10,7 +10,7 @@ use horizon_agent::roles::RoleId;
 use super::spawn::spawn_session_thread;
 use super::state::SessiondState;
 
-/// `horizon-agent`'s `agent.explore` seam (`docs/agent-explore-design.md`),
+/// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
 /// implemented against this daemon's own session hosting: spawn a peer
 /// session, subscribe to its events, terminate it. One is built per
 /// requesting session in [`super::run::run_session`] and installed on its
@@ -84,8 +84,8 @@ mod tests {
     };
     use std::time::Duration;
 
-    /// The whole `agent.explore` seam against the *real* daemon
-    /// implementation rather than a stub: an `agent.explore` call spawns a
+    /// The whole `task` seam against the *real* daemon
+    /// implementation rather than a stub: a `task` call spawns a
     /// genuine peer session here, its user message reaches that session's
     /// provider, its events come back through the event tap, and the
     /// session is shut down as soon as its own turn ends -- one-shot,
@@ -93,7 +93,7 @@ mod tests {
     /// Hermetic -- the exploration runs on the mock provider, so no network
     /// and no event log are involved.
     #[test]
-    fn agent_explore_spawns_a_real_peer_session_and_terminates_it_when_it_finishes() {
+    fn task_spawns_a_real_peer_session_and_terminates_it_when_it_finishes() {
         let state = judge_test_state();
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
@@ -124,8 +124,12 @@ mod tests {
             requester_id,
             &horizon_agent::contract::ToolCallRequest {
                 call_id: ToolCallId("explore-e2e".to_string()),
-                tool_id: "agent.explore".to_string(),
-                input: serde_json::json!({ "prompt": "where is the emit site?" }).into(),
+                tool_id: "task".to_string(),
+                input: serde_json::json!({
+                    "description": "find the emit site",
+                    "prompt": "where is the emit site?",
+                })
+                .into(),
             },
         );
         assert!(

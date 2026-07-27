@@ -1,4 +1,4 @@
-//! `agent.explore` (`docs/agent-explore-design.md`): delegate an open-ended
+//! `task` (`docs/agent-explore-design.md`): delegate an open-ended
 //! exploration to a parallel, read-only session sharing the requester's
 //! workspace, and fold only its final report back into the requester's
 //! history.
@@ -40,8 +40,9 @@
 //! turns and fork seeding -- the 2026-07-26 addendum B/C measurement pair
 //! -- were removed: both got in the way of fixing turn-folding behavior and
 //! discussing its design, and the fork arm was separately shown to break
-//! outright against at least one model's chat template. `agent.explore`'s
-//! input is the exploration prompt alone; every call spawns a fresh session
+//! outright against at least one model's chat template. This tool's
+//! input is the exploration prompt (plus a display label -- see [`Input`]);
+//! every call spawns a fresh session
 //! seeded with nothing but that prompt, and the waiter thread below
 //! terminates it as soon as its own event stream reaches a terminal state
 //! (see [`take_live`]'s call sites) -- no exploration ever outlives the call
@@ -73,7 +74,19 @@ use crate::contract::{
 use crate::tools::state::{session_runtime, ToolSessionState};
 use crate::tools::{Execution, ToolCompletion};
 
-pub(crate) const TOOL_ID: &str = "agent.explore";
+/// The model-visible tool id. Renamed from `agent.explore` on 2026-07-27:
+/// the plain `task` name measurably improved delegation adoption for one of
+/// the two production models and was neutral for the other
+/// (`docs/research/agent-delegation-and-batching-probes-2026-07-27.md`,
+/// cell C3).
+///
+/// Deliberately *not* the same string as `roles::EXPLORE_ROLE_ID`, which
+/// stays `"explore"`. That one is a persistence and cleanup identity -- it
+/// is written into the event log, decides which sessions
+/// `horizon-sessiond` refuses to resume at startup, and filters the
+/// client-visible session list -- so renaming it would touch resume paths
+/// and already-persisted records while buying nothing the model can see.
+pub(crate) const TOOL_ID: &str = "task";
 
 /// A running exploration session, as handed back by the daemon.
 pub struct StartedExploration {
@@ -88,7 +101,7 @@ pub struct StartedExploration {
     pub events: Receiver<Event>,
 }
 
-/// The daemon capability `agent.explore` is built on: spawn a peer session,
+/// The daemon capability `task` is built on: spawn a peer session,
 /// subscribe to its events, terminate it. Implemented by `horizon-sessiond`
 /// (`session::SessiondExplorationHost`) and installed on the requester's
 /// `ToolSessionState`; the requester's own workspace root, provider, and
@@ -116,7 +129,7 @@ pub trait ExplorationHost: Send + Sync {
     fn terminate(&self, session_id: SessionId);
 }
 
-/// Starts an `agent.explore` call. Mirrors `execution::execute_tier1_bash`'s
+/// Starts a `task` call. Mirrors `execution::execute_tier1_bash`'s
 /// shape: fold the `ToolRunning`/`ToolCallStarted` pair now (the caller does
 /// that with [`Execution::Started`]), deliver the real result later on the
 /// session's async completion channel. Every failure that is knowable right
@@ -265,16 +278,29 @@ pub(crate) fn cancel_session(session_id: SessionId) {
     }
 }
 
-/// What the model may say: the exploration question and the exact
-/// deliverable wanted back. Nothing else -- there is no way to target an
-/// existing exploration session (2026-07-27: follow-up was removed, see the
-/// module doc); every call spawns a fresh one.
+/// What the model may say: a short display label and the exploration
+/// question with the exact deliverable wanted back. Nothing else -- there is
+/// no way to target an existing exploration session (2026-07-27: follow-up
+/// was removed, see the module doc); every call spawns a fresh one.
 struct Input {
     prompt: String,
 }
 
 impl Input {
+    /// Validates both required fields but keeps only `prompt`: `description`
+    /// is a label for the human watching, not an input to the exploration
+    /// (which is seeded with `prompt` alone). It reaches the UI from the
+    /// persisted call input instead -- `transcript::tool_call::classify`
+    /// renders it as this call's target. It is still validated here so the
+    /// catalog schema's `required` is not a claim nothing enforces.
     fn parse(input: &Value) -> Result<Self, String> {
+        let description = input
+            .get("description")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "`description` is required and must be a string".to_string())?;
+        if description.trim().is_empty() {
+            return Err("`description` must not be empty".to_string());
+        }
         let prompt = input
             .get("prompt")
             .and_then(Value::as_str)

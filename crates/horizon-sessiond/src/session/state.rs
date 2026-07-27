@@ -39,7 +39,7 @@ pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<Agen
 
 /// In-process observers of a session's `contract::Event` stream, installed
 /// alongside (never instead of) the client-facing [`AgentSubscribers`]
-/// above. The only one today is an `agent.explore` waiter subscribing to
+/// above. The only one today is a `task` waiter subscribing to
 /// the exploration session it just spawned (`docs/agent-explore-design.md`
 /// decision 5: "the wait is an event subscription"). Crossbeam rather than
 /// tokio because the waiter is a plain OS thread, like every other session

@@ -97,8 +97,8 @@ pub fn definitions() -> Vec<Definition> {
                 one `path` + `line_number` per match — locations, not content — plus the \
                 total match count. Read what a location says with fs.read, passing offset \
                 and limit around the reported line. For an open-ended exploration that \
-                would take several rounds of searching and reading, delegate to \
-                agent.explore instead and keep only its report. Requires an absolute base \
+                would take several rounds of searching and reading, call task instead and \
+                keep only its report. Requires an absolute base \
                 path. Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
                 .to_string(),
             input_schema: json!({
@@ -464,36 +464,52 @@ pub fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        // `agent.explore` (`tools::explore`, `docs/agent-explore-design.md`)
-        // is auto-allowed like every other read tool -- the session it
-        // spawns can only read, and only inside the requester's own
-        // workspace root -- but it is the one auto-allowed tool that does
-        // *not* finish synchronously: `tools::execution::execute_agent_tool`
-        // routes it to `Execution::Started`, and its result arrives later on
-        // the session's async completion channel, like `bash`'s.
+        // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
+        // auto-allowed like every other read tool -- the session it spawns
+        // can only read, and only inside the requester's own workspace root
+        // -- but it is the one auto-allowed tool that does *not* finish
+        // synchronously: `tools::execution::execute_agent_tool` routes it to
+        // `Execution::Started`, and its result arrives later on the
+        // session's async completion channel, like `bash`'s.
+        //
+        // The description is in the register the two production models were
+        // measured against (`docs/research/agent-delegation-and-batching-
+        // probes-2026-07-27.md`, cells C3 and C5): the generic task-tool
+        // wording plus the self-orientation clause. Its routing counterpart
+        // is `prompt::DELEGATION_ROUTING_SECTION`; both were measured
+        // together, so change them together.
         Definition {
-            id: "agent.explore".to_string(),
-            title: "Explore in a Parallel Session".to_string(),
-            description: "Delegate an open-ended, multi-file exploration to a parallel read-only \
-                session sharing this workspace. Use it when locating or understanding code would \
-                take several rounds of grep/glob/read whose outputs you do not need verbatim \
-                afterwards; state the question and the exact deliverable (paths, line numbers, \
-                facts). For one to three known files, read them directly instead. Returns the \
-                exploration's final report, plus the exploration's session id for cost \
-                attribution."
+            id: "task".to_string(),
+            title: "Delegate a Task".to_string(),
+            description: "Launch a read-only agent in a parallel session sharing this workspace \
+                to handle multi-step investigation autonomously. For open-ended codebase \
+                exploration or multi-file search, prefer task instead of running searches \
+                yourself — this keeps intermediate output out of your context. Describe the \
+                question and the exact deliverable (paths, line numbers, facts, a step plan) in \
+                the prompt. The task agent does its own orientation inside its own session; do \
+                not orient with bash/ls first. For one to three known files, read them directly \
+                instead. Returns the task's final report — capped-out work is still reported, \
+                flagged with `capped` — plus the task session's id for cost attribution."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["prompt"],
+                "required": ["description", "prompt"],
                 "properties": {
+                    "description": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200,
+                        "description": "A short (3-5 word) summary of the task, for display \
+                            while it runs.",
+                    },
                     "prompt": {
                         "type": "string",
                         "minLength": 1,
                         "maxLength": 16384,
-                        "description": "The exploration question and the exact deliverable you \
-                            want back. The exploration session sees this and nothing else from \
-                            your conversation, so restate whatever context it needs.",
+                        "description": "The question and the exact deliverable you want back. \
+                            The task session sees this and nothing else from your conversation, \
+                            so restate whatever context it needs.",
                     },
                 }
             }),
@@ -526,4 +542,83 @@ pub fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
         .into_iter()
         .find(|definition| definition.id == tool_id)
         .map(|definition| definition.permission)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn definition(id: &str) -> Definition {
+        definitions()
+            .into_iter()
+            .find(|definition| definition.id == id)
+            .unwrap_or_else(|| panic!("`{id}` must be in the catalog"))
+    }
+
+    /// The 2026-07-27 rename and two-field input shape
+    /// (`docs/research/agent-delegation-and-batching-probes-2026-07-27.md`
+    /// cells C3/C5): the model-visible id is `task`, and both `description`
+    /// and `prompt` are required -- the shape every winning probe cell ran
+    /// with.
+    #[test]
+    fn task_is_cataloged_with_a_required_description_and_prompt() {
+        let task = definition("task");
+
+        assert_eq!(task.permission, ToolPermission::AutoAllowRead);
+        assert_eq!(
+            task.input_schema["required"],
+            json!(["description", "prompt"])
+        );
+        assert_eq!(
+            task.input_schema["properties"]["description"]["type"],
+            "string"
+        );
+        assert_eq!(
+            task.input_schema["properties"]["description"]["minLength"],
+            1
+        );
+        assert_eq!(task.input_schema["properties"]["prompt"]["type"], "string");
+        assert_eq!(task.input_schema["properties"]["prompt"]["minLength"], 1);
+        assert_eq!(
+            task.input_schema["additionalProperties"],
+            json!(false),
+            "the old `session_id` follow-up field must stay unrepresentable"
+        );
+        assert!(
+            !definitions().iter().any(|d| d.id == "agent.explore"),
+            "the pre-rename id must be gone from the catalog"
+        );
+    }
+
+    /// The description carries the self-orientation clause the probe's C5
+    /// cell measured, and `fs.grep`'s routing tail names the tool by its
+    /// current id rather than a stale one.
+    #[test]
+    fn task_and_grep_descriptions_route_consistently() {
+        let task = definition("task");
+        assert!(
+            task.description
+                .contains("does its own orientation inside its own session"),
+            "{}",
+            task.description
+        );
+        assert!(
+            task.description
+                .contains("do not orient with bash/ls first"),
+            "{}",
+            task.description
+        );
+
+        let grep = definition("fs.grep");
+        assert!(
+            grep.description.contains("call task instead"),
+            "{}",
+            grep.description
+        );
+        assert!(
+            !grep.description.contains("agent.explore"),
+            "{}",
+            grep.description
+        );
+    }
 }

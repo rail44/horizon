@@ -1,6 +1,6 @@
 //! Event fan-out: one session's `AgentWireEvent`s to whichever client
 //! attachment is subscribed, and its `contract::Event`s to whichever
-//! in-process observer (an `agent.explore` waiter) is tapped in.
+//! in-process observer (a `task` waiter) is tapped in.
 
 use horizon_agent::contract::{Event, SessionId};
 use horizon_agent::wire::AgentWireEvent;

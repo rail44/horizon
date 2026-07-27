@@ -1,9 +1,14 @@
-# Parallel Exploration Sessions — `agent.explore`
+# Parallel Exploration Sessions — `task` (originally `agent.explore`)
 
 Decided 2026-07-25 in an owner consultation, on the measurements in
 `docs/research/agent-read-navigation-prior-art-2026-07-25.md` and the two
 failed dogfooding runs described below. This document is the scope record
 for the implementing worker.
+
+The model-visible tool id is **`task`** as of the 2026-07-27 addendum at the
+bottom of this file; the dated sections below still say `agent.explore`,
+which is what it was called when they were written. The internal role id is
+still `"explore"` — see that addendum for why the two deliberately differ.
 
 ## Problem
 
@@ -308,3 +313,105 @@ own judgment or a prompt-only convention:
   that just proved it repeats itself is not the same bet as forcing one on
   a model that ran out of turns making genuine progress, so
   `summarize_on_cap` only applies to `GuardHalt::IterationCapExceeded`.
+
+---
+
+## Addendum (2026-07-27): renamed to `task`, delegation-first routing, two-field input
+
+Owner decision on the direct-API control probes recorded in
+`docs/research/agent-delegation-and-batching-probes-2026-07-27.md`. That
+probe asked why real sessions almost never delegated, measuring the *first
+action* under the full 16-tool catalog at both an exploration entry and an
+implementation entry, n=3–5 per cell, against both production models
+(`hf:moonshotai/Kimi-K2.7-Code` and `hf:MiniMaxAI/MiniMax-M3`). Adoption
+degrades with catalog size (competition with `bash`), not with the size of
+the `AGENTS.md` preamble. This addendum ships exactly what that probe found
+to work.
+
+### The rename
+
+`agent.explore` → **`task`** as the model-visible id
+(`tools::explore::TOOL_ID`; the module keeps its name). Cell C3: the plain
+`task` name plus a generic task-tool description moved Kimi from a
+degraded 2/3–5/5 baseline to 4/5 and was neutral for MiniMax. Renaming
+alone was *not* sufficient for either model — it is a real but partial
+lever, kept because it costs nothing.
+
+The internal role id stays `"explore"` (`roles::EXPLORE_ROLE_ID`). It is a
+persistence and cleanup identity: it is written into the event log, it is
+what makes `horizon-sessiond` refuse to resume an orphaned exploration at
+startup, and it is what filters exploration sessions out of the
+client-visible session list. Renaming it would touch resume paths and
+already-persisted records for no model-visible benefit.
+
+### The two routing clauses
+
+The single hedged line the base system prompt used to carry ("Delegate
+open-ended, multi-file exploration to agent.explore when it is available;
+keep its report, not a raw read/grep sweep of your own") is gone. In its
+place, `prompt::DELEGATION_ROUTING_SECTION` carries the two measured
+winners verbatim:
+
+- Exploration entry (cell C5, Kimi 3/3 + MiniMax 5/5): "For an open-ended
+  exploration goal, calling task must be your FIRST action — do not run
+  bash/ls or read files to orient yourself first; the task agent does its
+  own orientation inside its own session, which costs you nothing."
+- Implementation entry (cell C7b, Kimi 3/3 + MiniMax 4/5): "For any
+  implementation task, your FIRST action must be to delegate the up-front
+  investigation and planning to the task tool — even when the change
+  targets look already known or the task statement names concrete
+  components. State the question and the exact deliverable (relevant
+  files, line numbers, a step plan). Do not grep/read/bash to orient
+  yourself first. Start implementing only after its report returns."
+
+What the probe ruled out, so it is not tried again without new evidence:
+imperative tone alone (E2i lifted both models but not to saturation),
+negative routing on `bash`'s own description (C4: zero effect on MiniMax,
+harmful for Kimi), renaming alone (C3), and any conditional escape hatch
+in the implementation clause — "in an unfamiliar area" (C7) dropped
+MiniMax to 2/5, and removing it recovered 4/5. The **explicit ban on
+orienting first** is the one intervention that closed adoption for both
+models at both entries.
+
+Deliberately not addressed: the sequential-read momentum documented in the
+same probe's §3. Instructions cannot fix it (cell MI: an imperative
+parallel-call instruction recovered 0/5 against a history of single
+calls); only the trajectory's own precedent can, which is part of why
+delegation-first matters. No prompt wording is spent on it.
+
+### Conditional inclusion is the mechanism, not hedged wording
+
+The probe measured the clauses **unhedged**, so the shipped wording keeps
+no "when it is available" clause. Conditionality lives in whether the
+section is included at all: `providers::rig::session::session_extra_sections`
+appends it only when the session's advertised toolset actually contains
+`task`, decided from `RigAgentConfig::allowed_tool_ids` — the same
+allowlist `completion::rig_tool_definitions` filters the advertised catalog
+with, already role-adjusted by `role_adjusted_config` before the session
+spawns. `None` (role-less) means the unrestricted catalog and therefore
+inclusion; `Some(list)` includes it only if `task` is in the list.
+
+The case this exists for is an exploration session itself: its role allows
+`fs.read`/`fs.grep`/`fs.glob` and deliberately not `task` (decision 4,
+which is what makes recursion structurally impossible), so telling it "your
+FIRST action must be task" would be an instruction it could only fail. The
+`config` role is excluded by the same rule. Both paths are covered by
+`session_extra_sections_includes_the_delegation_block_only_when_task_is_advertised`.
+
+### Two-field input
+
+The input schema is now `{description, prompt}`, both required — the shape
+every winning probe cell ran with. `prompt` is unchanged (the question and
+the exact deliverable; the spawned session sees it and nothing else).
+`description` is a short 3–5 word label, validated in `tools::explore::
+Input::parse` but not forwarded to the exploration: it is what the
+requester's own transcript row shows while the task runs
+(`transcript::tool_call::classify`).
+
+That transcript row is the only place a delegated task announces itself.
+There is deliberately no session-title wiring: sessions have no title on
+the `StartSession` contract or the session wire at all (titles are
+workspace-side strings generated per attached pane, "Agent #N"), and an
+exploration session is never attached to a pane and is withheld from the
+client-visible session list by decision 3. A title field would have been
+invisible by construction.

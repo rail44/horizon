@@ -1045,6 +1045,56 @@ fn system_prompt_carries_tool_policy_and_retry_nudge() {
     assert!(lower.contains("retry"));
 }
 
+/// The base prompt must not route to the delegation tool at all: that
+/// routing moved into `prompt::DELEGATION_ROUTING_SECTION` on 2026-07-27,
+/// appended only for a session that actually has the tool
+/// (`providers::rig::session::session_extra_sections`). A session without
+/// it -- an exploration session -- reads this base prompt and nothing
+/// about delegating.
+#[test]
+fn base_prompt_carries_no_delegation_routing() {
+    let prompt = system_prompt(
+        &SessionEnvironment {
+            cwd: std::path::PathBuf::from("/repo"),
+            os: "linux",
+            git_repo: true,
+        },
+        &[],
+    );
+
+    let lower = prompt.to_ascii_lowercase();
+    assert!(!lower.contains("delegate"), "{prompt}");
+    assert!(!lower.contains("task"), "{prompt}");
+}
+
+/// The two clauses transplanted verbatim from
+/// `docs/research/agent-delegation-and-batching-probes-2026-07-27.md`
+/// (cells C5 and C7b). This pins the properties the probe showed were
+/// load-bearing -- both entries name `task` as the FIRST action, both ban
+/// orienting first, and the implementation clause stays unconditional --
+/// rather than the exact prose.
+#[test]
+fn delegation_routing_section_bans_orienting_before_delegating() {
+    let section = crate::prompt::DELEGATION_ROUTING_SECTION;
+
+    assert_eq!(
+        section.matches("FIRST action").count(),
+        2,
+        "both the exploration and the implementation entry must claim the first action: {section}"
+    );
+    assert!(section.contains("do not run bash/ls or read files to orient yourself first"));
+    assert!(section.contains("Do not grep/read/bash to orient yourself first"));
+    assert!(
+        section.contains("even when the change targets look already known"),
+        "cell C7b: the implementation clause must stay unconditional -- a conditional one \
+         (\"in an unfamiliar area\") was measurably used as an escape hatch: {section}"
+    );
+    assert!(
+        !section.contains("when it is available"),
+        "conditionality lives in whether this section is included, not in its wording: {section}"
+    );
+}
+
 #[test]
 fn system_prompt_carries_destructive_action_caution() {
     let prompt = system_prompt(
