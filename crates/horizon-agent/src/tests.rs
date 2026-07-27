@@ -1095,17 +1095,24 @@ fn delegation_routing_section_bans_orienting_before_delegating() {
     );
 }
 
-/// The 2026-07-27 amendment to the implementation clause: a dogfooded
-/// session delegated the implementation itself to `task` children, which
-/// are read-only by construction and so could only explore again until
-/// their budget ran out. The clause now says where implementation happens
-/// and that delegating it is not an option.
+/// The two amendments to the implementation clause's final sentence, both
+/// of which must hold at once (`prompt::DELEGATION_ROUTING_SECTION`'s doc
+/// comment records both):
+///
+/// - 2026-07-27: a dogfooded session delegated the implementation itself to
+///   `task` children, which are read-only by construction and so could only
+///   explore again until their budget ran out. The clause says where
+///   implementation happens and that delegating it is not an option.
+/// - 2026-07-28: `task` became asynchronous, so "only after its report
+///   returns" stopped describing anything real. The clause now states the
+///   async contract instead: keep working, the report arrives as a
+///   notification.
 #[test]
 fn delegation_routing_section_keeps_implementation_in_this_session() {
     let section = crate::prompt::DELEGATION_ROUTING_SECTION;
 
     assert!(
-        section.contains("Then implement the changes yourself in this session"),
+        section.contains("you implement the changes yourself in this session"),
         "{section}"
     );
     assert!(
@@ -1115,8 +1122,12 @@ fn delegation_routing_section_keeps_implementation_in_this_session() {
     );
     assert!(
         !section.contains("Start implementing only after its report returns"),
-        "the replaced sentence must be gone -- it read as license to delegate the \
+        "the first replaced sentence must be gone -- it read as license to delegate the \
          implementation: {section}"
+    );
+    assert!(
+        section.contains("Keep working while it runs; its report will arrive as a notification"),
+        "the async contract must be stated where the old blocking wording was: {section}"
     );
 }
 

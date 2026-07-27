@@ -466,11 +466,11 @@ pub fn definitions() -> Vec<Definition> {
         },
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
         // auto-allowed like every other read tool -- the session it spawns
-        // can only read, and only inside the requester's own workspace root
-        // -- but it is the one auto-allowed tool that does *not* finish
-        // synchronously: `tools::execution::execute_agent_tool` routes it to
-        // `Execution::Started`, and its result arrives later on the
-        // session's async completion channel, like `bash`'s.
+        // can only read, and only inside the requester's own workspace root.
+        // Since the 2026-07-28 asynchronous cutover
+        // (`docs/agent-async-task-design.md`) the *call* finishes at once,
+        // returning only a launch receipt; the report arrives later as a
+        // notification injected into a later provider round.
         //
         // The description is in the register the two production models were
         // measured against (`docs/research/agent-delegation-and-batching-
@@ -486,6 +486,13 @@ pub fn definitions() -> Vec<Definition> {
         // child's turn budget. The generic `task` name reads as
         // write-capable in these models' training distribution, so the
         // constraint has to be stated rather than implied.
+        //
+        // The asynchronous register (2026-07-28) replaces only the
+        // return-shape sentence: "runs in the background, you will be
+        // notified, keep working, up to 3 at once" is the wording
+        // mainstream harnesses use, which is the whole reason the design
+        // chose this shape over a join-first one
+        // (`docs/agent-async-task-design.md`'s "Why", third bullet).
         Definition {
             id: "task".to_string(),
             title: "Delegate a Task".to_string(),
@@ -498,9 +505,10 @@ pub fn definitions() -> Vec<Definition> {
                 not orient with bash/ls first. For one to three known files, read them directly \
                 instead. Task agents are read-only — they investigate, locate, and plan, but \
                 cannot write files or run commands that modify state; implementation happens in \
-                this session after the report returns. Returns the task's final report — \
-                capped-out work is still reported, flagged with `capped` — plus the task \
-                session's id for cost attribution."
+                this session after the report returns. Runs in the background — you will be \
+                notified when it completes; keep working in the meantime; up to 3 may run \
+                concurrently. Returns immediately with the task session's id, which is also how \
+                you re-read its report later with task_output."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -521,6 +529,36 @@ pub fn definitions() -> Vec<Definition> {
                         "description": "The question and the exact deliverable you want back. \
                             The task session sees this and nothing else from your conversation, \
                             so restate whatever context it needs.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        // `task_output` (`docs/agent-async-task-design.md` decision 3) is
+        // the pull complement to push delivery, not the primary channel:
+        // the report already arrived as a notification, capped at
+        // `tools::explore::INLINE_REPORT_CAP_CHARS`, and this is how the
+        // rest of a long one — or a re-read much later in the session — is
+        // fetched. Advertised only alongside `task` itself; see
+        // `providers::rig::completion::rig_tool_definitions`.
+        Definition {
+            id: "task_output".to_string(),
+            title: "Read a Task's Report".to_string(),
+            description: "Read the full report of a background task you launched with task, by \
+                its session id. Use it when a completion notification says the report was \
+                truncated, or to re-read a report from earlier in this session. A task that is \
+                still running reports as such — you do not need to poll it; you will be notified \
+                when it completes."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["session_id"],
+                "properties": {
+                    "session_id": {
+                        "type": "string",
+                        "description": "The task session id returned by the task call that \
+                            launched it.",
                     },
                 }
             }),

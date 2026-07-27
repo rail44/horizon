@@ -313,7 +313,26 @@ impl DecodeSkipLog {
 /// interoperate (tolerant evolution), rather than being rejected. The schema
 /// artifact carries the bump as `x-session-protocol-version` even though no
 /// wire type moved.
-pub const SESSION_PROTOCOL_VERSION: u32 = 13;
+///
+/// Version 14: **`MessageRole::TaskNotification`**
+/// (`docs/agent-async-task-design.md` decision 2). A background `task`
+/// child's completion is delivered to its requester as a message, and the
+/// event log must not record that system notification as words the human
+/// typed — so `horizon_agent::contract::MessageRole` gained a third named
+/// variant. The variant is *placed before* the enum's `#[serde(other)]
+/// Unknown` catch-all, per this workspace's standing "keep `Unknown` last"
+/// convention, which under an index-based codec (Postbag) shifts
+/// `Unknown`'s index: the schema checker classifies that as a reordering
+/// reshape rather than an appended value, and this bump is its required
+/// version marker. Decodability is nonetheless preserved in the direction
+/// that matters — an older peer decodes the new variant as `Unknown`,
+/// which it already renders as assistant-authored rather than inventing
+/// user words — so [`MIN_SUPPORTED_PROTOCOL_VERSION`] stays 11 and v14↔v11
+/// still negotiate 11 and interoperate. Nothing else in the wire surface
+/// moved: the whole async-`task` mechanism (launch receipt, notification
+/// queue, wake, `task_output`) is in-process inside `horizon-sessiond` and
+/// crosses no channel.
+pub const SESSION_PROTOCOL_VERSION: u32 = 14;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -332,7 +351,13 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 13;
 /// terminal input) is also *additive*, so it likewise does **not** raise
 /// this floor: a v13 peer negotiates 11 with a v11/v12 peer and falls back
 /// to legacy `Key`/`Input` commands (`TERMINAL_STRUCTURED_INPUT_VERSION`'s
-/// note), preserving lossless cross-version interop.
+/// note), preserving lossless cross-version interop. v14
+/// (`MessageRole::TaskNotification`) does not raise it either: the new
+/// variant leaves compatibility code behind on both sides — the older peer
+/// reads it as `Unknown` (assistant-authored, never user words) and the
+/// newer peer's own `Unknown` arm is unchanged — so the pairing is
+/// tolerantly lossy, not undecodable. See [`SESSION_PROTOCOL_VERSION`]'s
+/// v14 note for why the bump was still required.
 pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
 
 /// The first negotiated version at which the daemon answers

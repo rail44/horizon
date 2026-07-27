@@ -369,6 +369,20 @@ pub struct Message {
 pub enum MessageRole {
     User,
     Assistant,
+    /// A system-authored notification injected into the session's own turn
+    /// input -- today only the background-`task` completion notification
+    /// (`docs/agent-async-task-design.md` decision 2). Deliberately *not*
+    /// [`MessageRole::User`]: the provider is sent a plain user-role text
+    /// message (the shape every production chat template can render), but
+    /// the persisted event log must not claim a human typed it. Every
+    /// consumer that distinguishes "who said this" therefore has to name
+    /// this variant explicitly rather than folding it into `User`:
+    /// `providers::rig::mapping::rig_messages_from_horizon_events` replays
+    /// it to the provider as a user message (matching what was actually
+    /// sent), while `persistence::event_log::turn::TurnTracker`,
+    /// `frame`'s turn clock, and the transcript view all treat it as
+    /// system-authored.
+    TaskNotification,
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —

@@ -292,6 +292,10 @@ impl AgentTranscript {
         match item {
             AgentFrameItem::Message(message) => Some(match message.role {
                 MessageRole::User => block("you", theme::accent(), message.text.clone()),
+                // A background-`task` completion notification: system
+                // authored, not the human's words, so it gets its own
+                // muted label rather than the "you" block.
+                MessageRole::TaskNotification => block("task", theme::info(), message.text.clone()),
                 // Unknown renders as agent-authored -- see `MessageRole::
                 // Unknown`'s doc (never invent user words).
                 MessageRole::Assistant | MessageRole::Unknown => markdown_block(

@@ -625,12 +625,25 @@ fn multi_tool_call_message(count: usize) -> Message {
 /// allowed_tool_ids` — see that field's doc comment). `None` is the current,
 /// unrestricted behavior: every tool in `tools::definitions()` is advertised
 /// to the provider, unchanged from before this parameter existed.
+///
+/// One tool is filtered beyond the allowlist: `task_output` is advertised
+/// only when `task` itself is (`docs/agent-async-task-design.md` decision
+/// 3, "advertise it only alongside `task`"). It is the same conditional
+/// seam `prompt::DELEGATION_ROUTING_SECTION` rides on
+/// (`session::advertises_task_tool`), decided from the same allowlist —
+/// a session that cannot launch a task can never own one to read, so
+/// offering the fetch tool would only be a call it must fail.
 pub(super) fn rig_tool_definitions(allowed_tool_ids: Option<&[String]>) -> Vec<ToolDefinition> {
+    let allows = |id: &str| match allowed_tool_ids {
+        Some(allowed) => allowed.iter().any(|allowed| allowed == id),
+        None => true,
+    };
+    let advertises_task = allows(crate::tools::TASK_TOOL_ID);
     definitions()
         .into_iter()
-        .filter(|definition| match allowed_tool_ids {
-            Some(allowed) => allowed.iter().any(|id| id == &definition.id),
-            None => true,
+        .filter(|definition| {
+            allows(&definition.id)
+                && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
         })
         .map(rig_tool_definition_from_horizon)
         .collect()

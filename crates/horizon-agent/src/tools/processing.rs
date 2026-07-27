@@ -34,19 +34,23 @@ pub fn process_agent_provider_event(
 
     // A provider-originated `ToolCallFinished` is the turn-cancellation (or
     // loop-guard-halt) signal for any call still pending on the provider's
-    // side, including bash, host-side web calls, and a parallel exploration
-    // session (whose cancellation terminates that session -- see
-    // `docs/agent-explore-design.md` decision 6) (see
+    // side, including bash and host-side web calls (see
     // `docs/agent-tools-design.md`, "Bash
     // Semantics": "Cancelling a turn kills the process group of any
     // in-flight command"). This never fires for `bash`'s own genuine
     // completion — those arrive over `SessionRuntime::async_results`,
     // bypassing this function. A miss or already-finished call is a harmless
     // no-op.
+    //
+    // `task` children are deliberately absent: since the 2026-07-28
+    // asynchronous cutover they are session-scoped, not turn-scoped
+    // (`docs/agent-async-task-design.md` decision 4), so a cancelled turn
+    // must leave them running. Their one teardown path is the requesting
+    // session itself ending (`tools::explore::cancel_session`, reached from
+    // `unregister_session_runtime`).
     if let Event::ToolCallFinished(result) = &event {
         bash::kill_if_running(&result.call_id);
         crate::tools::web::cancel_if_running(session_id, &result.call_id);
-        crate::tools::explore::cancel_if_running(session_id, &result.call_id);
     }
 
     let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)

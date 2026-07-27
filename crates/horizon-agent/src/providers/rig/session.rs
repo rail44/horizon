@@ -88,6 +88,7 @@ pub(super) fn spawn_rig_session(
             let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
 
             runtime.block_on(run_session_loop(
+                session_id,
                 commands_rx,
                 events_tx,
                 config,
@@ -215,7 +216,21 @@ fn bridge_commands(
     rx
 }
 
+/// What the session loop woke up for: an inbound command, or a background
+/// `task` child finishing while no provider round was pending
+/// (`docs/agent-async-task-design.md` decision 2's auto-turn wake). Kept as
+/// a value the `select!` *returns* rather than work done inside a handler,
+/// because the wake's handling needs `&mut` access to state the command
+/// future itself borrows.
+enum Next {
+    Command(Command),
+    TaskWake,
+    Closed,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn run_session_loop(
+    session_id: crate::contract::SessionId,
     commands_rx: crossbeam_channel::Receiver<Command>,
     events_tx: Sender<ProviderEvent>,
     config: RigAgentConfig,
@@ -225,6 +240,12 @@ async fn run_session_loop(
     mut rig_history: Vec<Message>,
 ) {
     let mut commands = bridge_commands(commands_rx);
+    // The completion-subscription seam's receiving end for this session
+    // (`tools::explore`): signalled whenever one of this session's
+    // background `task` children finishes. Registered before the first
+    // command is read so a child launched in the very first turn can never
+    // finish into a session with no wake channel.
+    let mut task_wake = crate::tools::register_wake(session_id);
     let mut inbox: VecDeque<Command> = VecDeque::new();
     // Every tool call whose result is still outstanding, with the
     // descriptor (tool id + args) needed to fingerprint the eventual
@@ -242,12 +263,68 @@ async fn run_session_loop(
     let mut pending_halt_result: Option<ToolCallResult> = None;
 
     loop {
-        let command = match inbox.pop_front() {
-            Some(command) => command,
-            None => match commands.recv().await {
-                Some(command) => command,
-                None => break,
+        let next = match inbox.pop_front() {
+            Some(command) => Next::Command(command),
+            None => tokio::select! {
+                maybe_command = commands.recv() => match maybe_command {
+                    Some(command) => Next::Command(command),
+                    None => Next::Closed,
+                },
+                Some(()) = task_wake.recv() => Next::TaskWake,
             },
+        };
+
+        let command = match next {
+            Next::Closed => break,
+            Next::Command(command) => command,
+            Next::TaskWake => {
+                // A background `task` child finished. If a tool batch is
+                // still outstanding -- which includes a call parked on an
+                // approval -- a provider round is still coming, and the
+                // drain that runs before it will carry the notification
+                // instead; nothing to do here. Otherwise the turn has
+                // already ended, so the notification becomes a new turn's
+                // synthetic input. That turn is an ordinary one:
+                // `Event::TurnEnded` remains the only turn boundary
+                // external monitors need to trust.
+                if !pending_tool_calls.is_empty() {
+                    continue;
+                }
+                let Some(text) = crate::tools::take_notification(session_id) else {
+                    continue;
+                };
+                // The same flush `Command::UserMessage` performs: a result
+                // a guard halt stashed still has to land in `rig_history`
+                // before the next request, or the API rejects an assistant
+                // `tool_calls` message with no matching result.
+                if let Some(result) = pending_halt_result.take() {
+                    rig_history.push(rig_tool_result_message(&result));
+                }
+                guard.reset();
+                let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+                let _ = events_tx.send(crate::tools::notification_event(text.clone()).into());
+                let fallback_text = text.clone();
+                let outcome = run_cancellable_turn(
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
+                    &mut rig_history,
+                    Message::user(text),
+                    &events_tx,
+                    move || deterministic_rig_response(&fallback_text),
+                )
+                .await;
+                apply_turn_outcome(
+                    outcome,
+                    &events_tx,
+                    &mut rig_history,
+                    &mut pending_tool_calls,
+                    &mut cancelled_call_ids,
+                );
+                continue;
+            }
         };
 
         match command {
@@ -298,6 +375,13 @@ async fn run_session_loop(
                     })
                     .into(),
                 );
+                let (prompt, injected) = inject_task_notification(
+                    session_id,
+                    &events_tx,
+                    &mut rig_history,
+                    Message::user(text.clone()),
+                );
+                let fallback_text = injected.unwrap_or(text);
                 let outcome = run_cancellable_turn(
                     &mut commands,
                     &mut inbox,
@@ -305,9 +389,9 @@ async fn run_session_loop(
                     &environment,
                     &extra_sections,
                     &mut rig_history,
-                    Message::user(text.clone()),
+                    prompt,
                     &events_tx,
-                    || deterministic_rig_response(&text),
+                    move || deterministic_rig_response(&fallback_text),
                 )
                 .await;
                 apply_turn_outcome(
@@ -403,6 +487,12 @@ async fn run_session_loop(
                 }
 
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+                let (prompt, injected) = inject_task_notification(
+                    session_id,
+                    &events_tx,
+                    &mut rig_history,
+                    rig_tool_result_message(&result),
+                );
                 let outcome = run_cancellable_turn(
                     &mut commands,
                     &mut inbox,
@@ -410,9 +500,12 @@ async fn run_session_loop(
                     &environment,
                     &extra_sections,
                     &mut rig_history,
-                    rig_tool_result_message(&result),
+                    prompt,
                     &events_tx,
-                    || deterministic_tool_result_response(&result),
+                    move || match injected {
+                        Some(text) => deterministic_rig_response(&text),
+                        None => deterministic_tool_result_response(&result),
+                    },
                 )
                 .await;
                 apply_turn_outcome(
@@ -463,6 +556,12 @@ async fn run_session_loop(
                     continue;
                 }
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+                let (prompt, injected) = inject_task_notification(
+                    session_id,
+                    &events_tx,
+                    &mut rig_history,
+                    rig_tool_result_message(&result),
+                );
                 let outcome = run_cancellable_turn(
                     &mut commands,
                     &mut inbox,
@@ -470,9 +569,12 @@ async fn run_session_loop(
                     &environment,
                     &extra_sections,
                     &mut rig_history,
-                    rig_tool_result_message(&result),
+                    prompt,
                     &events_tx,
-                    || deterministic_tool_result_response(&result),
+                    move || match injected {
+                        Some(text) => deterministic_rig_response(&text),
+                        None => deterministic_tool_result_response(&result),
+                    },
                 )
                 .await;
                 apply_turn_outcome(
@@ -504,6 +606,40 @@ async fn run_session_loop(
             Command::ApproveToolCall { .. } | Command::DenyToolCall { .. } => {}
         }
     }
+
+    crate::tools::unregister_wake(session_id);
+}
+
+/// Drains this session's finished background `task` children and, if any
+/// were waiting, turns the whole batch into the message this provider round
+/// actually carries (`docs/agent-async-task-design.md` decision 2: "before
+/// each provider round of the requester's turn loop, drain the queue").
+///
+/// The mechanics matter for history validity. `prompt` is whatever the
+/// round would otherwise have sent -- a user message, or the tool result
+/// that completed a batch. When a notification is waiting, that original
+/// prompt is pushed into `rig_history` here and the notification becomes
+/// the new prompt, so the request reads `assistant(tool_calls) →
+/// tool_result(s) → user(notification) → assistant(reply)`: the tool
+/// results still sit directly behind the calls they answer, and the
+/// notification is an ordinary user-role text turn on top. Reversing the
+/// two would separate a tool call from its result and be rejected.
+///
+/// Returns the prompt to send plus the notification text, which the caller
+/// needs only to drive the deterministic fallback provider (no network
+/// mode) off the message actually sent.
+fn inject_task_notification(
+    session_id: crate::contract::SessionId,
+    events_tx: &Sender<ProviderEvent>,
+    rig_history: &mut Vec<Message>,
+    prompt: Message,
+) -> (Message, Option<String>) {
+    let Some(text) = crate::tools::take_notification(session_id) else {
+        return (prompt, None);
+    };
+    rig_history.push(prompt);
+    let _ = events_tx.send(crate::tools::notification_event(text.clone()).into());
+    (Message::user(text.clone()), Some(text))
 }
 
 /// Runs a single rig turn to completion while concurrently listening for

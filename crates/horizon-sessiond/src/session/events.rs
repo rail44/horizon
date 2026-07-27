@@ -1,8 +1,9 @@
 //! Event fan-out: one session's `AgentWireEvent`s to whichever client
 //! attachment is subscribed, and its `contract::Event`s to whichever
-//! in-process observer (a `task` waiter) is tapped in.
+//! in-process observer holds a [`super::subscription::SessionSubscription`]
+//! on it.
 
-use horizon_agent::contract::{Event, SessionId};
+use horizon_agent::contract::SessionId;
 use horizon_agent::wire::AgentWireEvent;
 
 use super::state::{lock_unpoisoned, SessiondState};
@@ -18,7 +19,7 @@ pub(super) fn send_session_event(
     event: AgentWireEvent,
 ) {
     if let AgentWireEvent::Event(event) = &event {
-        send_to_event_tap(state, session_id, event);
+        state.publish_to_subscriber(session_id, event);
     }
     let mut subscribers = lock_unpoisoned(&state.agent_subscribers);
     if subscribers
@@ -29,27 +30,12 @@ pub(super) fn send_session_event(
     }
 }
 
-/// Mirrors one `contract::Event` to `session_id`'s in-process observer, if
-/// one is installed -- see [`super::state::EventTaps`]. Only the `Event` variant is
-/// mirrored: the other [`AgentWireEvent`]s are UI-facing ephemera (progress
-/// previews, the model chip, the resolved-root correction) with nothing a
-/// waiter could fold.
-fn send_to_event_tap(state: &SessiondState, session_id: SessionId, event: &Event) {
-    let mut taps = lock_unpoisoned(&state.event_taps);
-    if taps
-        .get(&session_id)
-        .is_some_and(|tx| tx.send(event.clone()).is_err())
-    {
-        taps.remove(&session_id);
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::session::test_support::judge_test_state;
     use crate::session::Connection;
-    use horizon_agent::contract::SessionState;
+    use horizon_agent::contract::{Event, SessionState};
 
     #[test]
     fn agent_subscriber_mutex_recovers_after_poisoning() {

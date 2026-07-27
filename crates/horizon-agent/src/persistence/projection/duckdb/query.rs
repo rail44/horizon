@@ -520,6 +520,7 @@ fn parse_role(value: &str) -> MessageRole {
     match value {
         "user" => MessageRole::User,
         "assistant" => MessageRole::Assistant,
+        "task_notification" => MessageRole::TaskNotification,
         _ => MessageRole::Assistant,
     }
 }

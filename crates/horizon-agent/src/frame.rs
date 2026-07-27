@@ -542,7 +542,14 @@ pub(crate) fn apply_agent_event_to_frame(
             // `UserMessage` until the previous turn settled
             // (`WaitingForUser`), so every occurrence really does start a
             // new turn. See `TurnClock`.
-            if message.role == MessageRole::User {
+            // A background-`task` notification only opens a turn when none
+            // is running -- the auto-turn wake case. Injected mid-turn it
+            // belongs to the turn already in flight, whose elapsed clock
+            // must keep running. Mirrors `TurnTracker`'s own condition, for
+            // the same reason.
+            let opens_turn = message.role == MessageRole::User
+                || (message.role == MessageRole::TaskNotification && turn.started_at.is_none());
+            if opens_turn {
                 turn.started_at = Some(Instant::now());
                 turn.model = None;
             }
@@ -688,7 +695,10 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
     matches!(
         item,
         AgentFrameItem::Message(Message {
-            role: MessageRole::User,
+            // A `task` notification is an input to the model just like a
+            // user message, so it closes whatever delta/message run
+            // preceded it rather than merging into it.
+            role: MessageRole::User | MessageRole::TaskNotification,
             ..
         }) | AgentFrameItem::ToolCallRequested(_)
             | AgentFrameItem::ToolCallStarted(_)
@@ -704,6 +714,7 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
 fn role_label(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
+        MessageRole::TaskNotification => "task",
         // Unknown renders as assistant-authored -- see `MessageRole::
         // Unknown`'s doc (never invent user words).
         MessageRole::Assistant | MessageRole::Unknown => "assistant",

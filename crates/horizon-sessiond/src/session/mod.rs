@@ -40,9 +40,11 @@
 //! A session is created by [`spawn`], built by [`setup`], and lived by
 //! [`run`]; [`resume`] is the startup path that recreates one from the log.
 //! [`events`] fans a session's output out to the attached client and to
-//! in-process taps, [`host_tools`] runs the host round trip, [`approval`] and
-//! [`completion`] own the approval seam and the asynchronous tool folds,
-//! [`exploration`] implements the `task` tool's daemon seam, and [`panic`] is the session
+//! in-process subscribers, [`host_tools`] runs the host round trip,
+//! [`approval`] and [`completion`] own the approval seam and the
+//! asynchronous tool folds, [`subscription`] is the "observe another
+//! session's stop/blocking events" seam, [`exploration`] implements the
+//! `task` tool's daemon seam on top of it, and [`panic`] is the session
 //! thread's panic boundary.
 
 mod approval;
@@ -57,6 +59,7 @@ mod run;
 mod setup;
 mod spawn;
 mod state;
+mod subscription;
 #[cfg(test)]
 mod test_support;
 

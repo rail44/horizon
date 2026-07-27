@@ -450,17 +450,38 @@ pub fn classify(
         // delegated task announces what it is doing while it runs, since
         // the session it spawns is deliberately kept out of the
         // client-visible session list (`roles::is_exploration`).
+        //
+        // Since the 2026-07-28 asynchronous cutover the call itself only
+        // *launches* the task, so the honest summary is the launch
+        // receipt's own `status` ("started"). The completed report is not
+        // this call's result at all -- it arrives later as a
+        // `MessageRole::TaskNotification` message in the transcript, and
+        // `task_output`'s own row (below) reports "running" vs "finished"
+        // for a task looked up afterwards.
         "task" => {
             let description = str_field(input, "description")
                 .unwrap_or_default()
                 .to_string();
-            let summary = output.and_then(|output| {
-                (output.get("capped").and_then(Value::as_bool) == Some(true))
-                    .then(|| "capped".to_string())
-            });
+            let summary = output.and_then(|output| str_field(output, "status").map(str::to_string));
             (
                 "Task".to_string(),
                 Some(description),
+                summary,
+                ToolCallKind::Generic,
+            )
+        }
+        "task_output" => {
+            // The label the launch recorded, echoed back by the fetch so
+            // this row reads like the launch row rather than a bare uuid.
+            let target = output
+                .and_then(|output| str_field(output, "description"))
+                .or_else(|| str_field(input, "session_id"))
+                .unwrap_or_default()
+                .to_string();
+            let summary = output.and_then(|output| str_field(output, "status").map(str::to_string));
+            (
+                "Task Output".to_string(),
+                Some(target),
                 summary,
                 ToolCallKind::Generic,
             )
@@ -671,7 +692,8 @@ mod tests {
     /// `task`'s `description` input is what the requester's transcript
     /// shows while a delegated task runs -- the session it spawns is
     /// withheld from the client-visible session list, so this row is the
-    /// only place it announces itself. A capped report is labelled as such.
+    /// only place it announces itself. Since the launch became
+    /// asynchronous, the row's summary is the launch receipt's own status.
     #[test]
     fn a_task_call_is_labelled_with_its_description() {
         let items = vec![
@@ -680,13 +702,46 @@ mod tests {
                 "task",
                 json!({"description": "map the emit sites", "prompt": "where are they?"}),
             ),
-            tool_finished("t", json!({"report": "session.rs:1747", "capped": true})),
+            tool_finished(
+                "t",
+                json!({"session_id": "3f2b", "description": "map the emit sites",
+                       "status": "started"}),
+            ),
         ];
         let views = build_tool_call_views(&items);
         assert_eq!(views[0].verb, "Task");
         assert_eq!(views[0].target.as_deref(), Some("map the emit sites"));
-        assert_eq!(views[0].result_summary.as_deref(), Some("capped"));
+        assert_eq!(views[0].result_summary.as_deref(), Some("started"));
         assert!(!views[0].is_error);
+    }
+
+    /// The pull half of the same pair: `task_output` echoes the launch's
+    /// label back so its row reads like the launch row, and distinguishes a
+    /// task still running from one whose report is ready.
+    #[test]
+    fn a_task_output_call_reports_running_and_finished_distinctly() {
+        let running = build_tool_call_views(&[
+            tool_requested("o", "task_output", json!({"session_id": "3f2b"})),
+            tool_finished(
+                "o",
+                json!({"session_id": "3f2b", "description": "map the emit sites",
+                       "status": "running"}),
+            ),
+        ]);
+        assert_eq!(running[0].verb, "Task Output");
+        assert_eq!(running[0].target.as_deref(), Some("map the emit sites"));
+        assert_eq!(running[0].result_summary.as_deref(), Some("running"));
+        assert!(!running[0].is_error);
+
+        let finished = build_tool_call_views(&[
+            tool_requested("o", "task_output", json!({"session_id": "3f2b"})),
+            tool_finished(
+                "o",
+                json!({"session_id": "3f2b", "description": "map the emit sites",
+                       "status": "finished", "report": "session.rs:1747"}),
+            ),
+        ]);
+        assert_eq!(finished[0].result_summary.as_deref(), Some("finished"));
     }
 
     #[test]

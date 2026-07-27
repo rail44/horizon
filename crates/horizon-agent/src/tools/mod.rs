@@ -20,11 +20,18 @@ pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // session's `ToolSessionState`, the same way it constructs the network
 // proxy and judge handles this module also exposes.
 pub use explore::{ExplorationHost, StartedExploration};
-// The model-visible id of that tool, named for the two places outside
-// `explore` that have to recognize it: dispatch (`execution`) and the
-// prompt's delegation-routing block
-// (`providers::rig::session::advertises_task_tool`).
+// The model-visible ids of that tool and its companion fetch tool, named
+// for the places outside `explore` that have to recognize them: dispatch
+// (`execution`), the prompt's delegation-routing block
+// (`providers::rig::session::advertises_task_tool`), and the conditional
+// advertisement of `task_output` alongside `task`
+// (`providers::rig::completion::rig_tool_definitions`).
+pub(crate) use explore::OUTPUT_TOOL_ID as TASK_OUTPUT_TOOL_ID;
 pub(crate) use explore::TOOL_ID as TASK_TOOL_ID;
+// The asynchronous-delivery seam (`docs/agent-async-task-design.md`): the
+// rig session loop drains finished children before each provider round and
+// wakes on the channel below when one lands with no turn to ride on.
+pub(crate) use explore::{notification_event, register_wake, take_notification, unregister_wake};
 // `execute_agent_tool`/`Execution` are re-exported fully `pub` (not
 // `pub(crate)`) specifically so `tests/tier1_network_containment.rs` --
 // an integration test, hence external to this crate -- can drive the real
