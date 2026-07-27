@@ -506,6 +506,38 @@ entries live in `backlog-resolved.md` keeping their original numbers
     everything passed once per-package runs rebuilt things. Mechanism
     not fully pinned (build ordering vs. feature unification) — worth
     reproducing before designing the hook hardening.
+    **Mechanism pinned 2026-07-28** (worker worktree, while a sibling
+    worktree was building concurrently): six `horizon-agent`
+    `tools::tests::` sandboxed-bash tests failed deterministically with
+    a `Finished` completion carrying `exit_code: null`
+    (`a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing`,
+    `approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed`,
+    `bash_auto_executes_sandboxed_and_is_killed_on_timeout`,
+    `bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox`,
+    `judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant`,
+    `tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp`)
+    — reproduced identically on the unmodified branch base, so not
+    change-induced. Cause is `horizon_sandbox::helper::resolve`'s
+    fallback chain meeting the split build-dir: a *unit* test binary
+    gets no `CARGO_BIN_EXE_horizon-sandbox-helper`, its `current_exe()`
+    is `{CARGO_HOME}/horizon-build-dir/debug/deps/…`, and the adjacent
+    and `deps/..` probes both miss because cargo uplifts final binaries
+    to `<worktree>/target/debug`, **not** into the shared build-dir. So
+    resolution falls through to `cargo_test_artifact`, which picks the
+    *newest* `deps/horizon_sandbox_helper-*` carrying the protocol
+    marker — a directory every worktree writes into, so a sibling's
+    build (or that bin target's own test-harness variant, ~6.9MB next to
+    the real ~75MB binary) wins the race and gets spawned as the
+    supervisor. Proof: setting
+    `CARGO_BIN_EXE_horizon-sandbox-helper=<worktree>/target/debug/horizon-sandbox-helper`
+    turned the same run green (80/80 in `tools::tests::`, and 1539/1539
+    workspace-wide). Fix candidates, in preference order: have
+    `resolve()` also probe the *target-dir* (`CARGO_TARGET_DIR` /
+    `<workspace-root>/target/<profile>/`) before the deps scan; or make
+    `cargo_test_artifact` verify the candidate is the real bin rather
+    than the newest marker-bearing file; or set the env var in a
+    `build.rs`/nextest profile. Until then the gate is only reliable
+    when no sibling worktree is building.
 
 67. Running background `task` children are invisible to the user
     (owner observation, 2026-07-28, during the first async-task

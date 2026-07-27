@@ -74,6 +74,15 @@ const EVENT_LOG_PATH_VAR: &str = "HORIZON_AGENT_EVENT_LOG";
 /// `~/` is expanded against `$HOME`, same as `event_log_path` above.
 const STATE_DB_PATH_VAR: &str = "HORIZON_AGENT_STATE_DB";
 
+/// Overrides the Tier 1 history-clearing trigger percentage (see
+/// [`DEFAULT_CLEARING_TRIGGER_PCT`]), clamped to `1..=100`. Env-only, the
+/// same no-file-key treatment `HORIZON_AGENT_EVENT_LOG`/
+/// `HORIZON_AGENT_STATE_DB` get: it exists to force clearing to fire in a
+/// measurement run (`docs/agent-compaction-design.md`'s "計測スイッチ"),
+/// not as a user-facing knob. A value that isn't a number in range is
+/// ignored, leaving the built-in default in place.
+const CLEARING_THRESHOLD_PCT_VAR: &str = "HORIZON_AGENT_CLEARING_THRESHOLD_PCT";
+
 /// Overrides the enforcing judge's model id (`crate::judge`,
 /// `docs/agent-approval-design.md`'s "Judge design"). Falls back to
 /// [`DEFAULT_JUDGE_MODEL`]. Env-only, mirroring `HORIZON_AGENT_EVENT_LOG`/
@@ -202,6 +211,40 @@ pub(crate) const DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS: usize = 24_000;
 /// default-selection behavior.
 pub(crate) const DEFAULT_AGENT_MAX_OUTPUT_TOKENS: u64 = 32_768;
 
+// --- Tier 1 compaction (reversible tool-result clearing) -------------------
+//
+// `docs/agent-compaction-design.md`, "閾値と数値" — every one of these is an
+// initial value the design doc itself flags as unmeasured, to be adjusted
+// once a real session's clearing behavior has been observed. They live here
+// beside the other agent defaults rather than in `providers::rig::clearing`
+// so the whole tunable surface of this crate stays in one file.
+
+/// Tier 1 clearing fires once the provider's own most recently reported
+/// input token count reaches this percentage of the effective window
+/// (`context_length − max_output_tokens`). 60% per the design doc's
+/// threshold table. Overridable for measurement only, via
+/// [`CLEARING_THRESHOLD_PCT_VAR`].
+pub(crate) const DEFAULT_CLEARING_TRIGGER_PCT: u32 = 60;
+
+/// A clearing pass only runs when it would recover at least this many
+/// tokens' worth of tool-result text. The design doc's recovery floor
+/// (16k), borrowed from OpenCode's `PRUNE_MINIMUM`: clearing invalidates
+/// the provider's prompt cache from the first cleared message onward, so
+/// the loss is worth paying rarely and in bulk, never in a trickle.
+pub(crate) const CLEARING_RECOVERY_FLOOR_TOKENS: u64 = 16_384;
+
+/// The most recent tool results are kept verbatim until their combined
+/// size reaches this budget; a pass walks oldest-first and stops there.
+/// Measured in rounds' worth of text rather than a turn count, per the
+/// design doc ("往復単位で遡る（turn 非依存）").
+pub(crate) const CLEARING_TAIL_BUDGET_TOKENS: u64 = 16_384;
+
+/// The characters-per-token estimate both the recovery floor and the tail
+/// budget are measured with. Deliberately the crude 4:1 rule of thumb: the
+/// exact tokenizer is provider- and model-specific, and both budgets are
+/// coarse thresholds where a ±30% estimate changes nothing that matters.
+pub(crate) const CLEARING_CHARS_PER_TOKEN: u64 = 4;
+
 pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
 pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
 #[cfg(test)]
@@ -300,6 +343,14 @@ pub struct RigAgentConfig {
     /// [`DEFAULT_AGENT_MAX_OUTPUT_TOKENS`] for why this exists and how
     /// 32,768 was chosen. Always that constant.
     pub max_output_tokens: u64,
+    /// Percentage of the effective context window at which Tier 1 history
+    /// clearing fires (`providers::rig::clearing`). Always
+    /// [`DEFAULT_CLEARING_TRIGGER_PCT`] unless
+    /// [`CLEARING_THRESHOLD_PCT_VAR`] overrides it for a measurement run --
+    /// kept as a field (rather than reading the constant at the use site)
+    /// for the same reason `iteration_cap` is: so a test can construct a
+    /// config that trips the threshold without simulating a real window.
+    pub clearing_threshold_pct: u32,
     /// Restricts which tool ids `providers::rig::completion::
     /// rig_tool_definitions` advertises to the provider. `None` (the only
     /// value [`Self::from_env_and_provider`] itself ever produces -- this
@@ -326,6 +377,7 @@ impl Default for RigAgentConfig {
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
+            clearing_threshold_pct: DEFAULT_CLEARING_TRIGGER_PCT,
             allowed_tool_ids: None,
         }
     }
@@ -343,9 +395,28 @@ impl RigAgentConfig {
             stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
             repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
             max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
+            clearing_threshold_pct: resolve_clearing_threshold_pct(
+                std::env::var(CLEARING_THRESHOLD_PCT_VAR).ok(),
+            ),
             allowed_tool_ids: None,
         }
     }
+}
+
+/// Pure resolution for the Tier 1 clearing trigger percentage: a parseable
+/// env value clamped into `1..=100` wins, anything else (absent, empty,
+/// non-numeric, zero) leaves [`DEFAULT_CLEARING_TRIGGER_PCT`] in place.
+/// Kept free of I/O for the same testability reason as [`resolve_model`].
+///
+/// Zero is deliberately rejected rather than clamped up: "0%" would read as
+/// "clear on every request", which is not a measurement mode this design
+/// supports (a pass is meant to be rare and bulk -- see
+/// [`CLEARING_RECOVERY_FLOOR_TOKENS`]).
+pub(crate) fn resolve_clearing_threshold_pct(env_value: Option<String>) -> u32 {
+    env_value
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .filter(|pct| (1..=100).contains(pct))
+        .unwrap_or(DEFAULT_CLEARING_TRIGGER_PCT)
 }
 
 /// Pure precedence resolution for the rig model id: env var wins, then the

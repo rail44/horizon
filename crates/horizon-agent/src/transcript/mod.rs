@@ -159,6 +159,16 @@ pub(crate) mod test_support {
         ))
     }
 
+    pub(crate) fn history_cleared(call_ids: &[&str], recovered_chars: u64) -> AgentFrameItem {
+        AgentFrameItem::HistoryCleared(crate::contract::HistoryCleared {
+            cleared_call_ids: call_ids
+                .iter()
+                .map(|id| ToolCallId((*id).to_string()))
+                .collect(),
+            recovered_chars,
+        })
+    }
+
     pub(crate) fn tool_started(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallStarted(ToolCallId(call_id.to_string()))
     }

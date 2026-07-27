@@ -1,7 +1,8 @@
 # Compaction — 二層の文脈削減（Tier 1: 復元可能な clearing / Tier 2: 状態要約）
 
-Status: designed 2026-07-28（オーナー承認）。実装は Tier 1 先行・計測
-後に Tier 2（証拠の順序に忠実な段階導入）。
+Status: designed 2026-07-28（オーナー承認）。**Tier 1 は 2026-07-28 実装
+済み**（下記「Tier 1 実装記録」）。Tier 2 は未実装 — 計測後に着手（証拠の
+順序に忠実な段階導入）。
 
 証拠基盤: `docs/research/agent-compaction-prior-art-2026-07-28.md`（本
 設計の全判断の出典。以下「証拠 doc」）と
@@ -50,6 +51,68 @@ Anthropic の公表実測は clearing+memory 側のみ、Manus「不可逆圧縮
 論理的にリスク」、Claude Code の公式実行順（clearing → 要約）。
 Horizon 固有の強み: 消した本文は recall で**実際に**再取得できる
 （event log が正本のまま残るため）。
+
+## Tier 1 実装記録（2026-07-28）
+
+実装コード（すべて `crates/horizon-agent`）:
+
+- `providers/rig/clearing.rs` — pass の決定（`plan_clearing_pass`）、
+  provider view の seam（`history_for_provider_request`）、セッション状態
+  （`ClearingState`）、resume 再生（`cleared_call_ids_from_events`）。
+- `providers/rig/model_limits.rs` — `GET {base_url}/models` を
+  `(base_url, model)` ごとにプロセス内 1 回だけ取得しキャッシュ（失敗も
+  キャッシュ）。
+- 呼び出し点は `providers/rig/completion.rs` の `complete_rig_turn` の
+  1 箇所のみ（2026-07-25 の撤去記録が「1 call site の 1 関数」と述べた
+  とおり）。
+
+確定した定数（`config.rs`、いずれも初期値）:
+
+| 定数 | 実装値 |
+|---|---|
+| `DEFAULT_CLEARING_TRIGGER_PCT` | 60 |
+| `CLEARING_RECOVERY_FLOOR_TOKENS` | 16,384 |
+| `CLEARING_TAIL_BUDGET_TOKENS` | 16,384 |
+| `CLEARING_CHARS_PER_TOKEN` | 4 |
+| 有効窓 | `context_length − 32,768`（送信中の `max_tokens`） |
+
+設計からの確定事項・差分:
+
+- **fallback 有効窓 128k は採らなかった。** 設計表の「fallback 有効窓
+  128k」は「発火なし + 警告」と併記されていたが、発火しない以上その数値
+  は何にも使われない。実装は限界不明なら窓を持たず（`None`）、
+  セッション開始時に stderr へ 1 行出すだけ。推測した窓を根拠に履歴を
+  削ることは起きない。
+- **cleared set は凍結**。pass は 1 回だけ集合を決め、
+  `Event::HistoryCleared`（`cleared_call_ids` + `recovered_chars`）として
+  event log に載る。以後のリクエストは同じ集合を適用するので projection は
+  バイト一致し、cache 損は pass ごとに 1 回。**リクエストごとの再計算は
+  却下設計**（seam の doc comment に明記）。
+- **保護は構造で担保**: 触るのは tool result の content のみ（user /
+  assistant / TaskNotification は型として対象外）、tail 予算まで遡って
+  停止、最後に tool call を要求した assistant メッセージ＝「今の往復」は
+  丸ごと除外（未回収バッチを半端に消せない）。ツール別例外は無し。
+- **placeholder** は 1 行:
+  `[cleared old tool result: fs.read path="…" (12345 chars). The full
+  result is retained in the session event log — use recall.search /
+  recall.read, or re-run the tool.]`
+- **計測スイッチ**: `HORIZON_AGENT_CLEARING_THRESHOLD_PCT`（env only、
+  1..=100 にクランプ、範囲外・非数値は既定値）。config file には載せない。
+- **wire 影響**: `Event` に variant を 1 つ追加（`Unknown` の手前）した
+  ため、v14 の `MessageRole::TaskNotification` と同じ理由で
+  `SESSION_PROTOCOL_VERSION` を 14 → 15。`MIN_SUPPORTED_PROTOCOL_VERSION`
+  は 11 のまま（旧 peer は `Unknown` として読み飛ばし、失うのは transcript
+  の区切り表示だけ）。
+- **transcript**: `AgentFrameItem::HistoryCleared` として区切り行を描画
+  （"cleared N old tool result(s) (~X chars) — recoverable via recall"）。
+  burst はこの行で閉じる — burst 範囲は 1 行の receipt に畳まれ内部の item
+  は個別描画されないため、吸収させると唯一の痕跡が消える。
+- **turn 規約**: pass は provider round の直前（`complete_rig_turn` の
+  入口）でのみ走る。`WaitingForApproval` 中はリクエストを組み立てないので
+  構造的に走らず、`Event::TurnEnded` は不変。
+
+未実施: 実測（T-callid 再走。死亡点の移動、発火回数・回収量、cache 損、
+recall 再取得率）。Tier 2 の着手判断はこの計測の後。
 
 ## Tier 2 — LLM 状態要約（最終段・生存保証）
 

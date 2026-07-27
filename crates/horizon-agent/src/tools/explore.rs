@@ -219,6 +219,26 @@ pub(crate) fn start(
     )
 }
 
+/// Test-only: puts an already-finished child in the registry, so a test
+/// elsewhere in this crate can exercise `task_output`'s re-fetch without
+/// standing up a scripted `ExplorationHost` and driving a whole child
+/// lifecycle. Used by `providers::rig::clearing`'s tests to pin the
+/// interaction the compaction design depends on: clearing an old `task`
+/// report out of the *provider view* must leave the report itself
+/// re-fetchable, because finished children are retained for the
+/// requester's lifetime and clearing touches nothing but one request's
+/// message list.
+#[cfg(test)]
+pub(crate) fn register_finished_child_for_test(
+    requester: SessionId,
+    child: SessionId,
+    description: &str,
+    output: Value,
+) {
+    children::register_hostless(requester, child, description);
+    children::complete(child, output);
+}
+
 /// `task_output`: the full report of one finished child owned by this
 /// session (decision 3). Ownership is checked, and an id belonging to
 /// another session reports exactly like an unknown one -- a session must

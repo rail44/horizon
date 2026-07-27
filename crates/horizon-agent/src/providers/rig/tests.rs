@@ -451,8 +451,15 @@ fn loads_initial_rig_history_from_duckdb_projection() {
         .expect("append events");
     let shared_store = DuckdbStoreHandle::new(store);
 
-    let history = load_rig_history(Some(&shared_store), session_id);
-    assert_eq!(history, rig_messages_from_horizon_events(&events));
+    let persisted = load_rig_session_history(Some(&shared_store), session_id);
+    assert_eq!(
+        persisted.messages,
+        rig_messages_from_horizon_events(&events)
+    );
+    assert!(
+        persisted.cleared_call_ids.is_empty(),
+        "a log with no clearing pass restores an empty cleared set"
+    );
 
     drop(shared_store);
     let _ = std::fs::remove_file(path);
@@ -886,6 +893,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         &tx,
         &mut pending_halt_result,
         &mut history,
+        &mut ClearingState::disabled(),
         &arrived,
         &mut pending,
         &mut cancelled,

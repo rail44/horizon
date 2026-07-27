@@ -129,7 +129,10 @@ implemented once, in `crates/horizon-config`, so every process that loads
 the file gets them. `crates/horizon-agent`'s event log/DuckDB-projection
 paths keep an environment-only override
 (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
-all.
+all; `HORIZON_AGENT_JUDGE_MODEL` (the enforcing judge's model id) and
+`HORIZON_AGENT_CLEARING_THRESHOLD_PCT` (Tier 1 compaction's trigger
+percentage, clamped 1..=100 — a measurement switch, see
+`docs/agent-compaction-design.md`) are environment-only in the same way.
 
 Config is applied at startup only, with these exceptions: `Reload Config`
 (palette / `reload-config` keybinding id / CLI `horizon reload-config`)

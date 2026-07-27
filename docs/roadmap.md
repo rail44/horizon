@@ -296,6 +296,29 @@ lands:
   and an overflowed session would fail every subsequent turn with no recovery
   path (latent: max observed single-request input since 2026-07-23 is 32,277
   tokens against a 262,144 window).
+  **Compaction Tier 1 LANDED 2026-07-28** (`docs/agent-compaction-design.md`,
+  now marked implemented; evidence base
+  `docs/research/agent-compaction-prior-art-2026-07-28.md`), reinstating the
+  seam this entry left behind — deliberately, and only after the removal's
+  stated precondition (fix the baseline first) was discharged by the
+  2026-07-26..27 consumption campaign. `providers/rig/clearing.rs` replaces
+  the *content* of old tool results with a one-line reference placeholder
+  naming the tool, its key argument, the elided size, and the two honest
+  recovery routes (`recall.search`/`recall.read`, or re-run); the call and
+  its `call_id` are untouched. The cleared set is decided **once per pass and
+  frozen** — recorded as `Event::HistoryCleared` so every later request and
+  every resume applies the identical set (stable prefix, cache paid once per
+  pass); per-request recomputation is a rejected design. Fires only when the
+  provider's own reported input reaches 60% of `context_length − 32,768` and
+  a pass would recover ≥16k tokens; a 16k-token tail, the round still
+  resolving, and every non-tool-result message are structurally out of
+  scope. `/models` is queried once per process per `(base_url, model)` and
+  **no fallback window is invented**: unknown limits mean clearing never
+  fires (crush's `cw == 0` protection) plus one stderr note. The new event
+  variant took `SESSION_PROTOCOL_VERSION` 14 → 15 for the same
+  `Unknown`-index reason v14 did. **Not yet measured**: the design's
+  measurement plan (rerun T-callid) is outstanding, and Tier 2 is gated on
+  it.
 - **Agent context-consumption baseline — open, being scoped 2026-07-25.**
   Measured from agent #67's persisted event log: a read-only audit over six
   files totaling 85KB used 47 provider requests, 46 tool calls (all strictly
