@@ -12,8 +12,9 @@
 //!   carries -- see `handle`'s module doc.
 //! - [`run_judge`] is the pure two-stage orchestration: stage 1 (single-
 //!   token, err-toward-block, cheap) auto-approves or flags; a flagged call
-//!   runs stage 2 (chain-of-thought, reasoning back on) for a final,
-//!   parseable verdict. Never makes a real call itself -- takes a
+//!   runs stage 2 (chain-of-thought in the visible reply, provider-side
+//!   reasoning off) for a final, parseable verdict. Never makes a real
+//!   call itself -- takes a
 //!   `&dyn ModelClient`, so it's exercised in tests against a mock.
 //! - [`prompt`] assembles both stages' prompts (fixed system text, a
 //!   per-call-id-delimited untrusted args region); [`parse`] turns each
@@ -135,8 +136,14 @@ pub(crate) struct JudgeApprovalContext {
 /// `Y`/`N` character.
 const STAGE1_MAX_TOKENS: u64 = 4;
 /// Room for a few sentences of reasoning plus a final parseable verdict
-/// line/JSON object -- audit-trail brevity, not a transcript.
-const STAGE2_MAX_TOKENS: u64 = 300;
+/// line/JSON object -- and, deliberately, for a whole unasked-for think
+/// block in front of them. Stage 2 now sends `reasoning_effort: "none"`
+/// (see [`client::stage2_additional_params`]), but a model that emits a
+/// think block anyway must not be able to spend the budget before
+/// reaching `VERDICT:` -- that is exactly how the old 300-token budget
+/// turned every stage-2 call into a human prompt. Stage 2 runs only on
+/// the flagged minority of calls, so a budget this generous is cheap.
+const STAGE2_MAX_TOKENS: u64 = 2_000;
 
 /// The two-stage cascade: stage 1 (single-token, err-toward-block) decides
 /// on its own if it says "safe" (`N` -> [`JudgeDecision::AutoApprove`]);
@@ -444,6 +451,57 @@ mod tests {
         assert_eq!(verdict.decision, JudgeDecision::Escalate);
         assert_eq!(verdict.stage, 2);
         assert_eq!(verdict.fallback_reason, None);
+    }
+
+    #[tokio::test]
+    async fn stage2_disables_reasoning_and_still_parses_a_stray_think_block() {
+        // The 2026-07-28 defect, end to end: reasoning left on plus a
+        // 300-token budget made every stage-2 reply unparseable. Stage 2
+        // now asks for reasoning off, budgets for a think block that shows
+        // up anyway, and reads the verdict that follows it.
+        let client = ScriptedClient::new(vec![
+            Ok(ScriptedClient::text("Y", None)),
+            Ok(ScriptedClient::text(
+                "<think>The user did ask for this build.</think>\nRoutine.\n\
+                 VERDICT: AUTO_APPROVE",
+                None,
+            )),
+        ]);
+        let verdict = run_judge("syn:small:text", &client, &input("call-think")).await;
+
+        assert_eq!(verdict.decision, JudgeDecision::AutoApprove);
+        assert_eq!(verdict.stage, 2);
+        assert_eq!(verdict.fallback_reason, None);
+
+        let requests = client.requests.lock().unwrap();
+        assert_eq!(requests[1].additional_params["reasoning_effort"], "none");
+        assert_eq!(requests[1].max_tokens, STAGE2_MAX_TOKENS);
+    }
+
+    #[test]
+    fn stage2_budget_covers_a_think_block_plus_a_verdict_line() {
+        let reply = format!(
+            "<think>{}</think>\nVERDICT: ESCALATE",
+            "The call writes outside the workspace, and the user never asked for it. ".repeat(60)
+        );
+        // Conservative reading of the byte-pair budget: ~3 characters per
+        // token. The reply below is roughly 4,400 characters, i.e. a think
+        // block of ~1,500 tokens the old 300-token budget could not have
+        // survived.
+        let estimated_tokens = reply.chars().count().div_ceil(3) as u64;
+        assert!(
+            estimated_tokens > 1_000,
+            "the constructed reply must be long enough to be a real test: {estimated_tokens}"
+        );
+        assert!(
+            STAGE2_MAX_TOKENS >= estimated_tokens,
+            "STAGE2_MAX_TOKENS ({STAGE2_MAX_TOKENS}) must cover a think block plus a \
+             verdict line (~{estimated_tokens} tokens)"
+        );
+        assert_eq!(
+            parse::parse_stage2_result(&reply),
+            Some(JudgeDecision::Escalate)
+        );
     }
 
     #[tokio::test]

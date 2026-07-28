@@ -711,3 +711,38 @@ short.
 After landing: re-run a gate-running dogfooding brief with the project
 grant in place — expected stalls: zero (today: one to four per gate).
 Track alongside backlog 65.
+
+## 2026-07-28 fix: never propose a grant that revalidation will refuse
+
+An event-log investigation of one live session found three operator
+approvals thrown away with `Approved filesystem grants could not be
+revalidated: denied filesystem path /tmp cannot be represented as a
+narrow grant`. Two clamps existed and disagreed: `resolve_denial` shaped
+the per-attempt proposal and rejected only `/proc`, `/sys`, `/dev`, so a
+`/tmp/<leaf>` attempt (leaf missing, nearest existing parent `/tmp`)
+proposed a `ReadWrite DirectoryTree /tmp`; `revalidate_grant` then
+applied `is_overbroad_tree`, whose system-root list contains `/tmp`, and
+refused the identical grant *after* the human had answered. The
+suggestion shaping's own clamp did not save it either: when the common
+ancestor is over-broad it falls back to the per-attempt grants, which is
+where the over-broad tree came from.
+
+The clamp now runs inside `resolve_denial` as well, on the same
+predicate and the same `$HOME`, so the two can never disagree — the
+invariant is a test (`every_proposed_grant_survives_revalidation`): any
+grant `resolve_denial` proposes passes `revalidate_grant`.
+
+An attempt whose narrowest honest grant is refused this way is not a
+prompt the operator can usefully answer, so **no approval is raised for
+it at all**. It is reported instead as
+`horizon_sandbox::UngrantableDenial` — carried out of the supervisor
+report next to the grantable denials (one ungrantable attempt must not
+cost the report its grantable ones) and annotated onto the tool result as
+`ungrantable_filesystem_paths`, whose guidance names the supported
+destination: `$TMPDIR`, which the sandbox already provisions inside the
+session's workspace (`SCRATCH_DIR_NAME`). Genuinely narrowable paths keep
+proposing grants exactly as before.
+
+Known gap, unfixed: on macOS `/tmp` canonicalizes to `/private/tmp`,
+which is not itself in `SYSTEM_ROOTS`, so the same attempt there still
+proposes a tree. The Linux path is what dogfooding runs on.

@@ -61,7 +61,7 @@ pub use grant::{home_dir, is_overbroad_tree, revalidate_grant, suggest_grants};
 pub use policy::{
     ContainmentDenials, FilesystemDenial, FilesystemGrant, FilesystemGrantAccess,
     FilesystemGrantScope, HelperPolicy, NetworkDenial, NetworkPolicy, ReadableScope, SandboxPolicy,
-    SandboxStdio,
+    SandboxStdio, UngrantableDenial,
 };
 
 #[cfg(target_os = "linux")]

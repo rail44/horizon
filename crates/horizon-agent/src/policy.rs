@@ -196,6 +196,36 @@ pub(crate) fn annotate_filesystem_denials(
     }
 }
 
+/// Refused paths no approval will ever be offered for
+/// (`horizon_sandbox::UngrantableDenial`): the sandbox's own explanation
+/// of why, and of the supported destination, travels to the model in the
+/// tool result instead of becoming a prompt the operator cannot usefully
+/// answer.
+pub(crate) fn annotate_ungrantable_denials(
+    output: &mut Value,
+    denials: &[horizon_sandbox::UngrantableDenial],
+) {
+    if denials.is_empty() {
+        return;
+    }
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "ungrantable_filesystem_paths".to_string(),
+            Value::Array(
+                denials
+                    .iter()
+                    .map(|denial| {
+                        serde_json::json!({
+                            "path": denial.attempted_path.display().to_string(),
+                            "guidance": denial.guidance,
+                        })
+                    })
+                    .collect(),
+            ),
+        );
+    }
+}
+
 pub(crate) fn annotate_network_denials(
     output: &mut Value,
     denials: &[horizon_sandbox::NetworkDenial],

@@ -81,6 +81,19 @@ pub struct FilesystemDenial {
     pub grant: FilesystemGrant,
 }
 
+/// A mediated attempt that has no honest narrow grant at all, so no
+/// approval is ever offered for it (see
+/// [`SandboxError::UngrantableDenial`](crate::SandboxError::UngrantableDenial)).
+/// It is diagnostic guidance for whoever ran the command -- what was
+/// refused, and what to do instead -- never a grant proposal.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UngrantableDenial {
+    pub attempted_path: PathBuf,
+    /// The refusal and its supported alternative, as worded by
+    /// `SandboxError::UngrantableDenial`.
+    pub guidance: String,
+}
+
 /// A kernel-mediated network or IPC route refusal. It is structured
 /// diagnostic evidence, not a grant proposal: hostname grants come only from
 /// the HTTP proxy after it parses a request authority.
@@ -91,10 +104,14 @@ pub struct NetworkDenial {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContainmentDenials {
     pub filesystem: Vec<FilesystemDenial>,
     pub network: Vec<NetworkDenial>,
+    /// Refused attempts that are deliberately *not* in `filesystem`:
+    /// nothing narrow enough to offer for approval exists for them.
+    #[serde(default)]
+    pub ungrantable: Vec<UngrantableDenial>,
 }
 
 /// Private helper wire envelope. Kept public only for this package's bin target.
