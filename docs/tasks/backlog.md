@@ -599,3 +599,51 @@ entries live in `backlog-resolved.md` keeping their original numbers
     occurrences in 200 messages, all inside parallel batches. Fixing it
     properly wants turn grouping in the replay; `Record::turn_id` exists
     but `rig_messages_from_horizon_events` only receives `&[Event]`.
+
+69. **libduckdb crashes on an aggregate over a statically-empty filter
+    while the table carries uncommitted rows** — recorded here as the
+    resolution of the first real suspect raised against AGENTS.md "Build
+    setup"'s libduckdb-sys-1.10504.0-expects-1.5.4-vs-Void-ships-1.5.0
+    skew caveat: it is a DuckDB bug present in *both* versions, not a
+    skew symptom (evidence below). Found 2026-07-28 root-causing "DuckDB
+    projection rebuild failed (INTERNAL Error: Attempted to access index
+    0 within vector of size 0); live projection disabled for this run"
+    against the owner's real ~121k-record agent event log, which blanked
+    every session's transcript in the UI. Minimal repro:
+
+    ```sql
+    BEGIN TRANSACTION;
+    INSERT INTO agent_approvals (event_id, session_id, sequence, call_id, reason)
+      VALUES ('e1', 's', 1, 'c1', 'r');
+    SELECT MAX(sequence) FROM agent_approvals WHERE call_id = 'c2';
+    -- INTERNAL Error: Attempted to access index 0 within vector of size 0
+    ```
+
+    Every condition is load-bearing: it needs the aggregate (the same
+    filter without one returns 0 rows fine), a filter the optimizer can
+    *statically prove* empty from column statistics (`'c2'` is outside
+    the only row's min/max), and transaction-local rows (identical query
+    is fine once they are committed, or when the transaction wrote
+    nothing to that table). The failure is in the optimizer at
+    (re)bind time — `duckdb::Optimizer::RunOptimizer` under
+    `ClientContext::RebindPreparedStatement` — not at execution, and it
+    aborts the whole transaction ("Current transaction is aborted (please
+    ROLLBACK)"), whose `COMMIT` then commits nothing.
+
+    **Not a skew artifact, and the AGENTS.md ABI-compatibility statement
+    stands**: reproduced identically on the system libduckdb 1.5.0 *and*
+    on libduckdb-sys 1.10504.0's own bundled 1.5.4 (`cargo test -p
+    horizon-agent --features bundled-duckdb`, which reports
+    `version() = v1.5.4`), so a Void catch-up would not have fixed it and
+    nothing here argues for a system upgrade. The `ORDER BY ... LIMIT 1`
+    replacement was checked on both too (`Ok(None)` when the filter
+    selects nothing, the row when it does).
+
+    Horizon's own occurrence is fixed by not writing the pattern
+    (`projection::Store::most_recent_pending_approval` uses `ORDER BY ...
+    LIMIT 1` instead of `MAX(...)`); the rule to carry forward is
+    **prefer a top-N lookup over an aggregate anywhere a filter may
+    select nothing**, especially inside the batch transactions
+    `import::apply_records` runs. Not reported upstream (see the
+    upstream-posting policy); worth checking against a newer DuckDB
+    before writing any new aggregate in that position.

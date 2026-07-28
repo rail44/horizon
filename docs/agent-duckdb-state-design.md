@@ -265,6 +265,44 @@ DuckDB is rebuilt from JSONL and is not the primary append path.
 > practical problem (a first-ever boot against a large pre-existing log,
 > or a schema migration).
 
+> **Addendum (2026-07-28, rebuild fault tolerance).** The "one DuckDB
+> transaction for the whole batch" above is now "one transaction per
+> `import::APPLY_CHUNK_RECORDS` records", because the single transaction
+> turned any one unprojectable record into total loss of the rebuild.
+> DuckDB aborts an explicit transaction on the *first* failing statement
+> ("Current transaction is aborted (please ROLLBACK)"); every later
+> statement in it fails the same way, and the `COMMIT` then commits
+> nothing. `rebuild_and_open_duckdb_projection` reported that as "rebuild
+> failed ... live projection disabled for this run" and every session's
+> transcript in the UI went blank -- the actual dogfooding symptom that
+> prompted this.
+>
+> `import::apply_records` now applies chunks, and `import::apply_chunk`
+> retries a failed chunk by halving it until the failure is cornered on a
+> single record, which is skipped and counted
+> (`ApplyRecordsReport::skipped`/`first_skip_error`, reported by one
+> stderr summary line next to the existing turn-id-missing one). The
+> per-record projection semantics are unchanged; only the blast radius of
+> a failure is. Chunk size is a throughput/blast-radius trade measured at
+> within ~5% of the previous whole-batch transaction (23.1s vs 24.4s over
+> a real log's first 10k records, debug build) -- the per-record
+> statement-compilation cost noted above still dominates, and a full
+> rebuild of that log's ~121k records still takes ~5 minutes.
+>
+> The record that triggered this in production was not itself malformed:
+> the `mark_approval_outcome` fallback asked DuckDB for `MAX(sequence)`
+> over a filter its optimizer could statically prove selects nothing,
+> which is an internal-error crash while the table carries
+> transaction-local rows -- see `projection::Store::
+> most_recent_pending_approval` for the mechanism and the rewrite. The
+> two fixes are independent on purpose: the statement rewrite removes
+> this cause, the chunking removes the "one record kills the whole
+> projection" *consequence* for whatever cause comes next. A real log
+> already carries such records anyway -- the owner's ~121k-record log has
+> 17 duplicate `(session_id, sequence)` pairs, which violate
+> `agent_events`'s UNIQUE constraint and are now skipped-and-counted
+> rather than fatal.
+
 The projection runs by default now, at `$XDG_DATA_HOME/horizon/agent-state.duckdb`
 (falling back to `~/.local/share/horizon/agent-state.duckdb`) -- there is no
 "unset = disabled" state any more. `HORIZON_AGENT_STATE_DB`, if set,
