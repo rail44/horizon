@@ -402,6 +402,17 @@ async fn rig_openai_turn_streaming(
     reasoning_buffer.flush();
     text_buffer.flush();
 
+    // One provider response persists as *several* events: a
+    // `ToolCallRequested` per tool call, emitted above as its chunks arrive
+    // (so Horizon can start executing it while the stream continues), plus
+    // this one `MessageCommitted` for the accumulated text, which can only
+    // be emitted now that the stream is done. In-memory history keeps them
+    // together as the single assistant message assembled below, but a replay
+    // of the log sees the text event *after* the calls -- and after any
+    // result that landed before the stream ended. Rebuilds therefore fold
+    // adjacent assistant messages back into one
+    // (`mapping::repair_replayed_message_pairing`); nothing is missing from
+    // the log, the grouping simply isn't recorded.
     if !text.is_empty() {
         let _ = events_tx.send(
             Event::MessageCommitted(AgentMessage {

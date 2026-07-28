@@ -553,3 +553,20 @@ entries live in `backlog-resolved.md` keeping their original numbers
     precisely to label this) and probably per-child cancel; design
     belongs with the UI, not the daemon — the subscription seam already
     carries the needed events.
+
+68. A rebuilt history still replays a *parallel* tool batch with its
+    results out of order (found 2026-07-28 while fixing the `b182c25b`
+    session death). `mapping::repair_replayed_message_pairing` folds a
+    provider response's split-up events back into one assistant message,
+    but only while they are adjacent: when a batch's results arrive
+    interleaved with the next call's announcement, the replay reads
+    `assistant(A,B) → tool(B) → assistant(C) → tool(C) → tool(A)`, so
+    `tool(A)` sits behind an assistant message that announced `C`. Live
+    history never has this shape (one assistant message holds the whole
+    batch, results follow it). Harmless against every template observed
+    so far — MiniMax-M3's only requires *some* tool call on the nearest
+    assistant message, which holds — but a template that matches the
+    call id would reject it. Measured on the real `b182c25b` log: 4
+    occurrences in 200 messages, all inside parallel batches. Fixing it
+    properly wants turn grouping in the replay; `Record::turn_id` exists
+    but `rig_messages_from_horizon_events` only receives `&[Event]`.
