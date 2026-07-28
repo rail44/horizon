@@ -37,8 +37,8 @@ fn call_id(id: &str) -> ToolCallId {
     ToolCallId(id.to_string())
 }
 
-fn cleared_set(ids: &[&str]) -> HashSet<ToolCallId> {
-    ids.iter().map(|id| call_id(id)).collect()
+fn cleared_set(ids: &[&str]) -> ClearedResults {
+    ClearedResults::from_occurrences(ids.iter().map(|id| call_id(id)))
 }
 
 /// The text of the (single) tool result carried by `message`, if it is one.
@@ -168,7 +168,7 @@ fn the_tail_budget_keeps_the_most_recent_results_verbatim() {
     // it is kept too, so the boundary never lands mid-round.
     let per_round_tokens = 4_000;
     let history = read_rounds(40, chars_for_tokens(per_round_tokens));
-    let plan = plan_clearing_pass(&history, &HashSet::new());
+    let plan = plan_clearing_pass(&history, &ClearedResults::default());
 
     let expected_tail = CLEARING_TAIL_BUDGET_TOKENS.div_ceil(per_round_tokens) as usize;
     assert_eq!(plan.cleared_call_ids.len(), 40 - expected_tail);
@@ -188,7 +188,7 @@ fn the_tail_budget_keeps_the_most_recent_results_verbatim() {
 fn a_history_smaller_than_the_tail_budget_clears_nothing() {
     let history = read_rounds(3, chars_for_tokens(1_000));
     assert_eq!(
-        plan_clearing_pass(&history, &HashSet::new()),
+        plan_clearing_pass(&history, &ClearedResults::default()),
         ClearingPlan::default()
     );
 }
@@ -209,7 +209,7 @@ fn the_current_unresolved_round_is_never_cleared() {
     history.push(tool_result_message("batch-a", chars_for_tokens(40_000)));
     history.push(tool_result_message("batch-b", chars_for_tokens(40_000)));
 
-    let plan = plan_clearing_pass(&history, &HashSet::new());
+    let plan = plan_clearing_pass(&history, &ClearedResults::default());
     for id in ["batch-a", "batch-b", "batch-c"] {
         assert!(
             !plan.cleared_call_ids.contains(&call_id(id)),
@@ -235,10 +235,9 @@ fn non_tool_messages_are_structurally_out_of_scope() {
     history.push(Message::user("task `abcd` finished: report follows"));
     history.push(Message::user("also check the docs"));
 
-    let cleared: HashSet<ToolCallId> = plan_clearing_pass(&history, &HashSet::new())
-        .cleared_call_ids
-        .into_iter()
-        .collect();
+    let cleared = ClearedResults::from_occurrences(
+        plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
+    );
     let projected = history_for_provider_request(&history, &cleared);
 
     assert_eq!(projected[0], history[0]);
@@ -250,10 +249,9 @@ fn non_tool_messages_are_structurally_out_of_scope() {
 #[test]
 fn clearing_preserves_every_tool_call_result_pair() {
     let history = read_rounds(40, chars_for_tokens(4_000));
-    let cleared: HashSet<ToolCallId> = plan_clearing_pass(&history, &HashSet::new())
-        .cleared_call_ids
-        .into_iter()
-        .collect();
+    let cleared = ClearedResults::from_occurrences(
+        plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
+    );
     assert!(!cleared.is_empty());
     let projected = history_for_provider_request(&history, &cleared);
 
@@ -293,10 +291,9 @@ fn two_consecutive_request_builds_are_byte_identical() {
     // unchanged, the projection is a pure function of history, so the
     // provider's cache is invalidated once per pass and not per round.
     let history = read_rounds(40, chars_for_tokens(4_000));
-    let cleared: HashSet<ToolCallId> = plan_clearing_pass(&history, &HashSet::new())
-        .cleared_call_ids
-        .into_iter()
-        .collect();
+    let cleared = ClearedResults::from_occurrences(
+        plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
+    );
 
     let first = history_for_provider_request(&history, &cleared);
     let second = history_for_provider_request(&history, &cleared);
@@ -314,7 +311,7 @@ fn a_second_pass_extends_the_set_and_never_re_reports_what_it_already_cleared() 
 
     let history = read_rounds(40, chars_for_tokens(4_000));
     let first = state.run_pass(&history).expect("the first pass fires");
-    let after_first: HashSet<ToolCallId> = state.cleared().clone();
+    let after_first: ClearedResults = state.cleared().clone();
     assert_eq!(
         after_first.len(),
         first.cleared_call_ids.len(),
@@ -456,12 +453,131 @@ fn a_long_key_argument_is_truncated_in_the_placeholder() {
 fn an_uncleared_result_is_left_exactly_as_it_was() {
     let history = read_rounds(3, 100);
     assert_eq!(
-        history_for_provider_request(&history, &HashSet::new()),
+        history_for_provider_request(&history, &ClearedResults::default()),
         history
     );
     assert_eq!(
         history_for_provider_request(&history, &cleared_set(&["not-in-this-history"])),
         history
+    );
+}
+
+// --- call_id reuse ---------------------------------------------------------
+
+/// The hazard the occurrence counting exists for: providers reuse `call_id`s
+/// across turns (measured on Kimi, whose ids are `functions.<name>:<index>`),
+/// so a fresh result arriving under an id a pass already froze must survive
+/// the projection untouched -- blanking it would hand the model a
+/// placeholder for a different call in the very turn it needs the output.
+#[test]
+fn a_result_reusing_a_cleared_call_id_after_the_freeze_is_never_replaced() {
+    let mut history = vec![
+        Message::user("read it"),
+        tool_call_message(&[(
+            "functions.fs.read:1",
+            "fs.read",
+            serde_json::json!({ "path": "src/old.rs" }),
+        )]),
+        tool_result_message("functions.fs.read:1", 5_000),
+    ];
+    let cleared = cleared_set(&["functions.fs.read:1"]);
+
+    // A later turn reuses the same provider-supplied id for a genuinely
+    // different call.
+    history.push(tool_call_message(&[(
+        "functions.fs.read:1",
+        "fs.read",
+        serde_json::json!({ "path": "src/fresh.rs" }),
+    )]));
+    history.push(Message::tool_result(
+        "functions.fs.read:1",
+        "the fresh body the model just asked for",
+    ));
+
+    let projected = history_for_provider_request(&history, &cleared);
+    assert!(
+        tool_result_text(&projected[2])
+            .unwrap()
+            .starts_with("[cleared old tool result:"),
+        "the occurrence the pass actually froze is still cleared"
+    );
+    assert_eq!(
+        tool_result_text(&projected[4]).unwrap(),
+        "the fresh body the model just asked for",
+        "a post-freeze result reusing a cleared call_id must be left verbatim"
+    );
+}
+
+/// The counting is per occurrence, not per id: a pass that clears two
+/// same-id results clears exactly those two, and a third still survives.
+#[test]
+fn a_pass_that_clears_two_occurrences_of_one_id_leaves_a_later_third_verbatim() {
+    let mut history = vec![Message::user("read it")];
+    for _ in 0..2 {
+        history.push(tool_call_message(&[(
+            "dup",
+            "fs.read",
+            serde_json::json!({ "path": "src/old.rs" }),
+        )]));
+        history.push(tool_result_message("dup", 5_000));
+    }
+    let cleared = ClearedResults::from_occurrences([call_id("dup"), call_id("dup")]);
+
+    history.push(tool_call_message(&[(
+        "dup",
+        "fs.read",
+        serde_json::json!({ "path": "src/fresh.rs" }),
+    )]));
+    history.push(Message::tool_result("dup", "fresh"));
+
+    let projected = history_for_provider_request(&history, &cleared);
+    for index in [2, 4] {
+        assert!(tool_result_text(&projected[index])
+            .unwrap()
+            .starts_with("[cleared old tool result:"));
+    }
+    assert_eq!(tool_result_text(&projected[6]).unwrap(), "fresh");
+}
+
+/// Resume must reproduce the guard, not just the set of ids: the per-id
+/// occurrence counts ride the existing `HistoryCleared::cleared_call_ids`
+/// list (one entry per cleared occurrence), so replaying the events
+/// rebuilds the identical projection -- including leaving the reused id's
+/// fresh result alone.
+#[test]
+fn resume_replay_preserves_the_reuse_guard() {
+    let mut history = vec![Message::user("read it")];
+    for _ in 0..2 {
+        history.push(tool_call_message(&[(
+            "dup",
+            "fs.read",
+            serde_json::json!({ "path": "src/old.rs" }),
+        )]));
+        history.push(tool_result_message("dup", 5_000));
+    }
+    history.push(tool_call_message(&[(
+        "dup",
+        "fs.read",
+        serde_json::json!({ "path": "src/fresh.rs" }),
+    )]));
+    history.push(Message::tool_result("dup", "fresh"));
+
+    let events = vec![Event::HistoryCleared(HistoryCleared {
+        cleared_call_ids: vec![call_id("dup"), call_id("dup")],
+        recovered_chars: 10_000,
+    })];
+    let mut resumed = ClearingState::new(Some(200_000), 60);
+    resumed.seed_cleared(cleared_call_ids_from_events(&events));
+
+    assert_eq!(
+        resumed.cleared(),
+        &ClearedResults::from_occurrences([call_id("dup"), call_id("dup")])
+    );
+    let projected = history_for_provider_request(&history, resumed.cleared());
+    assert_eq!(
+        tool_result_text(&projected[6]).unwrap(),
+        "fresh",
+        "a resumed session must apply the same occurrence guard a live one does"
     );
 }
 
@@ -503,7 +619,6 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
             call_id: call_id("fetch-1"),
             tool_id: crate::tools::TASK_OUTPUT_TOOL_ID.to_string(),
             input: serde_json::json!({ "session_id": child.as_uuid().to_string() }).into(),
-
             occurrence_id: None,
         },
     );

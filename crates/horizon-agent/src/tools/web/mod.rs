@@ -104,6 +104,12 @@ pub(crate) fn spawn(
             _ = token.cancelled() => None,
             result = work => Some(match result {
                 Ok(completion) => completion,
+                // `occurrence_id` is `None` here and in `with_call_id`
+                // below: a spawned web task is handed a `call_id`, never
+                // the originating `ToolCallRequest`. The sessiond's
+                // `fold_finished_bash_result` (which folds every
+                // `ToolCompletion::Finished`, web included) stamps the
+                // request's occurrence before forwarding.
                 Err(payload) => ToolCompletion::Finished(ToolCallResult::new(
                     call_id.clone(),
                     None,

@@ -206,8 +206,8 @@ mod tests {
     use super::*;
     use crate::contract::{
         event_kind, ApprovalKind, ApprovalRequest, Event, Message, MessageDelta, MessageRole,
-        ProviderId, ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
-        TurnEndReason,
+        OccurrenceId, ProviderId, ProviderRequestSent, SessionState, ToolCallId, ToolCallRequest,
+        ToolCallResult, TurnEndReason,
     };
     use crate::roles::RoleId;
     use duckdb::params;
@@ -1233,6 +1233,71 @@ mod tests {
 
         let approvals = store.approvals_for_session(session_id).expect("approvals");
         assert_eq!(approvals[0].outcome.as_deref(), Some("denied"));
+    }
+
+    /// Two approvals pending at once on one `call_id` -- the shape a
+    /// provider that reuses call_ids, or a denial retry, actually
+    /// produces. Resolving one occurrence must leave the other pending:
+    /// per-occurrence targeting and the most-recent-pending fallback are
+    /// alternatives, never both (`mark_approval_outcome`).
+    #[test]
+    fn resolving_one_occurrence_leaves_a_sibling_pending_approval_untouched() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("call-1".to_string());
+        let occ_a = OccurrenceId("occ-A".to_string());
+        let occ_b = OccurrenceId("occ-B".to_string());
+
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    Event::ToolCallRequested(ToolCallRequest {
+                        call_id: call_id.clone(),
+                        tool_id: "bash.exec".to_string(),
+                        input: serde_json::json!({}).into(),
+                        occurrence_id: Some(occ_a.clone()),
+                    }),
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "first occurrence".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: Some(occ_a.clone()),
+                    }),
+                    Event::ToolCallRequested(ToolCallRequest {
+                        call_id: call_id.clone(),
+                        tool_id: "bash.exec".to_string(),
+                        input: serde_json::json!({}).into(),
+                        occurrence_id: Some(occ_b.clone()),
+                    }),
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "second occurrence".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: Some(occ_b.clone()),
+                    }),
+                    // The first occurrence is denied (finished with no
+                    // preceding `ToolCallStarted`); the second is still
+                    // waiting on the human.
+                    Event::ToolCallFinished(ToolCallResult::denied(
+                        call_id.clone(),
+                        Some(occ_a.clone()),
+                        serde_json::json!({ "is_error": true, "message": "denied by user" }),
+                    )),
+                ],
+            )
+            .expect("append events");
+
+        let approvals = store.approvals_for_session(session_id).expect("approvals");
+        assert_eq!(approvals.len(), 2);
+        assert_eq!(approvals[0].reason, "first occurrence");
+        assert_eq!(approvals[0].outcome.as_deref(), Some("denied"));
+        assert_eq!(approvals[1].reason, "second occurrence");
+        assert_eq!(
+            approvals[1].outcome, None,
+            "resolving one occurrence must not resolve its sibling"
+        );
     }
 
     #[test]

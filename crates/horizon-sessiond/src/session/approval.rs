@@ -99,8 +99,11 @@ pub(super) fn begin_reissued_approval(
     // attempt takes this fresh one, and both stay attributable. UUID v4
     // -- not a per-session counter -- so a resumed session and a replayed
     // log line up without any shared counter to coordinate (the prior
-    // generation-counter pattern in `tools::web::registry` is in-process
-    // and not persisted, so it would not survive either of those).
+    // generation-counter pattern in `crates/horizon-agent/src/tools/web/
+    // mod.rs`'s task registry -- `next_generation` and the
+    // `RegisteredTask`/`finish_registration` pair -- is a process-local
+    // `AtomicU64` and is never persisted, so it would not survive
+    // either of those).
     let occurrence_id = OccurrenceId::new();
     let request = horizon_agent::contract::ToolCallRequest {
         occurrence_id: Some(occurrence_id.clone()),

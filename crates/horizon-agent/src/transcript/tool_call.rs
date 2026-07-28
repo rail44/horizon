@@ -1110,37 +1110,39 @@ mod tests {
     /// `backlog 42 / 55`.
     #[test]
     fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
-        // Same `call_id` reused across two genuinely distinct
-        // `ToolCallRequested` events. Each carries its own fresh
-        // `OccurrenceId` (what `rig_tool_call_request` mints at the
-        // provider boundary today).
+        // Both requests land before either result -- the shape the
+        // `.rev()` fallback actually gets wrong. A batched turn requests
+        // two calls at once, and a provider that reuses ids hands both
+        // the same `call_id`; with positional matching alone, `fin(occ_a)`
+        // attributes to the *newest* entry with that call_id, which is
+        // occurrence B. Each request carries its own fresh `OccurrenceId`,
+        // exactly what `rig_tool_call_request` mints at the provider
+        // boundary.
         let occ_a = OccurrenceId("occ-A".to_string());
         let occ_b = OccurrenceId("occ-B".to_string());
         let items = vec![
-            // First occurrence: an `fs.edit` that ran cleanly.
             tool_requested_with_occurrence(
                 "fs.edit:1",
                 "fs.edit",
                 json!({"path": "a.txt", "old": "x", "new": "y"}),
                 occ_a.clone(),
             ),
-            tool_finished_with_occurrence(
-                "fs.edit:1",
-                json!({ "is_error": false, "applied": true }),
-                occ_a.clone(),
-            ),
-            // Second occurrence: same `call_id`, a *different* `fs.edit`,
-            // the result the provider would have reported under the same
-            // id 18 minutes later. Distinct `OccurrenceId`.
             tool_requested_with_occurrence(
                 "fs.edit:1",
                 "fs.edit",
                 json!({"path": "b.txt", "old": "p", "new": "q"}),
                 occ_b.clone(),
             ),
+            // A's result arrives first and must land on A's row, not on
+            // the more recent B.
             tool_finished_with_occurrence(
                 "fs.edit:1",
                 json!({ "is_error": false, "applied": true }),
+                occ_a.clone(),
+            ),
+            tool_finished_with_occurrence(
+                "fs.edit:1",
+                json!({ "is_error": true, "message": "old_string not found" }),
                 occ_b.clone(),
             ),
         ];
@@ -1148,21 +1150,15 @@ mod tests {
         // Two rows, one per occurrence -- exactly what the user wants
         // for the provider-reuse shape.
         assert_eq!(views.len(), 2);
-        // Each row's `call_id` is the same (provider gave us the same
-        // string twice); the second key is implicit in which `Building`
-        // entry the result attached to. We verify attribution by the
-        // `input` field, which differs between the two calls.
+        // Each row's `call_id` is the same (the provider gave us the same
+        // string twice); the second key decides which `Building` entry
+        // each result attached to. Attribution is observable two ways:
+        // `affected_files` carries the path of the *request* the row was
+        // built from, and `is_error` carries the outcome of the *result*
+        // that attached to it -- so a misattribution pairs a.txt with B's
+        // failure (and vice versa) rather than going unnoticed.
         assert_eq!(views[0].call_id, ToolCallId("fs.edit:1".to_string()));
         assert!(views[0].finished);
-        assert!(!views[0].is_error);
-        // `views[0].input` is not exposed by `ToolCallView`, but the
-        // *order* of the rows preserves input distinctness because each
-        // `ToolCallRequested` pushed its own `Building`. We instead
-        // assert via a side-channel: had the second result collapsed
-        // onto the first request, `views[0].result_summary` would
-        // describe the *b.txt* edit instead. `affected_files` carries
-        // the path the tool ran against, which is the simplest
-        // observable.
         assert_eq!(
             views[0]
                 .affected_files
@@ -1171,9 +1167,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["a.txt"],
         );
+        assert!(
+            !views[0].is_error,
+            "a.txt's row must carry occurrence A's successful result, not B's failure"
+        );
         assert_eq!(views[1].call_id, ToolCallId("fs.edit:1".to_string()));
         assert!(views[1].finished);
-        assert!(!views[1].is_error);
         assert_eq!(
             views[1]
                 .affected_files
@@ -1182,33 +1181,51 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["b.txt"],
         );
+        assert!(
+            views[1].is_error,
+            "b.txt's row must carry occurrence B's failing result"
+        );
     }
 
-    /// Sandbox-denial-retry shape -- the user-visible defect from the
-    /// task statement: one conceptual bash call renders as two
-    /// transcript rows, the first stuck forever as
-    /// "started-but-never-finished". The user wants both attempts visible
-    /// but attributed as one conceptual call with two occurrences.
+    /// Domain-denial-retry shape, in the sequence the daemon actually
+    /// emits (`crates/horizon-sessiond/src/session/completion.rs`'s
+    /// `fold_domain_denied` plus `tools::approval::
+    /// resolve_domain_denial_retry`): a tier-1 auto-approved bash call
+    /// starts, is refused a domain, and is *reissued* under the same
+    /// `call_id` with a fresh occurrence and its own approval prompt.
+    /// `fold_domain_denied` emits no result for the first attempt -- it
+    /// parks the outcome on the approval's `prior_result` -- so the only
+    /// `ToolCallFinished` here arrives after the reissue. Denying it
+    /// forwards that parked result, stamped with the *first* attempt's
+    /// occurrence, which is precisely where positional `.rev()` matching
+    /// misfires: the newest request with this `call_id` is the reissue.
     /// See `backlog 42 / 55`.
     #[test]
-    fn sandbox_denial_retry_renders_two_rows_attributed_as_one_conceptual_call() {
-        // First attempt: bash refused to reach `evil.example.com`; the
-        // sessiond's `begin_reissued_approval` mints `occ_1` for the
-        // initial request and `occ_2` for the reissued request.
+    fn a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it() {
         let occ_1 = OccurrenceId("occ-1".to_string());
         let occ_2 = OccurrenceId("occ-2".to_string());
         let items = vec![
-            // Initial attempt.
+            // Initial attempt: tier-1 auto-approved, so it starts with no
+            // approval prompt of its own, and gets no result event.
             tool_requested_with_occurrence(
                 "bash:1",
                 "bash",
                 json!({"command": "curl -sS http://evil.example.com/x"}),
                 occ_1.clone(),
             ),
-            approval_requested_with_occurrence("bash:1", occ_1.clone()),
-            // First attempt's result lands stamped with `occ_1` (the
-            // sessiond's `fold_domain_denied` fixup, see
-            // `crates/horizon-sessiond/src/session/completion.rs`).
+            tool_started("bash:1"),
+            // `fold_domain_denied`'s reissue: same `call_id`, fresh
+            // occurrence, and the retry prompt.
+            tool_requested_with_occurrence(
+                "bash:1",
+                "bash",
+                json!({"command": "curl -sS http://evil.example.com/x"}),
+                occ_2.clone(),
+            ),
+            approval_requested_with_occurrence("bash:1", occ_2.clone()),
+            // The user declined the domain grant, so the parked first
+            // attempt's outcome is what reaches the provider -- carrying
+            // `occ_1`, the occurrence that actually ran it.
             tool_finished_with_occurrence(
                 "bash:1",
                 json!({
@@ -1218,57 +1235,34 @@ mod tests {
                 }),
                 occ_1.clone(),
             ),
-            // Reissued attempt (the sessiond's
-            // `begin_reissued_approval` re-emitted `ToolCallRequested`
-            // under the same `call_id`, with the fresh `occ_2`).
-            tool_requested_with_occurrence(
-                "bash:1",
-                "bash",
-                json!({"command": "curl -sS http://evil.example.com/x"}),
-                occ_2.clone(),
-            ),
-            approval_requested_with_occurrence("bash:1", occ_2.clone()),
-            // The user approved, so this attempt actually runs and the
-            // bash call finishes -- again stamped with the request's
-            // own `occ_2` (the bash executor fills this in from the
-            // originating request's `occurrence_id` at fold time).
-            tool_finished_with_occurrence(
-                "bash:1",
-                json!({ "is_error": false, "stdout": "ok\n", "exit_code": 0 }),
-                occ_2.clone(),
-            ),
         ];
         let views = build_tool_call_views(&items);
-        // Both attempts are visible -- two rows.
+        // Both attempts are visible -- two rows, same conceptual
+        // `call_id` (the sessiond reissues the id, only the occurrence is
+        // fresh).
         assert_eq!(views.len(), 2);
-        // Same call_id throughout (the sessiond never reissues a fresh
-        // one for a retry -- only Horizon-minted `OccurrenceId`s).
         assert_eq!(views[0].call_id, ToolCallId("bash:1".to_string()));
         assert_eq!(views[1].call_id, ToolCallId("bash:1".to_string()));
-        // First attempt: marked as denied (the `denied_domains` shape
-        // above is what the bash executor writes; the transcript's
-        // `is_denied` classifier catches the `denied` flag plus the
-        // legacy "denied by user" string match -- here it's via the
-        // `ToolCallResult.denied` flag the bash path would set in
-        // production, but for this test we assert via `is_error` and
-        // `approval`).
-        assert!(views[0].is_error);
-        // First attempt did NOT actually start -- it was short-circuited
-        // with the denied result. `started` should be false, but
-        // `finished` is true (it has a result).
-        assert!(views[0].finished);
-        // Second attempt: ran to completion, exit 0, no error.
-        assert!(!views[1].is_error);
-        assert!(views[1].finished);
-        // Both rows carry the same conceptual `call_id`, so the
-        // transcript's per-turn grouping by call_id sees one
-        // conceptual call. The `ToolCallView` shape deliberately
-        // doesn't carry `occurrence_id` (it's a per-turn *view* --
-        // the underlying `AgentFrameItem` list retains each occurrence
-        // distinctly), but the test's invariant is that *both
-        // occurrences resolve to a row with the same `call_id` and a
-        // terminal `finished: true`*, which is the user-visible
-        // "stuck forever" bug fixed.
+        // The result belongs to the attempt that ran, not to the reissue
+        // that was declined.
+        assert!(
+            views[0].finished && views[0].is_error,
+            "the parked outcome must land on the first attempt's row"
+        );
+        assert!(
+            !views[1].finished,
+            "the declined reissue produced no result of its own"
+        );
+        // The reissue is the row that carries the approval, and it
+        // resolved as a denial (its prompt was answered, and no
+        // `ToolCallStarted` followed).
+        assert_eq!(views[0].approval, ApprovalState::None);
+        assert_eq!(views[1].approval, ApprovalState::Waiting);
+        // Backlog 55's remaining, deliberately unaddressed symptom: the
+        // first row stays `finished` while the second renders as still
+        // waiting, so one conceptual bash call still shows as two rows.
+        // Fixing that is a fold-predicate decision, not part of the
+        // identity primitive this test covers.
     }
 
     #[test]

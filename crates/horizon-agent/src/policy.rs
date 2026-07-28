@@ -503,7 +503,6 @@ mod tests {
             call_id: crate::contract::ToolCallId("call-host-reason".to_string()),
             tool_id: "bash".to_string(),
             input: serde_json::json!({ "command": "cargo check" }).into(),
-
             occurrence_id: None,
         };
         let reason = standard_approval_reason(&request);
@@ -665,10 +664,8 @@ mod tests {
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
                 occurrence_id: None,
-
                 ..
-
-                }) if domains == &["docs.example.com".to_string()]
+            }) if domains == &["docs.example.com".to_string()]
         )));
 
         tool_state.allow_domain("example.com");
@@ -678,10 +675,8 @@ mod tests {
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
                 occurrence_id: None,
-
                 ..
-
-                }) if domains == &["docs.example.com".to_string()]
+            }) if domains == &["docs.example.com".to_string()]
         )));
 
         tool_state.allow_domain("docs.example.com");

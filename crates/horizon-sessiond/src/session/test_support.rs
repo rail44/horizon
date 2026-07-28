@@ -30,7 +30,6 @@ pub(super) fn judge_candidate(call_id: &str) -> ApprovalCandidate {
         call_id: ToolCallId(call_id.to_string()),
         tool_id: "mock.approval_required".to_string(),
         input: serde_json::json!({}).into(),
-
         occurrence_id: None,
     };
     ApprovalCandidate {
@@ -38,7 +37,6 @@ pub(super) fn judge_candidate(call_id: &str) -> ApprovalCandidate {
             call_id: request.call_id.clone(),
             reason: "test approval".to_string(),
             kind: ApprovalKind::Standard,
-
             occurrence_id: None,
         },
         request,

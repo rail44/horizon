@@ -650,7 +650,6 @@ mod tests {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
-
             occurrence_id: None,
         };
         ApprovalCandidate {
@@ -658,7 +657,6 @@ mod tests {
                 call_id: request.call_id.clone(),
                 reason: "test approval".to_string(),
                 kind,
-
                 occurrence_id: None,
             },
             request,

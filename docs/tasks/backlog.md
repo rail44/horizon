@@ -130,6 +130,22 @@ entries live in `backlog-resolved.md` keeping their original numbers
     condition plus interaction with the stale row specifically; a
     proper fix is a per-occurrence identity model — design judgment,
     not mechanical. Recorded 2026-07-18 from the fix's review.
+    Partly addressed 2026-07-28: the identity primitive landed —
+    `contract::OccurrenceId`, minted at `providers::rig::mapping::
+    rig_tool_call_request` and again at `sessiond::session::approval::
+    begin_reissued_approval` for every reissue, carried on
+    `ToolCallRequest`/`ToolCallResult`/`ApprovalRequest` (additive on the
+    wire), matched occurrence-first in `transcript::tool_call::
+    build_tool_call_views`, and stored as an `occurrence_id` column on the
+    DuckDB tool-call/result/approval projections. **The named UI symptoms
+    did not move**: `ToolCallView` still carries only `call_id`, so
+    `tool_call_body`/`expanded_rows` keying and the colliding
+    `running-row-{call_id}` `ElementId`s are unchanged — expanding the
+    older duplicate row still shows the newest occurrence's body. What
+    remains is exactly that view-layer work: put the occurrence on
+    `ToolCallView`, key `expanded_rows` and every per-row `ElementId` on
+    it, and decide what the row header shows when two rows share a
+    `call_id`.
 
 31. **Suspected upstream fork-safety hazard in `portable-pty` 0.9.0's PTY
     spawn — can wedge a terminal spawn under extreme concurrent load, at a
@@ -301,6 +317,19 @@ entries live in `backlog-resolved.md` keeping their original numbers
     fixing 42's identity model is likely the real fix; a targeted
     "superseded by retry" row state is the cheaper alternative.
     Recorded 2026-07-19 from the leg-3 review.
+    Still open after 42's identity primitive landed (2026-07-28): each
+    attempt is now cleanly *attributable* — the parked first-attempt
+    result reaches the row that produced it rather than the reissue's
+    (`transcript::tool_call::tests::
+    a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it`)
+    — but the stuck row itself is unchanged, because attribution was
+    never the cause. `fold_domain_denied`/`fold_filesystem_denied` emit
+    no result for the abandoned attempt at all, so on the *approve* path
+    the first row simply never gets one and renders started-but-never-
+    finished forever. What remains is the fold-predicate decision that
+    was deliberately left to the owner: either emit a terminal
+    "superseded by retry" outcome for the abandoned occurrence, or teach
+    the view to collapse an occurrence that a later one supersedes.
 
 56. **Sandboxed bash loses the CPU-niceness hardening.** The
     unsandboxed bash path applies `setpriority` via `pre_exec`;
