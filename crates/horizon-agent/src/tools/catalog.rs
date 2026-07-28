@@ -154,56 +154,48 @@ pub fn definitions() -> Vec<Definition> {
         Definition {
             id: "fs.edit".to_string(),
             title: "Edit File".to_string(),
-            description: "Replace one or more exact occurrences of `old_string` with \
-                `new_string` in an existing file. By default (`replace_all: false`) \
-                `old_string` must match exactly once; set `replace_all: true` to replace \
-                every occurrence. The file must have been read in this session with no \
-                changes on disk since."
+            description: "Apply one or more string replacements in a single call. Batch related \
+                edits — several files, or several hunks of one file — into one list instead of \
+                one call each. Each `old_string` must match exactly once unless \
+                `replace_all: true` is set for that edit, and every file must have been read in \
+                this session with no changes on disk since. Edits apply in list order and later \
+                edits see earlier ones' effects. If an edit fails, the call stops there: earlier \
+                edits stay applied, the rest are not attempted, and the result reports every \
+                edit's outcome (applied / failed / not_attempted) in order plus the failing \
+                index, so you can fix that edit and resend from it."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["path", "old_string", "new_string"],
+                "required": ["edits"],
                 "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to an existing file that has been read this session.",
-                    },
-                    "old_string": {
-                        "type": "string",
-                        "description": "Exact text to replace. Must match exactly once in the file unless `replace_all` is true.",
-                    },
-                    "new_string": {
-                        "type": "string",
-                        "description": "Replacement text.",
-                    },
-                    "replace_all": {
-                        "type": "boolean",
-                        "description": "If true, replace every occurrence of `old_string` in the file. Defaults to false (exactly one match required).",
-                    },
-                }
-            }),
-            permission: ToolPermission::RequireApproval,
-        },
-        Definition {
-            id: "fs.patch".to_string(),
-            title: "Apply File Patch".to_string(),
-            description: "Apply one validated patch containing multiple changes to one or more \
-                files. Use this instead of repeated fs.edit calls when the complete change set \
-                is already known. Every existing file must have been read in this session and \
-                remain unchanged. All paths and hunks are validated before any file content is \
-                written. Patch file paths must be absolute."
-                .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["patch"],
-                "properties": {
-                    "patch": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 1048576,
-                        "description": "A patch delimited by `*** Begin Patch` and `*** End Patch`, with `*** Add File:`, `*** Update File:`, or `*** Delete File:` sections. Update sections contain one or more `@@` chunks whose lines begin with space, `+`, or `-`.",
+                    "edits": {
+                        "type": "array",
+                        "minItems": 1,
+                        "description": "Replacements to apply, in order. Put every related edit in this one list rather than issuing a call per edit.",
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["path", "old_string", "new_string"],
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "Absolute path to an existing file that has been read this session.",
+                                },
+                                "old_string": {
+                                    "type": "string",
+                                    "description": "Exact text to replace. Must match exactly once in the file unless `replace_all` is true.",
+                                },
+                                "new_string": {
+                                    "type": "string",
+                                    "description": "Replacement text.",
+                                },
+                                "replace_all": {
+                                    "type": "boolean",
+                                    "description": "If true, replace every occurrence of `old_string` in the file. Defaults to false (exactly one match required).",
+                                },
+                            }
+                        },
                     },
                 }
             }),

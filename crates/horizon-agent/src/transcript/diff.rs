@@ -7,7 +7,7 @@ use super::receipt::CallClass;
 use super::tool_call::ToolCallView;
 use super::{classify_call, file_name};
 
-/// One file's cumulative edit/write/patch activity across the *whole session*
+/// One file's cumulative edit/write activity across the *whole session*
 /// (every turn, not just whichever receipt/burst is currently rendering)
 /// -- feeds the pane's collapsible "Changes overview"
 /// (`docs/agent-output-ui-design.md` decision 9, never ported from the
@@ -29,7 +29,7 @@ pub struct FileChange {
     pub created: bool,
 }
 
-/// Aggregates every successful, finished `fs.edit`/`fs.write`/`fs.patch` call in
+/// Aggregates every successful, finished `fs.edit`/`fs.write` call in
 /// `tool_calls` -- the *whole session's* [`super::build_tool_call_views`]
 /// output, not one turn/burst's -- into one [`FileChange`] per distinct
 /// path, ordered by each path's first touch. A failed call (`is_error`) or
@@ -42,9 +42,9 @@ pub struct FileChange {
 /// diffstats *summed*, not combined into a net diff across the file's
 /// whole session history -- two edits that each touch 3 lines report `+6
 /// −6` here even if the second fully reverted the first's changes.
-/// Each contribution is only a per-call reconstruction for `fs.edit`, or
-/// the patch's explicit line counts, and this aggregation has no access to
-/// the file's real end-to-end content to diff against instead.
+/// Each contribution is only a per-edit reconstruction for `fs.edit`, and
+/// this aggregation has no access to the file's real end-to-end content to
+/// diff against instead.
 pub fn aggregate_changes(tool_calls: &[ToolCallView]) -> Vec<FileChange> {
     let mut changes: Vec<FileChange> = Vec::new();
     for call in tool_calls {
@@ -95,7 +95,7 @@ pub struct DiffLine {
 /// Reconstructs a full line diff between `old` and `new` by trimming the
 /// common prefix/suffix (kept as `Context` lines) and pairing the
 /// remaining middle as removed-then-added -- not a full diff algorithm
-/// (no interior-line matching), matching `fs.edit`'s single
+/// (no interior-line matching), matching one `fs.edit` entry's
 /// old_string/new_string replacement shape. Operates on `&str` lines
 /// throughout, so multibyte content (e.g. Japanese text) round-trips
 /// unmodified -- no byte-level slicing here.
@@ -235,13 +235,13 @@ mod tests {
             tool_requested(
                 "e1",
                 "fs.edit",
-                json!({"path": "src/a.rs", "old_string": "x", "new_string": "y\nz"}),
+                json!({"edits": [{"path": "src/a.rs", "old_string": "x", "new_string": "y\nz"}]}),
             ),
             tool_finished("e1", json!({"path": "src/a.rs", "replaced": true})),
             tool_requested(
                 "e2",
                 "fs.edit",
-                json!({"path": "src/a.rs", "old_string": "y\nz", "new_string": "w"}),
+                json!({"edits": [{"path": "src/a.rs", "old_string": "y\nz", "new_string": "w"}]}),
             ),
             tool_finished("e2", json!({"path": "src/a.rs", "replaced": true})),
         ];
@@ -262,20 +262,20 @@ mod tests {
             tool_requested(
                 "e1",
                 "fs.edit",
-                json!({"path": "b.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("e1", json!({"path": "b.rs", "replaced": true})),
             tool_requested(
                 "e2",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("e2", json!({"path": "a.rs", "replaced": true})),
             // A second touch of b.rs must not move it later in the order.
             tool_requested(
                 "e3",
                 "fs.edit",
-                json!({"path": "b.rs", "old_string": "y", "new_string": "z"}),
+                json!({"edits": [{"path": "b.rs", "old_string": "y", "new_string": "z"}]}),
             ),
             tool_finished("e3", json!({"path": "b.rs", "replaced": true})),
         ];
@@ -326,7 +326,7 @@ mod tests {
             tool_requested(
                 "e1",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished(
                 "e1",

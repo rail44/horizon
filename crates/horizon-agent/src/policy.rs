@@ -68,7 +68,7 @@ pub(crate) fn classify_call(
     sandbox_available: bool,
 ) -> Classification {
     match tool_id {
-        "fs.write" | "fs.edit" | "fs.patch" => {
+        "fs.write" | "fs.edit" => {
             if session_isolated {
                 Classification::Contained
             } else {
@@ -504,7 +504,7 @@ mod tests {
     #[test]
     fn fs_mutations_are_contained_only_when_isolated() {
         let input = serde_json::json!({});
-        for tool_id in ["fs.write", "fs.edit", "fs.patch"] {
+        for tool_id in ["fs.write", "fs.edit"] {
             assert_eq!(
                 classify_call(tool_id, &input, true, false),
                 Classification::Contained,

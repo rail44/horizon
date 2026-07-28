@@ -118,6 +118,12 @@ entries live in `backlog-resolved.md` keeping their original numbers
     to `replace_all` uses. If escapes persist, the routing (tool
     description) is the next suspect, not the capability. Recorded
     2026-07-26.
+    Measurement note 2026-07-28: `fs.edit` became list-only the same week
+    (`fs.patch` deleted with it, see `docs/agent-tools-design.md`), so
+    "one `fs.edit` call" is no longer "one replacement" — count
+    replacements from each result's `edits` array, not from call rows, or
+    the post-change window will look artificially cheap next to the 272
+    baseline. The escape-count question itself is unaffected.
 
 42. **Tool-call rows have no per-occurrence identity when a provider
     reuses a call_id.** The 2026-07-18 reused-call_id fix (`1d86521`)

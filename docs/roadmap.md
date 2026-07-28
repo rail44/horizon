@@ -245,6 +245,11 @@ lands:
   path locks serialize only overlapping filesystem mutations. OpenAI-compatible
   turns explicitly enable native parallel tool calls; independent calls may
   overlap, same-path writes serialize, and bash retains its per-session FIFO.
+  **Superseded 2026-07-28** (owner decision): `fs.patch` is deleted — 5
+  failures in 6 lifetime uses — and batching now lives in `fs.edit`, whose
+  input is a list of edits and nothing else. Path locks and parallel tool
+  calls are unchanged. Evidence:
+  `docs/research/agent-editing-phase-analysis-2026-07-28.md`.
 - **Agent web search** (backlog 18) **LANDED 2026-07-21.**
   Consultation 2026-07-19/20: **vendor = Exa** (owner decision;
   empirical probe + independent-benchmark evidence in

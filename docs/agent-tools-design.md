@@ -75,6 +75,26 @@ The measurement and prior-art basis for the read/grep bounds is recorded in
 The industry has converged on exact-string replacement with uniqueness
 enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 
+- **`fs.edit` takes a list of edits and nothing else**:
+  `{"edits": [{path, old_string, new_string, replace_all?}, …]}`, at least
+  one entry, no single-edit top-level shape (owner decision 2026-07-28).
+  Batching is therefore the ordinary path rather than a capability the
+  model has to discover — the measurement behind that decision is
+  `research/agent-editing-phase-analysis-2026-07-28.md`: 82/82 edits in
+  the analyzed session ran as single-edit rounds, and the model built a
+  35-round Python bulk-edit workaround rather than reach for either
+  batching tool. The shape matches kimi-cli's native `edit: Edit |
+  list[Edit]` dialect minus the scalar branch.
+- **Sequential, stop at the first failure, no rollback.** Edits apply in
+  list order; edits to the same file compose (a later edit reads what an
+  earlier one wrote, and a path this call already wrote is exempt from the
+  staleness gate for the rest of the call). The first failing edit ends
+  the call: already-applied edits stay on disk — rolling other files back
+  would fabricate state — and the result reports every edit's outcome in
+  order (`applied` with its `occurrences`, `failed` with its reason,
+  `not_attempted`) plus `failed_index`, so the model can fix that one edit
+  and resend from there. A malformed `edits` list is rejected before any
+  file is touched, so a shape error never leaves a partial application.
 - `old_string` must match **exactly**. Zero matches and multiple matches are
   `is_error` results with actionable text. By default, `old_string` must also
   match **uniquely** ("found 3 matches — include more surrounding context");
@@ -99,30 +119,20 @@ enforcement (Claude Code, Gemini CLI, OpenHands, goose, Cline):
 - No fuzzy-match fallback in v1. Gemini ships a four-tier fuzzy cascade;
   Claude Code deliberately ships none. Start strict, collect failure data,
   add leniency only if the data demands it.
+- A process-wide per-path lock serializes `fs.write` and `fs.edit`
+  mutations that target the same file, including calls from different
+  sessions. An `fs.edit` call holds every path in its list for the whole
+  call, acquired in lexical order to avoid deadlocks.
 
-## Patch Semantics
+### `fs.patch`, removed 2026-07-28
 
-`fs.patch` complements rather than replaces `fs.edit`. Its marker-based
-format follows the production `apply_patch` shape used by OpenCode/Codex
-(`*** Begin Patch`, per-file add/update/delete headers, and `@@` update
-chunks), while retaining Horizon's `fs.*` naming and absolute-path rule.
-One call may carry several chunks for one file or changes to several files,
-which avoids the edit/result/completion round trip for every independent
-replacement.
-
-- Every path is confined to the session workspace. Existing update/delete
-  sources must pass the same read-before-write mtime gate as `fs.edit`.
-- The complete patch is parsed and every path and hunk is validated against
-  one in-memory snapshot per file before any file content is written. A bad
-  later hunk therefore cannot leave an earlier validated hunk applied.
-- Application begins only after validation. There is no portable
-  cross-file filesystem transaction: an I/O failure during the final write
-  phase can still leave a partial multi-file change, and the result reports
-  that failure plainly.
-- A process-wide per-path lock serializes `fs.write`, `fs.edit`, and
-  `fs.patch` mutations that target the same file, including calls from
-  different sessions. Multi-path lock acquisition uses lexical order to
-  avoid deadlocks.
+`fs.patch` (a V4A `*** Begin Patch` marker format, shipped 2026-07-22 as
+the multi-file batching path) was deleted rather than repaired: 5 failures
+in 6 lifetime uses, because its `@@` headers are literal source-line
+anchors while the schema never said so and models write the diff-style
+`@@ -1,6 +1,8 @@` they were trained on. Batching moved to the tool the
+model already trusts. Rationale and numbers:
+`research/agent-editing-phase-analysis-2026-07-28.md`.
 
 ## Parallel Tool Calls
 

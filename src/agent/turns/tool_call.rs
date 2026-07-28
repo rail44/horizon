@@ -15,7 +15,7 @@ use horizon_agent::frame::AgentFrameItem;
 use serde_json::Value;
 
 use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff};
-use super::{classify, str_field, DiffLine};
+use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind};
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
 /// expands further individually"), keyed off the tool id the same way
@@ -28,8 +28,9 @@ use super::{classify, str_field, DiffLine};
 /// call id rather than anything receipt-specific.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ToolCallBody {
-    /// fs.edit -- a reconstructed line diff; `omitted` counts any lines
-    /// trimmed by the cap.
+    /// fs.edit -- one reconstructed line diff per edit in the call's
+    /// `edits` list, concatenated; `omitted` counts any lines trimmed by
+    /// the cap.
     Diff {
         lines: Vec<DiffLine>,
         omitted: usize,
@@ -59,8 +60,8 @@ pub(crate) enum ToolCallBody {
     Raw { lines: Vec<String>, omitted: usize },
 }
 
-/// Diff body line cap -- generous, since a single `fs.edit` replacement is
-/// normally small; guards against an unusually large one still bounding
+/// Diff body line cap -- generous, since an `fs.edit` batch's replacements
+/// are normally small; guards against an unusually large one still bounding
 /// the number of elements the view has to build.
 const MAX_DIFF_LINES: usize = 300;
 /// fs.write content-preview line cap (head-capped: the file's start
@@ -82,7 +83,6 @@ fn is_known_tool_id(tool_id: &str) -> bool {
         tool_id,
         "fs.edit"
             | "fs.write"
-            | "fs.patch"
             | "bash"
             | "fs.read"
             | "fs.grep"
@@ -180,41 +180,23 @@ pub(crate) fn build_tool_call_body(
 ) -> ToolCallBody {
     match tool_id {
         "fs.edit" => {
-            let old = str_field(input, "old_string").unwrap_or_default();
-            let new = str_field(input, "new_string").unwrap_or_default();
-            let (lines, omitted) = cap_lines_head(reconstruct_line_diff(old, new), MAX_DIFF_LINES);
-            ToolCallBody::Diff { lines, omitted }
-        }
-        "fs.patch" => {
-            let patch = str_field(input, "patch").unwrap_or_default();
-            let lines = patch
-                .lines()
-                .filter_map(|line| {
-                    if line.starts_with("***") || line.starts_with("@@") {
-                        Some(horizon_agent::transcript::DiffLine {
-                            kind: horizon_agent::transcript::DiffLineKind::Context,
-                            text: line.to_string(),
-                        })
-                    } else if let Some(line) = line.strip_prefix('+') {
-                        Some(horizon_agent::transcript::DiffLine {
-                            kind: horizon_agent::transcript::DiffLineKind::Added,
-                            text: line.to_string(),
-                        })
-                    } else if let Some(line) = line.strip_prefix('-') {
-                        Some(horizon_agent::transcript::DiffLine {
-                            kind: horizon_agent::transcript::DiffLineKind::Removed,
-                            text: line.to_string(),
-                        })
-                    } else {
-                        line.strip_prefix(' ')
-                            .map(|line| horizon_agent::transcript::DiffLine {
-                                kind: horizon_agent::transcript::DiffLineKind::Context,
-                                text: line.to_string(),
-                            })
-                    }
-                })
-                .collect();
-            let (lines, omitted) = cap_lines_head(lines, MAX_DIFF_LINES);
+            // One diff per edit, concatenated in list order. A batch gets a
+            // `--- <path>` header line before each edit so the reader can
+            // tell which file (and which hunk of it) a run of lines belongs
+            // to; a single edit keeps the bare diff it always had.
+            let edits = edit_entries(input);
+            let labeled = edits.len() > 1;
+            let mut all_lines = Vec::new();
+            for edit in &edits {
+                if labeled {
+                    all_lines.push(DiffLine {
+                        kind: DiffLineKind::Context,
+                        text: format!("--- {}", edit.path),
+                    });
+                }
+                all_lines.extend(reconstruct_line_diff(edit.old_string, edit.new_string));
+            }
+            let (lines, omitted) = cap_lines_head(all_lines, MAX_DIFF_LINES);
             ToolCallBody::Diff { lines, omitted }
         }
         "fs.write" => {
@@ -306,9 +288,11 @@ mod tests {
         let body = build_tool_call_body(
             "fs.edit",
             &json!({
-                "path": "src/agent/view.rs",
-                "old_string": "line1\nold\nline3",
-                "new_string": "line1\nnew a\nnew b\nline3",
+                "edits": [{
+                    "path": "src/agent/view.rs",
+                    "old_string": "line1\nold\nline3",
+                    "new_string": "line1\nnew a\nnew b\nline3",
+                }],
             }),
             Some(&json!({"path": "src/agent/view.rs", "replaced": true})),
         );
@@ -362,24 +346,32 @@ mod tests {
     }
 
     #[test]
-    fn build_tool_call_body_renders_fs_patch_as_a_diff() {
+    fn build_tool_call_body_concatenates_an_fs_edit_batchs_diffs_with_path_headers() {
         let body = build_tool_call_body(
-            "fs.patch",
+            "fs.edit",
             &json!({
-                "patch": "*** Begin Patch\n*** Update File: /w/a.rs\n@@\n-old\n+new\n*** End Patch"
+                "edits": [
+                    {"path": "/w/a.rs", "old_string": "old", "new_string": "new"},
+                    {"path": "/w/b.rs", "old_string": "gone", "new_string": "kept"},
+                ],
             }),
             None,
         );
         let ToolCallBody::Diff { lines, omitted } = body else {
-            panic!("expected patch diff body");
+            panic!("expected a Diff body");
         };
         assert_eq!(omitted, 0);
-        assert!(lines.iter().any(|line| {
-            line.kind == horizon_agent::transcript::DiffLineKind::Removed && line.text == "old"
-        }));
-        assert!(lines.iter().any(|line| {
-            line.kind == horizon_agent::transcript::DiffLineKind::Added && line.text == "new"
-        }));
+        assert_eq!(
+            diff_texts(&lines),
+            vec![
+                (DiffLineKind::Context, "--- /w/a.rs"),
+                (DiffLineKind::Removed, "old"),
+                (DiffLineKind::Added, "new"),
+                (DiffLineKind::Context, "--- /w/b.rs"),
+                (DiffLineKind::Removed, "gone"),
+                (DiffLineKind::Added, "kept"),
+            ]
+        );
     }
 
     #[test]
@@ -504,7 +496,7 @@ mod tests {
             tool_requested(
                 "dup",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "first old", "new_string": "first new"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "first old", "new_string": "first new"}]}),
             ),
             approval_requested("dup"),
             tool_started("dup"),
@@ -514,7 +506,7 @@ mod tests {
             tool_requested(
                 "dup",
                 "fs.edit",
-                json!({"path": "b.rs", "old_string": "second old", "new_string": "second new"}),
+                json!({"edits": [{"path": "b.rs", "old_string": "second old", "new_string": "second new"}]}),
             ),
             approval_requested("dup"),
             // No `ToolCallStarted`/`ToolCallFinished` yet for this second
@@ -558,7 +550,7 @@ mod tests {
             tool_requested(
                 "b",
                 "fs.edit",
-                json!({"path": "b.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("a", json!({"total_lines": 10})),
             tool_finished("b", json!({"path": "b.rs", "replaced": true})),

@@ -328,7 +328,7 @@ mod tests {
             tool_requested(
                 "b",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
         ];
         assert_eq!(
@@ -410,7 +410,7 @@ mod tests {
             tool_requested(
                 "b",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("b", json!({"path": "a.rs", "replaced": true})),
             assistant_message("Fixed."),
@@ -496,7 +496,7 @@ mod tests {
         grown.push(tool_requested(
             "b",
             "fs.edit",
-            json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+            json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
         ));
         let grown_bursts = segment_bursts(&grown);
         assert_eq!(grown_bursts.len(), 2);

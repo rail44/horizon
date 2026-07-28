@@ -230,7 +230,7 @@ mod tests {
             tool_requested(
                 "e1",
                 "fs.edit",
-                json!({"path": "b.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("e1", json!({"path": "b.rs", "replaced": true})),
             tool_requested("b1", "bash", json!({"command": "cargo test"})),
@@ -261,7 +261,7 @@ mod tests {
             tool_requested(
                 "e1",
                 "fs.edit",
-                json!({"path": "c.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "c.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished("e1", json!({"path": "c.rs", "replaced": true})),
             tool_requested("e2", "fs.write", json!({"path": "c.rs", "content": "z"})),

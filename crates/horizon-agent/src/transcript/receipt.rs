@@ -109,7 +109,6 @@ mod tests {
     fn classify_call_sorts_every_tool_id_into_its_class() {
         assert_eq!(classify_call("fs.edit"), CallClass::Edit);
         assert_eq!(classify_call("fs.write"), CallClass::Edit);
-        assert_eq!(classify_call("fs.patch"), CallClass::Edit);
         assert_eq!(classify_call("bash"), CallClass::Bash);
         for tool_id in [
             "fs.read",
@@ -138,7 +137,7 @@ mod tests {
             tool_requested(
                 "bad_edit",
                 "fs.edit",
-                json!({"path": "d.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "d.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             tool_finished(
                 "bad_edit",
