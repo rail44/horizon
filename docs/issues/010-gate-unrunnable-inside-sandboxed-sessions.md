@@ -1,7 +1,7 @@
 ---
 id: 010
 title: The local quality gate cannot be faithfully executed inside a sandboxed agent session
-status: open
+status: resolved
 severity: high
 area: agent, sandbox, testing
 ---
@@ -52,3 +52,26 @@ and (c) are design work.
   own subject matter.
 - Filed from the Tier-1 compaction measurement run
   (`docs/research/agent-ceiling-death-autopsy-2026-07-26.md` 追補 5).
+
+## Resolution (2026-07-28)
+
+Option (a), as two repo-side changes — no harness code (owner framing:
+this is project-specific, so it belongs in this project's instructions
+and test configuration, not in `crates/`):
+
+- `.config/nextest.toml` gained a `sandboxed` profile whose
+  `default-filter` skips exactly the 63 boundary tests (1,571 → 1,508),
+  each category commented with its reason. Tests that merely *failed* in
+  session aa95e066 for the shared-build-dir stale-artifact reason
+  (backlog 43/66) are deliberately NOT skipped — hiding those would hide
+  real regressions.
+- `AGENTS.md`'s gate section now tells a sandboxed session to run that
+  profile, states why the skipped tests cannot pass under containment,
+  says the integrator's default-profile run covers them (the existing
+  branch-handoff division of labour), and forbids hand-building an
+  exclusion list.
+
+Not attempted: loosening the sandbox or the judge for these paths. The
+excluded tests assert that literal `/tmp` is unwritable, that repo-external
+directories are unreachable, and that sockets cannot be bound — allowing
+them would delete the property under test.

@@ -41,6 +41,21 @@ cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
 ```
 
+**Inside a sandboxed agent session, run the `sandboxed` nextest profile
+instead of the default one** (`cargo nextest run --profile sandboxed
+--workspace --locked`; the other three steps are unchanged). 63 tests
+verify the host boundary the sandbox enforces — they bind real sockets,
+write to literal `/tmp`, need directories outside any repository, or
+spawn a real `horizon-sessiond` — so they cannot pass from inside
+containment, and making them pass would mean removing the containment
+they verify. The profile skips exactly those (`.config/nextest.toml`
+lists them with reasons); the integrator running the default profile
+covers them when the branch lands, which is the same division of labour
+the branch-handoff flow already uses. Do not hand-build an exclusion
+list: a failure *outside* the profile's skip set is a real finding, and
+one session burned 92 rounds growing a 30-term filter one failure at a
+time before this profile existed (`docs/issues/010`).
+
 The last step is the session-wire skew checker
 (`docs/remoc-adoption-design.md` §4): it diffs the committed wire-schema
 artifact (`crates/horizon-session-protocol/schema/session-wire.json`)

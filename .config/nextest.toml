@@ -24,3 +24,42 @@ test-group = 'sessiond-e2e'
 
 [test-groups.sessiond-e2e]
 max-threads = 1
+
+# `sandboxed` -- the profile an agent session running inside Horizon's own
+# sandbox can honestly run (`cargo nextest run --profile sandboxed
+# --workspace --locked`). It excludes exactly the tests whose *subject
+# matter* is the host boundary the sandbox exists to enforce: they bind
+# real sockets, write to literal `/tmp`, need directories outside any
+# repository, or spawn a real `horizon-sessiond`. Under containment those
+# cannot pass, and making them pass would mean removing the containment
+# they verify -- so a sandboxed session skips them and the integrator's
+# full gate (`profile.default`) runs them (`docs/issues/010`).
+#
+# Filed from session aa95e066 (2026-07-28), which spent 92 rounds -- 21.6%
+# of the run -- growing a hand-rolled 30-term exclusion list one failure at
+# a time before the operator stopped it
+# (`docs/research/agent-harness-findings-97-2026-07-28.md`).
+#
+# Deliberately NOT excluded: anything that merely *failed* in that session.
+# Several failures there were the shared-build-dir stale-artifact problem
+# (backlog 43/66), not containment; excluding those would hide real
+# regressions. If a test outside this list fails in a sandboxed session,
+# it is a finding, not noise.
+[profile.sandboxed]
+default-filter = '''
+    not (
+        binary_id(horizon-agent::tier1_network_containment)
+        + binary_id(horizon-sessiond::e2e)
+        + (binary_id(horizon::bin/horizon) & test(/^sessiond::tests::/))
+        + test(/^tools::network::/)
+        + test(/^tools::tests::bash_auto_executes_sandboxed/)
+        + test(/^tools::tests::tier1_sandboxed_bash/)
+        + test(/^tools::tests::a_configured_grant_makes_an_out_of_workspace_write/)
+        + test(/^tools::tests::approved_git_commit_writes_linked_metadata/)
+        + test(/^tools::tests::judge_approved_filesystem_retry_reruns_sandboxed/)
+        + test(/^session::setup::tests::isolation_announcement::/)
+        + test(/^worktree::tests::create_isolated_worktree_branches/)
+        + test(/outside_a_git_repository$/)
+        + test(/outside_any_repository_is_none$/)
+    )
+'''
