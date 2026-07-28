@@ -343,3 +343,35 @@ task 改名 + 委譲 routing 条項 + cap 部分報告 + max_tokens 32,768 +
 - **残る唯一の死因は純粋な context 天井**。T-callid はこのモデルの
   歩幅では 1 窓に収まらない — 以後の設計（compaction / async task +
   書き込み可 role）の before 側ベースライン
+
+## 追補 5（2026-07-28）: Tier 1 clearing の in vivo 計測（シリーズ最終走）
+
+async task（分割発射文言込み）+ Tier 1 clearing を載せた M3 再走
+（session aa95e066）。オーナーによる continue 数回を挟み、最終的に
+オーナー判断で停止・成果は収穫済み。
+
+**Tier 1 は完全動作**: 6 pass / 392 tool 結果 / 599,157 chars
+（~146k トークン）回収。**426 リクエスト**（過去最長の 2.6 倍）を
+peak input 190,852 で走り切り、**一度も天井死しなかった**（before:
+2 走連続で 229.2k 死）。凍結 projection はバイト安定、M3 template も
+placeholder 履歴を全編受理。副次観測: provider 一時障害 2 件
+（stream timeout / 接続エラー）を子完了通知の auto-wake が自動回復。
+
+**行動側の新発見 3 件**:
+1. **polling 病理** — 序盤 ~100 往復が task_output 連打（66 回、
+   実装ゼロ）。「ターンを譲れば通知が来る」という yield の affordance
+   が無いと、"keep working" はこのモデルでは "poll forever" になる。
+   doom-loop ガードは session_id の入れ替わりですり抜けられ、計 3 回
+   halt→auto-wake で再発。still-running 応答への situated 案内 +
+   polling 検出が修正候補。
+2. **cap チェックポイントの相転移が再現**（n=2）— continue 直後に
+   polling→実装へ切替、以降 edit 19+・検証 bash 46 の健全ループ。
+3. **gate は sandbox 内から構造的に green にできない**（issue 010 に
+   起票）。agent は除外リストを自力構築し、stash→素の木で再テスト→pop
+   という正しい切り分けまで行った上で環境起因と判定した。
+
+**成果**: 35 ファイル +990/−84 の per-occurrence identity 実装を
+ブランチから収穫（`052e1e1` でマージ、ゲートは統合側で実行）。9 走目に
+して T-callid が「窓の中で作業を終えられなかった」以外の全条件を
+クリアした初の走行であり、compaction シリーズの目的（窓を理由に死な
+ない）はここで達成。残る改善軸は行動側（polling / 完了判定）に移った。

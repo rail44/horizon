@@ -928,8 +928,7 @@ mod tests {
             "begin_reissued_approval must mint a fresh OccurrenceId"
         );
         assert_ne!(
-            reissued_occurrence_id,
-            original_request.occurrence_id,
+            reissued_occurrence_id, original_request.occurrence_id,
             "reissued occurrence_id must differ from the original's None"
         );
         assert!(forwarded.iter().any(|event| {
