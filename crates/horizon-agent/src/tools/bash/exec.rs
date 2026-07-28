@@ -740,7 +740,18 @@ pub(super) fn run_sandboxed(
         return BashCompletion::FilesystemDenied {
             call_id: call_id.clone(),
             denials: filesystem_denials,
-            result: ToolCallResult::new(call_id.clone(), value),
+            // `occurrence_id` is `None` here: this is the bash executor
+            // constructing the `prior_result` of an
+            // `ApprovalKind::FilesystemDenialRetry` approval, and the
+            // sessiond's `fold_filesystem_denied` already knows the request's
+            // `occurrence_id` (it pulled `original_request` off the frame)
+            // and stamps it onto the final `ToolCallResult` it forwards to
+            // the agent (see `crates/horizon-sessiond/src/session/
+            // completion.rs`'s `fold_filesystem_denied`). The transcript
+            // matches results by `occurrence_id` first, so a `None` here
+            // would re-collide on reused `call_id`s -- the fixup at fold
+            // time is what keeps provider-reuse and denial-retry separable.
+            result: ToolCallResult::new(call_id.clone(), None, value),
         };
     }
 
@@ -764,6 +775,10 @@ pub(super) fn run_sandboxed(
     if !drained {
         note_undrained(&mut value, config);
     }
+    // Same fixup-at-fold-time story as the `FilesystemDenied` arm above;
+    // `fold_finished_bash_result` (and the `fold_domain_denied` branch
+    // above) stamp the request's `occurrence_id` onto the result they
+    // forward to the agent.
     finished(call_id, value)
 }
 
@@ -816,12 +831,15 @@ fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> B
     BashCompletion::DomainDenied {
         call_id: call_id.clone(),
         domains,
-        result: ToolCallResult::new(call_id.clone(), output),
+        // `occurrence_id` is fixed up by `fold_domain_denied` at sessiond
+        // fold time -- see the comment on the `FilesystemDenied` arm of
+        // `run_sandboxed` above.
+        result: ToolCallResult::new(call_id.clone(), None, output),
     }
 }
 
 fn finished(call_id: &ToolCallId, output: Value) -> BashCompletion {
-    BashCompletion::Finished(ToolCallResult::new(call_id.clone(), output))
+    BashCompletion::Finished(ToolCallResult::new(call_id.clone(), None, output))
 }
 
 fn note_undrained(value: &mut Value, config: &BashToolConfig) {

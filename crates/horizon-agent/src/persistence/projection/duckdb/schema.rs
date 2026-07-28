@@ -58,6 +58,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_calls (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
+    occurrence_id TEXT,
     tool_id TEXT NOT NULL,
     input_json TEXT NOT NULL
 );
@@ -67,6 +68,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_results (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
+    occurrence_id TEXT,
     output_json TEXT NOT NULL,
     -- Derived at projection time from `output_json`'s own `is_error` key
     -- (the convention every tool's error output already follows -- see
@@ -81,6 +83,7 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
+    occurrence_id TEXT,
     reason TEXT NOT NULL,
     -- NULL while the approval is still pending; then 'approved' or
     -- 'denied', derived from event *order* rather than any string match

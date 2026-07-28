@@ -337,6 +337,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
                 call_id: call_id.clone(),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({ "path": "widget.txt" }).into(),
+                occurrence_id: None,
             }),
             provider_payload: None,
         })
@@ -349,6 +350,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
             role_id: None,
             event: Event::ToolCallFinished(ToolCallResult::new(
                 call_id,
+                None,
                 serde_json::json!({ "is_error": true, "message": "widget not found" }),
             )),
             provider_payload: None,
@@ -497,9 +499,11 @@ fn read_entries_carry_is_error_on_tool_results() {
                     call_id: call_id.clone(),
                     tool_id: "fs.read".to_string(),
                     input: serde_json::json!({}).into(),
+                    occurrence_id: None,
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
+                    None,
                     serde_json::json!({ "is_error": true, "message": "nope" }),
                 )),
             ],

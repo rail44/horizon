@@ -602,6 +602,7 @@ mod tests {
                 grants: vec![shaped.clone()],
                 prior_result: crate::contract::ToolCallResult::new(
                     crate::contract::ToolCallId("call-context".to_string()),
+                    None,
                     serde_json::json!({}),
                 ),
             },
@@ -621,6 +622,7 @@ mod tests {
                 domains: expected_domains.clone(),
                 prior_result: crate::contract::ToolCallResult::new(
                     crate::contract::ToolCallId("call-domain".to_string()),
+                    None,
                     serde_json::json!({}),
                 ),
             },
@@ -648,12 +650,16 @@ mod tests {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
+
+            occurrence_id: None,
         };
         ApprovalCandidate {
             approval: ApprovalRequest {
                 call_id: request.call_id.clone(),
                 reason: "test approval".to_string(),
                 kind,
+
+                occurrence_id: None,
             },
             request,
         }
@@ -792,6 +798,7 @@ mod tests {
             grants: Vec::new(),
             prior_result: crate::contract::ToolCallResult::new(
                 crate::contract::ToolCallId("call-1".to_string()),
+                None,
                 serde_json::json!({}),
             ),
         });

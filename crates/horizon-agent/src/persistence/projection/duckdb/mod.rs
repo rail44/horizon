@@ -143,6 +143,25 @@ impl Store {
             conn.execute_batch("DROP TABLE IF EXISTS agent_approvals;")?;
             migrated = true;
         }
+        // `occurrence_id` was added in the same leg as
+        // `SESSION_PROTOCOL_VERSION = 15` (still v15 -- the wire change
+        // is additive, see `backlog 42 / 55`). A pre-existing DB won't
+        // have the column; same drop-and-rebuild pattern as the rows
+        // above, so the next `CREATE TABLE IF NOT EXISTS` lays down the
+        // new shape and `replace_from_event_log_records` repopulates it
+        // from the JSONL log.
+        if !column_exists(conn, "agent_tool_calls", "occurrence_id")? {
+            conn.execute_batch("DROP TABLE IF EXISTS agent_tool_calls;")?;
+            migrated = true;
+        }
+        if !column_exists(conn, "agent_tool_results", "occurrence_id")? {
+            conn.execute_batch("DROP TABLE IF EXISTS agent_tool_results;")?;
+            migrated = true;
+        }
+        if !column_exists(conn, "agent_approvals", "occurrence_id")? {
+            conn.execute_batch("DROP TABLE IF EXISTS agent_approvals;")?;
+            migrated = true;
+        }
         if !table_exists(conn, "agent_turns")? {
             // Nothing to drop -- a missing table is simply laid down fresh
             // by `INITIALIZE_SCHEMA_SQL` -- but a brand-new `agent_turns`
@@ -215,14 +234,17 @@ mod tests {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                         kind: ApprovalKind::Standard,
+                        occurrence_id: None,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
+                        None,
                         serde_json::json!({ "tab_count": 1 }),
                     )),
                 ],
@@ -254,14 +276,17 @@ mod tests {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
                         input: serde_json::json!({ "include": "tabs" }).into(),
+                        occurrence_id: None,
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
                         kind: ApprovalKind::Standard,
+                        occurrence_id: None,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
+                        None,
                         serde_json::json!({ "ok": true }),
                     )),
                 ],
@@ -397,9 +422,11 @@ mod tests {
                             call_id: call_id.clone(),
                             tool_id: "workspace.snapshot".to_string(),
                             input: serde_json::json!({}).into(),
+                            occurrence_id: None,
                         }),
                         Event::ToolCallFinished(ToolCallResult::new(
                             call_id,
+                            None,
                             serde_json::json!({ "tab_count": 1 }),
                         )),
                     ],
@@ -458,11 +485,13 @@ mod tests {
                             call_id: call_id.clone(),
                             tool_id: "workspace.snapshot".to_string(),
                             input: serde_json::json!({}).into(),
+                            occurrence_id: None,
                         }),
                         Event::ApprovalRequested(ApprovalRequest {
                             call_id: call_id.clone(),
                             reason: "approval".to_string(),
                             kind: ApprovalKind::Standard,
+                            occurrence_id: None,
                         }),
                     ],
                 )
@@ -527,14 +556,17 @@ mod tests {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
                         kind: ApprovalKind::Standard,
+                        occurrence_id: None,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
+                        None,
                         serde_json::json!({ "tab_count": 1 }),
                     )),
                 ],
@@ -647,12 +679,14 @@ mod tests {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
                     input: serde_json::json!({}).into(),
+                    occurrence_id: None,
                 }))
                 .to_string(),
                 event: Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
                     input: serde_json::json!({}).into(),
+                    occurrence_id: None,
                 }),
                 provider_payload: None,
                 created_at_unix_ms: 2,
@@ -669,11 +703,13 @@ mod tests {
                 session_context: None,
                 event_kind: event_kind(&Event::ToolCallFinished(ToolCallResult::new(
                     call_id.clone(),
+                    None,
                     serde_json::json!({ "ok": true }),
                 )))
                 .to_string(),
                 event: Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
+                    None,
                     serde_json::json!({ "ok": true }),
                 )),
                 provider_payload: None,
@@ -980,6 +1016,9 @@ mod tests {
             ("agent_sessions", "role_id"),
             ("agent_tool_results", "is_error"),
             ("agent_approvals", "outcome"),
+            ("agent_tool_calls", "occurrence_id"),
+            ("agent_tool_results", "occurrence_id"),
+            ("agent_approvals", "occurrence_id"),
         ] {
             assert!(
                 column_exists(&store.conn, table, column).expect("check migrated column"),
@@ -1083,18 +1122,22 @@ mod tests {
                         call_id: ok_call.clone(),
                         tool_id: "fs.read".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         ok_call,
+                        None,
                         serde_json::json!({ "ok": true }),
                     )),
                     Event::ToolCallRequested(ToolCallRequest {
                         call_id: err_call.clone(),
                         tool_id: "fs.read".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
                         err_call,
+                        None,
                         serde_json::json!({ "is_error": true, "message": "nope" }),
                     )),
                 ],
@@ -1128,15 +1171,18 @@ mod tests {
                         call_id: call_id.clone(),
                         tool_id: "bash.exec".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                         kind: ApprovalKind::Standard,
+                        occurrence_id: None,
                     }),
                     Event::ToolCallStarted(call_id.clone()),
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
+                        None,
                         serde_json::json!({ "ok": true }),
                     )),
                 ],
@@ -1162,17 +1208,20 @@ mod tests {
                         call_id: call_id.clone(),
                         tool_id: "bash.exec".to_string(),
                         input: serde_json::json!({}).into(),
+                        occurrence_id: None,
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                         kind: ApprovalKind::Standard,
+                        occurrence_id: None,
                     }),
                     // A deny short-circuits: `ToolCallFinished` arrives with
                     // no `ToolCallStarted` in between (`tools::approval::
                     // synchronous_result(ran=false)`).
                     Event::ToolCallFinished(ToolCallResult::new(
                         call_id,
+                        None,
                         serde_json::json!({
                             "is_error": true,
                             "message": "denied by user"
@@ -1266,6 +1315,7 @@ mod tests {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
                     input: serde_json::json!({}).into(),
+                    occurrence_id: None,
                 }),
                 1,
             ),
@@ -1279,6 +1329,7 @@ mod tests {
                     call_id: call_id.clone(),
                     reason: "needs approval".to_string(),
                     kind: ApprovalKind::Standard,
+                    occurrence_id: None,
                 }),
                 2,
             ),
@@ -1299,6 +1350,7 @@ mod tests {
                 Some("assistant.default"),
                 Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
+                    None,
                     serde_json::json!({ "ok": true }),
                 )),
                 4,
@@ -1587,14 +1639,17 @@ mod tests {
                 call_id: ToolCallId(format!("call-{index}")),
                 tool_id: "workspace.snapshot".to_string(),
                 input: serde_json::json!({ "index": index }).into(),
+                occurrence_id: None,
             }),
             7 => Event::ApprovalRequested(ApprovalRequest {
                 call_id: ToolCallId(format!("call-{}", index - 1)),
                 reason: "benchmark approval".to_string(),
                 kind: ApprovalKind::Standard,
+                occurrence_id: None,
             }),
             8 => Event::ToolCallFinished(ToolCallResult::new(
                 ToolCallId(format!("call-{}", index - 2)),
+                None,
                 serde_json::json!({ "ok": true, "index": index }),
             )),
             _ => Event::MessageCommitted(Message {

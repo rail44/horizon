@@ -52,6 +52,12 @@ pub(crate) use git::{approved_metadata_roots, metadata_writable_roots, requires_
 /// folding a received completion into the session's `LiveState`/`Frames`
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
+// Same justification as `ApprovalKind` in `contract.rs` -- adding
+// `occurrence_id: Option<OccurrenceId>` to `ToolCallResult` pushed the
+// `Finished(ToolCallResult)` variant just past the 200-byte threshold
+// the lint compares against, and the variants are not constructed in a
+// hot loop.
+#[allow(clippy::large_enum_variant)]
 pub enum ToolCompletion {
     /// An enforcing judge finished evaluating an approval candidate.
     ApprovalJudged(crate::judge::ApprovalJudgment),
@@ -244,7 +250,7 @@ fn spawn_host(
                         );
                     }
                 }
-                BashCompletion::Finished(ToolCallResult::new(run_call_id.clone(), output))
+                BashCompletion::Finished(ToolCallResult::new(run_call_id.clone(), None, output))
             });
         }),
     );
@@ -333,6 +339,7 @@ pub fn spawn_sandboxed(
                                 annotate_sandboxed(&mut output, false);
                                 BashCompletion::Finished(ToolCallResult::new(
                                     run_call_id.clone(),
+                                    None,
                                     output,
                                 ))
                             }
@@ -450,6 +457,7 @@ fn run_job_body(
             eprintln!("bash worker panicked (session {session_id:?}, call {call_id:?}): {message}");
             BashCompletion::Finished(ToolCallResult::new(
                 call_id,
+                None,
                 exec::panic_output(&format!("bash worker panicked: {message}")),
             ))
         }

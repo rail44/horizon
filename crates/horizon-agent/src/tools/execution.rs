@@ -109,6 +109,7 @@ pub fn execute_agent_tool(
         // (e.g. `write` -> `fs.write`) without another round trip to ask.
         None => Execution::Unknown(vec![Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
+            request.occurrence_id.clone(),
             unknown_tool_output(&request.tool_id),
         ))]),
     }
@@ -125,6 +126,7 @@ fn execute_boundary_tool(
     let Some(runtime) = session_runtime(session_id) else {
         return Execution::Auto(vec![Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
+            request.occurrence_id.clone(),
             json!({
                 "is_error": true,
                 "message": format!("{} has no registered session runtime", request.tool_id),
@@ -188,7 +190,11 @@ fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) ->
     Execution::Auto(vec![
         Event::StateChanged(SessionState::ToolRunning),
         Event::ToolCallStarted(request.call_id.clone()),
-        Event::ToolCallFinished(ToolCallResult::new(request.call_id.clone(), output)),
+        Event::ToolCallFinished(ToolCallResult::new(
+            request.call_id.clone(),
+            request.occurrence_id.clone(),
+            output,
+        )),
     ])
 }
 
@@ -270,7 +276,11 @@ fn execute_auto_tool(
     vec![
         Event::StateChanged(SessionState::ToolRunning),
         Event::ToolCallStarted(request.call_id.clone()),
-        Event::ToolCallFinished(ToolCallResult::new(request.call_id.clone(), output)),
+        Event::ToolCallFinished(ToolCallResult::new(
+            request.call_id.clone(),
+            request.occurrence_id.clone(),
+            output,
+        )),
         // No `StateChanged(WaitingForUser)` here: this call is only one
         // member of whatever batch the originating completion requested (a
         // single completion can request several parallel tool calls — see
@@ -295,7 +305,12 @@ pub fn tool_result_message(result: &ToolCallResult) -> Event {
 
 /// A synthetic tool result marking a pending tool call as cancelled, so a
 /// pending approval belonging to a cancelled turn resolves to a terminal
-/// (non-error) outcome instead of hanging forever.
+/// (non-error) outcome instead of hanging forever. `occurrence_id` is `None`
+/// because a cancellation is a session-wide event with no per-occurrence
+/// reference available at the call site; the sessiond's `fold_finished_
+/// bash_result` (and any other fold site that receives this) falls back to
+/// call_id matching for `None`, the same legacy path replayed pre-feature
+/// logs already take.
 pub fn cancelled_tool_call_result(call_id: ToolCallId) -> ToolCallResult {
-    ToolCallResult::new(call_id, json!({ "cancelled": true }))
+    ToolCallResult::new(call_id, None, json!({ "cancelled": true }))
 }

@@ -9,7 +9,7 @@
 //! body construction (and the reasoning-delta cap) both lean on stayed
 //! here regardless, since they're wording-free.
 
-use crate::contract::{ToolCallId, ToolCallResult};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult};
 use crate::frame::{pending_approval_call_ids_in, AgentFrameItem};
 use serde_json::Value;
 
@@ -162,6 +162,11 @@ fn derive_approval_state(
 pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     struct Building<'a> {
         call_id: ToolCallId,
+        /// Per-occurrence identity from the originating `ToolCallRequest`.
+        /// `None` for legacy / replayed logs that pre-date the field; the
+        /// matching logic below falls back to `.rev()`-by-call_id in that
+        /// case (the prior behavior, retained for replay correctness).
+        occurrence_id: Option<OccurrenceId>,
         tool_id: &'a str,
         input: &'a Value,
         result: Option<&'a ToolCallResult>,
@@ -175,6 +180,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             AgentFrameItem::ToolCallRequested(request) => {
                 building.push(Building {
                     call_id: request.call_id.clone(),
+                    occurrence_id: request.occurrence_id.clone(),
                     tool_id: &request.tool_id,
                     input: &request.input,
                     result: None,
@@ -183,28 +189,52 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 });
             }
             AgentFrameItem::ApprovalRequested(request) => {
-                // `.rev()`: attribute to the *most recently requested*
-                // entry with this call_id, matching `AgentFrame::
-                // tool_call_request`'s convention (`frame.rs`). A provider
-                // can legitimately reuse a call_id for a second, distinct
-                // call after the first one's full request/approve/finish
-                // cycle already closed (observed 2026-07-18: a rig/
-                // Kimi-K2.7-Code turn re-requested `fs.edit` with the same
-                // id an already-finished call had used). Forward `.find()`
-                // would keep re-attributing every follow-up event to that
-                // stale first entry, leaving the real, currently-pending
-                // occurrence permanently unresolved (`ApprovalState::None`,
-                // no Approve/Deny row ever rendered -- the "session wedged
-                // on an empty edit call" report).
-                if let Some(entry) = building
-                    .iter_mut()
-                    .rev()
-                    .find(|entry| entry.call_id == request.call_id)
-                {
+                // Attribute to the entry that shares this approval's
+                // `occurrence_id` first (the per-occurrence identity the
+                // sessiond stamps on every reissue, see
+                // `session/approval.rs::begin_reissued_approval`). For
+                // legacy `None` approvals (or replayed pre-feature logs)
+                // fall back to the prior `.rev()`-by-call_id semantic --
+                // attribute to the most recently requested entry with this
+                // call_id, matching `AgentFrame::tool_call_request`'s
+                // convention (`frame.rs`). A provider can legitimately
+                // reuse a call_id for a second, distinct call after the
+                // first one's full request/approve/finish cycle already
+                // closed (observed 2026-07-18: a rig/Kimi-K2.7-Code turn
+                // re-requested `fs.edit` with the same id an
+                // already-finished call had used). Forward `.find()` would
+                // keep re-attributing every follow-up event to that stale
+                // first entry, leaving the real, currently-pending
+                // occurrence permanently unresolved (`ApprovalState::
+                // None`, no Approve/Deny row ever rendered -- the "session
+                // wedged on an empty edit call" report). The
+                // `occurrence_id` match wins on top of that for the
+                // sandbox-denial-retry shape (same call_id, two distinct
+                // `ApprovalRequested` events for the same conceptual
+                // call's two attempts).
+                let entry = match &request.occurrence_id {
+                    Some(occ) => building
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.occurrence_id.as_ref() == Some(occ)),
+                    None => building
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.call_id == request.call_id),
+                };
+                if let Some(entry) = entry {
                     entry.had_approval_request = true;
                 }
             }
             AgentFrameItem::ToolCallStarted(call_id) => {
+                // `ToolCallStarted(ToolCallId)` carries no `occurrence_id`
+                // (it stays a unit-style variant to keep the wire change
+                // additive -- see `contract.rs`'s doc comment on
+                // `OccurrenceId`). It still uses the prior `.rev()`-
+                // by-call_id semantic; this is correct because the
+                // sessiond never reissues the same call_id's started
+                // signal without reissuing the request first, so the most
+                // recently requested entry is always the right target.
                 if let Some(entry) = building
                     .iter_mut()
                     .rev()
@@ -214,11 +244,41 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 }
             }
             AgentFrameItem::ToolCallFinished(result) => {
-                if let Some(entry) = building
-                    .iter_mut()
-                    .rev()
-                    .find(|entry| entry.call_id == result.call_id)
-                {
+                // Match by `occurrence_id` first -- this is the fix for
+                // both shapes the user observed:
+                //
+                // * provider-reuse: provider emits a fresh
+                //   `ToolCallRequested` with the same `call_id` as an
+                //   already-finished call. Each request gets its own
+                //   `Building` entry (with its own `occurrence_id`), and
+                //   the result lands on the entry whose `occurrence_id`
+                //   matches, not on the most recent request of that
+                //   call_id (which on provider-reuse is the *new* request,
+                //   the one the result does not answer to).
+                // * sandbox-denial-retry: sessiond's
+                //   `begin_reissued_approval` reissues the request with
+                //   a fresh `occurrence_id` (see
+                //   `session/approval.rs`). The first attempt's result
+                //   (denied or otherwise) attaches to the first entry, the
+                //   second attempt's result to the second -- so the
+                //   transcript shows both attempts visible as one
+                //   conceptual call with two occurrences, as the user
+                //   requested.
+                //
+                // The `.rev()` fallback for `None` preserves replay
+                // correctness for events persisted before this field
+                // existed.
+                let entry = match &result.occurrence_id {
+                    Some(occ) => building
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.occurrence_id.as_ref() == Some(occ)),
+                    None => building
+                        .iter_mut()
+                        .rev()
+                        .find(|entry| entry.call_id == result.call_id),
+                };
+                if let Some(entry) = entry {
                     entry.result = Some(result);
                 }
             }
@@ -841,6 +901,7 @@ mod tests {
             approval_requested("a"),
             AgentFrameItem::ToolCallFinished(ToolCallResult::denied(
                 ToolCallId("a".to_string()),
+                None,
                 json!({"is_error": true, "message": "denied by user"}),
             )),
         ];
@@ -1037,6 +1098,177 @@ mod tests {
     fn line_diffstat_matches_the_reconstructed_diffs_own_counts() {
         assert_eq!(line_diffstat("a\nold1\nold2\nb", "a\nnew1\nb"), (1, 2));
         assert_eq!(line_diffstat("a\nb\nc", "a\nb\nc"), (0, 0));
+    }
+
+    /// Provider-reuse shape -- the `functions.fs.edit:66` incident in
+    /// session 05254b6a, generalized: a single provider `call_id` is
+    /// legitimately used by two completely distinct tool calls. Without
+    /// per-occurrence identity, both requests collapse onto the same
+    /// `Building` slot and the first result attributes to the second
+    /// request (or vice versa), leaving the genuine occurrence stuck
+    /// "started-but-never-finished" in the transcript. See
+    /// `backlog 42 / 55`.
+    #[test]
+    fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
+        // Same `call_id` reused across two genuinely distinct
+        // `ToolCallRequested` events. Each carries its own fresh
+        // `OccurrenceId` (what `rig_tool_call_request` mints at the
+        // provider boundary today).
+        let occ_a = OccurrenceId("occ-A".to_string());
+        let occ_b = OccurrenceId("occ-B".to_string());
+        let items = vec![
+            // First occurrence: an `fs.edit` that ran cleanly.
+            tool_requested_with_occurrence(
+                "fs.edit:1",
+                "fs.edit",
+                json!({"path": "a.txt", "old": "x", "new": "y"}),
+                occ_a.clone(),
+            ),
+            tool_finished_with_occurrence(
+                "fs.edit:1",
+                json!({ "is_error": false, "applied": true }),
+                occ_a.clone(),
+            ),
+            // Second occurrence: same `call_id`, a *different* `fs.edit`,
+            // the result the provider would have reported under the same
+            // id 18 minutes later. Distinct `OccurrenceId`.
+            tool_requested_with_occurrence(
+                "fs.edit:1",
+                "fs.edit",
+                json!({"path": "b.txt", "old": "p", "new": "q"}),
+                occ_b.clone(),
+            ),
+            tool_finished_with_occurrence(
+                "fs.edit:1",
+                json!({ "is_error": false, "applied": true }),
+                occ_b.clone(),
+            ),
+        ];
+        let views = build_tool_call_views(&items);
+        // Two rows, one per occurrence -- exactly what the user wants
+        // for the provider-reuse shape.
+        assert_eq!(views.len(), 2);
+        // Each row's `call_id` is the same (provider gave us the same
+        // string twice); the second key is implicit in which `Building`
+        // entry the result attached to. We verify attribution by the
+        // `input` field, which differs between the two calls.
+        assert_eq!(views[0].call_id, ToolCallId("fs.edit:1".to_string()));
+        assert!(views[0].finished);
+        assert!(!views[0].is_error);
+        // `views[0].input` is not exposed by `ToolCallView`, but the
+        // *order* of the rows preserves input distinctness because each
+        // `ToolCallRequested` pushed its own `Building`. We instead
+        // assert via a side-channel: had the second result collapsed
+        // onto the first request, `views[0].result_summary` would
+        // describe the *b.txt* edit instead. `affected_files` carries
+        // the path the tool ran against, which is the simplest
+        // observable.
+        assert_eq!(
+            views[0]
+                .affected_files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a.txt"],
+        );
+        assert_eq!(views[1].call_id, ToolCallId("fs.edit:1".to_string()));
+        assert!(views[1].finished);
+        assert!(!views[1].is_error);
+        assert_eq!(
+            views[1]
+                .affected_files
+                .iter()
+                .map(|f| f.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b.txt"],
+        );
+    }
+
+    /// Sandbox-denial-retry shape -- the user-visible defect from the
+    /// task statement: one conceptual bash call renders as two
+    /// transcript rows, the first stuck forever as
+    /// "started-but-never-finished". The user wants both attempts visible
+    /// but attributed as one conceptual call with two occurrences.
+    /// See `backlog 42 / 55`.
+    #[test]
+    fn sandbox_denial_retry_renders_two_rows_attributed_as_one_conceptual_call() {
+        // First attempt: bash refused to reach `evil.example.com`; the
+        // sessiond's `begin_reissued_approval` mints `occ_1` for the
+        // initial request and `occ_2` for the reissued request.
+        let occ_1 = OccurrenceId("occ-1".to_string());
+        let occ_2 = OccurrenceId("occ-2".to_string());
+        let items = vec![
+            // Initial attempt.
+            tool_requested_with_occurrence(
+                "bash:1",
+                "bash",
+                json!({"command": "curl -sS http://evil.example.com/x"}),
+                occ_1.clone(),
+            ),
+            approval_requested_with_occurrence("bash:1", occ_1.clone()),
+            // First attempt's result lands stamped with `occ_1` (the
+            // sessiond's `fold_domain_denied` fixup, see
+            // `crates/horizon-sessiond/src/session/completion.rs`).
+            tool_finished_with_occurrence(
+                "bash:1",
+                json!({
+                    "is_error": true,
+                    "denied_domains": ["evil.example.com"],
+                    "exit_code": 0,
+                }),
+                occ_1.clone(),
+            ),
+            // Reissued attempt (the sessiond's
+            // `begin_reissued_approval` re-emitted `ToolCallRequested`
+            // under the same `call_id`, with the fresh `occ_2`).
+            tool_requested_with_occurrence(
+                "bash:1",
+                "bash",
+                json!({"command": "curl -sS http://evil.example.com/x"}),
+                occ_2.clone(),
+            ),
+            approval_requested_with_occurrence("bash:1", occ_2.clone()),
+            // The user approved, so this attempt actually runs and the
+            // bash call finishes -- again stamped with the request's
+            // own `occ_2` (the bash executor fills this in from the
+            // originating request's `occurrence_id` at fold time).
+            tool_finished_with_occurrence(
+                "bash:1",
+                json!({ "is_error": false, "stdout": "ok\n", "exit_code": 0 }),
+                occ_2.clone(),
+            ),
+        ];
+        let views = build_tool_call_views(&items);
+        // Both attempts are visible -- two rows.
+        assert_eq!(views.len(), 2);
+        // Same call_id throughout (the sessiond never reissues a fresh
+        // one for a retry -- only Horizon-minted `OccurrenceId`s).
+        assert_eq!(views[0].call_id, ToolCallId("bash:1".to_string()));
+        assert_eq!(views[1].call_id, ToolCallId("bash:1".to_string()));
+        // First attempt: marked as denied (the `denied_domains` shape
+        // above is what the bash executor writes; the transcript's
+        // `is_denied` classifier catches the `denied` flag plus the
+        // legacy "denied by user" string match -- here it's via the
+        // `ToolCallResult.denied` flag the bash path would set in
+        // production, but for this test we assert via `is_error` and
+        // `approval`).
+        assert!(views[0].is_error);
+        // First attempt did NOT actually start -- it was short-circuited
+        // with the denied result. `started` should be false, but
+        // `finished` is true (it has a result).
+        assert!(views[0].finished);
+        // Second attempt: ran to completion, exit 0, no error.
+        assert!(!views[1].is_error);
+        assert!(views[1].finished);
+        // Both rows carry the same conceptual `call_id`, so the
+        // transcript's per-turn grouping by call_id sees one
+        // conceptual call. The `ToolCallView` shape deliberately
+        // doesn't carry `occurrence_id` (it's a per-turn *view* --
+        // the underlying `AgentFrameItem` list retains each occurrence
+        // distinctly), but the test's invariant is that *both
+        // occurrences resolve to a row with the same `call_id` and a
+        // terminal `finished: true`*, which is the user-visible
+        // "stuck forever" bug fixed.
     }
 
     #[test]

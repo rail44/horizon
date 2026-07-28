@@ -108,8 +108,8 @@ pub(crate) mod test_support {
     use std::time::Duration;
 
     use crate::contract::{
-        ApprovalKind, ApprovalRequest, Message, MessageDelta, MessageRole, ToolCallId,
-        ToolCallRequest, ToolCallResult, TurnEndReason,
+        ApprovalKind, ApprovalRequest, Message, MessageDelta, MessageRole, OccurrenceId,
+        ToolCallId, ToolCallRequest, ToolCallResult, TurnEndReason,
     };
     use crate::frame::AgentFrameItem;
     use serde_json::Value;
@@ -149,12 +149,47 @@ pub(crate) mod test_support {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: tool_id.to_string(),
             input: input.into(),
+            occurrence_id: None,
+        })
+    }
+
+    /// Same as [`Self::tool_requested`] but stamps the given `occurrence_id`
+    /// on the `ToolCallRequest` -- used by the per-occurrence identity tests
+    /// (`transcript::tool_call::tests::provider_reused_call_id_attributes_
+    /// each_occurrence_to_its_own_result` and the sandbox-denial-retry
+    /// counterpart below).
+    pub(crate) fn tool_requested_with_occurrence(
+        call_id: &str,
+        tool_id: &str,
+        input: Value,
+        occurrence_id: OccurrenceId,
+    ) -> AgentFrameItem {
+        AgentFrameItem::ToolCallRequested(ToolCallRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            tool_id: tool_id.to_string(),
+            input: input.into(),
+            occurrence_id: Some(occurrence_id),
         })
     }
 
     pub(crate) fn tool_finished(call_id: &str, output: Value) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
+            None,
+            output,
+        ))
+    }
+
+    /// Same as [`Self::tool_finished`] but stamps the given `occurrence_id`
+    /// on the `ToolCallResult`. See `tool_requested_with_occurrence`.
+    pub(crate) fn tool_finished_with_occurrence(
+        call_id: &str,
+        output: Value,
+        occurrence_id: OccurrenceId,
+    ) -> AgentFrameItem {
+        AgentFrameItem::ToolCallFinished(ToolCallResult::new(
+            ToolCallId(call_id.to_string()),
+            Some(occurrence_id),
             output,
         ))
     }
@@ -188,6 +223,22 @@ pub(crate) mod test_support {
     pub(crate) fn approval_requested(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ApprovalRequested(ApprovalRequest {
             call_id: ToolCallId(call_id.to_string()),
+            reason: "writes a file".to_string(),
+            kind: ApprovalKind::Standard,
+            occurrence_id: None,
+        })
+    }
+
+    /// Same as [`Self::approval_requested`] but stamps the given
+    /// `occurrence_id` on the `ApprovalRequest`. See
+    /// `tool_requested_with_occurrence`.
+    pub(crate) fn approval_requested_with_occurrence(
+        call_id: &str,
+        occurrence_id: OccurrenceId,
+    ) -> AgentFrameItem {
+        AgentFrameItem::ApprovalRequested(ApprovalRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            occurrence_id: Some(occurrence_id),
             reason: "writes a file".to_string(),
             kind: ApprovalKind::Standard,
         })

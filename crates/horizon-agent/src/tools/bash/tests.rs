@@ -531,6 +531,7 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
         .items
         .push(AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             call_id.clone(),
+            None,
             json!({ "cancelled": true }),
         )));
 
@@ -596,6 +597,7 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
     super::run_job_body(SessionId::new(), call_id.clone(), &tx, move || {
         BashCompletion::Finished(ToolCallResult::new(
             work_call_id.clone(),
+            None,
             json!({ "ok": true }),
         ))
     });

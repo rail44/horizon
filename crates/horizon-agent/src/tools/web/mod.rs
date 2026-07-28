@@ -106,6 +106,7 @@ pub(crate) fn spawn(
                 Ok(completion) => completion,
                 Err(payload) => ToolCompletion::Finished(ToolCallResult::new(
                     call_id.clone(),
+                    None,
                     json!({
                         "is_error": true,
                         "message": format!("{tool_id} worker panicked: {}", panic_message(&*payload)),
@@ -175,7 +176,7 @@ fn with_call_id(
                     annotate_domain_approval(&mut output, domains)
                 }
             }
-            ToolCompletion::Finished(ToolCallResult::new(call_id, output))
+            ToolCompletion::Finished(ToolCallResult::new(call_id, None, output))
         }
         WebOutcome::DomainGrantRequired(domains) => {
             ToolCompletion::DomainGrantRequired { call_id, domains }

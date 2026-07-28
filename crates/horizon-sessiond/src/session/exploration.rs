@@ -105,6 +105,8 @@ mod tests {
                 call_id: ToolCallId(call_id.to_string()),
                 tool_id: tool_id.to_string(),
                 input: input.into(),
+
+                occurrence_id: None,
             },
         );
         let Execution::Auto(events) = execution else {

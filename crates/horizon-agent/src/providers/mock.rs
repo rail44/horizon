@@ -107,6 +107,7 @@ impl Provider for MockProvider {
                                     call_id,
                                     tool_id: "mock.approval_required".to_string(),
                                     input: serde_json::json!({ "message": text }).into(),
+                                    occurrence_id: None,
                                 })
                                 .into(),
                             );
@@ -120,6 +121,7 @@ impl Provider for MockProvider {
                                     call_id,
                                     tool_id: "workspace.snapshot".to_string(),
                                     input: serde_json::json!({}).into(),
+                                    occurrence_id: None,
                                 })
                                 .into(),
                             );
@@ -141,6 +143,7 @@ impl Provider for MockProvider {
                                     input:
                                         serde_json::json!({ "command": "echo sessiond-bash-ok" })
                                             .into(),
+                                    occurrence_id: None,
                                 })
                                 .into(),
                             );
@@ -154,6 +157,7 @@ impl Provider for MockProvider {
                                     call_id: call_id.clone(),
                                     tool_id: "mock.approval_required".to_string(),
                                     input: serde_json::json!({ "message": text }).into(),
+                                    occurrence_id: None,
                                 })
                                 .into(),
                             );
@@ -233,6 +237,7 @@ impl Provider for MockProvider {
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
                                 call_id.clone(),
+                                None,
                                 serde_json::json!({
                                     "approved": true,
                                     "result": "mock tool completed",
@@ -255,6 +260,7 @@ impl Provider for MockProvider {
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
                                 call_id.clone(),
+                                None,
                                 serde_json::json!({
                                     "approved": false,
                                     "reason": reason,

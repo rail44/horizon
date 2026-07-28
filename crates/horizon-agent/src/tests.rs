@@ -55,6 +55,7 @@ fn agent_frame_folds_a_compaction_pass_into_its_own_marker_item() {
     };
     let finished = agent::ToolCallResult::new(
         agent::ToolCallId("call-0".to_string()),
+        None,
         serde_json::json!({"total_lines": 42}),
     );
     let frame = agent_frame_from_events(&[
@@ -375,6 +376,7 @@ fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() 
             call_id: agent::ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
+            occurrence_id: None,
         }),
         &mut TurnClock::new(),
     );
@@ -519,12 +521,14 @@ fn turn_ended_is_a_turn_boundary_for_coalescing() {
 fn tool_call_result_new_derives_is_error_from_the_output_convention() {
     let ok = agent::ToolCallResult::new(
         agent::ToolCallId("call-1".to_string()),
+        None,
         serde_json::json!({ "ok": true }),
     );
     assert!(!ok.is_error);
 
     let failed = agent::ToolCallResult::new(
         agent::ToolCallId("call-2".to_string()),
+        None,
         serde_json::json!({ "is_error": true, "message": "boom" }),
     );
     assert!(failed.is_error);
@@ -563,6 +567,7 @@ fn tool_call_result_denied_field_defaults_to_false_for_a_pre_marker_record() {
     // with `denied: true` intact.
     let denied = agent::ToolCallResult::denied(
         agent::ToolCallId("call-2".to_string()),
+        None,
         serde_json::json!({ "is_error": true, "message": "denied by user" }),
     );
     let round_tripped: agent::ToolCallResult =
@@ -636,12 +641,13 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
             call_id: call_id.clone(),
             reason: "needs approval".to_string(),
             kind: agent::ApprovalKind::Standard,
+            occurrence_id: None,
         }));
 
     assert_eq!(frame.pending_approval_call_id(), Some(call_id.clone()));
 
     frame.items.push(AgentFrameItem::ToolCallFinished(
-        agent::ToolCallResult::new(call_id, serde_json::json!({ "ok": true })),
+        agent::ToolCallResult::new(call_id, None, serde_json::json!({ "ok": true })),
     ));
 
     assert_eq!(frame.pending_approval_call_id(), None);
@@ -661,6 +667,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
             call_id: first.clone(),
             reason: "first".to_string(),
             kind: agent::ApprovalKind::Standard,
+            occurrence_id: None,
         }));
     frame
         .items
@@ -668,6 +675,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
             call_id: second.clone(),
             reason: "second".to_string(),
             kind: agent::ApprovalKind::Standard,
+            occurrence_id: None,
         }));
 
     assert_eq!(
@@ -677,7 +685,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
     assert_eq!(frame.pending_approval_call_id(), Some(first.clone()));
 
     frame.items.push(AgentFrameItem::ToolCallFinished(
-        agent::ToolCallResult::new(first, serde_json::json!({ "ok": true })),
+        agent::ToolCallResult::new(first, None, serde_json::json!({ "ok": true })),
     ));
 
     assert_eq!(frame.pending_approval_call_ids(), vec![second.clone()]);
@@ -693,6 +701,7 @@ fn horizon_policy_adds_approval_for_requested_tool() {
             call_id: call_id.clone(),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
+            occurrence_id: None,
         }),
         &tool_state,
         SessionId::new(),
@@ -727,6 +736,7 @@ fn mock_agent_accepts_tool_call_result_command() {
 
     let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
         agent::ToolCallId("call-1".to_string()),
+        None,
         serde_json::json!({ "ok": true }),
     )));
 
@@ -958,6 +968,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
     // silently dropped — no further events are produced for it.
     let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
         call_id,
+        None,
         serde_json::json!({ "ignored": true }),
     )));
     assert!(

@@ -503,6 +503,8 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
             call_id: call_id("fetch-1"),
             tool_id: crate::tools::TASK_OUTPUT_TOOL_ID.to_string(),
             input: serde_json::json!({ "session_id": child.as_uuid().to_string() }).into(),
+
+            occurrence_id: None,
         },
     );
     let crate::tools::Execution::Auto(events) = fetch else {
