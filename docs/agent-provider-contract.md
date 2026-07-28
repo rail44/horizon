@@ -173,6 +173,19 @@ Notes:
   cannot prove that retrying would avoid duplicate generation, billing, or
   tool-call intent. A timeout instead follows the normal failed-turn path:
   `Error`, `TurnEnded(Failed)`, then `StateChanged(WaitingForUser)`.
+  A rejection received **before any chunk of the response has been decoded**
+  is the one exception, and it is not a weakening of that rule: nothing was
+  generated, so re-sending cannot duplicate anything. HTTP 429/502/503/504
+  and connection/handshake-level failures are re-sent up to three attempts
+  total, with exponentially backed-off jittered waits (~1s/2s, capped at
+  30s, honouring a `Retry-After` the provider names in its error body); a
+  turn cancellation wins over a pending retry immediately, every other 4xx
+  stays fatal, and one stderr line per retry names the attempt and status.
+  Each attempt is a genuinely separate request and emits its own
+  `ProviderRequestSent`/`ProviderRequestFinished` pair.
+  `ProviderRequestFirstToken` marks the first *successfully decoded* chunk,
+  so a rejection delivered as the response stream's first item is not
+  mistaken for a token.
 - `ProviderRequestUsage` is a separate frame-neutral event emitted when the
   provider supplies final per-request input, output, total, and cached-input
   token counts. It remains queryable through the generic JSONL/DuckDB event

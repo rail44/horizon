@@ -35,14 +35,37 @@ use super::{
 
 /// Bounds the HTTP/request setup phase before rig yields a response stream.
 ///
-/// Provider requests are deliberately not retried here: once a request has
-/// crossed the network boundary Horizon cannot know whether retrying would
-/// duplicate generation, billing, or tool-call intent.
+/// A request that has crossed the network boundary is deliberately not
+/// retried on timeout: Horizon cannot know whether retrying would duplicate
+/// generation, billing, or tool-call intent. That caveat is about failures
+/// that may land *after* generation started; a rejection received before any
+/// of the response has been decoded is a different case and is retried --
+/// see [`retryable_rejection`].
 const PROVIDER_STREAM_ESTABLISH_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// Maximum silence between response-stream chunks, including the wait for
 /// the first chunk after the HTTP response stream has been established.
+///
+/// A trip of this bound stays fatal, and the asymmetry with the retried
+/// rejections below is deliberate: silence proves nothing about whether the
+/// provider is already generating, so a retry could duplicate a generation
+/// that is merely slow to reach us.
 const PROVIDER_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// How many times one provider request may be sent when the provider keeps
+/// rejecting it before generating anything: the first send plus two retries.
+pub(super) const PROVIDER_REQUEST_MAX_ATTEMPTS: u32 = 3;
+
+/// First backoff window; it doubles per attempt (~1s, ~2s, ~4s).
+const PROVIDER_RETRY_BASE_BACKOFF: Duration = Duration::from_secs(1);
+
+/// Ceiling on any single backoff, including one the provider asked for.
+pub(super) const PROVIDER_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
+
+/// Statuses with which a provider says "not now" rather than "not ever":
+/// rate limiting plus the three gateway-level failures. Every other 4xx
+/// describes the request itself and would fail identically on a retry.
+const RETRYABLE_STATUSES: [u16; 4] = [429, 502, 503, 504];
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ProviderWait<T> {
@@ -69,6 +92,217 @@ pub(super) async fn await_provider_phase<T>(
                 ))
         }
     }
+}
+
+/// A provider rejection that arrived before any of the response had been
+/// decoded, so re-sending the request cannot duplicate a generation: the
+/// provider answered "no" (or never answered at all) instead of starting to
+/// produce tokens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct TransientRejection {
+    /// The status the provider answered with. `None` is the
+    /// connection/handshake-level shape (rig renders it as `Http client
+    /// error: error sending request for url ...`), where the request never
+    /// reached the model at all.
+    pub(super) status: Option<u16>,
+    /// A `Retry-After` the provider named. rig surfaces no response headers,
+    /// so this only fires when the provider repeats the hint in its error
+    /// body; absent, the exponential window below is used instead. A 429
+    /// body that names the concrete concurrency limit would be the natural
+    /// input for tuning the launch ceiling in `tools::explore::children`
+    /// dynamically -- deliberately not built now.
+    pub(super) retry_after: Option<Duration>,
+}
+
+impl TransientRejection {
+    fn describe(&self) -> String {
+        match self.status {
+            Some(status) => format!("HTTP {status}"),
+            None => "connection failure".to_string(),
+        }
+    }
+}
+
+/// One attempt's outcome as [`with_pre_generation_retry`] needs to see it.
+pub(super) struct Attempt<T> {
+    pub(super) result: anyhow::Result<T>,
+    /// Whether the provider had begun answering by the time this attempt
+    /// ended. Once true, no failure of this attempt may be retried.
+    pub(super) generation_started: bool,
+}
+
+/// How a retried provider request finally ended.
+pub(super) enum Retried<T> {
+    Ok(T),
+    /// The turn was cancelled while a backoff was being waited out. Cancel
+    /// wins over a pending retry, always.
+    Cancelled,
+    Failed(anyhow::Error),
+}
+
+/// The retry decision, kept free of I/O so the classification is directly
+/// testable: `Some` exactly when this attempt may be sent again.
+///
+/// Three independent gates, all of which must pass. The request must not
+/// have reached generation (anything after the provider started answering
+/// could be duplicated by a retry); the attempt budget must not be spent;
+/// and the failure must be one of the transient shapes above rather than a
+/// contract error or a stream timeout.
+pub(super) fn retryable_rejection(
+    attempt: u32,
+    generation_started: bool,
+    message: &str,
+) -> Option<TransientRejection> {
+    if generation_started || attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
+        return None;
+    }
+    if let Some(status) = rejected_status(message) {
+        return RETRYABLE_STATUSES
+            .contains(&status)
+            .then(|| TransientRejection {
+                status: Some(status),
+                retry_after: named_retry_after(message),
+            });
+    }
+    message
+        .contains(TRANSPORT_FAILURE_MARKER)
+        .then_some(TransientRejection {
+            status: None,
+            retry_after: None,
+        })
+}
+
+/// rig renders a non-2xx response as `Invalid status code <status> <reason>
+/// with message: <body>` (`rig_core::http_client::Error`), wrapped in a
+/// `ProviderError`.
+fn rejected_status(message: &str) -> Option<u16> {
+    const MARKER: &str = "Invalid status code ";
+    let index = message.find(MARKER)?;
+    message[index + MARKER.len()..]
+        .split_whitespace()
+        .next()?
+        .parse()
+        .ok()
+}
+
+/// rig's rendering of a connection/handshake-level failure -- the client
+/// never got a status back.
+const TRANSPORT_FAILURE_MARKER: &str = "Http client error:";
+
+/// Reads a `Retry-After`-style hint out of the provider's error text, in
+/// whole seconds. Only the first number following the hint within a short
+/// window counts, so an unrelated number further down the body cannot be
+/// mistaken for one.
+fn named_retry_after(message: &str) -> Option<Duration> {
+    let lowered = message.to_ascii_lowercase();
+    let index = lowered
+        .find("retry-after")
+        .or_else(|| lowered.find("retry_after"))?;
+    let window: String = lowered[index..].chars().take(64).collect();
+    let seconds: String = window
+        .chars()
+        .skip_while(|character| !character.is_ascii_digit())
+        .take_while(char::is_ascii_digit)
+        .collect();
+    seconds.parse().ok().map(Duration::from_secs)
+}
+
+/// Exponential backoff with equal jitter: the wait is drawn from the upper
+/// half of a window that doubles per attempt, so sessions rejected at the
+/// same instant do not all come back at the same instant either. A
+/// provider-supplied `Retry-After` replaces the exponential term -- the
+/// provider knows its own window better than this does -- and both are
+/// clamped to [`PROVIDER_RETRY_MAX_BACKOFF`].
+pub(super) fn retry_backoff(
+    attempt: u32,
+    retry_after: Option<Duration>,
+    jitter_permille: u32,
+) -> Duration {
+    let window = retry_after
+        .unwrap_or_else(|| {
+            PROVIDER_RETRY_BASE_BACKOFF
+                .checked_mul(1u32 << attempt.saturating_sub(1).min(16))
+                .unwrap_or(PROVIDER_RETRY_MAX_BACKOFF)
+        })
+        .min(PROVIDER_RETRY_MAX_BACKOFF);
+    let half = window / 2;
+    half + half * jitter_permille.min(1000) / 1000
+}
+
+/// Jitter from the wall clock's sub-second component: enough to break
+/// lockstep between concurrent sessions, and not worth a new dependency
+/// for -- nothing here is security-sensitive.
+fn jitter_permille() -> u32 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.subsec_nanos() % 1_000)
+        .unwrap_or(500)
+}
+
+/// Waits out a retry backoff, returning `false` the moment the turn is
+/// cancelled. `biased` makes an already-cancelled token win without even
+/// arming the timer.
+pub(super) async fn sleep_unless_cancelled(delay: Duration, token: &CancellationToken) -> bool {
+    tokio::select! {
+        biased;
+        _ = token.cancelled() => false,
+        _ = tokio::time::sleep(delay) => true,
+    }
+}
+
+/// Sends one provider request, re-sending it while the provider keeps
+/// rejecting it before generating anything.
+///
+/// Generic over the attempt so the loop itself is testable without a
+/// provider: the real caller passes a closure that runs one
+/// `rig_openai_turn_streaming`.
+pub(super) async fn with_pre_generation_retry<T, F, Fut>(
+    token: &CancellationToken,
+    mut attempt: F,
+) -> Retried<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Attempt<T>>,
+{
+    let mut number = 1;
+    loop {
+        let Attempt {
+            result,
+            generation_started,
+        } = attempt().await;
+        let error = match result {
+            Ok(value) => return Retried::Ok(value),
+            Err(error) => error,
+        };
+        let message = format!("{error:#}");
+        let Some(rejection) = retryable_rejection(number, generation_started, &message) else {
+            return Retried::Failed(error);
+        };
+        let backoff = retry_backoff(number, rejection.retry_after, jitter_permille());
+        // The 2026-07-28 investigation had to infer this whole failure class
+        // from its absence in the log; one line per retry is what makes it
+        // legible next time.
+        eprintln!(
+            "horizon-agent: provider rejected attempt {number}/{PROVIDER_REQUEST_MAX_ATTEMPTS} \
+             before generating anything ({}); retrying in {backoff:?}: {}",
+            rejection.describe(),
+            truncate_for_log(&message),
+        );
+        if !sleep_unless_cancelled(backoff, token).await {
+            return Retried::Cancelled;
+        }
+        number += 1;
+    }
+}
+
+/// Keeps a provider error body (which can be arbitrarily long) from
+/// dominating sessiond's stderr.
+fn truncate_for_log(message: &str) -> String {
+    const LIMIT: usize = 300;
+    if message.chars().count() <= LIMIT {
+        return message.to_string();
+    }
+    message.chars().take(LIMIT).chain("…".chars()).collect()
 }
 
 /// Guarantees a matching `ProviderRequestFinished` marker for every path
@@ -164,13 +398,13 @@ pub(super) async fn complete_rig_turn(
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
     if config.openai_enabled {
-        match rig_openai_turn_streaming(
+        match rig_openai_turn_with_retry(
             config,
             environment,
             extra_sections,
-            prompt.clone(),
+            &prompt,
             history_for_provider_request(rig_history, clearing.cleared()),
-            events_tx.clone(),
+            events_tx,
             token,
         )
         .await
@@ -217,6 +451,58 @@ pub(super) async fn complete_rig_turn(
     }
 }
 
+/// Runs one turn's provider request under the pre-generation retry policy.
+///
+/// Each attempt is a genuinely new request and emits its own
+/// `ProviderRequestSent`/`ProviderRequestFinished` pair, which is what a
+/// turn with several provider rounds already looks like in the log. Nothing
+/// is retried once a chunk has been decoded, so no attempt can have emitted
+/// transcript content before the next one starts.
+async fn rig_openai_turn_with_retry(
+    config: &RigAgentConfig,
+    environment: &SessionEnvironment,
+    extra_sections: &[String],
+    prompt: &Message,
+    history: Vec<Message>,
+    events_tx: &Sender<ProviderEvent>,
+    token: &CancellationToken,
+) -> anyhow::Result<(Message, TurnCompletion)> {
+    let outcome = with_pre_generation_retry(token, || async {
+        let mut generation_started = false;
+        let result = rig_openai_turn_streaming(
+            config,
+            environment,
+            extra_sections,
+            prompt.clone(),
+            history.clone(),
+            events_tx.clone(),
+            token,
+            &mut generation_started,
+        )
+        .await;
+        Attempt {
+            result,
+            generation_started,
+        }
+    })
+    .await;
+
+    match outcome {
+        Retried::Ok(turn) => Ok(turn),
+        // Same shape the establishment-phase cancel returns: a cancel is a
+        // stop reason, not an error.
+        Retried::Cancelled => Ok((
+            partial_assistant_message(None, "", Vec::new()),
+            TurnCompletion {
+                cancelled: true,
+                ..TurnCompletion::default()
+            },
+        )),
+        Retried::Failed(error) => Err(error),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn rig_openai_turn_streaming(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
@@ -225,6 +511,7 @@ async fn rig_openai_turn_streaming(
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
+    generation_started: &mut bool,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
     let client = openai_completions_client(config)?;
     let model = client.completion_model(&config.model);
@@ -311,6 +598,17 @@ async fn rig_openai_turn_streaming(
         let Some(chunk) = chunk else {
             break;
         };
+        // Decoded before anything is marked: an error chunk is not a token,
+        // and an OpenAI-compatible endpoint delivers a rejected request's
+        // status here rather than from stream establishment (rig sends the
+        // HTTP request lazily, on the stream's first poll).
+        let chunk = chunk?;
+        // Any decoded chunk proves the provider accepted the request and
+        // started answering it, so from here on a retry could duplicate a
+        // generation -- see `retryable_rejection`. Set before the match so
+        // text, reasoning, tool-call deltas, and the final usage frame all
+        // count.
+        *generation_started = true;
         if !first_token_seen {
             first_token_seen = true;
             // The gap between `ProviderRequestSent` above and this event is
@@ -319,7 +617,7 @@ async fn rig_openai_turn_streaming(
             let _ = events_tx.send(Event::ProviderRequestFirstToken.into());
         }
 
-        match chunk? {
+        match chunk {
             StreamedAssistantContent::Text(delta) => {
                 text.push_str(&delta.text);
                 text_buffer.push(delta.text);

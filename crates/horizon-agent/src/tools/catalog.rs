@@ -504,7 +504,7 @@ pub fn definitions() -> Vec<Definition> {
                 instead. Task agents are read-only — they investigate, locate, and plan, but \
                 cannot write files or run commands that modify state; implementation happens in \
                 this session after the report returns. Runs in the background — you will be \
-                notified when it completes; keep working in the meantime; up to 3 may run \
+                notified when it completes; keep working in the meantime; up to 2 may run \
                 concurrently. Prefer several narrowly scoped tasks launched in parallel in one \
                 response over a single broad one. Returns immediately with the task session's \
                 id, which is also how you re-read its report later with task_output."
