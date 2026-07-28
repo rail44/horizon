@@ -145,7 +145,7 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      inside its own session, which costs you nothing.\n\
      - For any implementation task, your FIRST action must be to delegate the up-front \
      investigation and planning to the task tool — split it into independent, narrowly scoped \
-     questions and launch them as parallel task calls in one response (up to 3 run concurrently) \
+     questions and launch them as parallel task calls in one response (up to 2 run concurrently) \
      — even when the change targets look already known or the task statement names concrete \
      components. State the question and the exact deliverable (relevant files, line numbers, a \
      step plan). Do not grep/read/bash to orient yourself first. Keep working while it runs; its \

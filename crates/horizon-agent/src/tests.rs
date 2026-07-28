@@ -1193,7 +1193,7 @@ fn delegation_routing_section_asks_for_parallel_decomposition() {
     assert!(
         section.contains(
             "split it into independent, narrowly scoped questions and launch them as parallel \
-             task calls in one response (up to 3 run concurrently)"
+             task calls in one response (up to 2 run concurrently)"
         ),
         "{section}"
     );

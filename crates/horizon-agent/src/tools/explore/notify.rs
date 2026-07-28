@@ -69,17 +69,37 @@ fn entry(position: usize, completion: &Completion) -> String {
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
 
-    let status = match (failed, capped) {
-        (true, _) if report.is_empty() => format!("failed: {message}"),
-        (true, _) => format!("finished with an error ({message}); partial report follows"),
-        (false, true) => "completed, but hit its turn limit — the report is partial".to_string(),
-        (false, false) => "completed".to_string(),
+    // A child that died or was capped mid-thought can leave a "partial
+    // report" with no body -- the observed extreme being one whose entire
+    // text was `</mm:think>`. Shipping that as content reads like an answer,
+    // so the notification says what happened instead and points at the one
+    // move that can still work (`super::report_body_is_empty`).
+    let usable = !super::report_body_is_empty(report);
+    let status = if usable {
+        match (failed, capped) {
+            (true, _) => format!("finished with an error ({message}); partial report follows"),
+            (false, true) => {
+                "completed, but hit its turn limit — the report is partial".to_string()
+            }
+            (false, false) => "completed".to_string(),
+        }
+    } else {
+        let cause = match (failed, capped) {
+            (true, _) if !message.is_empty() => format!("failed: {message}"),
+            (true, _) => "failed".to_string(),
+            (false, true) => "hit its turn limit".to_string(),
+            (false, false) => "ended its turn with nothing to say".to_string(),
+        };
+        format!(
+            "{cause} — it produced no usable report. If you still need this, relaunch a narrower \
+             task rather than re-reading this one."
+        )
     };
     let mut entry = format!(
         "[{position}] task \"{description}\" (session_id: {session_id}) — {status}",
         description = completion.description,
     );
-    if !report.is_empty() {
+    if usable {
         let (head, truncated) = truncate_report(report);
         entry.push('\n');
         entry.push_str(&head);

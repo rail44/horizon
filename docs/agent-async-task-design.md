@@ -86,6 +86,16 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
      models (M3's chat template is the strictest observed — mapping
      arguments, no string branch; the exact message role/format is an
      implementation decision to be verified against it).
+   - *Added 2026-07-28.* An empty report is never delivered as a
+     report. When a child dies or is capped and its "partial report"
+     body is empty once stray reasoning-close artifacts are discounted
+     (`</think>`/`</mm:think>`/`</thinking>` — the serving-layer leak
+     measured that day), the notification says it produced no usable
+     report, names the cause, and tells the requester to relaunch a
+     narrower task instead of re-reading this one. The stored report
+     keeps the body verbatim for `task_output` and forensics: this is
+     an emptiness *test*, not a rewrite — defensively stripping the
+     artifact from live output remains an open decision (candidate 6).
 3. **`task_output(session_id)` fetch tool** for full reports and
    re-reads. This *is* mainstream (Claude Code `TaskOutput`, Hermes/
    MiniMax `bash_output` lineage) and complements push delivery; it is
@@ -99,6 +109,19 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
    beyond the cap fail fast with a clear error naming the running
    children (id + description). Per-child iteration cap 25 and
    `summarize_on_cap` behavior unchanged.
+
+   *Amended 2026-07-28.* The budget is **concurrent provider streams,
+   counting the requester's own turn**, not children: 3 children plus a
+   requester mid-turn is four streams against one endpoint, and that is
+   what produced the observed `429 Too many concurrent requests` which
+   killed a child 397s in
+   (`docs/research/agent-harness-findings-97-2026-07-28.md`, candidate
+   5). So `MAX_CONCURRENT_PROVIDER_STREAMS = 3` and the launch ceiling
+   is that minus one, i.e. 2 children. The refusal now also says the
+   limit is provider concurrency rather than a policy quota, keeping the
+   running-children list. Held static: a provider-side signal
+   (`Retry-After`, or a 429 body naming the real limit) would be the
+   input for tuning it dynamically, and that is not built.
 6. **The plumbing is the subscription abstraction.** Everything above
    is written against "subscribe to another session's blocking/stop
    events" (owner direction recorded 2026-07-26 in

@@ -394,10 +394,12 @@ fn error_output(message: String) -> Value {
     json!({ "is_error": true, "message": message })
 }
 
-/// The over-cap refusal (decision 5). It names every running child --
-/// id and description -- so the model can decide whether to wait for one,
-/// read it with `task_output`, or work on something else, rather than
-/// blindly retrying.
+/// The over-cap refusal (decision 5, as amended 2026-07-28). It names every
+/// running child -- id and description -- so the model can decide whether to
+/// wait for one, read it with `task_output`, or work on something else,
+/// rather than blindly retrying, and it says *why* the ceiling exists: the
+/// budget is concurrent provider streams, of which the requester's own turn
+/// already holds one.
 fn over_cap_output(running: &[(SessionId, String)]) -> Value {
     let listed = running
         .iter()
@@ -405,8 +407,12 @@ fn over_cap_output(running: &[(SessionId, String)]) -> Value {
         .collect::<Vec<_>>()
         .join(", ");
     let mut output = error_output(format!(
-        "at most {} tasks may run at once, and {} are already running: {listed}. Keep working \
-         with what you have, or wait -- you will be notified as each finishes.",
+        "this session may keep at most {} provider streams in flight at once, and your own turn \
+         is one of them, so at most {} tasks may run in parallel. {} already are: {listed}. This \
+         is the provider's concurrency limit, not a quota -- launching past it gets the whole \
+         session rate-limited. Keep working with what you have, or wait: you will be notified as \
+         each finishes.",
+        children::MAX_CONCURRENT_PROVIDER_STREAMS,
         children::MAX_CONCURRENT_TASKS,
         running.len(),
     ));
@@ -427,6 +433,33 @@ fn over_cap_output(running: &[(SessionId, String)]) -> Value {
         );
     }
     output
+}
+
+/// Reasoning-close tags a serving layer can leak into an assistant message
+/// with no opening tag anywhere -- the `</mm:think>` shape observed
+/// 2026-07-28 (`docs/research/agent-harness-findings-97-2026-07-28.md`).
+const ORPHAN_REASONING_CLOSE_TAGS: [&str; 3] = ["</mm:think>", "</thinking>", "</think>"];
+
+/// Whether a child's report is empty once stray reasoning-close artifacts
+/// are discounted.
+///
+/// A child killed by a provider error mid-thought can leave a "partial
+/// report" whose entire body is one orphan close tag; delivering that as
+/// content reads like an answer and is worse than saying nothing came back.
+/// This is an *emptiness test only* -- the stored report keeps whatever the
+/// child actually emitted, because defensively rewriting bodies Horizon does
+/// not understand is a separate, open decision.
+fn report_body_is_empty(report: &str) -> bool {
+    let mut rest = report.trim();
+    loop {
+        let Some(stripped) = ORPHAN_REASONING_CLOSE_TAGS
+            .iter()
+            .find_map(|tag| rest.strip_prefix(tag))
+        else {
+            return rest.is_empty();
+        };
+        rest = stripped.trim();
+    }
 }
 
 /// How a child's event stream ended.
@@ -486,7 +519,7 @@ impl Outcome {
         let capped = matches!(
             self.terminal,
             Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap)
-        ) && self.report.is_some();
+        ) && self.has_usable_report();
         let failure = self.failure_message();
         if let Some(report) = self.report {
             map.insert("report".to_string(), Value::String(report));
@@ -501,17 +534,29 @@ impl Outcome {
         output
     }
 
+    /// A report with an actual body behind it -- a stored report that is
+    /// nothing but a stray reasoning-close artifact does not count as one,
+    /// so a child that shipped only that is reported as the failure it was
+    /// (see [`report_body_is_empty`]).
+    fn has_usable_report(&self) -> bool {
+        self.report
+            .as_deref()
+            .is_some_and(|report| !report_body_is_empty(report))
+    }
+
     fn failure_message(&self) -> Option<String> {
         let detail = |suffix: &str| match &self.error {
             Some(error) => format!("{suffix} ({error})"),
             None => suffix.to_string(),
         };
         match &self.terminal {
-            Terminal::Completed if self.report.is_some() => None,
+            Terminal::Completed if self.has_usable_report() => None,
             Terminal::Completed => Some(detail(
-                "the task session ended its turn without producing a report",
+                "the task session ended its turn without producing a usable report",
             )),
-            Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap) if self.report.is_some() => {
+            Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap)
+                if self.has_usable_report() =>
+            {
                 None
             }
             Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap) => {

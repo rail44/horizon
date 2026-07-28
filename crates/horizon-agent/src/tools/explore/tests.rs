@@ -341,11 +341,26 @@ fn a_long_report_is_truncated_with_a_pointer_to_task_output() {
     assert_eq!(fetched["report"], json!(report));
 }
 
-/// Decision 5: a fourth concurrent launch fails fast, and the refusal names
-/// every running child (id and description) so the model can decide what to
-/// wait for instead of blindly retrying.
+/// The ceiling is provider streams, not children: a session running its own
+/// turn is already using one, so it may only launch one fewer task than the
+/// endpoint will take at once (2026-07-28 amendment to decision 5 — four
+/// streams against one endpoint is what produced the observed `429 Too many
+/// concurrent requests`).
 #[test]
-fn a_fourth_concurrent_launch_is_refused_and_names_the_running_tasks() {
+fn the_task_ceiling_reserves_a_provider_stream_for_the_requesters_own_turn() {
+    assert_eq!(
+        super::children::MAX_CONCURRENT_TASKS + 1,
+        super::children::MAX_CONCURRENT_PROVIDER_STREAMS,
+        "the requester's own turn must be counted against the provider ceiling"
+    );
+}
+
+/// Decision 5: a launch past the cap fails fast, and the refusal names every
+/// running child (id and description) so the model can decide what to wait
+/// for instead of blindly retrying — while saying that the ceiling is the
+/// provider's concurrency, not a policy quota.
+#[test]
+fn a_launch_over_the_concurrency_cap_is_refused_and_names_the_running_tasks() {
     let (host, _terminated) = ScriptedHost::new();
     let requester = Requester::new(Some(host.clone()));
 
@@ -361,6 +376,12 @@ fn a_fourth_concurrent_launch_is_refused_and_names_the_running_tasks() {
     let refused = requester.launch("t-over", "one too many", "look around");
     assert_eq!(refused["is_error"], json!(true), "{refused}");
     let message = refused["message"].as_str().expect("a message");
+    assert!(
+        message.contains("provider streams in flight")
+            && message.contains("your own turn is one of them")
+            && message.contains("concurrency limit, not a quota"),
+        "the refusal must explain the ceiling as provider concurrency: {message}"
+    );
     for index in 0..super::children::MAX_CONCURRENT_TASKS {
         let (child_id, _) = host.child(index);
         assert!(
@@ -623,6 +644,80 @@ fn a_capped_child_is_reported_as_a_partial_success() {
     );
     assert_eq!(fetched["capped"], json!(true));
     assert!(fetched.get("is_error").is_none(), "{fetched}");
+}
+
+/// A child that died with a "partial report" made of nothing but a stray
+/// reasoning-close artifact (the `</mm:think>` shape observed 2026-07-28)
+/// must not have that artifact shipped as content: the notification says no
+/// usable report came back, names the cause, and points at relaunching a
+/// narrower task.
+#[test]
+fn a_partial_report_that_is_only_a_reasoning_artifact_is_not_delivered_as_a_report() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    requester.launch("t1", "map the module", "map it");
+    let (child_id, events) = host.child(0);
+    events.send(user("map it")).unwrap();
+    events.send(assistant("</mm:think>")).unwrap();
+    events
+        .send(Event::Error(AgentError {
+            message: "Rig OpenAI completion failed: 429 Too many concurrent requests".to_string(),
+        }))
+        .unwrap();
+    events
+        .send(Event::StateChanged(SessionState::Terminated))
+        .unwrap();
+
+    let text = requester.await_notification();
+    assert!(text.contains("produced no usable report"), "{text}");
+    assert!(text.contains("429 Too many concurrent requests"), "{text}");
+    assert!(text.contains("relaunch a narrower task"), "{text}");
+    assert!(
+        !text.contains("</mm:think>"),
+        "the artifact must not be inlined as content: {text}"
+    );
+
+    // The body is still stored verbatim -- the emptiness test does not
+    // rewrite what the child emitted.
+    let fetched = requester.call(
+        "o1",
+        OUTPUT_TOOL_ID,
+        json!({ "session_id": child_id.as_uuid().to_string() }),
+    );
+    assert_eq!(fetched["report"], json!("</mm:think>"));
+    assert_eq!(fetched["is_error"], json!(true), "{fetched}");
+}
+
+/// The same test for the cap path: an empty wrap-up is not a partial
+/// success, it is a task that produced nothing.
+#[test]
+fn a_capped_child_with_an_empty_wrap_up_is_reported_as_producing_nothing() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+
+    requester.launch("t1", "map the module", "map it");
+    let (child_id, events) = host.child(0);
+    events.send(user("map it")).unwrap();
+    events.send(assistant("</think>\n\n")).unwrap();
+    events
+        .send(Event::TurnEnded(TurnEndReason::HaltedByIterationCap))
+        .unwrap();
+
+    let text = requester.await_notification();
+    assert!(text.contains("produced no usable report"), "{text}");
+    assert!(text.contains("ran out of turns"), "{text}");
+
+    let fetched = requester.call(
+        "o1",
+        OUTPUT_TOOL_ID,
+        json!({ "session_id": child_id.as_uuid().to_string() }),
+    );
+    assert!(
+        fetched.get("capped").is_none(),
+        "an empty wrap-up is not a partial success: {fetched}"
+    );
+    assert_eq!(fetched["is_error"], json!(true), "{fetched}");
 }
 
 /// A session with no task host installed -- every test construction, and a

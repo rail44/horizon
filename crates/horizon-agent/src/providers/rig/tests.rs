@@ -1,9 +1,12 @@
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::Duration;
 
 use super::completion::{
     await_provider_phase, openai_turn_additional_params, partial_assistant_message,
-    provider_request_usage_event_from_openai_final, rig_tool_definitions, ProviderRequestSpan,
-    ProviderWait, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    provider_request_usage_event_from_openai_final, retry_backoff, retryable_rejection,
+    rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
+    ProviderRequestSpan, ProviderWait, Retried, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
+    PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
@@ -85,6 +88,226 @@ fn provider_request_span_finishes_when_an_error_path_drops_it() {
     drop(ProviderRequestSpan::new(tx));
 
     assert!(matches!(recv(&rx).event, Event::ProviderRequestFinished));
+}
+
+/// The exact shape rig renders a non-2xx streaming response as: the status
+/// arrives as the response stream's first item (rig sends the HTTP request
+/// lazily), wrapped in a `ProviderError`.
+fn rejected_with(status: &str, body: &str) -> String {
+    format!("ProviderError: Invalid status code {status} with message: {body}")
+}
+
+/// The retry classifier, tested directly: `horizon-agent` has no way to
+/// drive a real provider from a unit test, so the decision function is the
+/// testable surface (the loop it feeds is covered separately below).
+///
+/// Retryable only when the provider said "not now" *and* nothing of the
+/// response had been decoded yet — a rejection before the first chunk is
+/// provably a no-op on the provider side, so re-sending cannot duplicate a
+/// generation.
+#[test]
+fn rejections_before_generation_are_classified_as_retryable() {
+    let rate_limited = retryable_rejection(
+        1,
+        false,
+        &rejected_with(
+            "429 Too Many Requests",
+            r#"{"error":{"message":"Too many concurrent requests"}}"#,
+        ),
+    )
+    .expect("a pre-generation 429 is retryable");
+    assert_eq!(rate_limited.status, Some(429));
+    assert_eq!(rate_limited.retry_after, None);
+
+    for status in [
+        "502 Bad Gateway",
+        "503 Service Unavailable",
+        "504 Gateway Timeout",
+    ] {
+        assert!(
+            retryable_rejection(1, false, &rejected_with(status, "upstream is unwell")).is_some(),
+            "{status} is a transient gateway failure"
+        );
+    }
+
+    // The connection-level shape: no status ever came back, so the request
+    // never reached the model.
+    let transport = retryable_rejection(
+        1,
+        false,
+        "ProviderError: Http client error: error sending request for url \
+         (https://example.invalid/v1/chat/completions)",
+    )
+    .expect("a connection failure is retryable");
+    assert_eq!(transport.status, None);
+}
+
+/// Everything else stays fatal exactly as before: a 4xx that is not 429
+/// describes the request itself, a failure after the first decoded chunk
+/// could be duplicated by a retry, the attempt budget is finite, and the
+/// response-stream timeout is deliberately excluded (silence proves nothing
+/// about whether generation started — see `PROVIDER_STREAM_IDLE_TIMEOUT`).
+#[test]
+fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
+    for status in [
+        "400 Bad Request",
+        "401 Unauthorized",
+        "403 Forbidden",
+        "404 Not Found",
+        "422 Unprocessable Entity",
+    ] {
+        assert!(
+            retryable_rejection(1, false, &rejected_with(status, "no")).is_none(),
+            "{status} would fail identically on a retry"
+        );
+    }
+
+    assert!(
+        retryable_rejection(
+            1,
+            true,
+            &rejected_with("429 Too Many Requests", "slow down")
+        )
+        .is_none(),
+        "a rejection after generation started must never be retried"
+    );
+
+    assert!(
+        retryable_rejection(
+            PROVIDER_REQUEST_MAX_ATTEMPTS,
+            false,
+            &rejected_with("429 Too Many Requests", "slow down"),
+        )
+        .is_none(),
+        "the attempt budget is finite"
+    );
+
+    assert!(
+        retryable_rejection(1, false, "provider response stream timed out after 120s").is_none(),
+        "a stream timeout may already have generated tokens"
+    );
+}
+
+/// `Retry-After` is honoured when the provider names one. rig surfaces no
+/// response headers, so the only place it can be read from is the error
+/// body the provider echoed it into.
+#[test]
+fn a_named_retry_after_is_read_out_of_the_rejection() {
+    let rejection = retryable_rejection(
+        1,
+        false,
+        &rejected_with(
+            "429 Too Many Requests",
+            r#"{"error":{"message":"rate limited","retry_after":7}}"#,
+        ),
+    )
+    .expect("retryable");
+
+    assert_eq!(rejection.retry_after, Some(Duration::from_secs(7)));
+    assert_eq!(
+        retry_backoff(1, rejection.retry_after, 0),
+        Duration::from_secs(3) + Duration::from_millis(500),
+        "the provider's own window replaces the exponential term"
+    );
+}
+
+/// Equal jitter over a doubling window, clamped at the ceiling: the low end
+/// of each window is half of it, the high end the whole window.
+#[test]
+fn retry_backoff_grows_per_attempt_and_stays_bounded() {
+    assert_eq!(retry_backoff(1, None, 0), Duration::from_millis(500));
+    assert_eq!(retry_backoff(1, None, 1_000), Duration::from_secs(1));
+    assert_eq!(retry_backoff(2, None, 0), Duration::from_secs(1));
+    assert_eq!(retry_backoff(3, None, 0), Duration::from_secs(2));
+    assert_eq!(
+        retry_backoff(1, Some(Duration::from_secs(600)), 1_000),
+        PROVIDER_RETRY_MAX_BACKOFF,
+        "a provider asking for ten minutes is still clamped"
+    );
+}
+
+/// The loop itself, with a scripted attempt standing in for the provider: a
+/// pre-generation 503 is re-sent and the second attempt's response is the
+/// turn's response.
+#[tokio::test]
+async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let attempts = std::cell::Cell::new(0u32);
+
+    let outcome = with_pre_generation_retry(&token, || async {
+        attempts.set(attempts.get() + 1);
+        if attempts.get() == 1 {
+            Attempt {
+                result: Err(anyhow::anyhow!(rejected_with(
+                    "503 Service Unavailable",
+                    "upstream is unwell"
+                ))),
+                generation_started: false,
+            }
+        } else {
+            Attempt {
+                result: Ok("the answer"),
+                generation_started: true,
+            }
+        }
+    })
+    .await;
+
+    assert!(matches!(outcome, Retried::Ok("the answer")));
+    assert_eq!(attempts.get(), 2);
+}
+
+/// A failure after the provider started answering ends the turn on the
+/// first attempt — the standing no-duplicate-generation rule.
+#[tokio::test]
+async fn a_failure_after_generation_started_ends_the_turn_without_retrying() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let attempts = std::cell::Cell::new(0u32);
+
+    let outcome = with_pre_generation_retry::<(), _, _>(&token, || async {
+        attempts.set(attempts.get() + 1);
+        Attempt {
+            result: Err(anyhow::anyhow!(rejected_with(
+                "429 Too Many Requests",
+                "slow down"
+            ))),
+            generation_started: true,
+        }
+    })
+    .await;
+
+    assert!(matches!(outcome, Retried::Failed(_)));
+    assert_eq!(attempts.get(), 1);
+}
+
+/// A cancel wins over a pending retry immediately: the backoff is never
+/// waited out, and no further attempt is made.
+#[tokio::test]
+async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
+    let token = tokio_util::sync::CancellationToken::new();
+    token.cancel();
+    let attempts = std::cell::Cell::new(0u32);
+
+    let started = std::time::Instant::now();
+    let outcome = with_pre_generation_retry::<(), _, _>(&token, || async {
+        attempts.set(attempts.get() + 1);
+        Attempt {
+            result: Err(anyhow::anyhow!(rejected_with(
+                "429 Too Many Requests",
+                "slow down"
+            ))),
+            generation_started: false,
+        }
+    })
+    .await;
+
+    assert!(matches!(outcome, Retried::Cancelled));
+    assert_eq!(attempts.get(), 1);
+    assert!(
+        started.elapsed() < Duration::from_millis(400),
+        "a cancelled turn must not wait out the backoff"
+    );
+    assert!(!sleep_unless_cancelled(Duration::from_secs(60), &token).await);
 }
 
 #[test]
