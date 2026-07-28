@@ -2489,6 +2489,143 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     unregister_session_runtime(session_id);
 }
 
+/// Backlog 55's fix (owner decision 2026-07-28), end to end on the
+/// *approve* branch: the parked first-attempt outcome is discarded (the
+/// retry recomputes it), so the abandoned occurrence is closed with a
+/// terminal "superseded by retry" result instead of never receiving one.
+/// Also pins the fold-predicate interplay that close creates -- the
+/// call_id-keyed reading now sees a finish for this call, and the retry's
+/// own genuine result must still be foldable regardless.
+#[cfg(target_os = "linux")]
+#[test]
+fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
+    use crate::contract::OccurrenceId;
+    use crate::transcript::{SUPERSEDED_BY_RETRY, SUPERSEDED_SUMMARY};
+
+    let workspace = temp_workspace("superseded-retry-workspace");
+    let outside = temp_workspace("superseded-retry-outside");
+    let cache = outside.join("cache");
+    fs::create_dir(&cache).unwrap();
+    let written = cache.join("written.txt");
+    let denial = horizon_sandbox::FilesystemDenial {
+        attempted_path: cache.join("lock"),
+        grant: horizon_sandbox::FilesystemGrant {
+            path: cache.canonicalize().unwrap(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        },
+    };
+    let grants = horizon_sandbox::suggest_grants(
+        std::slice::from_ref(&denial),
+        Some(&workspace),
+        horizon_sandbox::home_dir().as_deref(),
+    );
+
+    let tool_state = ToolSessionState::new(workspace.clone()).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(session_id, tool_state, live_state.clone(), bash_results_tx);
+
+    let call_id = ToolCallId("bash-superseded-retry".to_string());
+    let abandoned = OccurrenceId("occ-abandoned".to_string());
+    let retry = OccurrenceId("occ-retry".to_string());
+    let input = json!({ "command": format!("printf approved > {}", written.display()) });
+    // What `fold_filesystem_denied` parks on the reissued approval: the
+    // first attempt's genuine outcome, stamped with its own occurrence.
+    let prior_result = ToolCallResult::new(
+        call_id.clone(),
+        Some(abandoned.clone()),
+        json!({ "is_error": true, "filesystem_denied": true }),
+    );
+    let frame = live_state.extend_events([
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "bash".to_string(),
+            input: input.clone().into(),
+            occurrence_id: Some(abandoned.clone()),
+        }),
+        Event::ToolCallStarted(call_id.clone()),
+        Event::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "bash".to_string(),
+            input: input.into(),
+            occurrence_id: Some(retry.clone()),
+        }),
+        Event::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            reason: "grant the cache tree and retry, still sandboxed".to_string(),
+            kind: ApprovalKind::FilesystemDenialRetry {
+                denials: vec![denial],
+                grants,
+                prior_result,
+            },
+            occurrence_id: Some(retry.clone()),
+        }),
+    ]);
+
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        call_id.clone(),
+        ApprovalDecision::Approve,
+    );
+    let ApprovalOutcome::Started { events, frame, .. } = outcome else {
+        panic!("approving the retry must start it: {outcome:?}");
+    };
+    let Some(Event::ToolCallFinished(superseded)) = events.first() else {
+        panic!("the abandoned attempt must be closed before the retry starts: {events:?}");
+    };
+    assert_eq!(superseded.occurrence_id, Some(abandoned));
+    assert_eq!(superseded.output[SUPERSEDED_BY_RETRY], json!(true));
+    assert_eq!(
+        superseded.output["retry_occurrence_id"],
+        json!(retry.0.as_str())
+    );
+    assert!(
+        !superseded.is_error,
+        "an attempt a retry replaced did not fail on its own terms"
+    );
+    assert!(!superseded.denied, "nobody denied this attempt");
+
+    assert!(
+        frame.has_tool_call_finished(&call_id),
+        "the call_id-keyed reading does see the superseded close -- that is the trap"
+    );
+    assert!(
+        should_fold_completion(&frame, &call_id),
+        "the retry's own result must still be foldable after the abandoned attempt closed"
+    );
+
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("sandboxed retry completion");
+    let result = expect_finished(completion);
+    assert_eq!(result.output["exit_code"], 0);
+    assert_eq!(fs::read_to_string(&written).unwrap(), "approved");
+
+    // Folding the retry's result the way `fold_finished_bash_result` does
+    // (stamping the live request's occurrence) leaves two closed rows.
+    let frame = live_state.extend_events([Event::ToolCallFinished(ToolCallResult {
+        occurrence_id: Some(retry),
+        ..result
+    })]);
+    assert!(
+        !should_fold_completion(&frame, &call_id),
+        "the live occurrence is resolved once its own result folds"
+    );
+    let views = crate::transcript::build_tool_call_views(&frame.items);
+    assert_eq!(views.len(), 2);
+    assert!(views[0].finished && views[0].superseded && !views[0].is_error);
+    assert_eq!(views[0].result_summary.as_deref(), Some(SUPERSEDED_SUMMARY));
+    assert!(views[1].finished && !views[1].superseded && !views[1].is_error);
+    assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(workspace).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
 #[test]
 fn filesystem_grant_snapshot_drops_a_grant_whose_target_stopped_being_enforceable() {
     let root = temp_workspace("filesystem-grant-revalidation");

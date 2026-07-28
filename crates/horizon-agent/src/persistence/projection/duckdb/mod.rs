@@ -1300,6 +1300,66 @@ mod tests {
         );
     }
 
+    /// Backlog 55: approving a denial retry closes the abandoned attempt
+    /// with a terminal "superseded by retry" result. That result reaches
+    /// `insert_tool_result`, whose deny-inference would mark an approval
+    /// row "denied" -- it must target the *abandoned* occurrence (which has
+    /// no approval row at all, the attempt was tier-1 auto-approved) and
+    /// leave the retry's own pending row for the following
+    /// `ToolCallStarted` to mark "approved".
+    #[test]
+    fn a_superseded_close_does_not_steal_the_retrys_pending_approval_outcome() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("bash-superseded".to_string());
+        let abandoned = OccurrenceId("occ-abandoned".to_string());
+        let retry = OccurrenceId("occ-retry".to_string());
+        let requested = |occurrence: &OccurrenceId| {
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id: call_id.clone(),
+                tool_id: "bash".to_string(),
+                input: serde_json::json!({}).into(),
+                occurrence_id: Some(occurrence.clone()),
+            })
+        };
+
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    // Tier-1 auto-approved: started with no approval row.
+                    requested(&abandoned),
+                    Event::ToolCallStarted(call_id.clone()),
+                    // The denial fold's reissue and its retry prompt.
+                    requested(&retry),
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "grant the cache tree and retry".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: Some(retry.clone()),
+                    }),
+                    // Approve: the abandoned attempt closes, then the retry
+                    // starts.
+                    Event::ToolCallFinished(ToolCallResult::new(
+                        call_id.clone(),
+                        Some(abandoned),
+                        serde_json::json!({ "superseded_by_retry": true }),
+                    )),
+                    Event::ToolCallStarted(call_id.clone()),
+                ],
+            )
+            .expect("append events");
+
+        let approvals = store.approvals_for_session(session_id).expect("approvals");
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(
+            approvals[0].outcome.as_deref(),
+            Some("approved"),
+            "the superseded close answers the abandoned occurrence, not the retry's prompt"
+        );
+    }
+
     #[test]
     fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
         let store = Store::open_in_memory().expect("store");

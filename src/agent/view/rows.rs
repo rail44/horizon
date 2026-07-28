@@ -544,12 +544,20 @@ impl AgentTranscript {
     }
 }
 
-/// The status glyph (running/finished/error) shared by the running
-/// card's row (`render_tool_call_row`) and the expanded receipt's
+/// The status glyph (running/superseded/finished/error) shared by the
+/// running card's row (`render_tool_call_row`) and the expanded receipt's
 /// expandable row (`render_expandable_tool_call_row`).
+///
+/// `superseded` is checked before the success/error split because it is
+/// neither: the abandoned attempt of a denial retry ran, was refused, and
+/// an approved retry replaced it (backlog 55). A muted glyph reads as
+/// "closed, but not the outcome" -- the row's own summary says
+/// "superseded by retry".
 fn tool_call_glyph(call: &turns::ToolCallView) -> (&'static str, Hsla) {
     if !call.finished {
         ("●", theme::accent())
+    } else if call.superseded {
+        ("↻", theme::text_subtle())
     } else if call.is_error {
         ("✗", theme::danger())
     } else {

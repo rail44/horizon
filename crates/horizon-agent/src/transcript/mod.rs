@@ -71,8 +71,9 @@ pub use grouping::{contains_user_message, group_into_turns, latest_turn_model, T
 pub use receipt::{aggregate_receipt, CallClass, ReceiptAggregate};
 pub use tool_call::{
     build_tool_call_views, cap_lines_head, cap_lines_tail, cap_thinking_text, classify,
-    is_approval_still_pending, progress, running_row_expandable, str_field, ApprovalState,
-    FileEffect, ToolCallKind, ToolCallView, THINKING_TAIL_LINES,
+    is_approval_still_pending, is_superseded_output, progress, running_row_expandable, str_field,
+    ApprovalState, FileEffect, ToolCallKind, ToolCallView, SUPERSEDED_BY_RETRY, SUPERSEDED_SUMMARY,
+    THINKING_TAIL_LINES,
 };
 
 use std::path::Path;
