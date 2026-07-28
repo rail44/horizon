@@ -66,6 +66,15 @@ pub struct ToolCallView {
     pub affected_files: Vec<FileEffect>,
     pub finished: bool,
     pub is_error: bool,
+    /// This row is a denial-retry attempt that was abandoned: it ran, was
+    /// refused a domain or a path, and an approved retry took its place, so
+    /// its terminal result is the [`SUPERSEDED_BY_RETRY`] marker rather
+    /// than the outcome the model ever saw (backlog 55; the marker is
+    /// written by `crate::tools::approval`'s denial-retry approve path).
+    /// Neither success nor failure -- the renderers give it a muted
+    /// "superseded" register instead of the success check or the error
+    /// cross.
+    pub superseded: bool,
     /// This call's approval lifecycle (owner feedback 2026-07-13, round
     /// 3: "which tool call corresponds to which approval" -- integrating
     /// approval into the row instead of a standalone box). `None` for a
@@ -130,6 +139,22 @@ fn is_denied(result: &ToolCallResult) -> bool {
 fn is_denied_output(output: &Value) -> bool {
     output.get("is_error").and_then(Value::as_bool) == Some(true)
         && output.get("message").and_then(Value::as_str) == Some("denied by user")
+}
+
+/// Output-JSON marker key for an abandoned denial-retry attempt's terminal
+/// result -- see [`ToolCallView::superseded`]. Defined here, next to
+/// [`is_denied_output`]'s convention, and used by the one writer
+/// (`crate::tools::approval::superseded_by_retry_result`) so the key exists
+/// exactly once.
+pub const SUPERSEDED_BY_RETRY: &str = "superseded_by_retry";
+
+/// The display register an abandoned attempt's row reports instead of a
+/// tool-specific summary.
+pub const SUPERSEDED_SUMMARY: &str = "superseded by retry";
+
+/// Whether `output` is an abandoned denial-retry attempt's terminal result.
+pub fn is_superseded_output(output: &Value) -> bool {
+    output.get(SUPERSEDED_BY_RETRY).and_then(Value::as_bool) == Some(true)
 }
 
 /// Derives a call's [`ApprovalState`] from whether it ever had an
@@ -306,6 +331,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 affected_files,
                 finished: entry.result.is_some(),
                 is_error: entry.result.map(|result| result.is_error).unwrap_or(false),
+                superseded: output.is_some_and(is_superseded_output),
                 approval: derive_approval_state(
                     entry.had_approval_request,
                     entry.started,
@@ -374,6 +400,25 @@ pub fn progress(tool_calls: &[ToolCallView]) -> (usize, usize) {
 /// for every tool id it doesn't special-case itself (see `transcript`'s
 /// module doc for why this one didn't cleanly split).
 pub fn classify(
+    tool_id: &str,
+    input: &Value,
+    output: Option<&Value>,
+) -> (String, Option<String>, Option<String>, ToolCallKind) {
+    let (verb, target, summary, kind) = classify_tool(tool_id, input, output);
+    // An abandoned denial-retry attempt's result carries only the
+    // superseded marker, so every tool-specific summary below reads
+    // `None` off it (no `exit_code`, no counts). Say what happened
+    // instead of leaving the row bare -- the row is closed, but neither
+    // succeeded nor failed.
+    let summary = if output.is_some_and(is_superseded_output) {
+        Some(SUPERSEDED_SUMMARY.to_string())
+    } else {
+        summary
+    };
+    (verb, target, summary, kind)
+}
+
+fn classify_tool(
     tool_id: &str,
     input: &Value,
     output: Option<&Value>,
@@ -1258,11 +1303,110 @@ mod tests {
         // `ToolCallStarted` followed).
         assert_eq!(views[0].approval, ApprovalState::None);
         assert_eq!(views[1].approval, ApprovalState::Waiting);
-        // Backlog 55's remaining, deliberately unaddressed symptom: the
-        // first row stays `finished` while the second renders as still
-        // waiting, so one conceptual bash call still shows as two rows.
-        // Fixing that is a fold-predicate decision, not part of the
-        // identity primitive this test covers.
+        // The deny path was already the one that closed the first row; the
+        // approve path's counterpart is
+        // `an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded`
+        // below (backlog 55).
+    }
+
+    /// The same denial-retry shape, taken down the *approve* branch --
+    /// backlog 55's fix (owner decision 2026-07-28). The parked outcome is
+    /// discarded there (the retry recomputes it), so
+    /// `tools::approval::superseded_by_retry_result` closes the abandoned
+    /// occurrence with a terminal marker instead, and the retry's own
+    /// result closes the reissue. Both rows must read closed, and the
+    /// abandoned one must read as *superseded* rather than as a success or
+    /// a failure.
+    #[test]
+    fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
+        let occ_1 = OccurrenceId("occ-1".to_string());
+        let occ_2 = OccurrenceId("occ-2".to_string());
+        let command = json!({"command": "cargo build --workspace"});
+        let items = vec![
+            tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
+            tool_started("bash:1"),
+            // `fold_filesystem_denied`'s reissue plus its retry prompt.
+            tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
+            approval_requested_with_occurrence("bash:1", occ_2.clone()),
+            // Approve: the abandoned attempt is closed, the retry starts.
+            tool_finished_with_occurrence(
+                "bash:1",
+                json!({
+                    SUPERSEDED_BY_RETRY: true,
+                    "retry_occurrence_id": occ_2.0,
+                    "message": "this attempt was abandoned; an approved retry of the same call \
+                                replaced it",
+                }),
+                occ_1.clone(),
+            ),
+            tool_started("bash:1"),
+            // ... and finishes on its own.
+            tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
+        ];
+
+        let views = build_tool_call_views(&items);
+        assert_eq!(views.len(), 2);
+
+        assert!(
+            views[0].finished,
+            "the abandoned attempt must no longer render started-but-never-finished"
+        );
+        assert!(views[0].superseded);
+        assert!(
+            !views[0].is_error,
+            "an attempt a retry replaced did not fail on its own terms"
+        );
+        assert_eq!(views[0].result_summary.as_deref(), Some(SUPERSEDED_SUMMARY));
+        assert_eq!(views[0].approval, ApprovalState::None);
+
+        assert!(views[1].finished);
+        assert!(!views[1].superseded);
+        assert!(!views[1].is_error);
+        assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
+        assert_eq!(views[1].approval, ApprovalState::Approved);
+    }
+
+    /// The retry's own result can land before the abandoned attempt's
+    /// close in a replayed log; occurrence-first matching must keep each
+    /// result on the row that produced it either way.
+    #[test]
+    fn a_superseded_close_arriving_after_the_retrys_result_still_lands_on_its_own_row() {
+        let occ_1 = OccurrenceId("occ-1".to_string());
+        let occ_2 = OccurrenceId("occ-2".to_string());
+        let command = json!({"command": "cargo build --workspace"});
+        let items = vec![
+            tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
+            tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
+            tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2),
+            tool_finished_with_occurrence("bash:1", json!({ SUPERSEDED_BY_RETRY: true }), occ_1),
+        ];
+
+        let views = build_tool_call_views(&items);
+        assert_eq!(views.len(), 2);
+        assert!(views[0].superseded && views[0].finished);
+        assert!(!views[1].superseded && views[1].finished);
+        assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
+    }
+
+    /// A superseded attempt is a genuine attempt, not a failure and not an
+    /// anomaly, so the collapsed receipt line must neither break it out as
+    /// an individual chip nor count it alongside the retry that carries the
+    /// real outcome.
+    #[test]
+    fn the_collapsed_receipt_counts_a_superseded_attempt_once_not_twice() {
+        let occ_1 = OccurrenceId("occ-1".to_string());
+        let occ_2 = OccurrenceId("occ-2".to_string());
+        let command = json!({"command": "cargo build --workspace"});
+        let views = build_tool_call_views(&[
+            tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
+            tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
+            tool_finished_with_occurrence("bash:1", json!({ SUPERSEDED_BY_RETRY: true }), occ_1),
+            tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2),
+        ]);
+
+        let aggregate = super::super::aggregate_receipt(&views);
+        assert_eq!(aggregate.bash_count, 1);
+        assert!(aggregate.individual_calls.is_empty());
     }
 
     #[test]

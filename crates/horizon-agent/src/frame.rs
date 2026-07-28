@@ -249,6 +249,42 @@ impl AgentFrame {
         })
     }
 
+    /// Like [`Self::has_tool_call_finished`], but only counts a
+    /// `ToolCallFinished` that answers the *live* occurrence — the one the
+    /// most recent `ToolCallRequested` for `call_id` opened.
+    ///
+    /// The two readings differ for exactly one shape: a sandbox-denial
+    /// retry. Approving the retry closes the abandoned first attempt with
+    /// a terminal "superseded by retry" result carrying *that attempt's*
+    /// `occurrence_id` (`tools::approval::superseded_by_retry_result`), and
+    /// that event necessarily lands *after* the reissued request — so the
+    /// call_id-keyed reading would report the live retry as already
+    /// finished and block its own genuine result from ever folding. Only
+    /// the async-completion fold (`tools::should_fold_completion`) needs
+    /// this occurrence-scoped reading; the duplicate-approve/deny guard in
+    /// `tools::approval::try_execute` deliberately keeps the call_id-keyed
+    /// one, since there a *second* decision for the same call must be a
+    /// no-op no matter which occurrence answered the first.
+    ///
+    /// Falls back to the call_id match whenever either side carries no
+    /// occurrence (replayed pre-`OccurrenceId` logs, synthetic results),
+    /// which is exactly [`Self::has_tool_call_finished`]'s behavior.
+    pub fn has_live_occurrence_finished(&self, call_id: &ToolCallId) -> bool {
+        let live = self
+            .tool_call_request(call_id)
+            .and_then(|request| request.occurrence_id.as_ref());
+        self.items_since_latest_request(call_id)
+            .any(|item| match item {
+                AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => {
+                    match (live, result.occurrence_id.as_ref()) {
+                        (Some(live), Some(answered)) => live == answered,
+                        _ => true,
+                    }
+                }
+                _ => false,
+            })
+    }
+
     /// Whether `call_id`'s *most recent* `ToolCallRequested` occurrence
     /// already has a `ToolCallStarted` in the frame — true from the
     /// instant Horizon began executing it, not just once it finished. For
@@ -275,7 +311,8 @@ impl AgentFrame {
     /// never requested at all (harmless: every caller only matches items
     /// that reference `call_id`, so an unrelated call_id still yields
     /// `false`/`None` either way). Shared scoping helper for
-    /// [`Self::has_tool_call_finished`]/[`Self::has_tool_call_started`].
+    /// [`Self::has_tool_call_finished`]/[`Self::has_tool_call_started`]/
+    /// [`Self::has_live_occurrence_finished`].
     fn items_since_latest_request(
         &self,
         call_id: &ToolCallId,

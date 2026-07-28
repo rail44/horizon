@@ -57,6 +57,16 @@ pub fn aggregate_receipt(tool_calls: &[ToolCallView]) -> ReceiptAggregate {
     let mut edited_paths: HashSet<String> = HashSet::new();
 
     for call in tool_calls {
+        if call.superseded {
+            // An abandoned denial-retry attempt (backlog 55): the retry's
+            // own row in this same receipt carries the outcome, so
+            // counting this one would report one conceptual call twice,
+            // and breaking it out individually would flag a non-failure as
+            // an anomaly. The row itself still renders -- only the
+            // collapsed line, which is a lossy summary by design, leaves
+            // it out.
+            continue;
+        }
         if call.is_error || !call.finished {
             // A failed call never aggregates, regardless of class (the
             // owner's explicit requirement) -- nor does the defensive

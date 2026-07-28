@@ -231,7 +231,19 @@ product-owned API. Decisions:
   approve calls `SessionNetworkProxy::allow_domain` for this session only,
   then reruns the SAME call still sandboxed (`bash::spawn_sandboxed`); a deny
   simply forwards `prior_result` as-is (the real attempt already
-  happened). Audit: `policy::annotate_domain_approval` marks
+  happened). Because the reissue mints a fresh `OccurrenceId`, the two
+  attempts are two transcript rows, and each decision closes the abandoned
+  one differently: a deny gives it `prior_result` itself, while an approve
+  discards that and closes it with a non-error `superseded_by_retry`
+  marker (`tools::approval::superseded_by_retry_result`) so it can't
+  render started-but-never-finished forever (backlog 55, owner decision
+  2026-07-28). That close forced the async-completion fold predicate to
+  become occurrence-scoped — `should_fold_completion` reads
+  `AgentFrame::has_live_occurrence_finished`, not the call_id-keyed
+  `has_tool_call_finished`, which would otherwise mistake the abandoned
+  attempt's close for the live retry's and discard the retry's real
+  result. The duplicate-approve/deny guard (`try_execute`) deliberately
+  keeps the call_id-keyed reading. Audit: `policy::annotate_domain_approval` marks
   `domain_approved`/`approved_domains` on the eventual retry's result,
   kept distinct from `auto_approved` since this is a human decision, not
   an auto-approval. Proxy-agnostic seam: the allowlist-mutation/denial-log

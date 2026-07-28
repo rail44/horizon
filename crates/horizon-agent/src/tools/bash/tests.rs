@@ -541,6 +541,84 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
     );
 }
 
+/// Backlog 55's fold-predicate interplay. Approving a sandbox-denial retry
+/// closes the *abandoned* attempt with a terminal "superseded by retry"
+/// result carrying that attempt's own occurrence -- an event that
+/// necessarily lands after the reissued request. The call_id-keyed reading
+/// (`has_tool_call_finished`, which the duplicate-approve/deny guard still
+/// wants) therefore reports a finish for this call_id, and if the fold
+/// predicate followed it the retry's own genuine result would be silently
+/// discarded and the row would hang forever -- trading one stuck row for a
+/// worse one. Both arrival orders are pinned because the superseded close
+/// is folded synchronously on the approve path while the retry's result
+/// arrives asynchronously.
+#[test]
+fn should_fold_completion_ignores_the_superseded_close_of_an_abandoned_attempt() {
+    use crate::contract::{OccurrenceId, ToolCallRequest};
+    use crate::transcript::SUPERSEDED_BY_RETRY;
+
+    let call_id = ToolCallId("denial-retry".to_string());
+    let abandoned = OccurrenceId("occ-abandoned".to_string());
+    let retry = OccurrenceId("occ-retry".to_string());
+    let requested = |occurrence: &OccurrenceId| {
+        AgentFrameItem::ToolCallRequested(ToolCallRequest {
+            call_id: call_id.clone(),
+            tool_id: "bash".to_string(),
+            input: json!({ "command": "echo hi" }).into(),
+            occurrence_id: Some(occurrence.clone()),
+        })
+    };
+    let superseded_close = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
+        call_id.clone(),
+        Some(abandoned.clone()),
+        json!({ SUPERSEDED_BY_RETRY: true }),
+    ));
+    let retry_result = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
+        call_id.clone(),
+        Some(retry.clone()),
+        json!({ "exit_code": 0 }),
+    ));
+
+    let mut frame = AgentFrame::empty();
+    frame.items.push(requested(&abandoned));
+    frame
+        .items
+        .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+    frame.items.push(requested(&retry));
+    frame.items.push(superseded_close.clone());
+    frame
+        .items
+        .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+
+    assert!(
+        frame.has_tool_call_finished(&call_id),
+        "the call_id-keyed reading does see the superseded close -- that is the trap"
+    );
+    assert!(
+        super::should_fold_completion(&frame, &call_id),
+        "the retry's own result must still be foldable after the abandoned attempt closed"
+    );
+
+    // Superseded close first, retry result second (the live order).
+    let mut in_order = frame.clone();
+    in_order.items.push(retry_result.clone());
+    assert!(
+        !super::should_fold_completion(&in_order, &call_id),
+        "the live occurrence's own result resolves it"
+    );
+
+    // Retry result first, superseded close second (a reordered replay).
+    let mut reversed = AgentFrame::empty();
+    reversed.items.push(requested(&abandoned));
+    reversed.items.push(requested(&retry));
+    reversed.items.push(retry_result);
+    reversed.items.push(superseded_close);
+    assert!(
+        !super::should_fold_completion(&reversed, &call_id),
+        "order must not decide it: the live occurrence is resolved either way"
+    );
+}
+
 // --- panic safety: FIFO advance-on-drop ------------------------------------
 
 /// If a job panics, `registry::run_job`'s advance-on-drop guard must still

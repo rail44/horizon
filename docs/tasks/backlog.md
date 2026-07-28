@@ -317,19 +317,32 @@ entries live in `backlog-resolved.md` keeping their original numbers
     fixing 42's identity model is likely the real fix; a targeted
     "superseded by retry" row state is the cheaper alternative.
     Recorded 2026-07-19 from the leg-3 review.
-    Still open after 42's identity primitive landed (2026-07-28): each
-    attempt is now cleanly *attributable* — the parked first-attempt
-    result reaches the row that produced it rather than the reissue's
-    (`transcript::tool_call::tests::
-    a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it`)
-    — but the stuck row itself is unchanged, because attribution was
-    never the cause. `fold_domain_denied`/`fold_filesystem_denied` emit
-    no result for the abandoned attempt at all, so on the *approve* path
-    the first row simply never gets one and renders started-but-never-
-    finished forever. What remains is the fold-predicate decision that
-    was deliberately left to the owner: either emit a terminal
-    "superseded by retry" outcome for the abandoned occurrence, or teach
-    the view to collapse an occurrence that a later one supersedes.
+    **Resolved 2026-07-28** (owner decision: emit a terminal outcome, not
+    a view-side collapse). 42's identity primitive had already made each
+    attempt cleanly *attributable* — the parked first-attempt result
+    reaches the row that produced it — but the stuck row was unchanged,
+    because attribution was never the cause: `fold_domain_denied`/
+    `fold_filesystem_denied` emit no result for the abandoned attempt at
+    all, so on the *approve* path the first row never got one. What
+    shipped: `tools::approval::superseded_by_retry_result` closes the
+    abandoned occurrence with a non-error `ToolCallFinished` carrying a
+    `superseded_by_retry` marker, folded on the approve branch of
+    `resolve_domain_denial_retry`/`resolve_filesystem_denial_retry`
+    (the deny branch still forwards the parked result unchanged — the two
+    halves cross-reference each other). The row renders closed with a
+    muted "superseded by retry" register rather than success or error
+    styling (`ToolCallView::superseded`, `transcript::tool_call::classify`,
+    `view::rows::tool_call_glyph`), and the collapsed receipt counts one
+    conceptual call once. The fold predicate had to become
+    occurrence-aware for this: `should_fold_completion` now reads
+    `AgentFrame::has_live_occurrence_finished` — the call_id-keyed
+    `has_tool_call_finished` sees the abandoned attempt's close (which
+    lands after the reissued request) and would have swallowed the
+    retry's own genuine result; the duplicate-approve/deny guard in
+    `try_execute` deliberately keeps the call_id-keyed reading. No wire
+    change: it is an ordinary `ToolCallFinished`, and the DuckDB
+    projection's occurrence-targeted `mark_approval_outcome` leaves the
+    retry's pending approval alone.
 
 56. **Sandboxed bash loses the CPU-niceness hardening.** The
     unsandboxed bash path applies `setpriority` via `pre_exec`;

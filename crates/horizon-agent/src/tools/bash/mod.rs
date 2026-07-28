@@ -499,16 +499,23 @@ pub fn kill_if_running(call_id: &ToolCallId) {
 }
 
 /// Whether a finished bash call's result should still be folded into the
-/// session's frame — `false` if `call_id` already has a `ToolCallFinished`
-/// there. A cancellation racing this completion (see `kill_if_running` and
-/// `agent::tools::processing`) can beat it to the frame, in which case the
-/// late, genuine result is accepted and discarded — the same idempotence
-/// pattern `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
-/// uses for a duplicate approve/deny. Called from
+/// session's frame — `false` if the *live* occurrence of `call_id` already
+/// has a `ToolCallFinished` there. A cancellation racing this completion
+/// (see `kill_if_running` and `agent::tools::processing`) can beat it to
+/// the frame, in which case the late, genuine result is accepted and
+/// discarded — the same idempotence pattern
+/// `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved` uses for a
+/// duplicate approve/deny. Called from
 /// `horizon_sessiond::session::fold_bash_completion`, on the session loop,
 /// right before folding.
+///
+/// Occurrence-scoped rather than call_id-keyed
+/// ([`AgentFrame::has_live_occurrence_finished`], see its doc comment):
+/// approving a sandbox-denial retry closes the abandoned attempt with a
+/// terminal result of its own, which sits after the reissued request, so
+/// the call_id-keyed reading would swallow the retry's real result.
 pub fn should_fold_completion(frame: &AgentFrame, call_id: &ToolCallId) -> bool {
-    !frame.has_tool_call_finished(call_id)
+    !frame.has_live_occurrence_finished(call_id)
 }
 
 #[cfg(test)]
