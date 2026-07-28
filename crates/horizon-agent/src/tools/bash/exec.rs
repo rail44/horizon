@@ -643,10 +643,7 @@ pub(super) fn run_sandboxed(
 
     #[cfg(target_os = "linux")]
     let containment_denials = if killed {
-        horizon_sandbox::ContainmentDenials {
-            filesystem: Vec::new(),
-            network: Vec::new(),
-        }
+        horizon_sandbox::ContainmentDenials::default()
     } else {
         match supervisor_report {
             Some(handle) => match handle.join() {
@@ -682,12 +679,13 @@ pub(super) fn run_sandboxed(
         }
     };
     #[cfg(not(target_os = "linux"))]
-    let containment_denials = horizon_sandbox::ContainmentDenials {
-        filesystem: Vec::new(),
-        network: Vec::new(),
-    };
+    let containment_denials = horizon_sandbox::ContainmentDenials::default();
     let filesystem_denials = containment_denials.filesystem;
     let network_denials = containment_denials.network;
+    // Deliberately not an approval candidate: no grant exists that could
+    // satisfy these, so the model is told what to do instead (see
+    // `horizon_sandbox::UngrantableDenial`).
+    let ungrantable_denials = containment_denials.ungrantable;
 
     // Drained once the child has fully exited, so no further request can
     // still be in flight against the proxy -- see this function's own doc
@@ -701,6 +699,7 @@ pub(super) fn run_sandboxed(
         let mut value = timeout_output(timeout, raw_stdout, config);
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
+        crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
         if !drained {
             note_undrained(&mut value, config);
         }
@@ -719,6 +718,7 @@ pub(super) fn run_sandboxed(
         );
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
+        crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
             return domain_denied(call_id, denied_domains, value);
@@ -731,6 +731,7 @@ pub(super) fn run_sandboxed(
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_filesystem_denials(&mut value, &filesystem_denials);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
+        crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
         }
@@ -762,6 +763,7 @@ pub(super) fn run_sandboxed(
         let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
+        crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
         annotate_denied_domains(&mut value, &denied_domains);
         if !drained {
             note_undrained(&mut value, config);
@@ -772,6 +774,7 @@ pub(super) fn run_sandboxed(
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
     annotate_sandboxed(&mut value, true);
     crate::policy::annotate_network_denials(&mut value, &network_denials);
+    crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
     if !drained {
         note_undrained(&mut value, config);
     }

@@ -70,10 +70,24 @@ pub(super) fn stage1_additional_params() -> serde_json::Value {
     })
 }
 
-/// Stage 2 leaves reasoning on (the chain-of-thought step itself) and
-/// doesn't need a confidence signal, so it sends no extra provider params.
+/// Stage 2 sends the same `reasoning_effort: "none"` as stage 1, and no
+/// confidence signal (only stage 1 derives one).
+///
+/// It used to leave reasoning on, on the theory that provider-side
+/// reasoning *is* the chain-of-thought step. Measured against the chosen
+/// judge model that was wrong in the worst way: a reasoning-first model
+/// spent the whole stage-2 token budget inside its think block and never
+/// emitted the `VERDICT:` line, so every single stage-2 call parsed as
+/// unparseable and fell back to a human prompt (8/8 escalations in the
+/// 2026-07-28 event-log investigation). The chain of thought stage 2
+/// actually depends on is the one `prompt::STAGE2_SYSTEM_PROMPT` asks for
+/// in the *visible* reply ("think through this in 2-4 sentences, then end
+/// with VERDICT: ..."), which arrives with reasoning disabled -- exactly
+/// the shape stage 1 already proves parses reliably on this provider.
 pub(super) fn stage2_additional_params() -> serde_json::Value {
-    serde_json::json!({})
+    serde_json::json!({
+        "reasoning_effort": "none",
+    })
 }
 
 /// Real judge model client: a pooled rig OpenAI-completions client reused
@@ -174,11 +188,15 @@ mod tests {
     }
 
     #[test]
-    fn stage2_additional_params_carries_no_reasoning_effort_override() {
-        // Stage 2 leaves reasoning on: it must not carry stage 1's
-        // "reasoning_effort": "none" override.
+    fn stage2_additional_params_disables_reasoning_like_stage1() {
+        // Reasoning left on made stage 2 unparseable 100% of the time --
+        // see this function's own doc comment.
         let params = stage2_additional_params();
-        assert!(params.get("reasoning_effort").is_none());
+        assert_eq!(params["reasoning_effort"], "none");
         assert!(params.get("logit_bias").is_none());
+        assert!(
+            params.get("logprobs").is_none(),
+            "only stage 1 derives a confidence signal"
+        );
     }
 }

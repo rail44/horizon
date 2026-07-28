@@ -62,6 +62,19 @@ pub enum SandboxError {
     #[error("denied filesystem path {0} cannot be represented as a narrow grant")]
     UnsupportedGrantTarget(PathBuf),
 
+    /// The attempt resolves to a real, narrowest-honest grant -- but that
+    /// grant is a writable tree [`crate::is_overbroad_tree`] refuses, so
+    /// approving it could never take effect. Proposing it anyway is how an
+    /// operator's answer gets thrown away after the fact; this is carried
+    /// to the model as guidance instead of raised as an approval.
+    #[error(
+        "denied filesystem path {attempted} has no narrow grant: the smallest honest grant \
+         would be the writable tree {tree}, which is too broad to ever be approved. Write \
+         temporary files under $TMPDIR instead -- the sandbox provisions a private scratch \
+         directory inside this session's workspace and points $TMPDIR at it"
+    )]
+    UngrantableDenial { attempted: PathBuf, tree: PathBuf },
+
     #[error("proxied network endpoint must be 127.0.0.1 with a non-zero port, got {0}")]
     InvalidProxyEndpoint(SocketAddr),
 

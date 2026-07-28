@@ -71,7 +71,9 @@ impl SupervisorReport {
         self.reader.read(self.helper_pid)
     }
 
-    /// Returns authoritative grantable filesystem attempts plus structured,
+    /// Returns authoritative grantable filesystem attempts, the refused
+    /// attempts no grant can ever cover (carried as guidance rather than
+    /// dropped -- see [`crate::UngrantableDenial`]), plus structured,
     /// non-grantable network/IPC bypass attempts.
     pub fn containment_denials(self) -> Result<crate::ContainmentDenials, SandboxError> {
         let outcome = self
@@ -79,6 +81,7 @@ impl SupervisorReport {
             .read(self.helper_pid)
             .map_err(SandboxError::SupervisorReport)?;
         let mut denials = Vec::new();
+        let mut ungrantable: Vec<crate::UngrantableDenial> = Vec::new();
         for entry in outcome.approvals {
             if let nono::ApprovalRequest::Capability { path, access, .. } = entry.request {
                 let access = match access {
@@ -89,8 +92,23 @@ impl SupervisorReport {
                 };
                 match crate::grant::resolve_denial(path, access) {
                     Ok(denial) if !denials.contains(&denial) => denials.push(denial),
-                    Ok(_) | Err(SandboxError::UnsupportedGrantTarget(_)) => {}
-                    Err(error) => return Err(error),
+                    Ok(_) => {}
+                    // One ungrantable attempt must not cost this report the
+                    // grantable ones it also carries, so this collects
+                    // rather than returning early.
+                    Err(error) => match &error {
+                        SandboxError::UnsupportedGrantTarget(_) => {}
+                        SandboxError::UngrantableDenial { attempted, .. } => {
+                            let entry = crate::UngrantableDenial {
+                                attempted_path: attempted.clone(),
+                                guidance: error.to_string(),
+                            };
+                            if !ungrantable.contains(&entry) {
+                                ungrantable.push(entry);
+                            }
+                        }
+                        _ => return Err(error),
+                    },
                 }
             }
         }
@@ -108,6 +126,7 @@ impl SupervisorReport {
         Ok(crate::ContainmentDenials {
             filesystem: denials,
             network,
+            ungrantable,
         })
     }
 }

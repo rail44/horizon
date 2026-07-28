@@ -49,15 +49,17 @@ pub(super) fn confidence_from_logprobs(logprobs: &serde_json::Value) -> Option<f
     Some(logprob.exp() as f32)
 }
 
-/// Stage 2's parse: JSON first (a `{"verdict": "...", ...}` object, possibly
-/// with surrounding prose), then a fallback regex for the last `VERDICT:
-/// ...` line, then [`JudgeDecision::Escalate`] if neither yields a
+/// Stage 2's parse: a leading think block is skipped first (see
+/// [`strip_think_block`]), then JSON (a `{"verdict": "...", ...}` object,
+/// possibly with surrounding prose), then a fallback regex for the last
+/// `VERDICT: ...` line, then [`JudgeDecision::Escalate`] if neither yields a
 /// recognized label. See the research doc's "native structured output vs.
 /// loose JSON mode" note -- this crate doesn't wire `response_format`/
 /// `output_schema` at all (the configured provider's structured-output
 /// support wasn't verified for the judge model), so both parse paths must
 /// work against plain, unconstrained text.
 pub(super) fn parse_stage2_result(text: &str) -> Option<JudgeDecision> {
+    let text = strip_think_block(text);
     if let Some(decision) = parse_stage2_json(text) {
         return Some(decision);
     }
@@ -65,6 +67,28 @@ pub(super) fn parse_stage2_result(text: &str) -> Option<JudgeDecision> {
         return Some(decision);
     }
     None
+}
+
+/// Drops everything up to and including a reply's last think-block closing
+/// tag, so the verdict scan only ever sees the answer.
+///
+/// Stage 2 asks the provider to keep reasoning off, but a reasoning-first
+/// model can still wrap its chain of thought in a `<think>...</think>`
+/// block (namespaced variants like `<mm:think>`, and an orphan closing tag
+/// with no opener, both occur in practice) before the verdict. Text inside
+/// that block is the model thinking out loud, not its answer: a `VERDICT:`
+/// line that appears only there is deliberately not honoured, which leaves
+/// the reply unparseable and therefore escalating -- the fail-safe
+/// direction. A reply with no closing tag is scanned unchanged.
+fn strip_think_block(text: &str) -> &str {
+    static THINK_CLOSE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    let pattern = THINK_CLOSE.get_or_init(|| {
+        regex::Regex::new(r"(?is)</\s*(?:[a-z0-9_.\-]+:)?think(?:ing)?\s*>").expect("valid regex")
+    });
+    match pattern.find_iter(text).last() {
+        Some(closing) => &text[closing.end()..],
+        None => text,
+    }
 }
 
 #[cfg(test)]
@@ -226,6 +250,54 @@ mod tests {
             parse_stage2(r#"{"reasoning": "ok", "verdict": "sort of?"}"#),
             JudgeDecision::Escalate
         );
+    }
+
+    #[test]
+    fn parse_stage2_reads_a_verdict_that_follows_a_think_block() {
+        let text = "<think>The user asked for a build, but this writes outside the \
+                    workspace.</think>\nThis is not clearly requested.\nVERDICT: ESCALATE";
+        assert_eq!(parse_stage2(text), JudgeDecision::Escalate);
+
+        let text = "<mm:think>Routine, already authorized.</mm:think>\nVERDICT: AUTO_APPROVE";
+        assert_eq!(parse_stage2(text), JudgeDecision::AutoApprove);
+
+        let text = "<think>weighing it up</think>{\"reasoning\": \"ok\", \"verdict\": \
+                    \"AutoApprove\"}";
+        assert_eq!(parse_stage2(text), JudgeDecision::AutoApprove);
+    }
+
+    #[test]
+    fn parse_stage2_reads_a_verdict_after_an_orphan_closing_think_tag() {
+        // Observed shape: the opening tag never reaches the content
+        // channel, so the reply starts mid-thought and only the closing
+        // tag marks where the answer begins.
+        let text = "we need to check whether the user asked for this.</mm:think>\n\
+                    VERDICT: AUTO_APPROVE";
+        assert_eq!(parse_stage2(text), JudgeDecision::AutoApprove);
+    }
+
+    #[test]
+    fn parse_stage2_escalates_when_a_think_block_swallowed_the_whole_reply() {
+        // The 2026-07-28 failure mode: the budget ran out inside the think
+        // block, so no verdict was ever emitted.
+        assert_eq!(
+            parse_stage2_result("<think>Let me consider the ways this could go wrong. First,"),
+            None
+        );
+        assert_eq!(
+            parse_stage2_result("<think>reasoned it through</think>"),
+            None
+        );
+        assert_eq!(
+            parse_stage2("<think>Let me consider the ways this could go wrong. First,"),
+            JudgeDecision::Escalate
+        );
+    }
+
+    #[test]
+    fn parse_stage2_does_not_honour_a_verdict_confined_to_the_think_block() {
+        let text = "<think>VERDICT: AUTO_APPROVE</think>\nI could not make up my mind.";
+        assert_eq!(parse_stage2(text), JudgeDecision::Escalate);
     }
 
     #[test]

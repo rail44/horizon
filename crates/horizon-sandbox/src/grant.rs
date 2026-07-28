@@ -250,6 +250,13 @@ fn common_ancestor(paths: &[PathBuf]) -> Option<PathBuf> {
     Some(shared.iter().collect())
 }
 
+/// Turns one mediated attempt into the narrowest grant that could satisfy
+/// it, or a typed error when no grant honestly can:
+/// [`SandboxError::UnsupportedGrantTarget`] for a target the sandbox never
+/// hands out at all, and [`SandboxError::UngrantableDenial`] when the
+/// narrowest honest form would be a writable tree
+/// [`revalidate_grant`] is bound to refuse (that error's message carries
+/// the supported alternative for the caller to pass on).
 pub(crate) fn resolve_denial(
     attempted_path: PathBuf,
     access: FilesystemGrantAccess,
@@ -272,13 +279,26 @@ pub(crate) fn resolve_denial(
     if is_protected(&path) {
         return Err(SandboxError::UnsupportedGrantTarget(attempted_path));
     }
+    let grant = FilesystemGrant {
+        path,
+        access,
+        scope,
+    };
+    // The same clamp [`revalidate_grant`] applies after approval, applied
+    // here so the two can never disagree. Without it, an attempt whose
+    // nearest existing parent is a system root (`/tmp/<leaf>` being the
+    // live case) proposes a writable tree that revalidation is guaranteed
+    // to refuse -- the operator answers a prompt whose approval is thrown
+    // away moments later.
+    if is_writable_tree(&grant) && is_overbroad_tree(&grant.path, home_dir().as_deref()) {
+        return Err(SandboxError::UngrantableDenial {
+            attempted: attempted_path,
+            tree: grant.path,
+        });
+    }
     Ok(FilesystemDenial {
         attempted_path,
-        grant: FilesystemGrant {
-            path,
-            access,
-            scope,
-        },
+        grant,
     })
 }
 
@@ -443,6 +463,77 @@ mod tests {
             resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite),
             Err(SandboxError::UnsupportedGrantTarget(path)) if path == attempted
         ));
+    }
+
+    /// The 2026-07-28 defect: a `/tmp/<leaf>` attempt proposed the writable
+    /// tree `/tmp`, an operator approved it, and revalidation then refused
+    /// the very grant they had just approved. Linux-only because `/tmp` is
+    /// a symlink to `/private/tmp` on macOS, which is not itself a listed
+    /// system root.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_tmp_attempt_proposes_no_grant_and_names_the_supported_destination() {
+        let attempted = PathBuf::from("/tmp").join(format!(
+            "horizon-grant-tmp-clamp-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        assert!(!attempted.exists());
+
+        let error = resolve_denial(attempted.clone(), FilesystemGrantAccess::ReadWrite)
+            .expect_err("/tmp must never be proposed as a writable tree");
+
+        assert!(
+            matches!(&error, SandboxError::UngrantableDenial { attempted: path, tree }
+                if *path == attempted && tree == Path::new("/tmp")),
+            "unexpected error: {error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("$TMPDIR"),
+            "the refusal must name the supported destination: {message}"
+        );
+    }
+
+    /// The invariant the defect broke: whatever `resolve_denial` offers,
+    /// `revalidate_grant` must still accept after the human answers.
+    #[test]
+    fn every_proposed_grant_survives_revalidation() {
+        let root = test_dir("resolve-revalidate-invariant");
+        let nested = root.join("nested");
+        fs::create_dir(&nested).expect("create nested directory");
+        let file = nested.join("file.txt");
+        fs::write(&file, "content").expect("create file");
+
+        let mut attempts = vec![
+            file.clone(),
+            nested.clone(),
+            nested.join("missing.txt"),
+            nested.join("missing").join("deeper.txt"),
+            PathBuf::from("/"),
+            PathBuf::from("/tmp").join("horizon-grant-invariant-leaf"),
+            PathBuf::from("/etc").join("horizon-grant-invariant-leaf"),
+        ];
+        if let Some(home) = home_dir() {
+            attempts.push(home.join(format!("horizon-grant-invariant-{}", unique_suffix())));
+        }
+
+        for access in [
+            FilesystemGrantAccess::Read,
+            FilesystemGrantAccess::ReadWrite,
+        ] {
+            for attempted in &attempts {
+                let Ok(denial) = resolve_denial(attempted.clone(), access) else {
+                    continue;
+                };
+                assert!(
+                    revalidate_grant(&denial.grant).is_ok(),
+                    "resolve_denial proposed {:?} for {attempted:?}, which revalidation refuses",
+                    denial.grant
+                );
+            }
+        }
+        fs::remove_dir_all(root).expect("remove test directory");
     }
 
     #[cfg(unix)]

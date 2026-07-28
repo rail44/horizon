@@ -603,6 +603,25 @@ refactoring wave folds into this item.
      `VERDICT: ...` line or a JSON object in plain text and parses
      defensively (JSON first, then a `VERDICT:` regex, else escalate),
      the same portable posture stage 1 already commits to.
+   - **Stage 2 sends `reasoning_effort: "none"` too** (2026-07-28 defect
+     fix). It originally left provider-side reasoning on, reading the
+     research doc's "stage 2 may want reasoning back on" as the
+     chain-of-thought step. Measured against the chosen judge model that
+     was wrong in the worst direction: an event-log investigation of one
+     live session found stage 2 escalating 8/8 with
+     `fallback_reason: "unparseable"` -- the model spent the whole
+     300-token budget inside a think block and never emitted the
+     `VERDICT:` line, so every stage-2 call became a human prompt. The
+     chain of thought stage 2 depends on is the one its system prompt
+     asks for in the *visible* reply ("2-4 sentences, then
+     `VERDICT: ...`"), which arrives with reasoning off. Belt and
+     braces alongside it: `STAGE2_MAX_TOKENS` is 2,000 (stage 2 runs
+     only on the flagged minority, so a budget that survives an
+     unasked-for think block is cheap), and the stage-2 parser skips
+     everything through a reply's last think-block closing tag --
+     including an orphan one -- before scanning for the verdict. A
+     verdict that appears *only* inside the think block is deliberately
+     not honoured; unparseable still escalates.
    - **Rate limit**: a simple in-process token bucket (10 req/s, burst 5
      -- nono's reference figures), checked synchronously before ever
      spawning the async call; an exceeded budget skips that call's

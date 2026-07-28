@@ -1856,10 +1856,17 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 /// (`docs/roadmap.md`'s backlog-60 entry): nono has no mount namespace, so
 /// there is no private tmpfs for a literal `/tmp` write to land in (a
 /// deliberate, accepted behavior change -- see `horizon_sandbox::linux::
-/// spawn`'s TMPDIR-parity comment). The write is now denied outright
-/// and the Linux supervisor reports the attempted path structurally,
-/// independent of the shell's exit status. It still never lands on the
-/// host's real `/tmp`.
+/// spawn`'s TMPDIR-parity comment). The write is denied outright and the
+/// Linux supervisor reports the attempted path structurally, independent
+/// of the shell's exit status. It still never lands on the host's real
+/// `/tmp`.
+///
+/// Behavior updated again 2026-07-28: the denial no longer raises an
+/// approval at all. `/tmp` is a system root, so the only grant that could
+/// satisfy the attempt is a writable tree the sandbox refuses to enforce
+/// -- approving it was guaranteed to be thrown away on revalidation (three
+/// wasted operator approvals in one live session). The refusal now travels
+/// to the model as guidance naming `$TMPDIR` instead.
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
@@ -1892,38 +1899,51 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
 
     match completion {
         BashCompletion::ApprovalJudged(judgment) => {
-            panic!("expected a filesystem denial, got judge result: {judgment:?}")
+            panic!("expected a finished, ungrantable-annotated result, got: {judgment:?}")
         }
         BashCompletion::Finished(result) => {
-            panic!(
-                "expected the literal /tmp write to be denied by the sandbox \
-                 (no private tmpfs under nono), got a finished result instead: {:?}",
-                result.output
+            assert_eq!(result.call_id, request.call_id);
+            assert_eq!(result.output["sandboxed"], true);
+            let ungrantable = result.output["ungrantable_filesystem_paths"]
+                .as_array()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "expected the refused /tmp attempt to be reported as ungrantable: {:?}",
+                        result.output
+                    )
+                });
+            let entry = ungrantable
+                .iter()
+                .find(|entry| entry["path"] == host_target.display().to_string())
+                .unwrap_or_else(|| {
+                    panic!("expected {host_target:?} among {ungrantable:?}");
+                });
+            let guidance = entry["guidance"].as_str().expect("guidance string");
+            assert!(
+                guidance.contains("$TMPDIR"),
+                "the model must be pointed at the supported destination: {guidance}"
             );
         }
         BashCompletion::DomainDenied {
             call_id, domains, ..
         } => {
             panic!(
-                "expected the literal /tmp write to be denied by the sandbox, got a \
-                 domain-denied request instead for {call_id:?} ({domains:?})"
+                "expected a finished, ungrantable-annotated result, got a domain-denied \
+                 request instead for {call_id:?} ({domains:?})"
             );
         }
         BashCompletion::FilesystemDenied {
             call_id, denials, ..
         } => {
-            assert_eq!(call_id, request.call_id);
-            assert!(
-                denials
-                    .iter()
-                    .any(|denial| denial.attempted_path == host_target),
-                "expected the structured denial to name {host_target:?}: {denials:?}"
+            panic!(
+                "a /tmp attempt must never raise a filesystem approval -- no grant for it \
+                 can survive revalidation ({call_id:?}, {denials:?})"
             );
         }
         BashCompletion::DomainGrantRequired { call_id, domains } => {
             panic!(
-                "expected the literal /tmp write to be denied by the sandbox, got a host-side \
-                 domain grant instead for {call_id:?} ({domains:?})"
+                "expected a finished, ungrantable-annotated result, got a host-side domain \
+                 grant instead for {call_id:?} ({domains:?})"
             );
         }
     }
