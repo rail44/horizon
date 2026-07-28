@@ -2,7 +2,6 @@ mod edit;
 mod glob;
 mod grep;
 mod locks;
-mod patch;
 mod read;
 mod safety;
 mod staleness;
@@ -27,14 +26,13 @@ pub fn execute_auto(tool_state: &ToolSessionState, tool_id: &str, input: &Value)
 
 /// Executes a Horizon-approved (`RequireApproval`) file tool once the user
 /// has approved it. Callers should only reach this for
-/// `fs.write`/`fs.edit`/`fs.patch`
+/// `fs.write`/`fs.edit`
 /// (see `agent::tools::approval::is_horizon_executed_tool`); any other id
 /// falls back to an `is_error` result rather than panicking.
 pub fn execute_approved(tool_state: &ToolSessionState, tool_id: &str, input: &Value) -> Value {
     match tool_id {
         "fs.write" => write::execute(tool_state, input),
         "fs.edit" => edit::execute(tool_state, input),
-        "fs.patch" => patch::execute(tool_state, input),
         _ => error_output(format!("tool `{tool_id}` has no Horizon-side execution")),
     }
 }

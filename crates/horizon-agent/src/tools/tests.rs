@@ -196,10 +196,6 @@ fn fs_read_glob_grep_are_auto_allow_read_and_write_edit_require_approval() {
         permission_for_tool("fs.edit"),
         Some(ToolPermission::RequireApproval)
     );
-    assert_eq!(
-        permission_for_tool("fs.patch"),
-        Some(ToolPermission::RequireApproval)
-    );
 }
 
 #[test]
@@ -600,6 +596,18 @@ fn fs_write_rejects_new_file_path_escaping_workspace_root() {
 
 // --- fs.edit ---------------------------------------------------------------
 
+/// `fs.edit` takes only a list, so even a single replacement is one-element
+/// `edits`.
+fn one_edit(path: &Path, old_string: &str, new_string: &str) -> serde_json::Value {
+    json!({
+        "edits": [{
+            "path": path.display().to_string(),
+            "old_string": old_string,
+            "new_string": new_string,
+        }],
+    })
+}
+
 #[test]
 fn fs_edit_without_prior_read_is_error() {
     let root = temp_workspace("edit-unread");
@@ -607,11 +615,8 @@ fn fs_edit_without_prior_read_is_error() {
     fs::write(&target, "hello world").unwrap();
     let tool_state = ToolSessionState::new(root);
 
-    let output = fs_tools::execute_approved(
-        &tool_state,
-        "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
-    );
+    let output =
+        fs_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -635,11 +640,13 @@ fn fs_edit_zero_matches_is_error() {
     let output = fs_tools::execute_approved(
         &tool_state,
         "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "not present", "new_string": "x" }),
+        &one_edit(&target, "not present", "x"),
     );
 
     assert!(is_error(&output));
     assert!(output["message"].as_str().unwrap().contains("not found"));
+    assert_eq!(output["failed_index"], 0);
+    assert_eq!(output["edits"][0]["status"], "failed");
 }
 
 #[test]
@@ -654,11 +661,7 @@ fn fs_edit_multiple_matches_is_error() {
         &json!({ "path": target.display().to_string() }),
     );
 
-    let output = fs_tools::execute_approved(
-        &tool_state,
-        "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "dup", "new_string": "x" }),
-    );
+    let output = fs_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "dup", "x"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -679,22 +682,18 @@ fn fs_edit_success_updates_mtime_and_allows_chained_edit() {
         &json!({ "path": target.display().to_string() }),
     );
 
-    let first = fs_tools::execute_approved(
-        &tool_state,
-        "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
-    );
+    let first =
+        fs_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
     assert!(!is_error(&first));
-    assert_eq!(first["occurrences"], 1);
+    assert_eq!(first["edits"][0]["occurrences"], 1);
+    assert_eq!(first["applied_count"], 1);
+    assert_eq!(first["file_count"], 1);
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello there");
 
     // No re-read in between: the edit above must have refreshed the
     // recorded mtime itself, or this would fail the staleness gate.
-    let second = fs_tools::execute_approved(
-        &tool_state,
-        "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "there", "new_string": "again" }),
-    );
+    let second =
+        fs_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "there", "again"));
     assert!(!is_error(&second));
     assert_eq!(fs::read_to_string(&target).unwrap(), "hello again");
 }
@@ -714,11 +713,8 @@ fn fs_edit_stale_after_external_modification_is_error() {
     fs::write(&target, "hello world, modified externally").unwrap();
     bump_mtime(&target);
 
-    let output = fs_tools::execute_approved(
-        &tool_state,
-        "fs.edit",
-        &json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
-    );
+    let output =
+        fs_tools::execute_approved(&tool_state, "fs.edit", &one_edit(&target, "world", "there"));
 
     assert!(is_error(&output));
     assert!(output["message"]
@@ -743,15 +739,17 @@ fn fs_edit_replace_all_replaces_every_occurrence_and_reports_count() {
         &tool_state,
         "fs.edit",
         &json!({
-            "path": target.display().to_string(),
-            "old_string": "dup",
-            "new_string": "replaced",
-            "replace_all": true,
+            "edits": [{
+                "path": target.display().to_string(),
+                "old_string": "dup",
+                "new_string": "replaced",
+                "replace_all": true,
+            }],
         }),
     );
 
     assert!(!is_error(&output));
-    assert_eq!(output["occurrences"], 3);
+    assert_eq!(output["edits"][0]["occurrences"], 3);
     assert_eq!(
         fs::read_to_string(&target).unwrap(),
         "replaced replaced replaced"
@@ -774,10 +772,12 @@ fn fs_edit_zero_matches_is_error_even_with_replace_all() {
         &tool_state,
         "fs.edit",
         &json!({
-            "path": target.display().to_string(),
-            "old_string": "not present",
-            "new_string": "x",
-            "replace_all": true,
+            "edits": [{
+                "path": target.display().to_string(),
+                "old_string": "not present",
+                "new_string": "x",
+                "replace_all": true,
+            }],
         }),
     );
 
@@ -785,15 +785,12 @@ fn fs_edit_zero_matches_is_error_even_with_replace_all() {
     assert!(output["message"].as_str().unwrap().contains("not found"));
 }
 
-// --- fs.patch --------------------------------------------------------------
-
 #[test]
-fn fs_patch_applies_multiple_chunks_and_files_in_one_call() {
-    let root = temp_workspace("patch-multiple");
+fn fs_edit_applies_a_batch_across_several_files_in_one_call() {
+    let root = temp_workspace("edit-batch-files");
     let first = root.join("first.txt");
     let second = root.join("second.txt");
-    let added = root.join("added.txt");
-    fs::write(&first, "one\ntwo\nthree\n").unwrap();
+    fs::write(&first, "one\ntwo\n").unwrap();
     fs::write(&second, "before\n").unwrap();
     let tool_state = ToolSessionState::new(root);
     for path in [&first, &second] {
@@ -804,75 +801,154 @@ fn fs_patch_applies_multiple_chunks_and_files_in_one_call() {
         );
     }
 
-    let patch = format!(
-        "*** Begin Patch\n*** Update File: {}\n@@\n-one\n+ONE\n@@\n-three\n+THREE\n*** Update File: {}\n@@\n-before\n+after\n*** Add File: {}\n+new file\n*** End Patch",
-        first.display(),
-        second.display(),
-        added.display(),
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "edits": [
+                { "path": first.display().to_string(), "old_string": "one", "new_string": "ONE" },
+                { "path": second.display().to_string(), "old_string": "before", "new_string": "after" },
+                { "path": first.display().to_string(), "old_string": "two", "new_string": "TWO" },
+            ],
+        }),
     );
-    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
 
     assert!(!is_error(&output), "{output}");
-    assert_eq!(output["file_count"], 3);
-    assert_eq!(fs::read_to_string(first).unwrap(), "ONE\ntwo\nTHREE\n");
+    assert_eq!(output["applied_count"], 3);
+    assert_eq!(output["file_count"], 2);
+    for index in 0..3 {
+        assert_eq!(output["edits"][index]["status"], "applied");
+        assert_eq!(output["edits"][index]["index"], index);
+        assert_eq!(output["edits"][index]["occurrences"], 1);
+    }
+    assert_eq!(fs::read_to_string(first).unwrap(), "ONE\nTWO\n");
     assert_eq!(fs::read_to_string(second).unwrap(), "after\n");
-    assert_eq!(fs::read_to_string(added).unwrap(), "new file\n");
 }
 
 #[test]
-fn fs_patch_validates_every_file_before_writing_any_content() {
-    let root = temp_workspace("patch-prevalidate");
-    let readable = root.join("readable.txt");
-    let unread = root.join("unread.txt");
-    fs::write(&readable, "before\n").unwrap();
-    fs::write(&unread, "before\n").unwrap();
+fn fs_edit_composes_edits_to_the_same_file_without_tripping_the_staleness_gate() {
+    // The second edit's `old_string` only exists because the first one
+    // wrote it, and no `fs.read` runs in between: same-call sequencing must
+    // see the evolving content and must not read this call's own write as
+    // an external modification.
+    let root = temp_workspace("edit-batch-compose");
+    let target = root.join("file.txt");
+    fs::write(&target, "hello world").unwrap();
     let tool_state = ToolSessionState::new(root);
     fs_tools::execute_auto(
         &tool_state,
         "fs.read",
-        &json!({ "path": readable.display().to_string() }),
+        &json!({ "path": target.display().to_string() }),
     );
 
-    let patch = format!(
-        "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** Update File: {}\n@@\n-before\n+after\n*** End Patch",
-        readable.display(),
-        unread.display(),
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "edits": [
+                { "path": target.display().to_string(), "old_string": "world", "new_string": "there" },
+                { "path": target.display().to_string(), "old_string": "hello there", "new_string": "goodbye there" },
+            ],
+        }),
     );
-    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
 
-    assert!(is_error(&output));
-    assert!(output["message"]
+    assert!(!is_error(&output), "{output}");
+    assert_eq!(output["applied_count"], 2);
+    assert_eq!(output["file_count"], 1);
+    assert_eq!(fs::read_to_string(&target).unwrap(), "goodbye there");
+}
+
+#[test]
+fn fs_edit_stops_at_the_first_failure_and_reports_every_edits_outcome() {
+    let root = temp_workspace("edit-batch-partial");
+    let first = root.join("first.txt");
+    let second = root.join("second.txt");
+    let third = root.join("third.txt");
+    fs::write(&first, "one\n").unwrap();
+    fs::write(&second, "two\n").unwrap();
+    fs::write(&third, "three\n").unwrap();
+    let tool_state = ToolSessionState::new(root);
+    for path in [&first, &second, &third] {
+        fs_tools::execute_auto(
+            &tool_state,
+            "fs.read",
+            &json!({ "path": path.display().to_string() }),
+        );
+    }
+
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "edits": [
+                { "path": first.display().to_string(), "old_string": "one", "new_string": "ONE" },
+                { "path": second.display().to_string(), "old_string": "absent", "new_string": "x" },
+                { "path": third.display().to_string(), "old_string": "three", "new_string": "THREE" },
+            ],
+        }),
+    );
+
+    assert!(is_error(&output), "{output}");
+    assert_eq!(output["failed_index"], 1);
+    assert_eq!(output["applied_count"], 1);
+    assert_eq!(output["edits"][0]["status"], "applied");
+    assert_eq!(output["edits"][1]["status"], "failed");
+    assert!(output["edits"][1]["message"]
         .as_str()
         .unwrap()
-        .contains("has not been read"));
-    assert_eq!(fs::read_to_string(readable).unwrap(), "before\n");
-    assert_eq!(fs::read_to_string(unread).unwrap(), "before\n");
+        .contains("not found"));
+    assert_eq!(output["edits"][2]["status"], "not_attempted");
+    // No rollback: the applied edit stays on disk, the not-attempted one
+    // never ran.
+    assert_eq!(fs::read_to_string(first).unwrap(), "ONE\n");
+    assert_eq!(fs::read_to_string(second).unwrap(), "two\n");
+    assert_eq!(fs::read_to_string(third).unwrap(), "three\n");
 }
 
 #[test]
-fn fs_patch_rejects_a_path_outside_the_workspace_before_writing() {
-    let root = temp_workspace("patch-confined");
-    let inside = root.join("inside.txt");
-    fs::write(&inside, "before\n").unwrap();
+fn fs_edit_rejects_a_malformed_list_before_applying_anything() {
+    let root = temp_workspace("edit-batch-malformed");
+    let target = root.join("file.txt");
+    fs::write(&target, "one\n").unwrap();
     let tool_state = ToolSessionState::new(root);
     fs_tools::execute_auto(
         &tool_state,
         "fs.read",
-        &json!({ "path": inside.display().to_string() }),
+        &json!({ "path": target.display().to_string() }),
     );
-    let outside = temp_workspace("patch-outside").join("outside.txt");
 
-    let patch = format!(
-        "*** Begin Patch\n*** Update File: {}\n@@\n-before\n+after\n*** Add File: {}\n+escaped\n*** End Patch",
-        inside.display(),
-        outside.display(),
+    // The second entry has no `new_string`; the first one must not have run.
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "edits": [
+                { "path": target.display().to_string(), "old_string": "one", "new_string": "ONE" },
+                { "path": target.display().to_string(), "old_string": "ONE" },
+            ],
+        }),
     );
-    let output = fs_tools::execute_approved(&tool_state, "fs.patch", &json!({ "patch": patch }));
 
     assert!(is_error(&output));
-    assert!(output["message"].as_str().unwrap().contains("escapes"));
-    assert_eq!(fs::read_to_string(inside).unwrap(), "before\n");
-    assert!(!outside.exists());
+    assert!(output["message"].as_str().unwrap().contains("index 1"));
+    assert_eq!(fs::read_to_string(&target).unwrap(), "one\n");
+}
+
+#[test]
+fn fs_edit_requires_a_non_empty_edits_list() {
+    let root = temp_workspace("edit-batch-empty");
+    let tool_state = ToolSessionState::new(root);
+
+    let missing = fs_tools::execute_approved(&tool_state, "fs.edit", &json!({}));
+    assert!(is_error(&missing));
+    assert!(missing["message"].as_str().unwrap().contains("`edits`"));
+
+    let empty = fs_tools::execute_approved(&tool_state, "fs.edit", &json!({ "edits": [] }));
+    assert!(is_error(&empty));
+    assert!(empty["message"]
+        .as_str()
+        .unwrap()
+        .contains("at least one edit"));
 }
 
 // --- fs.glob / fs.grep ------------------------------------------------
@@ -1370,11 +1446,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     );
 
     let call_id = ToolCallId("call-1".to_string());
-    let frame = requested_frame(
-        &call_id,
-        "fs.edit",
-        json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
-    );
+    let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
 
     let outcome = resolve_approval(
         &frame,
@@ -1419,11 +1491,7 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     let call_id = ToolCallId("call-1".to_string());
     // No prior `fs.read` for this path -- `fs.edit` requires one, so this
     // approve runs the tool (it's not a denial) but the tool itself fails.
-    let frame = requested_frame(
-        &call_id,
-        "fs.edit",
-        json!({ "path": target.display().to_string(), "old_string": "world", "new_string": "there" }),
-    );
+    let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
 
     let outcome = resolve_approval(
         &frame,
@@ -1674,12 +1742,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.edit".to_string(),
-        input: json!({
-            "path": target.display().to_string(),
-            "old_string": "before",
-            "new_string": "after",
-        })
-        .into(),
+        input: one_edit(&target, "before", "after").into(),
         occurrence_id: None,
     };
 

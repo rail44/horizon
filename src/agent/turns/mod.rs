@@ -43,7 +43,7 @@ pub(crate) use tool_call::*;
 pub(crate) use horizon_agent::transcript::segment_bursts;
 pub(crate) use horizon_agent::transcript::{
     aggregate_changes, aggregate_receipt, build_tool_call_views, cap_lines_head, cap_lines_tail,
-    cap_thinking_text, classify, contains_user_message, group_into_turns,
+    cap_thinking_text, classify, contains_user_message, edit_entries, group_into_turns,
     is_approval_still_pending, latest_turn_model, progress, reconstruct_line_diff,
     running_row_expandable, str_field, ApprovalState, DiffLine, DiffLineKind, FileChange,
     ReceiptAggregate, ToolCallKind, ToolCallView, TurnEnd, THINKING_TAIL_LINES,

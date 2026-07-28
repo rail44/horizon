@@ -307,7 +307,6 @@ mod tests {
             "bash",
             "fs.write",
             "fs.edit",
-            "fs.patch",
             "web_fetch",
             "web_search",
             "config.write",

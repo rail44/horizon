@@ -24,9 +24,11 @@ pub enum ToolCallKind {
     Generic,
     File {
         file_name: String,
-        /// `(added, removed)` line counts, derived from `old_string`/
-        /// `new_string` for `fs.edit`. `None` when not derivable (e.g.
-        /// `fs.write`, which replaces wholesale rather than diffing).
+        /// `(added, removed)` line counts, derived from the `old_string`/
+        /// `new_string` pairs of `fs.edit`'s `edits` list (summed when the
+        /// call carries several edits for the one file). `None` when not
+        /// derivable (e.g. `fs.write`, which replaces wholesale rather
+        /// than diffing).
         diffstat: Option<(u32, u32)>,
     },
     Bash {
@@ -35,8 +37,9 @@ pub enum ToolCallKind {
 }
 
 /// One filesystem path affected by a successful mutation. A separate list
-/// is necessary because `fs.patch` has one receipt row but may change many
-/// files; its display target alone cannot preserve that cardinality.
+/// is necessary because one `fs.edit` call carries a whole batch of edits
+/// behind a single receipt row and may change many files; its display
+/// target alone cannot preserve that cardinality.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FileEffect {
     pub path: String,
@@ -380,19 +383,35 @@ pub fn classify(
 ) -> (String, Option<String>, Option<String>, ToolCallKind) {
     match tool_id {
         "fs.edit" => {
-            let path = str_field(input, "path").unwrap_or_default().to_string();
-            let old = str_field(input, "old_string").unwrap_or_default();
-            let new = str_field(input, "new_string").unwrap_or_default();
-            let diffstat = Some(line_diffstat(old, new));
-            let summary = diffstat.map(|(added, removed)| format!("+{added} -{removed}"));
+            let edits = edit_entries(input);
+            let paths = distinct_edit_paths(&edits);
+            let diffstat = edits.iter().fold((0, 0), |(added, removed), edit| {
+                let (edit_added, edit_removed) = line_diffstat(edit.old_string, edit.new_string);
+                (added + edit_added, removed + edit_removed)
+            });
+            // One edit still reads as the file it touches; a batch reads as
+            // its own cardinality, since no single path represents it.
+            let target = match (edits.len(), paths.len()) {
+                (0, _) => None,
+                (1, _) => Some(edits[0].path.to_string()),
+                (edit_count, file_count) => Some(format!(
+                    "{edit_count} edits in {file_count} {}",
+                    if file_count == 1 { "file" } else { "files" }
+                )),
+            };
+            let kind = match paths.as_slice() {
+                [path] => ToolCallKind::File {
+                    file_name: file_name(path),
+                    diffstat: Some(diffstat),
+                },
+                _ => ToolCallKind::Generic,
+            };
+            let (added, removed) = diffstat;
             (
                 "Edit".to_string(),
-                Some(path.clone()),
-                summary,
-                ToolCallKind::File {
-                    file_name: file_name(&path),
-                    diffstat,
-                },
+                target,
+                Some(format!("+{added} -{removed}")),
+                kind,
             )
         }
         "fs.write" => {
@@ -416,22 +435,6 @@ pub fn classify(
                     diffstat: None,
                 },
             )
-        }
-        "fs.patch" => {
-            let paths = str_field(input, "patch")
-                .map(patch_paths)
-                .unwrap_or_default();
-            let target = match paths.as_slice() {
-                [] => None,
-                [path] => Some(path.clone()),
-                _ => Some(format!("{} files", paths.len())),
-            };
-            let summary = output.and_then(|output| {
-                let added = output.get("added")?.as_u64()?;
-                let removed = output.get("removed")?.as_u64()?;
-                Some(format!("+{added} -{removed}"))
-            });
-            ("Patch".to_string(), target, summary, ToolCallKind::Generic)
         }
         "bash" => {
             let command = str_field(input, "command").unwrap_or_default();
@@ -552,20 +555,18 @@ pub fn classify(
 
 fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<FileEffect> {
     match tool_id {
-        "fs.edit" => {
-            let Some(path) = str_field(input, "path") else {
-                return Vec::new();
-            };
-            let old = str_field(input, "old_string").unwrap_or_default();
-            let new = str_field(input, "new_string").unwrap_or_default();
-            let (added, removed) = line_diffstat(old, new);
-            vec![FileEffect {
-                path: path.to_string(),
-                added,
-                removed,
-                created: false,
-            }]
-        }
+        "fs.edit" => edit_entries(input)
+            .into_iter()
+            .map(|edit| {
+                let (added, removed) = line_diffstat(edit.old_string, edit.new_string);
+                FileEffect {
+                    path: edit.path.to_string(),
+                    added,
+                    removed,
+                    created: false,
+                }
+            })
+            .collect(),
         "fs.write" => {
             let Some(output) = output else {
                 return Vec::new();
@@ -580,46 +581,48 @@ fn affected_files(tool_id: &str, input: &Value, output: Option<&Value>) -> Vec<F
                 created: output.get("created").and_then(Value::as_bool) == Some(true),
             }]
         }
-        "fs.patch" => output
-            .and_then(|output| output.get("files"))
-            .and_then(Value::as_array)
-            .map(|files| {
-                files
-                    .iter()
-                    .filter_map(|file| {
-                        Some(FileEffect {
-                            path: file.get("target_path")?.as_str()?.to_string(),
-                            added: file.get("added").and_then(Value::as_u64).unwrap_or(0) as u32,
-                            removed: file.get("removed").and_then(Value::as_u64).unwrap_or(0)
-                                as u32,
-                            created: file.get("operation").and_then(Value::as_str) == Some("added"),
-                        })
-                    })
-                    .collect()
-            })
-            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }
 
-fn patch_paths(patch: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    for line in patch.lines() {
-        let path = [
-            "*** Add File:",
-            "*** Update File:",
-            "*** Delete File:",
-            "*** Move to:",
-        ]
-        .iter()
-        .find_map(|header| line.strip_prefix(header))
-        .map(str::trim)
-        .filter(|path| !path.is_empty());
-        if let Some(path) = path {
-            let path = path.to_string();
-            if !paths.contains(&path) {
-                paths.push(path);
-            }
+/// One entry of an `fs.edit` call's `edits` list (`crate::tools::fs::edit`).
+/// Public alongside [`edit_entries`] so `src/agent/turns`'s own body
+/// renderer reads the batch exactly the way this classifier does.
+pub struct EditEntry<'a> {
+    pub path: &'a str,
+    pub old_string: &'a str,
+    pub new_string: &'a str,
+}
+
+/// Reads an `fs.edit` call's `edits` list in input order. An entry with no
+/// `path` is skipped (there is nothing to display it against); a missing or
+/// non-array `edits` yields an empty list, so a malformed call renders as an
+/// empty batch rather than panicking.
+pub fn edit_entries(input: &Value) -> Vec<EditEntry<'_>> {
+    input
+        .get("edits")
+        .and_then(Value::as_array)
+        .map(|edits| {
+            edits
+                .iter()
+                .filter_map(|edit| {
+                    Some(EditEntry {
+                        path: str_field(edit, "path")?,
+                        old_string: str_field(edit, "old_string").unwrap_or_default(),
+                        new_string: str_field(edit, "new_string").unwrap_or_default(),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The distinct paths an `fs.edit` batch touches, in first-touch order.
+fn distinct_edit_paths<'a>(edits: &[EditEntry<'a>]) -> Vec<&'a str> {
+    let mut paths: Vec<&str> = Vec::new();
+    for edit in edits {
+        if !paths.contains(&edit.path) {
+            paths.push(edit.path);
         }
     }
     paths
@@ -650,9 +653,10 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 
 /// A simple common-prefix/common-suffix line diffstat between `old` and
 /// `new` -- not a full diff algorithm (no interior-line matching), but
-/// enough to report `+added -removed` for `fs.edit`'s single
-/// old_string/new_string replacement, which is the shape every `fs.edit`
-/// call has today (see `crate::tools::fs::edit`). Derived from
+/// enough to report `+added -removed` for one `old_string`/`new_string`
+/// replacement, the shape of every entry in an `fs.edit` batch (see
+/// `crate::tools::fs::edit`); a whole call's counts are these summed
+/// across its `edits` list. Derived from
 /// [`super::reconstruct_line_diff`] rather than computed independently, so
 /// the receipt chip's counts and the expanded body's diff can never drift
 /// apart.
@@ -946,7 +950,7 @@ mod tests {
             tool_requested(
                 "a",
                 "fs.edit",
-                json!({"path": "a.rs", "old_string": "x", "new_string": "y"}),
+                json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
             approval_requested("a"),
             tool_finished(
@@ -965,9 +969,11 @@ mod tests {
                 "a",
                 "fs.edit",
                 json!({
-                    "path": "src/agent/view.rs",
-                    "old_string": "line1\nold\nline3",
-                    "new_string": "line1\nnew a\nnew b\nline3",
+                    "edits": [{
+                        "path": "src/agent/view.rs",
+                        "old_string": "line1\nold\nline3",
+                        "new_string": "line1\nnew a\nnew b\nline3",
+                    }],
                 }),
             ),
             tool_finished("a", json!({"path": "src/agent/view.rs", "replaced": true})),
@@ -1011,35 +1017,75 @@ mod tests {
     }
 
     #[test]
-    fn fs_patch_preserves_each_affected_file_behind_one_call() {
+    fn an_fs_edit_batch_reads_as_its_own_cardinality_and_keeps_every_affected_file() {
         let items = vec![
             tool_requested(
                 "a",
-                "fs.patch",
+                "fs.edit",
                 json!({
-                    "patch": "*** Begin Patch\n*** Update File: /w/a.rs\n@@\n-old\n+new\n*** Add File: /w/b.rs\n+new\n*** End Patch"
+                    "edits": [
+                        {"path": "/w/a.rs", "old_string": "old", "new_string": "new"},
+                        {"path": "/w/b.rs", "old_string": "x", "new_string": "y\nz"},
+                        {"path": "/w/a.rs", "old_string": "p", "new_string": "q"},
+                    ],
                 }),
             ),
             tool_finished(
                 "a",
                 json!({
-                    "applied": true,
+                    "applied_count": 3,
                     "file_count": 2,
-                    "added": 2,
-                    "removed": 1,
-                    "files": [
-                        {"path": "/w/a.rs", "target_path": "/w/a.rs", "operation": "updated", "added": 1, "removed": 1},
-                        {"path": "/w/b.rs", "target_path": "/w/b.rs", "operation": "added", "added": 1, "removed": 0}
-                    ]
+                    "edits": [
+                        {"index": 0, "path": "/w/a.rs", "status": "applied", "occurrences": 1},
+                        {"index": 1, "path": "/w/b.rs", "status": "applied", "occurrences": 1},
+                        {"index": 2, "path": "/w/a.rs", "status": "applied", "occurrences": 1},
+                    ],
                 }),
             ),
         ];
         let views = build_tool_call_views(&items);
-        assert_eq!(views[0].verb, "Patch");
-        assert_eq!(views[0].target.as_deref(), Some("2 files"));
-        assert_eq!(views[0].result_summary.as_deref(), Some("+2 -1"));
-        assert_eq!(views[0].affected_files.len(), 2);
-        assert!(views[0].affected_files[1].created);
+        assert_eq!(views[0].verb, "Edit");
+        assert_eq!(views[0].target.as_deref(), Some("3 edits in 2 files"));
+        // Summed across the batch: three replacements, one of which adds a
+        // line.
+        assert_eq!(views[0].result_summary.as_deref(), Some("+4 -3"));
+        // No single file represents a multi-file batch, so it gets no file
+        // chip.
+        assert_eq!(views[0].kind, ToolCallKind::Generic);
+        assert_eq!(
+            views[0]
+                .affected_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            vec!["/w/a.rs", "/w/b.rs", "/w/a.rs"],
+        );
+    }
+
+    #[test]
+    fn an_fs_edit_batch_within_one_file_keeps_its_file_chip() {
+        let items = vec![tool_requested(
+            "a",
+            "fs.edit",
+            json!({
+                "edits": [
+                    {"path": "/w/a.rs", "old_string": "old", "new_string": "new"},
+                    {"path": "/w/a.rs", "old_string": "p", "new_string": "q\nr"},
+                ],
+            }),
+        )];
+        let views = build_tool_call_views(&items);
+        assert_eq!(views[0].target.as_deref(), Some("2 edits in 1 file"));
+        match &views[0].kind {
+            ToolCallKind::File {
+                file_name,
+                diffstat,
+            } => {
+                assert_eq!(file_name, "a.rs");
+                assert_eq!(*diffstat, Some((3, 2)));
+            }
+            other => panic!("expected a File chip, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1124,13 +1170,13 @@ mod tests {
             tool_requested_with_occurrence(
                 "fs.edit:1",
                 "fs.edit",
-                json!({"path": "a.txt", "old": "x", "new": "y"}),
+                json!({"edits": [{"path": "a.txt", "old_string": "x", "new_string": "y"}]}),
                 occ_a.clone(),
             ),
             tool_requested_with_occurrence(
                 "fs.edit:1",
                 "fs.edit",
-                json!({"path": "b.txt", "old": "p", "new": "q"}),
+                json!({"edits": [{"path": "b.txt", "old_string": "p", "new_string": "q"}]}),
                 occ_b.clone(),
             ),
             // A's result arrives first and must land on A's row, not on

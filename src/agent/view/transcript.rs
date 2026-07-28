@@ -623,7 +623,7 @@ impl AgentTranscript {
     /// `individual_calls` -- any failed call, of any class, plus the
     /// defensive never-finished case: a bash chip (command head + mark)
     /// for a failed bash call, a file chip (name + mark -- no diffstat
-    /// once failed, see below) for a failed fs.edit/fs.write/fs.patch, and a
+    /// once failed, see below) for a failed fs.edit/fs.write, and a
     /// plain verb + mark for everything else.
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
         let (mark, mark_color) = if !call.finished {
@@ -650,10 +650,11 @@ impl AgentTranscript {
                         .child(file_name.clone()),
                 );
                 if call.is_error {
-                    // A failed edit/write never actually applied (the
-                    // tool aborts before writing) -- showing the
-                    // would-be diffstat here would misleadingly imply it
-                    // did. Owner feedback 2026-07-13: a failed call keeps
+                    // A failed edit/write applied nothing, or -- for an
+                    // `fs.edit` batch that stopped partway -- only some
+                    // prefix of its edits; either way the call's own
+                    // diffstat overstates what landed, so it is not
+                    // shown. Owner feedback 2026-07-13: a failed call keeps
                     // its own error-marked chip regardless of class, so
                     // just the mark, not the attempted diffstat.
                     label =
