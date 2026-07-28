@@ -8,7 +8,7 @@ use std::{
 use anyhow::{Context, Result};
 use crossbeam_channel::{unbounded, Receiver, Sender};
 
-use crate::persistence::projection::duckdb::{DuckdbStoreHandle, Store};
+use crate::persistence::projection::duckdb::{ApplyRecordsReport, DuckdbStoreHandle, Store};
 
 use super::{read, ReadReport, Record};
 
@@ -420,6 +420,7 @@ fn rebuild_and_open_duckdb_projection(
                 match store.catch_up_from_event_log_records(tail) {
                     Ok(report) => {
                         log_turn_id_missing_summary(report.turn_id_missing);
+                        log_skipped_record_summary(&report);
                         eprintln!(
                             "horizon-sessiond: DuckDB projection caught up incrementally \
                              ({} record(s))",
@@ -443,6 +444,7 @@ fn rebuild_and_open_duckdb_projection(
     match store.replace_from_event_log_records(records.iter().cloned()) {
         Ok(report) => {
             log_turn_id_missing_summary(report.turn_id_missing);
+            log_skipped_record_summary(&report);
             eprintln!(
                 "horizon-sessiond: DuckDB projection rebuilt ({} record(s))",
                 report.applied
@@ -473,6 +475,29 @@ fn log_turn_id_missing_summary(count: usize) {
              event(s) with no turn_id"
         );
     }
+}
+
+/// One combined stderr line -- same shape as [`log_turn_id_missing_summary`],
+/// a no-op when nothing was skipped -- for records a rebuild or incremental
+/// catch-up could not project at all and dropped
+/// (`import::Store::apply_chunk`). Naming the first failure's message is
+/// what distinguishes "one odd record in a long log" from a store-level
+/// problem that skipped everything; either way the rest of the projection
+/// is built and stays live, rather than the whole run losing its projection
+/// to a single record.
+fn log_skipped_record_summary(report: &ApplyRecordsReport) {
+    if report.skipped == 0 {
+        return;
+    }
+    let cause = report
+        .first_skip_error
+        .as_deref()
+        .unwrap_or("no error recorded");
+    eprintln!(
+        "horizon-agent: skipped {} unprojectable event log record(s) during the DuckDB \
+         projection; first failure: {cause}",
+        report.skipped
+    );
 }
 
 /// How [`rebuild_and_open_duckdb_projection`] should reconcile `store`'s

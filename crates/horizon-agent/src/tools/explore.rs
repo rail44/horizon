@@ -268,7 +268,10 @@ pub(crate) fn output(session_id: SessionId, request: &ToolCallRequest) -> Execut
             "session_id": target.as_uuid().to_string(),
             "description": description,
             "status": "running",
-            "message": "this task has not finished yet; you will be notified when it does",
+            "message": "this task has not finished yet. If nothing else is ready to \
+                        do, end your turn instead of polling: the completion \
+                        notification starts a new turn on its own, and calling \
+                        task_output again before then only costs a round.",
         }),
         children::Lookup::Finished {
             description,

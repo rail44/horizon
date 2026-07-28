@@ -16,6 +16,8 @@ mod shared_store;
 
 use schema::INITIALIZE_SCHEMA_SQL;
 
+pub(crate) use import::ApplyRecordsReport;
+
 use records::AgentStoredEvent;
 
 #[cfg(test)]
@@ -1818,5 +1820,201 @@ mod tests {
 
     fn format_duration(duration: Duration) -> String {
         format!("{:.3}ms", duration.as_secs_f64() * 1_000.0)
+    }
+
+    /// The `occurrence_id`-less fallback in `mark_approval_outcome` picks
+    /// the *most recent* pending approval for a `call_id`, not all of them
+    /// -- the property the old `sequence = (SELECT MAX(sequence) ...)`
+    /// subquery provided and the `ORDER BY sequence DESC LIMIT 1` lookup
+    /// that replaced it must still provide.
+    #[test]
+    fn occurrence_less_resolution_targets_only_the_most_recent_pending_approval() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+        let call_id = ToolCallId("call-1".to_string());
+
+        store
+            .append_events(
+                session_id,
+                None,
+                [
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "older pending".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: None,
+                    }),
+                    Event::ApprovalRequested(ApprovalRequest {
+                        call_id: call_id.clone(),
+                        reason: "newer pending".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: None,
+                    }),
+                    Event::ToolCallStarted(call_id.clone()),
+                ],
+            )
+            .expect("append events");
+
+        let approvals = store.approvals_for_session(session_id).expect("approvals");
+        assert_eq!(approvals.len(), 2);
+        assert_eq!(approvals[0].reason, "older pending");
+        assert_eq!(
+            approvals[0].outcome, None,
+            "only the most recent pending approval may be resolved"
+        );
+        assert_eq!(approvals[1].reason, "newer pending");
+        assert_eq!(approvals[1].outcome.as_deref(), Some("approved"));
+    }
+
+    /// The exact record sequence that killed the rebuild, minimized: an
+    /// approval requested and resolved, then a `ToolCallStarted` for a
+    /// *different*, never-gated `call_id`.
+    fn ungated_tool_call_started_records(
+        session_id: SessionId,
+    ) -> Vec<crate::persistence::event_log::Record> {
+        let gated = ToolCallId("call-gated".to_string());
+        let ungated = ToolCallId("call-ungated".to_string());
+        vec![
+            label_record(
+                "event-1",
+                0,
+                session_id,
+                None,
+                None,
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: gated.clone(),
+                    reason: "needs approval".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: None,
+                }),
+                1,
+            ),
+            label_record(
+                "event-2",
+                1,
+                session_id,
+                None,
+                None,
+                Event::ToolCallStarted(gated),
+                2,
+            ),
+            // Never gated: no approval row carries this call_id, so the
+            // fallback's lookup must match nothing without exploding.
+            label_record(
+                "event-3",
+                2,
+                session_id,
+                None,
+                None,
+                Event::ToolCallStarted(ungated),
+                3,
+            ),
+        ]
+    }
+
+    /// The rebuild-killer this fix is for, pinned at the level it lives:
+    /// several records projected inside one explicit transaction, the shape
+    /// every batched rebuild/catch-up uses. The old `mark_approval_outcome`
+    /// fallback asked DuckDB for `MAX(sequence)` over a filter the
+    /// optimizer could statically prove selects nothing (no approval row
+    /// carries this `call_id`), which -- with the approvals table carrying
+    /// transaction-local, uncommitted rows, as it always does mid-rebuild
+    /// -- fails with `INTERNAL Error: Attempted to access index 0 within
+    /// vector of size 0` and aborts the whole transaction. Against the
+    /// owner's real ~121k-record event log that took down every rebuild at
+    /// the 530th record, blanking every session's transcript in the UI. See
+    /// `projection::Store::most_recent_pending_approval`.
+    ///
+    /// Driven through `append_record_uncommitted` rather than
+    /// `replace_from_event_log_records` deliberately: the latter now
+    /// isolates a failing record and retries it in a narrower transaction
+    /// (`import::Store::apply_chunk`), which rescues this shape even with
+    /// the broken statement in place, so it cannot guard the statement
+    /// itself.
+    #[test]
+    fn resolving_an_ungated_tool_call_mid_batch_does_not_trip_duckdb() {
+        let store = Store::open_in_memory().expect("store");
+        let session_id = SessionId::new();
+
+        store
+            .conn
+            .execute_batch("BEGIN TRANSACTION")
+            .expect("begin batch transaction");
+        for record in ungated_tool_call_started_records(session_id) {
+            store
+                .append_record_uncommitted(&record)
+                .expect("every record must project inside one batch transaction");
+        }
+        store.conn.execute_batch("COMMIT").expect("commit");
+
+        let approvals = store.approvals_for_session(session_id).expect("approvals");
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].outcome.as_deref(), Some("approved"));
+    }
+
+    /// The same minimal shape through the real rebuild entry point, whole
+    /// and unskipped -- the end-to-end counterpart of
+    /// [`resolving_an_ungated_tool_call_mid_batch_does_not_trip_duckdb`].
+    #[test]
+    fn rebuild_survives_a_tool_call_started_with_no_pending_approval() {
+        let session_id = SessionId::new();
+        let store = Store::open_in_memory().expect("store");
+        let report = store
+            .replace_from_event_log_records(ungated_tool_call_started_records(session_id))
+            .expect("rebuild must not fail on an ungated ToolCallStarted");
+
+        assert_eq!(report.applied, 3);
+        assert_eq!(report.skipped, 0);
+        let approvals = store.approvals_for_session(session_id).expect("approvals");
+        assert_eq!(approvals.len(), 1);
+        assert_eq!(approvals[0].outcome.as_deref(), Some("approved"));
+    }
+
+    /// A record that cannot be projected at all -- here a duplicate
+    /// `(session_id, sequence)` pair, which a real event log does carry --
+    /// must cost only itself. DuckDB aborts an explicit transaction on the
+    /// first failing statement and its `COMMIT` then discards everything,
+    /// so before this the whole rebuild was lost and `horizon-sessiond`
+    /// disabled the live projection for the run.
+    #[test]
+    fn rebuild_skips_an_unprojectable_record_and_projects_the_rest() {
+        let session_id = SessionId::new();
+        let message = |text: &str| {
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: text.to_string(),
+            })
+        };
+        let records = vec![
+            label_record("event-1", 0, session_id, None, None, message("first"), 1),
+            // Same (session_id, sequence) as event-1: violates
+            // `agent_events`'s UNIQUE constraint.
+            label_record("event-2", 0, session_id, None, None, message("poison"), 2),
+            label_record("event-3", 1, session_id, None, None, message("third"), 3),
+        ];
+
+        let store = Store::open_in_memory().expect("store");
+        let report = store
+            .replace_from_event_log_records(records)
+            .expect("one poison record must not fail the whole rebuild");
+
+        assert_eq!(report.applied, 2);
+        assert_eq!(report.skipped, 1);
+        assert!(
+            report
+                .first_skip_error
+                .as_deref()
+                .is_some_and(|error| error.contains("constraint")),
+            "the summary must carry the first skip's cause, got {:?}",
+            report.first_skip_error
+        );
+
+        let texts = store
+            .messages_for_session(session_id)
+            .expect("messages")
+            .into_iter()
+            .map(|message| message.text)
+            .collect::<Vec<_>>();
+        assert_eq!(texts, vec!["first".to_string(), "third".to_string()]);
     }
 }

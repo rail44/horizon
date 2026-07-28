@@ -423,6 +423,20 @@ fn task_output_reports_unknown_running_and_finished_tasks() {
     assert!(running.get("is_error").is_none(), "{running}");
     assert_eq!(running["status"], json!("running"));
     assert_eq!(running["description"], json!("map the emit sites"));
+    // The yield guidance is the whole point of the running payload: a
+    // requester with nothing else to do should end its turn rather than
+    // poll (session aa95e066 spent 57 rounds -- 13.4% of the run -- on 63
+    // still-running polls, its own reasoning looking for a way to wait;
+    // see docs/research/agent-harness-findings-97-2026-07-28.md).
+    let running_message = running["message"].as_str().expect("a message");
+    assert!(
+        running_message.contains("end your turn"),
+        "the running payload must tell the requester to yield: {running_message}"
+    );
+    assert!(
+        running_message.contains("notification starts a new turn"),
+        "the running payload must say what wakes it back up: {running_message}"
+    );
 
     complete_child(&events, "where are they?", "Emitted at session.rs:1747.");
     wait_until(

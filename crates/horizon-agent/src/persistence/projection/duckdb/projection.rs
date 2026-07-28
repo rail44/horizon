@@ -1,5 +1,5 @@
 use anyhow::Result;
-use duckdb::params;
+use duckdb::{params, OptionalExt};
 
 #[cfg(test)]
 use crate::contract::SessionId;
@@ -100,7 +100,7 @@ impl Store {
             // `ToolCallStarted(ToolCallId)` carries no `occurrence_id`
             // (it stays a unit-style variant to keep the wire change
             // additive, see `contract::OccurrenceId`'s doc comment), so
-            // this falls through to the most-recent-pending subquery in
+            // this falls through to the most-recent-pending lookup in
             // `mark_approval_outcome` -- which is still the correct
             // target because `ToolCallStarted` always fires after the
             // matching `ApprovalRequested`, so any later-reissued
@@ -317,11 +317,15 @@ impl Store {
     /// without ever emitting `ToolCallStarted`, so a result landing on a
     /// still-pending approval means the human denied it; a
     /// `ToolCallStarted` landing on a still-pending approval means the
-    /// human approved it). The subquery uses
-    /// `MAX(sequence)`-with-`outcome IS NULL` to pick exactly one row,
-    /// avoiding the prior behavior's bug where multiple pending rows
-    /// for the same `call_id` (provider-reuse, sandbox-denial-retry)
-    /// would all flip to the same outcome.
+    /// human approved it). That most-recent row is picked by a separate
+    /// `ORDER BY sequence DESC LIMIT 1` lookup rather than folded into the
+    /// `UPDATE` as a `sequence = (SELECT MAX(sequence) ...)` scalar
+    /// subquery, which is what this used to be -- see
+    /// [`Self::most_recent_pending_approval`] for why that shape had to
+    /// go. Either way exactly one row is picked, avoiding the pre-
+    /// `occurrence_id` behavior's bug where multiple pending rows for the
+    /// same `call_id` (provider-reuse, sandbox-denial-retry) would all
+    /// flip to the same outcome.
     ///
     /// Matches zero rows harmlessly when the call was never gated by an
     /// approval, or its outcome is already resolved.
@@ -348,17 +352,59 @@ impl Store {
             // call_id, resolving either would silently stamp the other with
             // the same outcome -- the exact collapse `occurrence_id` exists
             // to prevent.
-            self.conn.execute(
-                "UPDATE agent_approvals SET outcome = ?
-                 WHERE session_id = ? AND call_id = ? AND outcome IS NULL
-                   AND sequence = (
-                     SELECT MAX(sequence) FROM agent_approvals
-                     WHERE session_id = ? AND call_id = ? AND outcome IS NULL
-                   )",
-                params![outcome, session_id, call_id, session_id, call_id],
-            )?;
+            if let Some(event_id) = self.most_recent_pending_approval(session_id, call_id)? {
+                // `event_id` is `agent_approvals`'s primary key, so this
+                // updates exactly the row the lookup picked.
+                self.conn.execute(
+                    "UPDATE agent_approvals SET outcome = ? WHERE event_id = ?",
+                    params![outcome, &event_id],
+                )?;
+            }
         }
         Ok(())
+    }
+
+    /// `event_id` of the highest-`sequence` still-pending approval for
+    /// `(session_id, call_id)`, or `None` when there is none.
+    ///
+    /// Split out of [`Self::mark_approval_outcome`]'s single statement --
+    /// which used to select the same row inline via `sequence = (SELECT
+    /// MAX(sequence) FROM agent_approvals WHERE ... outcome IS NULL)` --
+    /// because that shape crashes DuckDB. An aggregate over a scan whose
+    /// filter the optimizer can *statically prove* selects nothing (min/max
+    /// column statistics rule the `call_id` out, or the null count rules
+    /// `outcome IS NULL` out) fails during statistics propagation with
+    /// `INTERNAL Error: Attempted to access index 0 within vector of size 0`
+    /// -- but only while the table carries transaction-local, uncommitted
+    /// rows. That is why it never showed up on the live per-event append
+    /// path, whose one-record transaction covers a single event and so
+    /// never both inserts an approval row and calls this, and instead took
+    /// down the whole batched rebuild, where every approval inserted so
+    /// far in the batch is still uncommitted.
+    /// Reproduced down to `SELECT MAX(sequence) FROM agent_approvals WHERE
+    /// call_id = <absent>` on both libduckdb 1.5.0 (the system library
+    /// here) and 1.5.4 (libduckdb-sys 1.10504.0's bundled build), so this
+    /// is not the version skew AGENTS.md "Build setup" warns about -- see
+    /// `docs/tasks/backlog.md` 69. The same query is fine once those rows
+    /// are committed, and dropping the aggregate (this `ORDER BY`/`LIMIT`
+    /// lookup) is fine on both versions either way. Prefer a top-N lookup
+    /// over an aggregate anywhere a filter may select nothing.
+    fn most_recent_pending_approval(
+        &self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT event_id FROM agent_approvals
+                 WHERE session_id = ? AND call_id = ? AND outcome IS NULL
+                 ORDER BY sequence DESC
+                 LIMIT 1",
+                params![session_id, call_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
     }
 
     /// Turn-level bookkeeping row for a `TurnEnded` event -- see

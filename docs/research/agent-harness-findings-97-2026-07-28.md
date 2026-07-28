@@ -57,7 +57,13 @@ compaction シリーズの目的（context を理由に死なない）はこの�
 
 1. judge stage-2 パーサ修正 — **worker 実装中（2026-07-28）**
 2. grant 整形に overbroad 検査を前置き + $TMPDIR 案内 — **同上**
-3. turn-yield affordance + still-running の situated 案内
+3. turn-yield affordance + still-running の situated 案内 —
+   **案内文のみ 2026-07-28 実装**（`tools::explore` の running payload に
+   「他にやることが無ければターンを終えよ。完了通知が新しいターンを
+   起こす。再ポーリングは往復を消費するだけ」）。明示的な wait/yield
+   ツールと候補 9（ポーリング検出 guard）は、この案内の効果を次の走行で
+   測ってから判断する（H2 セルの前例どおり案内単独の効果は未知数）。
+   候補 10（task_output dedup）は実測 1 件のため見送り。
 4. sandbox 安全な nextest プロファイル or 検証責務の明文化（issue 010）
 5. first-token 前の 429/503 retry + 子起動の同時実行を provider 上限に
    合わせる
