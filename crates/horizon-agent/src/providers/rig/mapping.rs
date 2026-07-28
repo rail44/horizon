@@ -4,8 +4,8 @@ use rig_core::completion::{
 };
 
 use crate::contract::{
-    Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ToolCallId,
-    ToolCallRequest, ToolCallResult,
+    Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
+    ToolCallId, ToolCallRequest, ToolCallResult,
 };
 
 #[cfg(test)]
@@ -155,6 +155,15 @@ pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
         call_id: ToolCallId(call.call_id.unwrap_or(call.id)),
         tool_id: call.function.name,
         input: call.function.arguments.into(),
+        // Mint a fresh `OccurrenceId` here -- the upstream provider only
+        // knows its own `call_id`, which it can reuse across genuinely
+        // distinct calls (the `functions.fs.edit:66` incident in session
+        // 05254b6a) and which Horizon also reuses on every sandbox-denial
+        // retry. `OccurrenceId` is the per-occurrence second key the
+        // transcript, approval, and analytics each follow; a UUID v4 is
+        // globally unique without coordination across resumed sessions
+        // and replayed logs, which a per-process counter would not be.
+        occurrence_id: Some(OccurrenceId::new()),
     }
 }
 

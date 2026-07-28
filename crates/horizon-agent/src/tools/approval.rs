@@ -679,8 +679,21 @@ fn unstarted_error(
     call_id: &ToolCallId,
     message: &str,
 ) -> ApprovalOutcome {
+    // Look up the originating `ToolCallRequest`'s `occurrence_id` so the
+    // transcript's `build_tool_call_views` (which matches
+    // `ToolCallFinished` by `occurrence_id` first) attributes this denial
+    // to the right occurrence of the (possibly reused) `call_id`. The frame
+    // already has the request -- `unstarted_error` is only called when the
+    // approval gate decided to skip the start, which it could only do
+    // because the request is sitting in the frame.
+    let occurrence_id = runtime
+        .live_state
+        .frame()
+        .tool_call_request(call_id)
+        .and_then(|request| request.occurrence_id.clone());
     let result = ToolCallResult::new(
         call_id.clone(),
+        occurrence_id,
         json!({ "is_error": true, "message": message }),
     );
     let events = vec![Event::ToolCallFinished(result.clone())];
@@ -714,10 +727,19 @@ fn synchronous_result(
     output: Value,
     ran: bool,
 ) -> ApprovalOutcome {
+    // Same `occurrence_id` fixup as `unstarted_error` -- look up the
+    // request's `occurrence_id` from the live frame so the transcript and
+    // analytics attribute this result to the right occurrence of a
+    // possibly-reused `call_id`.
+    let occurrence_id = runtime
+        .live_state
+        .frame()
+        .tool_call_request(call_id)
+        .and_then(|request| request.occurrence_id.clone());
     let result = if ran {
-        ToolCallResult::new(call_id.clone(), output)
+        ToolCallResult::new(call_id.clone(), occurrence_id, output)
     } else {
-        ToolCallResult::denied(call_id.clone(), output)
+        ToolCallResult::denied(call_id.clone(), occurrence_id, output)
     };
 
     let mut events = Vec::new();

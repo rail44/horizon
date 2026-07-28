@@ -228,6 +228,7 @@ fn processing_preserves_provider_payload_on_original_event_only() {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".to_string(),
                 input: json!({}).into(),
+                occurrence_id: None,
             }),
             payload.clone(),
         ),
@@ -384,6 +385,8 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.read".to_string(),
         input: json!({ "path": target.display().to_string() }).into(),
+
+        occurrence_id: None,
     };
 
     let output = tool_output(execute_agent_tool(
@@ -415,6 +418,8 @@ fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "write".to_string(),
         input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
+
+        occurrence_id: None,
     };
 
     let Execution::Unknown(events) =
@@ -453,6 +458,7 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
             call_id: call_id.clone(),
             tool_id: "write".to_string(),
             input: json!({}).into(),
+            occurrence_id: None,
         }),
     );
 
@@ -1236,6 +1242,7 @@ fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value
             call_id: call_id.clone(),
             tool_id: tool_id.to_string(),
             input: input.into(),
+            occurrence_id: None,
         }));
     frame
 }
@@ -1270,6 +1277,8 @@ fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
             call_id: call_id.clone(),
             reason: "test".to_string(),
             kind: ApprovalKind::Standard,
+
+            occurrence_id: None,
         },
     };
 
@@ -1463,6 +1472,7 @@ fn resolve_approval_second_approve_is_noop() {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "first" }).into(),
+        occurrence_id: None,
     })]);
 
     let first = resolve_approval(
@@ -1514,6 +1524,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "should never land" })
             .into(),
+        occurrence_id: None,
     })]);
 
     let denied = resolve_approval(
@@ -1576,6 +1587,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target_a.display().to_string(), "content": "first" }).into(),
+        occurrence_id: None,
     })]);
     let first = resolve_approval(
         &frame,
@@ -1596,6 +1608,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
             call_id: call_id.clone(),
             tool_id: "fs.write".to_string(),
             input: json!({ "path": target_b.display().to_string(), "content": "second" }).into(),
+            occurrence_id: None,
         })]);
 
     let second = resolve_approval(
@@ -1624,6 +1637,8 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
+
+        occurrence_id: None,
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1664,7 +1679,8 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.edit".to_string(),
         input: json!({ "path": target.display().to_string(), "old_string": "before", "new_string": "after" }).into(),
-    };
+
+        occurrence_id: None,};
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
     assert!(
@@ -1683,6 +1699,8 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
+
+        occurrence_id: None,
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1698,6 +1716,7 @@ fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_f
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
             input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
+            occurrence_id: None,
         }),
         &tool_state,
         SessionId::new(),
@@ -1715,6 +1734,8 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
         call_id: ToolCallId("web-fetch-invalid".to_string()),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": "file:///etc/passwd" }).into(),
+
+        occurrence_id: None,
     };
 
     assert!(matches!(
@@ -1751,6 +1772,8 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
+
+        occurrence_id: None,
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -1793,6 +1816,8 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }).into(),
+
+        occurrence_id: None,
     };
 
     let started = std::time::Instant::now();
@@ -1858,6 +1883,8 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": format!("echo outside > {}", host_target.display()) }).into(),
+
+        occurrence_id: None,
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -1936,6 +1963,8 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
+
+        occurrence_id: None,
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -1966,6 +1995,8 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
         call_id: ToolCallId("sandboxed-git-status".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "git status --short" }).into(),
+
+        occurrence_id: None,
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &status_request),
@@ -1992,6 +2023,8 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
                         git -c core.hooksPath=/dev/null commit -m horizon-sandbox-test"
         })
         .into(),
+
+        occurrence_id: None,
     };
 
     assert_eq!(
@@ -2068,6 +2101,7 @@ fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
+        occurrence_id: None,
     })]);
     let after_started = live_state.extend_events([Event::ToolCallStarted(call_id.clone())]);
     assert!(after_started.has_tool_call_started(&call_id));
@@ -2081,11 +2115,13 @@ fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
             input: json!({ "command": "echo hi" }).into(),
+            occurrence_id: None,
         }),
         Event::ApprovalRequested(crate::contract::ApprovalRequest {
             call_id: call_id.clone(),
             reason: "sandboxed run looked denied".to_string(),
             kind: crate::contract::ApprovalKind::SandboxDenialRetry,
+            occurrence_id: None,
         }),
     ]);
     assert!(
@@ -2175,10 +2211,13 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             "command": format!("printf approved > {}", written.display())
         })
         .into(),
+
+        occurrence_id: None,
     };
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let prior_result = ToolCallResult::new(
         call_id.clone(),
+        None,
         json!({ "is_error": true, "filesystem_denied": true }),
     );
     let approval = ApprovalRequest {
@@ -2189,6 +2228,8 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             grants: grants.clone(),
             prior_result,
         },
+
+        occurrence_id: None,
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
@@ -2230,6 +2271,8 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             "command": format!("printf later > {}", ungranted.display())
         })
         .into(),
+
+        occurrence_id: None,
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &later_request),
@@ -2287,6 +2330,8 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
             "command": format!("printf granted > {}", inside.display())
         })
         .into(),
+
+        occurrence_id: None,
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
@@ -2312,6 +2357,8 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
             "command": format!("printf nope > {}", outside.display())
         })
         .into(),
+
+        occurrence_id: None,
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &other_request),
@@ -2343,6 +2390,8 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo must-not-run" }).into(),
+
+        occurrence_id: None,
     };
     // Exactly the shape a request persisted by the host-execution-era build
     // deserializes into: denials, but no grants.
@@ -2354,8 +2403,13 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
             kind: ApprovalKind::FilesystemDenialRetry {
                 denials: Vec::new(),
                 grants: Vec::new(),
-                prior_result: ToolCallResult::new(call_id.clone(), json!({ "is_error": true })),
+                prior_result: ToolCallResult::new(
+                    call_id.clone(),
+                    None,
+                    json!({ "is_error": true }),
+                ),
             },
+            occurrence_id: None,
         }),
     ]);
 
@@ -2389,9 +2443,12 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo must-not-run" }).into(),
+
+        occurrence_id: None,
     };
     let prior_result = ToolCallResult::new(
         call_id.clone(),
+        None,
         json!({ "is_error": true, "filesystem_denied": true }),
     );
     let frame = live_state.extend_events([
@@ -2404,6 +2461,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
                 grants: Vec::new(),
                 prior_result: prior_result.clone(),
             },
+            occurrence_id: None,
         }),
     ]);
 
@@ -2472,10 +2530,12 @@ fn domain_denial_retry_frame(
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "curl https://example.com" }).into(),
+        occurrence_id: None,
     })]);
 
     let prior_result = ToolCallResult::new(
         call_id.clone(),
+        None,
         json!({ "is_error": true, "denied_domains": domains, "exit_code": 0 }),
     );
     let frame =
@@ -2486,6 +2546,7 @@ fn domain_denial_retry_frame(
                 domains: vec!["example.com".to_string()],
                 prior_result: prior_result.clone(),
             },
+            occurrence_id: None,
         })]);
     (frame, prior_result)
 }
@@ -2495,6 +2556,7 @@ fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str
         call_id: call_id.clone(),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": format!("https://{domain}/") }).into(),
+        occurrence_id: None,
     })]);
     live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
         call_id: call_id.clone(),
@@ -2502,6 +2564,7 @@ fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str
         kind: crate::contract::ApprovalKind::DomainGrant {
             domains: vec![domain.to_string()],
         },
+        occurrence_id: None,
     })])
 }
 
@@ -2548,6 +2611,8 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
         call_id: call_id.clone(),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": "https://example.com/" }).into(),
+
+        occurrence_id: None,
     };
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let approval = ApprovalRequest {
@@ -2556,6 +2621,8 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
         kind: ApprovalKind::DomainGrant {
             domains: vec!["example.com".to_string()],
         },
+
+        occurrence_id: None,
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
@@ -2671,6 +2738,7 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
+        occurrence_id: None,
     })]);
 
     let outcome = resolve_approval(
@@ -2717,6 +2785,7 @@ fn resolve_approval_denies_bash_without_running_it() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo should-never-run" }).into(),
+        occurrence_id: None,
     })]);
 
     let outcome = resolve_approval(
@@ -2769,6 +2838,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo first" }).into(),
+        occurrence_id: None,
     })]);
 
     let first = resolve_approval(

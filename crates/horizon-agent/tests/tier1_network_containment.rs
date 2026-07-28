@@ -142,6 +142,7 @@ fn curl_request(target: &str) -> ToolCallRequest {
             "command": format!("curl --max-time 5 -sS http://{target} || true")
         })
         .into(),
+        occurrence_id: None,
     }
 }
 
@@ -264,6 +265,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
                 domains,
                 prior_result,
             },
+            occurrence_id: None,
         }),
     )]);
     assert!(matches!(
@@ -318,6 +320,8 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         call_id: ToolCallId("direct-connect".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "exec 3<>/dev/tcp/127.0.0.2/80" }).into(),
+
+        occurrence_id: None,
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),

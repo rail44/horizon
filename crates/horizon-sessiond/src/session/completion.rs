@@ -207,13 +207,29 @@ fn fold_domain_denied(
         state,
         live_state,
         session_id,
-        original_request,
+        original_request.clone(),
         ApprovalRequest {
             call_id,
+            // `begin_reissued_approval` mints a fresh `OccurrenceId` for
+            // the reissued request and stamps it on both the new
+            // `ToolCallRequest` and the `ApprovalRequest` (see
+            // `session/approval.rs`). The `prior_result` here, by
+            // contrast, is the *first* attempt's outcome -- the bash
+            // executor constructed it without an in-scope request, so
+            // its `occurrence_id` is `None`. We stamp the original
+            // request's `occurrence_id` onto it now so the transcript
+            // and analytics attribute this result to the same
+            // occurrence the originating `ToolCallRequested` carries,
+            // not to whichever request happens to share its `call_id`
+            // at fold time.
+            occurrence_id: None,
             reason,
             kind: ApprovalKind::DomainDenialRetry {
                 domains,
-                prior_result: result,
+                prior_result: ToolCallResult {
+                    occurrence_id: original_request.occurrence_id.clone(),
+                    ..result
+                },
             },
         },
     );
@@ -247,6 +263,11 @@ fn fold_domain_grant_required(
         original_request,
         ApprovalRequest {
             call_id,
+            // See the matching site in `fold_domain_denied` above --
+            // `begin_reissued_approval` overwrites this with the fresh
+            // `OccurrenceId` it mints for the reissued request, so we
+            // leave it as `None` here.
+            occurrence_id: None,
             reason,
             kind: ApprovalKind::DomainGrant { domains },
         },
@@ -307,14 +328,28 @@ fn fold_filesystem_denied(
         state,
         live_state,
         session_id,
-        original_request,
+        original_request.clone(),
         ApprovalRequest {
             call_id,
+            // See the matching site in `fold_domain_denied` --
+            // `begin_reissued_approval` mints a fresh `OccurrenceId` for
+            // the reissued request and stamps it on both the new
+            // `ToolCallRequest` and the `ApprovalRequest`, so we leave
+            // this as `None` here.
+            occurrence_id: None,
             reason,
             kind: ApprovalKind::FilesystemDenialRetry {
                 denials,
                 grants,
-                prior_result: result,
+                // Same prior_result fixup as `fold_domain_denied` --
+                // bash constructed the result without an in-scope
+                // request, so stamp the original request's
+                // `occurrence_id` onto it now so the transcript and
+                // analytics attribute it to the right occurrence.
+                prior_result: ToolCallResult {
+                    occurrence_id: original_request.occurrence_id.clone(),
+                    ..result
+                },
             },
         },
     );
@@ -392,11 +427,15 @@ mod tests {
                     call_id: call_a.clone(),
                     reason: "bash".to_string(),
                     kind: ApprovalKind::Standard,
+
+                    occurrence_id: None,
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_b.clone(),
                     reason: "bash".to_string(),
                     kind: ApprovalKind::Standard,
+
+                    occurrence_id: None,
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_a.clone()),
@@ -414,6 +453,7 @@ mod tests {
             session_id,
             ToolCompletion::Finished(ToolCallResult::new(
                 call_a.clone(),
+                None,
                 serde_json::json!({ "exit_code": 0 }),
             )),
         );
@@ -448,6 +488,7 @@ mod tests {
             session_id,
             ToolCompletion::Finished(ToolCallResult::new(
                 call_b.clone(),
+                None,
                 serde_json::json!({ "exit_code": 0 }),
             )),
         );
@@ -495,6 +536,7 @@ mod tests {
                     call_id: call_id.clone(),
                     tool_id: "bash".to_string(),
                     input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: None,
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_id.clone()),
@@ -511,6 +553,7 @@ mod tests {
             session_id,
             ToolCompletion::Finished(ToolCallResult::new(
                 call_id.clone(),
+                None,
                 serde_json::json!({ "exit_code": 0 }),
             )),
         );
@@ -553,6 +596,7 @@ mod tests {
                     call_id: call_id.clone(),
                     tool_id: "bash".to_string(),
                     input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: None,
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
                 Event::ToolCallStarted(call_id.clone()),
@@ -570,7 +614,11 @@ mod tests {
             ToolCompletion::FilesystemDenied {
                 call_id: call_id.clone(),
                 denials,
-                result: ToolCallResult::new(call_id.clone(), serde_json::json!({ "exit_code": 0 })),
+                result: ToolCallResult::new(
+                    call_id.clone(),
+                    None,
+                    serde_json::json!({ "exit_code": 0 }),
+                ),
             },
         );
 
@@ -716,6 +764,7 @@ mod tests {
             Event::ToolCallStarted(ToolCallId("judge-stale".to_string())),
             Event::ToolCallFinished(ToolCallResult::new(
                 ToolCallId("judge-stale".to_string()),
+                None,
                 serde_json::json!({ "cancelled": true }),
             )),
         ] {
@@ -773,6 +822,8 @@ mod tests {
             call_id: ToolCallId("duplicate-judge".to_string()),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
+
+            occurrence_id: None,
         };
         live_state.extend_provider_events(std::iter::once(
             Event::ToolCallRequested(request.clone()).into(),
@@ -783,6 +834,8 @@ mod tests {
                     call_id: request.call_id.clone(),
                     reason: "ask once".to_string(),
                     kind: ApprovalKind::Standard,
+
+                    occurrence_id: None,
                 },
                 request,
             },
@@ -826,6 +879,8 @@ mod tests {
             call_id: call_id.clone(),
             tool_id: "web_fetch".to_string(),
             input: serde_json::json!({ "url": "https://example.com/start" }).into(),
+
+            occurrence_id: None,
         };
         live_state.extend_provider_events(
             vec![
@@ -850,17 +905,50 @@ mod tests {
         );
 
         let forwarded = drain_events(&mut outgoing_rx);
-        assert!(forwarded.iter().any(
-            |event| matches!(event, Event::ToolCallRequested(request) if request == &original_request)
-        ));
-        assert!(forwarded.iter().any(|event| matches!(
-            event,
-            Event::ApprovalRequested(ApprovalRequest {
-                call_id: approval_call_id,
-                kind: ApprovalKind::DomainGrant { domains },
-                ..
-            }) if approval_call_id == &call_id && domains == &["redirect.example".to_string()]
-        )));
+        // The reissued `ToolCallRequested` keeps the original `call_id`,
+        // `tool_id`, and `input` but picks up a fresh `OccurrenceId` --
+        // see `begin_reissued_approval`'s doc comment (and
+        // `backlog 42 / 55`). The test only seeded the original request
+        // with `occurrence_id: None` (no provider-side identity yet at the
+        // sessiond layer in this test path), so we check that the reissue
+        // stamp is *some* `Some(_)` and that it doesn't match the
+        // original's `None` -- the important invariant is "the reissue is
+        // a distinct occurrence, not a verbatim forward".
+        let reissued_occurrence_id = forwarded
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallRequested(request) if request.call_id == call_id => {
+                    Some(request.occurrence_id.clone())
+                }
+                _ => None,
+            })
+            .expect("reissued ToolCallRequested event");
+        assert!(
+            reissued_occurrence_id.is_some(),
+            "begin_reissued_approval must mint a fresh OccurrenceId"
+        );
+        assert_ne!(
+            reissued_occurrence_id,
+            original_request.occurrence_id,
+            "reissued occurrence_id must differ from the original's None"
+        );
+        assert!(forwarded.iter().any(|event| {
+            matches!(
+                event,
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: approval_call_id,
+                    kind: ApprovalKind::DomainGrant { domains },
+                    occurrence_id: Some(ref occ),
+                    ..
+                }) if approval_call_id == &call_id
+                    && domains == &["redirect.example".to_string()]
+                    // The approval's `occurrence_id` must match the
+                    // reissued request's -- see
+                    // `begin_reissued_approval` in
+                    // `session/approval.rs`.
+                    && Some(occ) == reissued_occurrence_id.as_ref()
+            )
+        }));
         assert_eq!(
             forwarded.last(),
             Some(&Event::StateChanged(SessionState::WaitingForApproval))

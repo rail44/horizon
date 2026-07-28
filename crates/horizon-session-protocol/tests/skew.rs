@@ -337,6 +337,8 @@ fn json_payloads_round_trip_the_postbag_wire_as_json_text() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.read".to_string(),
         input: serde_json::json!({"path": "a.txt", "nested": [1, 2, {"k": true}]}).into(),
+
+        occurrence_id: None,
     };
     let received: ToolCallRequest = wire_roundtrip(&request);
     assert_eq!(received, request);

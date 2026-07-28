@@ -252,6 +252,7 @@ mod tests {
                 call_id: crate::contract::ToolCallId("call-1".to_string()),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({"path": "a.txt"}).into(),
+                occurrence_id: None,
             })),
             AgentWireEvent::ToolCallProgress(ToolCallProgress {
                 key: "call-1".to_string(),

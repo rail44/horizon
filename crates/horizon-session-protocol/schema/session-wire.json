@@ -216,6 +216,17 @@
           "default": "Standard",
           "description": "Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(\ndefault)]` so a `Record` persisted before this field existed still\ndeserializes, reading as the same [`ApprovalKind::Standard`] every\napproval request was before this leg."
         },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccurrenceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the\nsessiond on every approval it emits (initial + every reissue) so the\napproval attaches to the specific occurrence the user is deciding,\nnot just to a call_id that may have already been resolved by an\nearlier occurrence. See [`ToolCallRequest::occurrence_id`] for\nthe `serde` attribute rationale."
+        },
         "reason": {
           "type": "string"
         }
@@ -936,6 +947,10 @@
           "type": "string"
         }
       ]
+    },
+    "OccurrenceId": {
+      "description": "Per-occurrence identity for a tool call: a string Horizon mints on its own\nside of the boundary (the rig provider never sees it, satisfying the\nconstraint that a provider knows only its own `call_id`).\n\nA single provider `call_id` can be reused across two distinct shapes --\n\n* provider reuse: the rig provider (or a backend it fronts) emits a fresh\n  tool call with the same `call_id` as an earlier, fully resolved one\n  (`docs/issues/002-tool-call-call-id-reuse.md`, the\n  `functions.fs.edit:66` incident in session 05254b6a). Without a second\n  key, every consumer -- transcript, approval, analytics -- collapses the\n  two onto the same row.\n* denial retry: every sandbox-denial retry deliberately reissues\n  `ToolCallRequested` under the same `call_id`, so one conceptual bash\n  call renders as two transcript rows, the first stuck forever as\n  started-but-never-finished (a cosmetic defect the user sees daily).\n\n`OccurrenceId` is the second key. It is stamped on every\n`ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows\nout of Horizon. `#[serde(default)]` on the field sites means a peer (older\nsessiond, replayed pre-feature log) that never minted one decodes cleanly\nwith `None`, and the consumers fall back to call_id + position scanning\n(`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is\nadditive and needs no `SESSION_PROTOCOL_VERSION` bump.\n\nThe string itself is a UUID v4 minted at the first emission point in\n`providers::rig::mapping::rig_tool_call_request` (and at\n`sessiond::session::approval::begin_reissued_approval` for reissues) --\nnot the provider-supplied `call_id`, not a per-process counter, so a\nresumed session and a replayed log line up on the same value without any\nshared counter to coordinate.",
+      "type": "string"
     },
     "ProviderId": {
       "type": "string"
@@ -2149,6 +2164,17 @@
         "input": {
           "$ref": "#/$defs/JsonValue"
         },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccurrenceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. `#[serde(default,\nskip_serializing_if = \"Option::is_none\")]`: `default` so a request\npersisted before this field existed still deserializes (reads back\nwith `None`), and consumers fall back to `call_id` + positional\n`.rev()` scanning in that case; `skip_serializing_if` keeps the\non-disk JSON shape identical to the pre-v15 wire format when the\nfield is `None`, so existing log analyzers that pattern-match on\n`tool_call_request` keys don't break."
+        },
         "tool_id": {
           "type": "string"
         }
@@ -2174,6 +2200,17 @@
           "default": false,
           "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically. `#[serde(default)]` (false, i.e. success) so\na `Record` written before this field existed still deserializes --\nmatching the same convention's \"absence means success\" reading.",
           "type": "boolean"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccurrenceId"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the\n`ToolCallRequest` field it answers to. See [`ToolCallRequest`]\nfor the `serde` attribute rationale."
         },
         "output": {
           "$ref": "#/$defs/JsonValue"

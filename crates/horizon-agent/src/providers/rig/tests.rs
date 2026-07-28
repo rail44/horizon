@@ -382,9 +382,11 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "workspace.snapshot".to_string(),
             input: serde_json::json!({}).into(),
+            occurrence_id: None,
         }),
         Event::ToolCallFinished(ToolCallResult::new(
             ToolCallId("call-1".to_string()),
+            None,
             serde_json::json!({ "tab_count": 1 }),
         )),
         Event::MessageCommitted(AgentMessage {
@@ -477,6 +479,7 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
     events.push(Event::ToolCallStarted(request.call_id.clone()));
     events.push(Event::ToolCallFinished(ToolCallResult::new(
         request.call_id.clone(),
+        None,
         serde_json::json!({
             "tab_count": 1,
             "active_title": "Agent #1",
@@ -736,11 +739,13 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::Value::String("{\"path\":\"/tmp/x\"}".to_string()).into(),
+            occurrence_id: None,
         }),
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-2".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::Value::String("not json at all".to_string()).into(),
+            occurrence_id: None,
         }),
     ];
 
@@ -867,7 +872,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     )]);
     let mut cancelled: HashSet<ToolCallId> = HashSet::new();
     let mut pending_halt_result: Option<ToolCallResult> = None;
-    let arrived = ToolCallResult::new(id_a.clone(), serde_json::json!({ "tab_count": 2 }));
+    let arrived = ToolCallResult::new(id_a.clone(), None, serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
         guard.record_tool_turn();
@@ -1091,6 +1096,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     for i in 0..TEST_ITERATION_CAP {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
+            None,
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1110,6 +1116,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // ToolCallFinished may be emitted for it.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
+        None,
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(
@@ -1139,6 +1146,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // completes normally, proving the resumed session is fully healthy.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
+        None,
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1222,6 +1230,7 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     for i in 0..cap {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
+            None,
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1238,6 +1247,7 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     // through to its plain-text reply, which becomes the report.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
+        None,
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1326,6 +1336,7 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
     // message to rig_history) and must not advance the loop guards.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         ToolCallId("never-requested".to_string()),
+        None,
         serde_json::json!({ "ok": true }),
     )));
     assert!(
@@ -1456,7 +1467,8 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // First of three: two more calls are still outstanding, so the result
     // is folded directly into history (in arrival order) and no turn runs.
     pending.remove(&call_a);
-    let result_a = ToolCallResult::new(call_a.clone(), serde_json::json!({ "contents": "a" }));
+    let result_a =
+        ToolCallResult::new(call_a.clone(), None, serde_json::json!({ "contents": "a" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_a),
         BatchStep::Continue
@@ -1465,7 +1477,8 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
 
     // Second of three: same story.
     pending.remove(&call_b);
-    let result_b = ToolCallResult::new(call_b.clone(), serde_json::json!({ "contents": "b" }));
+    let result_b =
+        ToolCallResult::new(call_b.clone(), None, serde_json::json!({ "contents": "b" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_b),
         BatchStep::Continue
@@ -1478,7 +1491,8 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // (`run_cancellable_turn`/`complete_rig_turn`) appends it right before
     // the resulting assistant message.
     pending.remove(&call_c);
-    let result_c = ToolCallResult::new(call_c.clone(), serde_json::json!({ "contents": "c" }));
+    let result_c =
+        ToolCallResult::new(call_c.clone(), None, serde_json::json!({ "contents": "c" }));
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_c),
         BatchStep::RunTurn
@@ -1533,6 +1547,7 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     for call_id in &call_ids[..call_ids.len() - 1] {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
+            None,
             serde_json::json!({ "ok": true }),
         )));
         assert!(
@@ -1546,6 +1561,7 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     // completion fires.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_ids[call_ids.len() - 1].clone(),
+        None,
         serde_json::json!({ "ok": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1639,6 +1655,7 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
     for call_id in old_call_ids {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id,
+            None,
             serde_json::json!({ "late": true }),
         )));
     }
@@ -1650,6 +1667,7 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
 
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         new_call_id,
+        None,
         serde_json::json!({ "ok": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -1694,6 +1712,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     // Only the first of the batch resolves before the user cancels.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_ids[0].clone(),
+        None,
         serde_json::json!({ "ok": true }),
     )));
     assert!(
@@ -1731,6 +1750,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     for call_id in remaining {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
+            None,
             serde_json::json!({ "ok": true }),
         )));
     }
@@ -1814,6 +1834,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
             };
             let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
                 call_id.clone(),
+                None,
                 output,
             )));
             if is_last {
@@ -1841,6 +1862,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
         let is_last = index == call_ids.len() - 1;
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
+            None,
             serde_json::json!({ "index": index }),
         )));
         if !is_last {
@@ -2363,6 +2385,7 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
 
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id,
+        None,
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2544,6 +2567,7 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
     // Resolving the call is what lets it through.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id,
+        None,
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));

@@ -855,6 +855,7 @@ mod tests {
             tracker.turn_id_for_event(&Event::ToolCallFinished(
                 crate::contract::ToolCallResult::new(
                     crate::contract::ToolCallId("call-1".to_string()),
+                    None,
                     serde_json::json!({ "approved": true }),
                 )
             )),

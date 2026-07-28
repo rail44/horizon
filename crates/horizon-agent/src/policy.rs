@@ -354,6 +354,15 @@ pub fn horizon_events_for_provider_event(
                             };
                             events.push(Event::ApprovalRequested(ApprovalRequest {
                                 call_id: request.call_id.clone(),
+                                // Approval attaches to the specific
+                                // occurrence the user is deciding -- see the
+                                // `ApprovalRequest.occurrence_id` field's own
+                                // doc comment. Without this, the approval
+                                // modal would target the call_id as a whole,
+                                // which on a reused call_id collapses to
+                                // whichever pending occurrence happened to
+                                // be last in the frame.
+                                occurrence_id: request.occurrence_id.clone(),
                                 reason,
                                 kind,
                             }));
@@ -367,6 +376,7 @@ pub fn horizon_events_for_provider_event(
                             });
                         events.push(Event::ApprovalRequested(ApprovalRequest {
                             call_id: request.call_id.clone(),
+                            occurrence_id: request.occurrence_id.clone(),
                             reason,
                             kind,
                         }));
@@ -493,6 +503,8 @@ mod tests {
             call_id: crate::contract::ToolCallId("call-host-reason".to_string()),
             tool_id: "bash".to_string(),
             input: serde_json::json!({ "command": "cargo check" }).into(),
+
+            occurrence_id: None,
         };
         let reason = standard_approval_reason(&request);
         assert!(reason.contains("filesystem, network, and process sandbox"));
@@ -623,6 +635,7 @@ mod tests {
             call_id: crate::contract::ToolCallId("call-1".to_string()),
             tool_id: tool_id.to_string(),
             input: input.into(),
+            occurrence_id: None,
         })
     }
 
@@ -651,8 +664,11 @@ mod tests {
             event,
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
+                occurrence_id: None,
+
                 ..
-            }) if domains == &["docs.example.com".to_string()]
+
+                }) if domains == &["docs.example.com".to_string()]
         )));
 
         tool_state.allow_domain("example.com");
@@ -661,8 +677,11 @@ mod tests {
             event,
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
+                occurrence_id: None,
+
                 ..
-            }) if domains == &["docs.example.com".to_string()]
+
+                }) if domains == &["docs.example.com".to_string()]
         )));
 
         tool_state.allow_domain("docs.example.com");

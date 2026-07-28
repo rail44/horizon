@@ -49,6 +49,55 @@ pub struct RequestId(pub String);
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallId(pub String);
 
+/// Per-occurrence identity for a tool call: a string Horizon mints on its own
+/// side of the boundary (the rig provider never sees it, satisfying the
+/// constraint that a provider knows only its own `call_id`).
+///
+/// A single provider `call_id` can be reused across two distinct shapes --
+///
+/// * provider reuse: the rig provider (or a backend it fronts) emits a fresh
+///   tool call with the same `call_id` as an earlier, fully resolved one
+///   (`docs/issues/002-tool-call-call-id-reuse.md`, the
+///   `functions.fs.edit:66` incident in session 05254b6a). Without a second
+///   key, every consumer -- transcript, approval, analytics -- collapses the
+///   two onto the same row.
+/// * denial retry: every sandbox-denial retry deliberately reissues
+///   `ToolCallRequested` under the same `call_id`, so one conceptual bash
+///   call renders as two transcript rows, the first stuck forever as
+///   started-but-never-finished (a cosmetic defect the user sees daily).
+///
+/// `OccurrenceId` is the second key. It is stamped on every
+/// `ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows
+/// out of Horizon. `#[serde(default)]` on the field sites means a peer (older
+/// sessiond, replayed pre-feature log) that never minted one decodes cleanly
+/// with `None`, and the consumers fall back to call_id + position scanning
+/// (`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is
+/// additive and needs no `SESSION_PROTOCOL_VERSION` bump.
+///
+/// The string itself is a UUID v4 minted at the first emission point in
+/// `providers::rig::mapping::rig_tool_call_request` (and at
+/// `sessiond::session::approval::begin_reissued_approval` for reissues) --
+/// not the provider-supplied `call_id`, not a per-process counter, so a
+/// resumed session and a replayed log line up on the same value without any
+/// shared counter to coordinate.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct OccurrenceId(pub String);
+
+impl OccurrenceId {
+    /// Mints a fresh `OccurrenceId` (UUID v4). Use at every wire emission
+    /// point that creates a new occurrence -- never at construction points
+    /// that only forward an existing one.
+    pub fn new() -> Self {
+        Self(Uuid::new_v4().to_string())
+    }
+}
+
+impl Default for OccurrenceId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct StartSession {
     pub session_id: SessionId,
@@ -540,11 +589,26 @@ pub struct ToolCallRequest {
     pub call_id: ToolCallId,
     pub tool_id: String,
     pub input: JsonValue,
+    /// Per-occurrence identity -- see [`OccurrenceId`]. `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]`: `default` so a request
+    /// persisted before this field existed still deserializes (reads back
+    /// with `None`), and consumers fall back to `call_id` + positional
+    /// `.rev()` scanning in that case; `skip_serializing_if` keeps the
+    /// on-disk JSON shape identical to the pre-v15 wire format when the
+    /// field is `None`, so existing log analyzers that pattern-match on
+    /// `tool_call_request` keys don't break.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ToolCallResult {
     pub call_id: ToolCallId,
+    /// Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the
+    /// `ToolCallRequest` field it answers to. See [`ToolCallRequest`]
+    /// for the `serde` attribute rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
     pub output: JsonValue,
     /// Explicit success/failure outcome, lifted out of `output`'s
     /// `"is_error"` JSON convention (every tool in `tools::` already writes
@@ -582,7 +646,21 @@ impl ToolCallResult {
     /// constructor every production call site should go through, so the
     /// convention lives in one place rather than being re-checked (or
     /// forgotten) at each tool.
-    pub fn new(call_id: ToolCallId, output: impl Into<JsonValue>) -> Self {
+    ///
+    /// `occurrence_id` is the per-occurrence identity from the originating
+    /// `ToolCallRequest` (see [`OccurrenceId`]); `None` is acceptable when
+    /// the originating request is not in scope (replayed logs, synthetic
+    /// results). `transcript::tool_call::build_tool_call_views` matches
+    /// `ToolCallFinished` events back to their `Building` entry by
+    /// `occurrence_id` first, falling back to call_id + position -- so a
+    /// `None` here does not break the transcript, it just removes the
+    /// per-occurrence attribution that an older or synthetic event
+    /// doesn't carry.
+    pub fn new(
+        call_id: ToolCallId,
+        occurrence_id: Option<OccurrenceId>,
+        output: impl Into<JsonValue>,
+    ) -> Self {
         let output = output.into();
         let is_error = output
             .get("is_error")
@@ -590,6 +668,7 @@ impl ToolCallResult {
             .unwrap_or(false);
         Self {
             call_id,
+            occurrence_id,
             output,
             is_error,
             denied: false,
@@ -599,11 +678,15 @@ impl ToolCallResult {
     /// Builds a result for a user's tool-call denial -- see the `denied`
     /// field's own doc comment. Always `is_error: true` (a denial is
     /// definitionally a failure), regardless of what `output` itself
-    /// carries.
-    pub fn denied(call_id: ToolCallId, output: impl Into<JsonValue>) -> Self {
+    /// carries. `occurrence_id` is forwarded the same way as [`Self::new`].
+    pub fn denied(
+        call_id: ToolCallId,
+        occurrence_id: Option<OccurrenceId>,
+        output: impl Into<JsonValue>,
+    ) -> Self {
         Self {
             denied: true,
-            ..Self::new(call_id, output)
+            ..Self::new(call_id, occurrence_id, output)
         }
     }
 }
@@ -611,6 +694,14 @@ impl ToolCallResult {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
+    /// Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the
+    /// sessiond on every approval it emits (initial + every reissue) so the
+    /// approval attaches to the specific occurrence the user is deciding,
+    /// not just to a call_id that may have already been resolved by an
+    /// earlier occurrence. See [`ToolCallRequest::occurrence_id`] for
+    /// the `serde` attribute rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
     pub reason: String,
     /// Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(
     /// default)]` so a `Record` persisted before this field existed still
@@ -629,6 +720,17 @@ pub struct ApprovalRequest {
 /// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
 /// but this keeps that door open).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+// `large_enum_variant` triggered after adding `occurrence_id: Option<
+// OccurrenceId>` to `ToolCallResult` pushed the embedded variants
+// (DomainDenied, FilesystemDenied, ...) just past the 200-byte threshold
+// the lint uses. Boxing the embedded `result` fields would propagate
+// `Box` allocations through every match site; the variants are not
+// constructed in a hot loop, and the enum is not constructed many at
+// once, so the simpler shape is preferred. `clippy::large_enum_variant`
+// is allow-listed here rather than at each variant -- the same enum
+// sits behind `BashCompletion` too, and the alternative spelling would
+// multiply without adding a real signal.
+#[allow(clippy::large_enum_variant)]
 pub enum ApprovalKind {
     /// An ordinary first-time approval request -- the only kind that
     /// existed before this leg.
@@ -905,6 +1007,7 @@ mod json_value_tests {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::json!({"path": "a.txt"}).into(),
+            occurrence_id: None,
         };
         let encoded = serde_json::to_value(&request).unwrap();
         assert_eq!(
@@ -925,6 +1028,7 @@ mod json_value_tests {
     fn tool_call_result_new_reads_is_error_through_the_wrapper() {
         let result = ToolCallResult::new(
             ToolCallId("call-1".to_string()),
+            None,
             serde_json::json!({"is_error": true, "message": "boom"}),
         );
         assert!(result.is_error);
@@ -934,6 +1038,7 @@ mod json_value_tests {
     fn domain_grant_approval_round_trips_with_its_exact_hosts() {
         let request = ApprovalRequest {
             call_id: ToolCallId("fetch-1".to_string()),
+            occurrence_id: None,
             reason: "allow exact host".to_string(),
             kind: ApprovalKind::DomainGrant {
                 domains: vec!["docs.example.com".to_string()],

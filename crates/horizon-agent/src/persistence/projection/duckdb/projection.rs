@@ -96,8 +96,18 @@ impl Store {
             // implementation-shape addendum). Only affects a row still
             // pending (`outcome IS NULL`); a call with no approval row at
             // all (never gated) simply matches nothing.
+            //
+            // `ToolCallStarted(ToolCallId)` carries no `occurrence_id`
+            // (it stays a unit-style variant to keep the wire change
+            // additive, see `contract::OccurrenceId`'s doc comment), so
+            // this falls through to the most-recent-pending subquery in
+            // `mark_approval_outcome` -- which is still the correct
+            // target because `ToolCallStarted` always fires after the
+            // matching `ApprovalRequested`, so any later-reissued
+            // approval for the same `call_id` is also still pending and
+            // comes after this one's approval row by `sequence`.
             Event::ToolCallStarted(call_id) => {
-                self.mark_approval_outcome(session_id, &call_id.0, "approved")?;
+                self.mark_approval_outcome(session_id, &call_id.0, None, "approved")?;
                 Ok(false)
             }
             Event::ToolCallFinished(result) => {
@@ -190,14 +200,16 @@ impl Store {
                 session_id,
                 sequence,
                 call_id,
+                occurrence_id,
                 tool_id,
                 input_json
-             ) VALUES (?, ?, ?, ?, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 event_id,
                 session_id,
                 sequence,
                 &request.call_id.0,
+                request.occurrence_id.as_ref().map(|o| o.0.as_str()),
                 &request.tool_id,
                 serde_json::to_string(&request.input)?,
             ],
@@ -227,14 +239,16 @@ impl Store {
                 session_id,
                 sequence,
                 call_id,
+                occurrence_id,
                 output_json,
                 is_error
-             ) VALUES (?, ?, ?, ?, ?, ?)",
+             ) VALUES (?, ?, ?, ?, ?, ?, ?)",
             params![
                 event_id,
                 session_id,
                 sequence,
                 &result.call_id.0,
+                result.occurrence_id.as_ref().map(|o| o.0.as_str()),
                 serde_json::to_string(&result.output)?,
                 is_error,
             ],
@@ -245,7 +259,21 @@ impl Store {
         // been denied -- the order-derived counterpart to the `approved`
         // case in `project_event`'s `ToolCallStarted` arm. A no-op if there
         // was no approval row (never gated) or it's already resolved.
-        self.mark_approval_outcome(session_id, &result.call_id.0, "denied")?;
+        //
+        // The result's `occurrence_id` (when present, stamped by the
+        // agent's tool executor at fold time from the originating
+        // request) lets `mark_approval_outcome` target the specific
+        // approval row this result answers to, instead of the
+        // most-recent-pending-with-this-call_id fallback below -- which
+        // would otherwise flip an unrelated pending approval's outcome
+        // for a reused `call_id` (provider-reuse or sandbox-denial-retry,
+        // see `backlog 42 / 55`).
+        self.mark_approval_outcome(
+            session_id,
+            &result.call_id.0,
+            result.occurrence_id.as_ref().map(|o| o.0.as_str()),
+            "denied",
+        )?;
         Ok(())
     }
 
@@ -257,30 +285,69 @@ impl Store {
         request: &ApprovalRequest,
     ) -> Result<()> {
         self.conn.execute(
-            "INSERT INTO agent_approvals (event_id, session_id, sequence, call_id, reason)
-             VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO agent_approvals (event_id, session_id, sequence, call_id, occurrence_id, reason)
+             VALUES (?, ?, ?, ?, ?, ?)",
             params![
                 event_id,
                 session_id,
                 sequence,
                 &request.call_id.0,
+                request.occurrence_id.as_ref().map(|o| o.0.as_str()),
                 &request.reason,
             ],
         )?;
         Ok(())
     }
 
-    /// Sets `agent_approvals.outcome` for `call_id` in `session_id`, but
-    /// only for a row still pending (`outcome IS NULL`) -- see
-    /// `agent_approvals.outcome`'s doc comment in `schema.rs` for why
-    /// outcome is derived from event order rather than any string match.
+    /// Sets `agent_approvals.outcome` for a row matching `call_id` in
+    /// `session_id`, but only for a row still pending (`outcome IS NULL`)
+    /// -- see `agent_approvals.outcome`'s doc comment in `schema.rs` for
+    /// why outcome is derived from event order rather than any string
+    /// match.
+    ///
+    /// When `occurrence_id` is `Some`, this targets the specific approval
+    /// row it was stamped on (the sessiond's
+    /// `begin_reissued_approval` mints a fresh one per reissue, see
+    /// `session/approval.rs`). For legacy / replayed pre-feature rows
+    /// (`occurrence_id IS NULL`), this falls back to the *most recent*
+    /// pending approval for this `call_id` -- the order-derived
+    /// counterpart of the order-derived resolution (a deny short-circuits
+    /// without ever emitting `ToolCallStarted`, so a result landing on a
+    /// still-pending approval means the human denied it; a
+    /// `ToolCallStarted` landing on a still-pending approval means the
+    /// human approved it). The subquery uses
+    /// `MAX(sequence)`-with-`outcome IS NULL` to pick exactly one row,
+    /// avoiding the prior behavior's bug where multiple pending rows
+    /// for the same `call_id` (provider-reuse, sandbox-denial-retry)
+    /// would all flip to the same outcome.
+    ///
     /// Matches zero rows harmlessly when the call was never gated by an
     /// approval, or its outcome is already resolved.
-    fn mark_approval_outcome(&self, session_id: &str, call_id: &str, outcome: &str) -> Result<()> {
+    fn mark_approval_outcome(
+        &self,
+        session_id: &str,
+        call_id: &str,
+        occurrence_id: Option<&str>,
+        outcome: &str,
+    ) -> Result<()> {
+        if let Some(occ) = occurrence_id {
+            self.conn.execute(
+                "UPDATE agent_approvals SET outcome = ?
+                 WHERE session_id = ? AND call_id = ? AND occurrence_id = ?
+                   AND outcome IS NULL",
+                params![outcome, session_id, call_id, occ],
+            )?;
+        }
+        // Fallback / `ToolCallStarted` arm (which has no
+        // `occurrence_id`): most-recent-pending for this call_id.
         self.conn.execute(
             "UPDATE agent_approvals SET outcome = ?
-             WHERE session_id = ? AND call_id = ? AND outcome IS NULL",
-            params![outcome, session_id, call_id],
+             WHERE session_id = ? AND call_id = ? AND outcome IS NULL
+               AND sequence = (
+                 SELECT MAX(sequence) FROM agent_approvals
+                 WHERE session_id = ? AND call_id = ? AND outcome IS NULL
+               )",
+            params![outcome, session_id, call_id, session_id, call_id],
         )?;
         Ok(())
     }

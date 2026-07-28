@@ -760,12 +760,14 @@ mod field_scoped_reads_tests {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
             kind: ApprovalKind::Standard,
+            occurrence_id: None,
         })
     }
 
     fn tool_call_finished(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
+            None,
             serde_json::json!({}),
         ))
     }
@@ -773,6 +775,7 @@ mod field_scoped_reads_tests {
     fn tool_call_finished_denied(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
+            None,
             serde_json::json!({ "is_error": true, "message": "denied by user" }),
         ))
     }

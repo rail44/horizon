@@ -7,7 +7,8 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 
 use horizon_agent::contract::{
-    ApprovalRequest, Command, Event, ProviderEvent, SessionId, SessionState, ToolCallId,
+    ApprovalRequest, Command, Event, OccurrenceId, ProviderEvent, SessionId, SessionState,
+    ToolCallId,
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
@@ -86,6 +87,29 @@ pub(super) fn begin_reissued_approval(
     request: horizon_agent::contract::ToolCallRequest,
     approval: ApprovalRequest,
 ) {
+    // Mint a fresh `OccurrenceId` for the reissue. The provider hands the
+    // same `call_id` back to us on retry -- it has no concept of a retry
+    // -- so by `call_id` alone the two attempts of one conceptual
+    // sandbox-denial-retry collapse onto each other (the cosmetic
+    // "started-but-never-finished" defect the user sees daily, and the
+    // approval-attribution ambiguity that follows). `OccurrenceId` is the
+    // second key the transcript, approval modal, and analytics each
+    // follow; the first attempt (whose `ToolCallRequested` is already in
+    // the frame with its own `OccurrenceId`) keeps its identity, the new
+    // attempt takes this fresh one, and both stay attributable. UUID v4
+    // -- not a per-session counter -- so a resumed session and a replayed
+    // log line up without any shared counter to coordinate (the prior
+    // generation-counter pattern in `tools::web::registry` is in-process
+    // and not persisted, so it would not survive either of those).
+    let occurrence_id = OccurrenceId::new();
+    let request = horizon_agent::contract::ToolCallRequest {
+        occurrence_id: Some(occurrence_id.clone()),
+        ..request
+    };
+    let approval = ApprovalRequest {
+        occurrence_id: Some(occurrence_id),
+        ..approval
+    };
     let request_event = Event::ToolCallRequested(request.clone());
     let _ = live_state.extend_provider_events(std::iter::once(request_event.clone().into()));
     send_session_event(state, session_id, AgentWireEvent::Event(request_event));
