@@ -321,6 +321,33 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
     ));
 }
 
+/// The minting site is what makes every per-occurrence consumer possible
+/// (`contract::OccurrenceId`): two calls that share a provider `call_id` --
+/// the `functions.fs.edit:66` reuse shape -- must still come out with
+/// distinct occurrences, or the transcript, approval, and analytics all
+/// collapse them again.
+#[test]
+fn rig_tool_call_request_mints_a_distinct_occurrence_per_call() {
+    let mint = || {
+        rig_tool_call_request(ToolCall::new(
+            "functions.fs.edit:66".to_string(),
+            ToolFunction::new(
+                "fs.edit".to_string(),
+                serde_json::json!({ "path": "a.txt" }),
+            ),
+        ))
+    };
+    let first = mint();
+    let second = mint();
+
+    assert_eq!(first.call_id, second.call_id);
+    assert!(first.occurrence_id.is_some());
+    assert_ne!(
+        first.occurrence_id, second.occurrence_id,
+        "two calls sharing a provider call_id must still be separable"
+    );
+}
+
 #[test]
 fn duckdb_store_preserves_rig_provider_payload_for_tool_call() {
     let store = crate::persistence::projection::duckdb::Store::open_in_memory().expect("store");

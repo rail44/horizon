@@ -122,6 +122,30 @@ fn fold_finished_bash_result(
         return;
     }
 
+    // Stamp the occurrence this result answers to. Every asynchronous
+    // executor (bash, web) is handed only a `call_id` -- it has no
+    // `ToolCallRequest` in scope -- so it constructs its result with
+    // `occurrence_id: None`. This fold is the first point that can see
+    // both, and it is the only one on the finished path, so without this
+    // the per-occurrence key would be absent from essentially all
+    // asynchronous traffic and both the transcript and the approval
+    // projection would fall back to call_id matching -- exactly the
+    // collapse `OccurrenceId` exists to prevent. Preserve an already-set
+    // occurrence rather than overwriting it (the denial-retry paths hand
+    // back a `prior_result` that `fold_domain_denied`/
+    // `fold_filesystem_denied` already stamped with the *first*
+    // attempt's occurrence); `None` stays `None` when the request is not
+    // in the frame, which is the legacy/replay fallback the consumers
+    // already handle.
+    let result = ToolCallResult {
+        occurrence_id: result.occurrence_id.clone().or_else(|| {
+            frame
+                .tool_call_request(&result.call_id)
+                .and_then(|request| request.occurrence_id.clone())
+        }),
+        ..result
+    };
+
     // Honest trailing state: a second approval-gated call from the same
     // turn (another `bash` approved earlier, or a sibling fs/config
     // request still awaiting a decision) can still be outstanding when
@@ -427,14 +451,12 @@ mod tests {
                     call_id: call_a.clone(),
                     reason: "bash".to_string(),
                     kind: ApprovalKind::Standard,
-
                     occurrence_id: None,
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_b.clone(),
                     reason: "bash".to_string(),
                     kind: ApprovalKind::Standard,
-
                     occurrence_id: None,
                 }),
                 Event::StateChanged(SessionState::ToolRunning),
@@ -565,6 +587,153 @@ mod tests {
             "no approval is pending, so the finished tool must leave the turn \
              running, got: {forwarded:?}"
         );
+    }
+
+    /// The bash/web executors construct their results with
+    /// `occurrence_id: None` (they are handed a `call_id` and nothing
+    /// else), so this fold is the only point that can attach the
+    /// per-occurrence key to asynchronous traffic. Both the event it
+    /// forwards to the UI and the `Command::ToolCallResult` it hands the
+    /// provider must carry the originating request's occurrence.
+    #[test]
+    fn fold_finished_bash_result_stamps_the_requests_occurrence_on_the_result() {
+        use horizon_agent::contract::{OccurrenceId, ToolCallResult};
+
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+            Vec::new(),
+        ));
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let call_id = ToolCallId("bash-occ".to_string());
+        let occurrence = OccurrenceId("occ-live".to_string());
+
+        live_state.extend_provider_events(
+            vec![
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: Some(occurrence.clone()),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            // Exactly what `exec::run`/`exec::run_sandboxed` build.
+            ToolCompletion::Finished(ToolCallResult::new(
+                call_id.clone(),
+                None,
+                serde_json::json!({ "exit_code": 0 }),
+            )),
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        let finished = forwarded
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallFinished(result) => Some(result.clone()),
+                _ => None,
+            })
+            .expect("a finished result is forwarded");
+        assert_eq!(finished.occurrence_id, Some(occurrence.clone()));
+        assert!(matches!(
+            commands_rx.try_recv(),
+            Ok(Command::ToolCallResult(result))
+                if result.occurrence_id == Some(occurrence.clone())
+        ));
+    }
+
+    /// A result that already names its occurrence keeps it. The
+    /// denial-retry folds hand back the *first* attempt's `prior_result`
+    /// under a `call_id` whose most recent request is the reissue, so
+    /// overwriting here would re-attribute it to the wrong occurrence.
+    #[test]
+    fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
+        use horizon_agent::contract::{OccurrenceId, ToolCallResult};
+
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(SessiondState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+            Vec::new(),
+        ));
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let call_id = ToolCallId("bash-occ".to_string());
+        let first = OccurrenceId("occ-first".to_string());
+        let reissued = OccurrenceId("occ-reissued".to_string());
+
+        live_state.extend_provider_events(
+            vec![
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: Some(first.clone()),
+                }),
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: Some(reissued.clone()),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+
+        let (commands_tx, _commands_rx) = unbounded::<Command>();
+        fold_bash_completion(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            ToolCompletion::Finished(ToolCallResult::new(
+                call_id.clone(),
+                Some(first.clone()),
+                serde_json::json!({ "exit_code": 0 }),
+            )),
+        );
+
+        let forwarded = drain_events(&mut outgoing_rx);
+        let finished = forwarded
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallFinished(result) => Some(result.clone()),
+                _ => None,
+            })
+            .expect("a finished result is forwarded");
+        assert_eq!(finished.occurrence_id, Some(first));
     }
 
     /// Folds one `FilesystemDenied` completion and returns the approval
@@ -822,7 +991,6 @@ mod tests {
             call_id: ToolCallId("duplicate-judge".to_string()),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
-
             occurrence_id: None,
         };
         live_state.extend_provider_events(std::iter::once(
@@ -834,7 +1002,6 @@ mod tests {
                     call_id: request.call_id.clone(),
                     reason: "ask once".to_string(),
                     kind: ApprovalKind::Standard,
-
                     occurrence_id: None,
                 },
                 request,
@@ -879,7 +1046,6 @@ mod tests {
             call_id: call_id.clone(),
             tool_id: "web_fetch".to_string(),
             input: serde_json::json!({ "url": "https://example.com/start" }).into(),
-
             occurrence_id: None,
         };
         live_state.extend_provider_events(

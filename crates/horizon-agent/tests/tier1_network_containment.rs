@@ -320,7 +320,6 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         call_id: ToolCallId("direct-connect".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "exec 3<>/dev/tcp/127.0.0.2/80" }).into(),
-
         occurrence_id: None,
     };
     assert!(matches!(

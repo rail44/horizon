@@ -250,6 +250,13 @@ fn spawn_host(
                         );
                     }
                 }
+                // `occurrence_id` is `None` at every construction site in
+                // this module: an enqueued bash job is handed a `call_id`
+                // and nothing else. The sessiond's fold sites
+                // (`fold_finished_bash_result` and the two denial folds)
+                // stamp the originating request's occurrence on the way
+                // out -- see `exec::run_sandboxed`'s comment on the same
+                // seam.
                 BashCompletion::Finished(ToolCallResult::new(run_call_id.clone(), None, output))
             });
         }),

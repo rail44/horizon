@@ -308,9 +308,11 @@ impl Store {
     /// When `occurrence_id` is `Some`, this targets the specific approval
     /// row it was stamped on (the sessiond's
     /// `begin_reissued_approval` mints a fresh one per reissue, see
-    /// `session/approval.rs`). For legacy / replayed pre-feature rows
-    /// (`occurrence_id IS NULL`), this falls back to the *most recent*
-    /// pending approval for this `call_id` -- the order-derived
+    /// `session/approval.rs`) and nothing else. When it is `None` --
+    /// the `ToolCallStarted` arm, which carries no occurrence, and
+    /// legacy / replayed pre-feature events -- this instead falls back
+    /// to the *most recent* pending approval for this `call_id`, the
+    /// order-derived
     /// counterpart of the order-derived resolution (a deny short-circuits
     /// without ever emitting `ToolCallStarted`, so a result landing on a
     /// still-pending approval means the human denied it; a
@@ -337,18 +339,25 @@ impl Store {
                    AND outcome IS NULL",
                 params![outcome, session_id, call_id, occ],
             )?;
-        }
-        // Fallback / `ToolCallStarted` arm (which has no
-        // `occurrence_id`): most-recent-pending for this call_id.
-        self.conn.execute(
-            "UPDATE agent_approvals SET outcome = ?
-             WHERE session_id = ? AND call_id = ? AND outcome IS NULL
-               AND sequence = (
-                 SELECT MAX(sequence) FROM agent_approvals
+        } else {
+            // Fallback / `ToolCallStarted` arm (which has no
+            // `occurrence_id`): most-recent-pending for this call_id.
+            // Deliberately `else`, not a second unconditional statement:
+            // running both would resolve the targeted row *and* the most
+            // recent pending one, so with two pending approvals sharing a
+            // call_id, resolving either would silently stamp the other with
+            // the same outcome -- the exact collapse `occurrence_id` exists
+            // to prevent.
+            self.conn.execute(
+                "UPDATE agent_approvals SET outcome = ?
                  WHERE session_id = ? AND call_id = ? AND outcome IS NULL
-               )",
-            params![outcome, session_id, call_id, session_id, call_id],
-        )?;
+                   AND sequence = (
+                     SELECT MAX(sequence) FROM agent_approvals
+                     WHERE session_id = ? AND call_id = ? AND outcome IS NULL
+                   )",
+                params![outcome, session_id, call_id, session_id, call_id],
+            )?;
+        }
         Ok(())
     }
 

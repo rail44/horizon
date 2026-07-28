@@ -307,10 +307,12 @@ pub fn tool_result_message(result: &ToolCallResult) -> Event {
 /// pending approval belonging to a cancelled turn resolves to a terminal
 /// (non-error) outcome instead of hanging forever. `occurrence_id` is `None`
 /// because a cancellation is a session-wide event with no per-occurrence
-/// reference available at the call site; the sessiond's `fold_finished_
-/// bash_result` (and any other fold site that receives this) falls back to
-/// call_id matching for `None`, the same legacy path replayed pre-feature
-/// logs already take.
+/// reference available at the call site -- and unlike the asynchronous
+/// executors' results, this one never passes through the sessiond's
+/// `fold_finished_bash_result` (the session loop synthesizes it directly),
+/// so nothing stamps it later either. Consumers fall back to call_id
+/// matching for `None`, the same legacy path replayed pre-feature logs
+/// already take.
 pub fn cancelled_tool_call_result(call_id: ToolCallId) -> ToolCallResult {
     ToolCallResult::new(call_id, None, json!({ "cancelled": true }))
 }

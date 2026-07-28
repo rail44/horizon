@@ -57,10 +57,10 @@ pub struct ToolCallId(pub String);
 ///
 /// * provider reuse: the rig provider (or a backend it fronts) emits a fresh
 ///   tool call with the same `call_id` as an earlier, fully resolved one
-///   (`docs/issues/002-tool-call-call-id-reuse.md`, the
-///   `functions.fs.edit:66` incident in session 05254b6a). Without a second
-///   key, every consumer -- transcript, approval, analytics -- collapses the
-///   two onto the same row.
+///   (`docs/tasks/backlog.md`'s item 42, recorded from the 2026-07-18
+///   reused-call_id fix `1d86521`; the `functions.fs.edit:66` incident in
+///   session 05254b6a). Without a second key, every consumer -- transcript,
+///   approval, analytics -- collapses the two onto the same row.
 /// * denial retry: every sandbox-denial retry deliberately reissues
 ///   `ToolCallRequested` under the same `call_id`, so one conceptual bash
 ///   call renders as two transcript rows, the first stuck forever as
@@ -87,14 +87,14 @@ impl OccurrenceId {
     /// Mints a fresh `OccurrenceId` (UUID v4). Use at every wire emission
     /// point that creates a new occurrence -- never at construction points
     /// that only forward an existing one.
+    ///
+    /// Deliberately has no `Default`, and the lint asking for one is
+    /// suppressed rather than satisfied: a `Default` that silently mints a
+    /// random identity is a hazard the moment any container derives
+    /// `Default` and gets an occurrence nothing ever emitted.
+    #[allow(clippy::new_without_default)]
     pub fn new() -> Self {
         Self(Uuid::new_v4().to_string())
-    }
-}
-
-impl Default for OccurrenceId {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -594,9 +594,11 @@ pub struct ToolCallRequest {
     /// persisted before this field existed still deserializes (reads back
     /// with `None`), and consumers fall back to `call_id` + positional
     /// `.rev()` scanning in that case; `skip_serializing_if` keeps the
-    /// on-disk JSON shape identical to the pre-v15 wire format when the
-    /// field is `None`, so existing log analyzers that pattern-match on
-    /// `tool_call_request` keys don't break.
+    /// on-disk JSON shape byte-identical to what a build without this
+    /// field wrote whenever it is `None`, so existing log analyzers that
+    /// pattern-match on `tool_call_request` keys don't break. The field
+    /// is purely additive on the wire -- it landed inside
+    /// `SESSION_PROTOCOL_VERSION` 15 and needed no bump of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence_id: Option<OccurrenceId>,
 }

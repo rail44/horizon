@@ -30,6 +30,21 @@
 //! round, churning the cache continuously and making a resumed session
 //! disagree with the one it resumed -- the exact opposite of what a
 //! compaction layer is for.
+//!
+//! **A frozen `call_id` only ever blanks the results that existed when it
+//! froze.** Providers reuse `call_id`s across turns (measured on Kimi, whose
+//! ids are `functions.<name>:<index>`), and Horizon reuses one deliberately
+//! on every denial retry -- so a set keyed on `call_id` alone would blank a
+//! *fresh* result the moment it arrived, in the very turn the model needs
+//! it, with a placeholder pointing at an entirely different call's output.
+//! [`ClearedResults`] therefore records, per `call_id`, *how many* of that
+//! id's tool-result occurrences the passes cleared, counted from the oldest;
+//! the projection replaces only that many. A result appended after the
+//! freeze is a later occurrence and is always kept verbatim. The count is
+//! carried on the wire for free -- `HistoryCleared::cleared_call_ids` is a
+//! `Vec`, and a pass already pushes one entry per cleared *occurrence* -- so
+//! resume replay rebuilds identical counts by tallying the flattened list,
+//! with no new field and no `SESSION_PROTOCOL_VERSION` bump.
 
 use std::collections::{HashMap, HashSet};
 
@@ -73,7 +88,61 @@ pub(super) struct ClearingState {
     /// decision to compact is too consequential to make from a byte
     /// heuristic when the provider states the real number.
     latest_input_tokens: u64,
-    cleared: HashSet<ToolCallId>,
+    cleared: ClearedResults,
+}
+
+/// The frozen cleared set, plus the guard that keeps a reused `call_id`
+/// honest (see the module doc): for each cleared `call_id`, how many of that
+/// id's tool-result occurrences -- counted from the oldest in history order
+/// -- the passes so far cleared.
+///
+/// One pass pushes one entry per occurrence it clears, so tallying
+/// `HistoryCleared::cleared_call_ids` across a session's events reproduces
+/// this exactly; that is what [`ClearingState::seed_cleared`] does on
+/// resume.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct ClearedResults {
+    occurrences: HashMap<ToolCallId, usize>,
+}
+
+impl ClearedResults {
+    /// Tallies one entry per cleared occurrence -- the shape both a live
+    /// pass's plan and a replayed `HistoryCleared` come in. Production
+    /// builds these through [`ClearingState`] (`run_pass`/`seed_cleared`);
+    /// this is the direct constructor the unit tests use.
+    #[cfg(test)]
+    pub(super) fn from_occurrences(call_ids: impl IntoIterator<Item = ToolCallId>) -> Self {
+        let mut cleared = Self::default();
+        cleared.record_occurrences(call_ids);
+        cleared
+    }
+
+    fn record_occurrences(&mut self, call_ids: impl IntoIterator<Item = ToolCallId>) {
+        for call_id in call_ids {
+            *self.occurrences.entry(call_id).or_insert(0) += 1;
+        }
+    }
+
+    /// Whether any occurrence of `call_id` is already frozen -- the
+    /// planning walk's "don't re-report what a previous pass cleared"
+    /// check.
+    pub(super) fn contains(&self, call_id: &ToolCallId) -> bool {
+        self.occurrences.contains_key(call_id)
+    }
+
+    /// How many of `call_id`'s occurrences, from the oldest, are cleared.
+    fn cleared_occurrences(&self, call_id: &ToolCallId) -> usize {
+        self.occurrences.get(call_id).copied().unwrap_or(0)
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.occurrences.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(super) fn len(&self) -> usize {
+        self.occurrences.len()
+    }
 }
 
 impl ClearingState {
@@ -82,7 +151,7 @@ impl ClearingState {
             effective_window_tokens,
             threshold_pct,
             latest_input_tokens: 0,
-            cleared: HashSet::new(),
+            cleared: ClearedResults::default(),
         }
     }
 
@@ -97,14 +166,14 @@ impl ClearingState {
     /// path). Additive and idempotent, so replaying several passes in log
     /// order reproduces exactly the set the live session ended with.
     pub(super) fn seed_cleared(&mut self, call_ids: impl IntoIterator<Item = ToolCallId>) {
-        self.cleared.extend(call_ids);
+        self.cleared.record_occurrences(call_ids);
     }
 
     pub(super) fn record_input_tokens(&mut self, input_tokens: u64) {
         self.latest_input_tokens = input_tokens;
     }
 
-    pub(super) fn cleared(&self) -> &HashSet<ToolCallId> {
+    pub(super) fn cleared(&self) -> &ClearedResults {
         &self.cleared
     }
 
@@ -133,7 +202,8 @@ impl ClearingState {
         if plan.recovered_chars / CLEARING_CHARS_PER_TOKEN < CLEARING_RECOVERY_FLOOR_TOKENS {
             return None;
         }
-        self.cleared.extend(plan.cleared_call_ids.iter().cloned());
+        self.cleared
+            .record_occurrences(plan.cleared_call_ids.iter().cloned());
         Some(HistoryCleared {
             cleared_call_ids: plan.cleared_call_ids,
             recovered_chars: plan.recovered_chars,
@@ -175,7 +245,7 @@ pub(super) struct ClearingPlan {
 /// No per-tool exemptions in v1 -- deliberately, per the design doc.
 pub(super) fn plan_clearing_pass(
     history: &[Message],
-    already_cleared: &HashSet<ToolCallId>,
+    already_cleared: &ClearedResults,
 ) -> ClearingPlan {
     let sites = tool_result_sites(history);
     let tail_start = protected_tail_start(&sites);
@@ -204,15 +274,21 @@ pub(super) fn plan_clearing_pass(
 /// what makes two consecutive request builds byte-identical while nothing
 /// else changed -- see the module doc on why the set is frozen and why
 /// recomputing it per request is rejected.
+///
+/// The walk is ordered and counts occurrences per `call_id`, replacing only
+/// the first `cleared_occurrences(call_id)` of them: a result appended after
+/// the pass froze is a later occurrence of a reused id, never one the pass
+/// could have decided about, so it is left verbatim (module doc).
 pub(super) fn history_for_provider_request(
     history: &[Message],
-    cleared: &HashSet<ToolCallId>,
+    cleared: &ClearedResults,
 ) -> Vec<Message> {
     if cleared.is_empty() {
         return history.to_vec();
     }
 
     let calls = tool_call_summaries(history);
+    let mut seen: HashMap<ToolCallId, usize> = HashMap::new();
     let mut projected = history.to_vec();
     for message in &mut projected {
         let Message::User { content } = message else {
@@ -223,7 +299,10 @@ pub(super) fn history_for_provider_request(
                 continue;
             };
             let call_id = ToolCallId(result.id.clone());
-            if !cleared.contains(&call_id) {
+            let occurrence = seen.entry(call_id.clone()).or_insert(0);
+            let index = *occurrence;
+            *occurrence += 1;
+            if index >= cleared.cleared_occurrences(&call_id) {
                 continue;
             }
             let original_chars = tool_result_chars(result);

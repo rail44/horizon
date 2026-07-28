@@ -775,10 +775,9 @@ pub(super) fn run_sandboxed(
     if !drained {
         note_undrained(&mut value, config);
     }
-    // Same fixup-at-fold-time story as the `FilesystemDenied` arm above;
-    // `fold_finished_bash_result` (and the `fold_domain_denied` branch
-    // above) stamp the request's `occurrence_id` onto the result they
-    // forward to the agent.
+    // Same fixup-at-fold-time story as the `FilesystemDenied` arm above:
+    // `fold_finished_bash_result` stamps the originating request's
+    // `occurrence_id` onto the result before forwarding it.
     finished(call_id, value)
 }
 
