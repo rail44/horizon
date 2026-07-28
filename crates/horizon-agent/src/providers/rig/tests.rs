@@ -7,10 +7,10 @@ use super::completion::{
 };
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
-    horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
-    rig_tool_call_provider_payload, rig_tool_call_request, rig_workspace_snapshot_call,
-    rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
-    RIG_PROVIDER_PAYLOAD_VERSION,
+    horizon_tool_definition_from_rig, repair_replayed_message_pairing,
+    rig_messages_from_horizon_events, rig_tool_call_provider_payload, rig_tool_call_request,
+    rig_workspace_snapshot_call, rig_workspace_snapshot_call_with_provider_metadata,
+    RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION,
 };
 use super::session::{
     append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
@@ -467,6 +467,54 @@ fn loads_initial_rig_history_from_duckdb_projection() {
     let _ = std::fs::remove_file(path);
 }
 
+/// The resume path end to end: a session whose persisted events carry the
+/// `b182c25b` shape (a streamed assistant text between a tool call and its
+/// result, plus a tool call the interrupted turn never answered) comes back
+/// from the DuckDB projection as a pairing-valid history, not one a strict
+/// chat template rejects forever.
+#[test]
+fn resumed_history_from_duckdb_is_pairing_valid() {
+    use crate::persistence::projection::duckdb::DuckdbStoreHandle;
+
+    let path = std::env::temp_dir().join(format!(
+        "horizon-rig-pairing-{}.duckdb",
+        uuid::Uuid::new_v4()
+    ));
+    let session_id = crate::contract::SessionId::new();
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "how many tabs?".to_string(),
+        }),
+        tool_call_request("call-1"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "Let me check.".to_string(),
+        }),
+        tool_call_finished("call-1"),
+        tool_call_request("call-2"),
+    ];
+
+    let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
+    store
+        .append_events(
+            session_id,
+            Some(ProviderId("builtin.agent.rig".to_string())),
+            events,
+        )
+        .expect("append events");
+    let shared_store = DuckdbStoreHandle::new(store);
+
+    let persisted = load_rig_session_history(Some(&shared_store), session_id);
+    // user, assistant(call-1 + "Let me check."), tool(call-1),
+    // assistant(call-2), tool(cancelled call-2).
+    assert_pairing_valid(&persisted.messages);
+    assert_eq!(persisted.messages.len(), 5);
+
+    drop(shared_store);
+    let _ = std::fs::remove_file(path);
+}
+
 #[test]
 fn horizon_mediated_tool_result_can_continue_as_rig_history() {
     let tool_call = rig_workspace_snapshot_call();
@@ -523,6 +571,220 @@ fn a_task_notification_replays_to_the_provider_as_a_user_message() {
         "got {:?}",
         messages[0]
     );
+}
+
+// --- Rebuilt-history tool-call pairing --------------------------------
+//
+// The 2026-07-28 session death (session `b182c25b`): the runtime was
+// reloaded mid-turn, and the history rebuilt from the event log carried a
+// tool-role message that no *immediately preceding* assistant message
+// announced. MiniMax-M3's chat template rejects that outright ("Message has
+// tool role, but there was no previous assistant message with a tool call!")
+// and, because the shape sits in the rebuilt history, every later request in
+// the session 400s too.
+
+/// The invariant a strict chat template enforces, asserted over a rebuilt
+/// sequence: every tool-role message's call id was announced by a preceding
+/// assistant message, and the nearest preceding assistant message carries at
+/// least one tool call (no text-only assistant message separates a call from
+/// its result).
+fn assert_pairing_valid(messages: &[RigMessage]) {
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut nearest_assistant_announced = false;
+    for (index, message) in messages.iter().enumerate() {
+        match message {
+            RigMessage::Assistant { content, .. } => {
+                let calls: Vec<String> = content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::ToolCall(call) => Some(call.id.clone()),
+                        _ => None,
+                    })
+                    .collect();
+                nearest_assistant_announced = !calls.is_empty();
+                announced.extend(calls);
+            }
+            RigMessage::User { content } => {
+                let UserContent::ToolResult(result) = content.first_ref() else {
+                    continue;
+                };
+                assert!(
+                    announced.contains(&result.id),
+                    "message {index} answers unannounced call {}: {messages:?}",
+                    result.id
+                );
+                assert!(
+                    nearest_assistant_announced,
+                    "message {index} is a tool result, but the nearest assistant message \
+                     announces no tool call: {messages:?}"
+                );
+            }
+            RigMessage::System { .. } => {}
+        }
+    }
+}
+
+fn tool_call_request(call_id: &str) -> Event {
+    Event::ToolCallRequested(ToolCallRequest {
+        call_id: ToolCallId(call_id.to_string()),
+        tool_id: "workspace.snapshot".to_string(),
+        input: serde_json::json!({}).into(),
+        occurrence_id: None,
+    })
+}
+
+fn tool_call_finished(call_id: &str) -> Event {
+    Event::ToolCallFinished(ToolCallResult::new(
+        ToolCallId(call_id.to_string()),
+        None,
+        serde_json::json!({ "tab_count": 1 }),
+    ))
+}
+
+/// The `b182c25b` shape itself: a tool call's `MessageCommitted` text event
+/// is only emitted once the response stream ends, so a tool that finishes
+/// later persists its result *behind* that text. Replayed naively, the
+/// text-only assistant message separates the call from its result.
+#[test]
+fn a_streamed_assistant_text_never_separates_a_tool_call_from_its_result() {
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "how many tabs?".to_string(),
+        }),
+        tool_call_request("call-1"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "Let me check.".to_string(),
+        }),
+        tool_call_finished("call-1"),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_pairing_valid(&messages);
+    // The call and the text were one provider response and replay as one
+    // assistant message, exactly as live history holds them.
+    assert_eq!(messages.len(), 3);
+    let RigMessage::Assistant { content, .. } = &messages[1] else {
+        panic!("expected an assistant message, got {:?}", messages[1]);
+    };
+    let items = content.iter().collect::<Vec<_>>();
+    assert_eq!(items.len(), 2);
+    assert!(matches!(items[0], AssistantContent::ToolCall(call) if call.id == "call-1"));
+    assert!(matches!(items[1], AssistantContent::Text(text) if text.text == "Let me check."));
+}
+
+/// A tool result whose call no assistant message ever announced is dropped
+/// rather than replayed -- and nothing is synthesized in its place, because
+/// the provider never saw a call to answer.
+#[test]
+fn an_orphaned_tool_result_is_dropped_when_history_is_rebuilt() {
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "how many tabs?".to_string(),
+        }),
+        tool_call_finished("call-lost"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "There is one tab.".to_string(),
+        }),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_pairing_valid(&messages);
+    assert_eq!(messages.len(), 2);
+    assert!(matches!(&messages[0], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::Text(text)
+            if text.text == "how many tabs?")));
+    assert!(matches!(&messages[1], RigMessage::Assistant { .. }));
+}
+
+/// The inverse direction: a call announced with no result anywhere behind it
+/// (a turn cut short whose cancelled-result fixup hasn't reached the DuckDB
+/// projection the rebuild reads) is closed with the same cancelled result
+/// the live cancel path appends -- placed where the real result would have
+/// gone, not at the tail.
+#[test]
+fn an_unanswered_tool_call_is_closed_with_a_cancelled_result_on_rebuild() {
+    let events = vec![
+        tool_call_request("call-1"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "never mind".to_string(),
+        }),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "ok".to_string(),
+        }),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_pairing_valid(&messages);
+    assert_eq!(messages.len(), 4);
+    assert!(matches!(&messages[1], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::ToolResult(result)
+            if result.id == "call-1"
+                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+                    if text.text.contains("cancelled")))));
+    assert!(matches!(&messages[2], RigMessage::User { content }
+        if matches!(content.first_ref(), UserContent::Text(text)
+            if text.text == "never mind")));
+}
+
+/// Replaying an out-of-order parallel batch keeps every result paired: the
+/// batch's calls fold into one assistant message and each result still finds
+/// an announcement behind it.
+#[test]
+fn an_out_of_order_parallel_tool_batch_replays_paired() {
+    let events = vec![
+        tool_call_request("call-a"),
+        tool_call_request("call-b"),
+        tool_call_finished("call-b"),
+        tool_call_finished("call-a"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "done".to_string(),
+        }),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+
+    assert_pairing_valid(&messages);
+    assert_eq!(messages.len(), 4);
+}
+
+/// The repair must be a fixed point: running it over an already-repaired
+/// sequence changes nothing, so a session resumed twice sees the same
+/// history both times.
+#[test]
+fn rebuilt_history_pairing_repair_is_idempotent() {
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "how many tabs?".to_string(),
+        }),
+        tool_call_finished("call-lost"),
+        tool_call_request("call-1"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "Let me check.".to_string(),
+        }),
+        tool_call_finished("call-1"),
+        tool_call_request("call-2"),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "stop".to_string(),
+        }),
+    ];
+
+    let messages = rig_messages_from_horizon_events(&events);
+    assert_pairing_valid(&messages);
+
+    assert_eq!(repair_replayed_message_pairing(messages.clone()), messages);
 }
 
 #[test]
@@ -751,14 +1013,19 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
 
     let messages = rig_messages_from_horizon_events(&events);
 
+    // Both calls came from one provider response, so the rebuild folds them
+    // back into a single assistant message (see
+    // `mapping::repair_replayed_message_pairing`); neither was ever
+    // answered, so each also gets a cancelled result behind it.
     assert_eq!(
         history_tool_call_arguments(&messages[0]),
-        vec![serde_json::json!({ "path": "/tmp/x" })]
+        vec![
+            serde_json::json!({ "path": "/tmp/x" }),
+            serde_json::json!({})
+        ]
     );
-    assert_eq!(
-        history_tool_call_arguments(&messages[1]),
-        vec![serde_json::json!({})]
-    );
+    assert_eq!(messages.len(), 3);
+    assert_pairing_valid(&messages);
 }
 
 // --- Turn-loop guards -------------------------------------------------

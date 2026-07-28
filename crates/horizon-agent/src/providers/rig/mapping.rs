@@ -1,12 +1,16 @@
+use std::collections::HashSet;
+
 use rig_core::completion::{
-    message::{ToolCall, ToolFunction},
+    message::{ToolCall, ToolFunction, UserContent},
     AssistantContent, Message,
 };
+use rig_core::OneOrMany;
 
 use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
     ToolCallId, ToolCallRequest, ToolCallResult,
 };
+use crate::tools::cancelled_tool_call_result;
 
 #[cfg(test)]
 use rig_core::completion::ToolDefinition;
@@ -101,7 +105,7 @@ pub(super) fn horizon_tool_definition_from_rig(
 }
 
 pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
-    events
+    let messages = events
         .iter()
         .filter_map(|event| match event {
             Event::MessageCommitted(message) => match message.role {
@@ -147,7 +151,197 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::TurnEnded(_)
             | Event::Unknown => None,
         })
+        .collect();
+    repair_replayed_message_pairing(messages)
+}
+
+/// Makes a rebuilt history satisfy the tool-call pairing invariant strict
+/// chat templates enforce, so a resumed session can't be killed by a shape
+/// only the *rebuild* can produce. Same family as
+/// `completion::replay_safe_tool_arguments`: history-rebuild template
+/// safety.
+///
+/// Three repairs, all order-preserving and idempotent:
+///
+/// 1. **Adjacent assistant messages are folded into one.** Live, a provider
+///    response is a single assistant message carrying its text *and* its
+///    tool calls. The event log splits that into one `ToolCallRequested` per
+///    call plus a `MessageCommitted` for the text — and the text event is
+///    only emitted once the response stream ends
+///    (`completion::rig_openai_turn_streaming`), while tool calls are
+///    emitted as their chunks arrive and Horizon starts executing them
+///    immediately. A tool that finishes after the stream does lands its
+///    `ToolCallFinished` *after* the text event, so a naive replay puts a
+///    text-only assistant message between a tool call and the result that
+///    answers it. That is what killed session `b182c25b` on 2026-07-28:
+///    MiniMax-M3's template rejected the history permanently with "Message
+///    has tool role, but there was no previous assistant message with a tool
+///    call!", and because the shape is *in* the rebuilt history, every later
+///    request 400'd too. Folding the run restores the live shape.
+/// 2. **A tool result no assistant message announced is dropped.** Nothing
+///    is synthesized in its place: the provider never saw a call, so
+///    inventing one would put words in its mouth. Dropping a result no
+///    completed request ever consumed is the honest repair.
+/// 3. **An announced call nothing ever answers gets a cancelled result**,
+///    the same synthesis `session::append_cancelled_tool_results_to_history`
+///    and `horizon-sessiond`'s startup fixup already use, inserted where the
+///    real result would have gone. The rebuild needs its own copy because
+///    the two run against different stores: the startup fixup appends to the
+///    event log, while the rebuild reads the DuckDB projection, which the
+///    writer thread updates asynchronously — so a resumed session can load
+///    its history before the fixup's cancelled results have landed there.
+///
+/// Not repaired: with a *parallel* tool batch whose results arrive out of
+/// order, a result can still sit behind an assistant message that announced
+/// a different call of the same batch. Templates that match the call id
+/// against the nearest assistant message (rather than just requiring one
+/// with tool calls, as the observed failure does) would still object; no
+/// such rejection has been seen.
+pub(super) fn repair_replayed_message_pairing(messages: Vec<Message>) -> Vec<Message> {
+    // Which announced calls ever get an answer -- needed up front, because
+    // repair 3 has to distinguish "no result yet" from "no result at all"
+    // while walking the sequence forwards.
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut answered: HashSet<String> = HashSet::new();
+    for message in &messages {
+        match answered_tool_call_id(message) {
+            Some(call_id) if seen.contains(call_id) => {
+                answered.insert(call_id.to_string());
+            }
+            Some(_) => {}
+            None => seen.extend(announced_tool_call_ids(message)),
+        }
+    }
+
+    let mut announced: HashSet<String> = HashSet::new();
+    let mut unanswered: Vec<String> = Vec::new();
+    let mut dropped: Vec<String> = Vec::new();
+    let mut synthesized: Vec<String> = Vec::new();
+    let mut repaired: Vec<Message> = Vec::with_capacity(messages.len());
+
+    for message in messages {
+        if let Some(call_id) = answered_tool_call_id(&message) {
+            if announced.contains(call_id) {
+                repaired.push(message);
+            } else {
+                dropped.push(call_id.to_string());
+            }
+            continue;
+        }
+
+        match message {
+            Message::Assistant { id, content } => {
+                let call_ids = announced_tool_call_ids_in(&content);
+                let mut pending = Some((id, content));
+                if let Some(Message::Assistant {
+                    id: run_id,
+                    content: run_content,
+                }) = repaired.last_mut()
+                {
+                    // Still the same provider response, split across events.
+                    if let Some((id, content)) = pending.take() {
+                        if run_id.is_none() {
+                            *run_id = id;
+                        }
+                        for item in content {
+                            run_content.push(item);
+                        }
+                    }
+                }
+                if let Some((id, content)) = pending {
+                    close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+                    repaired.push(Message::Assistant { id, content });
+                }
+                for call_id in call_ids {
+                    if !answered.contains(&call_id) {
+                        unanswered.push(call_id.clone());
+                    }
+                    announced.insert(call_id);
+                }
+            }
+            other => {
+                close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+                repaired.push(other);
+            }
+        }
+    }
+    close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+
+    // Diagnosable on sessiond's stderr, the channel `horizon-sessiond`'s own
+    // resume fixups already report through: a repair that fired silently
+    // would leave the next incident with nothing to read.
+    if !dropped.is_empty() {
+        eprintln!(
+            "horizon-agent: dropped {} orphaned tool result(s) while rebuilding provider \
+             history (no assistant message announced them): {}",
+            dropped.len(),
+            dropped.join(", ")
+        );
+    }
+    if !synthesized.is_empty() {
+        eprintln!(
+            "horizon-agent: closed {} unanswered tool call(s) with a cancelled result while \
+             rebuilding provider history: {}",
+            synthesized.len(),
+            synthesized.join(", ")
+        );
+    }
+
+    repaired
+}
+
+/// Appends one cancelled tool result per call that will never be answered,
+/// at the point the real results would have sat.
+fn close_unanswered_calls(
+    repaired: &mut Vec<Message>,
+    unanswered: &mut Vec<String>,
+    synthesized: &mut Vec<String>,
+) {
+    for call_id in unanswered.drain(..) {
+        repaired.push(rig_tool_result_message(&cancelled_tool_call_result(
+            ToolCallId(call_id.clone()),
+        )));
+        synthesized.push(call_id);
+    }
+}
+
+/// Every tool-call id an assistant message announces; empty for any other
+/// message.
+fn announced_tool_call_ids(message: &Message) -> Vec<String> {
+    match message {
+        Message::Assistant { content, .. } => announced_tool_call_ids_in(content),
+        _ => Vec::new(),
+    }
+}
+
+fn announced_tool_call_ids_in(content: &OneOrMany<AssistantContent>) -> Vec<String> {
+    content
+        .iter()
+        .filter_map(|item| match item {
+            AssistantContent::ToolCall(call) => Some(call.id.clone()),
+            _ => None,
+        })
         .collect()
+}
+
+/// The call id a tool-result message answers. Rig models a tool result as a
+/// user message whose content is entirely `ToolResult` ([`Message::tool_result`],
+/// and [`rig_tool_result_message`] with it); a plain user text message is
+/// `None`.
+fn answered_tool_call_id(message: &Message) -> Option<&str> {
+    let Message::User { content } = message else {
+        return None;
+    };
+    if !content
+        .iter()
+        .all(|item| matches!(item, UserContent::ToolResult(_)))
+    {
+        return None;
+    }
+    match content.first_ref() {
+        UserContent::ToolResult(result) => Some(result.id.as_str()),
+        _ => None,
+    }
 }
 
 pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
