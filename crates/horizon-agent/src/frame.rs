@@ -213,6 +213,22 @@ impl AgentFrame {
         })
     }
 
+    /// The `TurnEndReason` of the most recent `AgentFrameItem::TurnEnded`
+    /// in this frame, if any. Mirrors [`Self::tool_call_request`]'s
+    /// `.rev()` walk so an emit site can recover the *current* guard halt
+    /// without re-scanning the frame from the top, and so a stale earlier
+    /// receipt that has since been superseded by a new turn's events (a
+    /// human message, more tool calls) does not leak into the next read.
+    ///
+    /// Backed by [`last_turn_end_reason_in`] so a caller holding only a
+    /// slice of `items` can reuse the same logic without cloning the whole
+    /// frame. Returns `None` for a frame that never halted; the emit site
+    /// for [`Event::ContinueTurnRequested`] promotes that to
+    /// [`TurnEndReason::Unknown`] (the documented "no-op replay" shape).
+    pub fn last_turn_end_reason(&self) -> Option<TurnEndReason> {
+        last_turn_end_reason_in(&self.items)
+    }
+
     /// Whether a turn is currently in flight (streaming, running a tool, or
     /// waiting on tool-call approval) and therefore cancellable. Delegates
     /// to [`state_indicates_turn_in_flight`] -- see that function's doc
@@ -438,6 +454,24 @@ pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
     )
 }
 
+/// The reason of the most recent `AgentFrameItem::TurnEnded` in `items`, if
+/// any. Pure-core companion to [`AgentFrame::last_turn_end_reason`] for
+/// callers that only hold a slice. Walks `.rev()` (the same scoping the
+/// `tool_call_request`/`approval_kind` accessors use) so a stale earlier
+/// halt that has since been superseded by new turn activity does not leak
+/// into the read; for a session whose last item is *not* a `TurnEnded` (no
+/// turn has ended, or a later tool-call or message has arrived), returns
+/// `None` and the emit site promotes that to `TurnEndReason::Unknown`. The
+/// reason is returned **regardless** of whether it's a halt or a normal
+/// completion: a non-halt reason is itself useful audit context (it marks
+/// a `ContinueTurn` sent to a non-halted session as a no-op replay).
+pub fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
+    items.iter().rev().find_map(|item| match item {
+        AgentFrameItem::TurnEnded { reason, .. } => Some(*reason),
+        _ => None,
+    })
+}
+
 /// The pure core of [`AgentFrame::is_turn_in_flight`], operating on just the
 /// `state` field -- see [`pending_approval_call_ids_in`]'s doc comment for
 /// why this split exists. `src/agent/view.rs`'s render and
@@ -512,6 +546,18 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
                     "history cleared: {} tool result(s), {} chars",
                     cleared.cleared_call_ids.len(),
                     cleared.recovered_chars,
+                ));
+            }
+            Event::ApprovalResolved(resolved) => {
+                lines.push(format!(
+                    "approval resolved: {} -> {:?}",
+                    resolved.call_id.0, resolved.decision,
+                ));
+            }
+            Event::ContinueTurnRequested(requested) => {
+                lines.push(format!(
+                    "continue turn requested: resumed_from {:?}",
+                    requested.resumed_from,
                 ));
             }
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
@@ -679,6 +725,18 @@ pub(crate) fn apply_agent_event_to_frame(
         }
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
+        // Operator-intervention audit records (`Event::ApprovalResolved` /
+        // `Event::ContinueTurnRequested`): deliberately fold into no frame
+        // item. Their audit purpose is fully served by the raw record in
+        // `agent_events` (which `LiveState::extend_provider_events` already
+        // persists via the unconditional `self.events.push(event.event)`
+        // below the `apply_agent_event_to_frame` call in
+        // `live::State::extend_provider_events`), and the transcript already
+        // shows their visible effect through the existing approval row /
+        // `TurnEnded` receipt / next-turn events. Adding a frame item here
+        // would duplicate that signal in the UI without adding anything
+        // for SQL analytics that read `agent_events` directly.
+        Event::ApprovalResolved(_) | Event::ContinueTurnRequested(_) => {}
         // The turn's receipt: see `Event::TurnEnded`'s doc comment and
         // `TurnClock`'s. `turn` is reset afterward so a stray second
         // `TurnEnded` with no intervening user message (shouldn't happen by

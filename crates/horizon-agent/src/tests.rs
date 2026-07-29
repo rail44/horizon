@@ -1308,3 +1308,184 @@ fn provider_registry_starts_builtin_provider() {
         agent::Event::StateChanged(agent::SessionState::Created)
     );
 }
+
+// ---------------------------------------------------------------------------
+// SESSION_PROTOCOL_VERSION v16: operator-intervention audit events
+// (`Event::ApprovalResolved`, `Event::ContinueTurnRequested`). See the v16
+// doc comment on `SESSION_PROTOCOL_VERSION` for the motivation; these tests
+// pin down the on-disk/wire shape the analyst-facing surfaces (SQL on
+// `agent_events`, replay on resume) depend on.
+// ---------------------------------------------------------------------------
+
+/// `event_kind` is what `agent_events.event_kind` stamps for the projection
+/// row, and what `wire_schema.rs`'s generator indexes by -- a stable string
+/// per variant is the only way SQL filters (`WHERE event_kind = 'approval_resolved'`)
+/// survive across builds. The two new variants must round-trip through
+/// serde_json with these discriminators and the same struct shape, so
+/// v11↔v16 decoders that surface `Event::Unknown` for unknown payloads
+/// degrade gracefully (skipped: no frame item, no projection table).
+#[test]
+fn operator_intervention_event_kind_discriminators_are_stable() {
+    use agent::event_kind;
+
+    let approval = agent::Event::ApprovalResolved(agent::ApprovalResolved {
+        call_id: agent::ToolCallId("call-x".to_string()),
+        occurrence_id: Some(agent::OccurrenceId("occ-x".to_string())),
+        decision: agent::ApprovalDecisionPayload::Deny {
+            reason: Some("retry with fs.read".to_string()),
+        },
+    });
+    assert_eq!(event_kind(&approval), "approval_resolved");
+
+    let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
+        resumed_from: agent::TurnEndReason::HaltedByIterationCap,
+    });
+    assert_eq!(event_kind(&continue_turn), "continue_turn_requested");
+}
+
+/// Round-trip the two new payloads through serde_json with the same shape
+/// the wire and the JSONL event log carry. The projection reads the JSON
+/// back from `agent_events.horizon_event_json` to build per-row columns
+/// (`agent_approvals.outcome`, `agent_turns.end_reason`); a future schema
+/// migration needs to be able to read these rows, so the on-disk shape is
+/// load-bearing.
+///
+/// `Event` has no `#[serde(tag = "...")]` -- serde's default externally
+/// tagged representation is `{"VariantName": {...}}`, which is what both
+/// the wire (the `AgentWireEvent::Event` envelope around it) and the
+/// JSONL log store. The wire-schema generator (`crates/horizon-sessiond/
+/// tests/wire_schema.rs`) consumes this same shape.
+#[test]
+fn operator_intervention_events_round_trip_through_serde_json() {
+    // ApprovalResolved: Approve with no deny reason -> no reason field.
+    let approve = agent::Event::ApprovalResolved(agent::ApprovalResolved {
+        call_id: agent::ToolCallId("call-approve".to_string()),
+        occurrence_id: Some(agent::OccurrenceId("occ-1".to_string())),
+        decision: agent::ApprovalDecisionPayload::Approve,
+    });
+    let json = serde_json::to_value(&approve).expect("serialize ApprovalResolved");
+    let payload = &json["ApprovalResolved"];
+    assert_eq!(payload["call_id"], "call-approve");
+    assert_eq!(payload["occurrence_id"], "occ-1");
+    assert_eq!(payload["decision"], "Approve");
+    assert!(
+        payload["decision"].get("reason").is_none(),
+        "Approve must not carry a reason field"
+    );
+    let round_tripped: agent::Event =
+        serde_json::from_value(json).expect("deserialize ApprovalResolved");
+    assert_eq!(round_tripped, approve);
+
+    // ApprovalResolved: Deny with no reason -> reason omitted via
+    // `skip_serializing_if = "Option::is_none"`.
+    let deny_no_reason = agent::Event::ApprovalResolved(agent::ApprovalResolved {
+        call_id: agent::ToolCallId("call-deny".to_string()),
+        occurrence_id: None,
+        decision: agent::ApprovalDecisionPayload::Deny { reason: None },
+    });
+    let json = serde_json::to_value(&deny_no_reason).expect("serialize");
+    let payload = &json["ApprovalResolved"];
+    assert!(
+        payload["occurrence_id"].is_null(),
+        "Option::is_none serializes as JSON null under the default behavior"
+    );
+    assert!(
+        payload["decision"].get("reason").is_none(),
+        "Deny {{ reason: None }} must not carry a reason field"
+    );
+    let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(round_tripped, deny_no_reason);
+
+    // ContinueTurnRequested: full payload.
+    let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
+        resumed_from: agent::TurnEndReason::HaltedByDoomLoop,
+    });
+    let json = serde_json::to_value(&continue_turn).expect("serialize ContinueTurnRequested");
+    assert_eq!(
+        json["ContinueTurnRequested"]["resumed_from"],
+        "HaltedByDoomLoop"
+    );
+    let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
+    assert_eq!(round_tripped, continue_turn);
+}
+
+/// The two new events are audit-only: they persist (via `agent_events`)
+/// but fold into no frame item, so the transcript does not gain a row
+/// (the existing approval / TurnEnded / next-turn rows already show the
+/// operator action's visible effect). Pinning the no-op fold here keeps
+/// the transcript-count invariant honest: every persisted event must
+/// either produce a frame item or be a documented audit record.
+#[test]
+fn operator_intervention_events_fold_into_no_frame_item() {
+    let mut frame = AgentFrame::empty();
+    let mut turn = TurnClock::new();
+
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ApprovalResolved(agent::ApprovalResolved {
+            call_id: agent::ToolCallId("call".to_string()),
+            occurrence_id: None,
+            decision: agent::ApprovalDecisionPayload::Approve,
+        }),
+        &mut turn,
+    );
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
+            resumed_from: agent::TurnEndReason::HaltedByIterationCap,
+        }),
+        &mut turn,
+    );
+
+    assert!(
+        frame.items.is_empty(),
+        "audit-only events must not grow frame.items; got {:?}",
+        frame.items
+    );
+}
+
+/// `AgentFrame::last_turn_end_reason` is the accessor
+/// `Event::ContinueTurnRequested`'s emit site uses to record *what kind of
+/// halt* the human resumed from. The `.rev()` walk must (a) find the
+/// latest `TurnEnded` regardless of what other items sit between it and
+/// the head, and (b) return `None` for a frame that has never ended a
+/// turn, so the emit site promotes that to `TurnEndReason::Unknown` per
+/// the Event doc comment.
+#[test]
+fn last_turn_end_reason_finds_the_latest_turn_ended() {
+    let mut frame = AgentFrame::empty();
+    let mut turn = TurnClock::new();
+    assert_eq!(frame.last_turn_end_reason(), None);
+
+    // A `MessageCommitted` after the halt would shadow the old read if
+    // the accessor naively took the last item; pin the `.rev()` walk.
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::TurnEnded(agent::TurnEndReason::HaltedByIterationCap),
+        &mut turn,
+    );
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::MessageCommitted(agent::Message {
+            role: agent::MessageRole::User,
+            text: "new prompt".to_string(),
+        }),
+        &mut turn,
+    );
+    assert_eq!(
+        frame.last_turn_end_reason(),
+        Some(agent::TurnEndReason::HaltedByIterationCap),
+        "the halt must remain the latest TurnEnded even with a later MessageCommitted"
+    );
+
+    // A *newer* TurnEnded supersedes the older one.
+    apply_agent_event_to_frame(
+        &mut frame,
+        &agent::Event::TurnEnded(agent::TurnEndReason::Completed),
+        &mut turn,
+    );
+    assert_eq!(
+        frame.last_turn_end_reason(),
+        Some(agent::TurnEndReason::Completed),
+    );
+}

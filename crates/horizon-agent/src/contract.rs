@@ -227,6 +227,62 @@ pub enum Event {
     /// stay in this very log and in the DuckDB projection, which is what
     /// makes the placeholder's "re-fetch via recall" pointer honest.
     HistoryCleared(HistoryCleared),
+    /// A human resolved a pending `ApprovalRequested`. Emitted at the
+    /// sessiond seam where `Command::ApproveToolCall`/`DenyToolCall` lands
+    /// in `dispatch_inbound_command` (`crates/horizon-sessiond/src/session/
+    /// approval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the
+    /// resolution may then go on to produce — so the audit row exists
+    /// regardless of which `ApprovalOutcome` variant `resolve_approval`
+    /// returns, including the `AlreadyResolved` duplicate-click case.
+    ///
+    /// This is the **authoritative** record of who resolved a pending
+    /// approval and how (the existing `agent_approvals.outcome` column
+    /// stays populated by the order-derived `ToolCallStarted`/`Tool
+    /// CallFinished` path for backward compatibility, but it is a derived
+    /// best-effort projection — collapsed rows and reused `call_id`s can
+    /// mis-stamp it; this event is what analysis reads first).
+    /// `Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the
+    /// `requested -> resolved` interval an analyst wants for wait-time
+    /// numbers; `ApprovalResolved::occurrence_id` carries the same
+    /// `OccurrenceId` the matching `ApprovalRequested` was minted with
+    /// (sandbox-denial-retry always has one; older logs may not — see
+    /// `ApprovalRequest::occurrence_id` for the `serde` rationale).
+    ///
+    /// Deliberately carries only the *human* decision: judge-issued
+    /// approvals (`tools::approval::resolve_auto_approval`, the enforcing
+    /// judge's auto-resolve path) do not produce this event, because the
+    /// whole point is to surface what the operator did, not what the
+    /// background model decided. Auto-approvals are still visible via
+    /// `agent_approvals.outcome` and the `judge_*` event log records
+    /// (`docs/agent-approval-design.md`'s "Judge design").
+    ///
+    /// Audit-only: no frame item, no projection table row. The transcript
+    /// already shows the resolution as the approval-row state changing
+    /// (approve → `ToolCallStarted` / `ToolCallFinished`; deny →
+    /// `ToolCallFinished` with `denied: true`); adding a row here would
+    /// duplicate that signal for the user while doing nothing for SQL
+    /// analytics that read `agent_events` directly.
+    ApprovalResolved(ApprovalResolved),
+    /// A human resumed a turn the turn-loop guard halted via
+    /// `Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-
+    /// halts-real-work.md`'s decision 3 — "Continue is one action").
+    /// Emitted at the same sessiond seam as `ApprovalResolved`.
+    /// `resumed_from` carries the `TurnEndReason` of the most recent
+    /// `TurnEnded` event in this session's frame at the moment of
+    /// dispatch — `AgentFrame::last_turn_end_reason` is the accessor —
+    /// so an analyst can read "human resumed after an iteration-cap
+    /// halt" / "...after a doom-loop halt" from this row alone. A
+    /// `ContinueTurn` arriving for a session with nothing halted (a
+    /// no-op replay, or one sent to an idle session) still emits this
+    /// event with `resumed_from = Unknown`, so analytics can count
+    /// attempted-but-idle continue-turns without a separate missing-
+    /// data signal: that count is itself a useful operator-behavior
+    /// number (a non-zero one likely means a UI keybinding race).
+    ///
+    /// Audit-only: same as `ApprovalResolved`. The transcript already
+    /// shows the resumed turn's `TurnEnded` receipt and the next turn's
+    /// events; the audit row sits in the event log alongside them.
+    ContinueTurnRequested(ContinueTurnRequested),
     /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
     /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
     /// discarded there; under serde_json only *unit* variants degrade —
@@ -299,6 +355,8 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ToolCallStarted(_) => "tool_call_started",
         Event::ToolCallFinished(_) => "tool_call_finished",
         Event::ApprovalRequested(_) => "approval_requested",
+        Event::ApprovalResolved(_) => "approval_resolved",
+        Event::ContinueTurnRequested(_) => "continue_turn_requested",
         Event::ProviderRequestSent(_) => "provider_request_sent",
         Event::ProviderRequestFirstToken => "provider_request_first_token",
         Event::ProviderRequestFinished => "provider_request_finished",
@@ -711,6 +769,52 @@ pub struct ApprovalRequest {
     /// approval request was before this leg.
     #[serde(default)]
     pub kind: ApprovalKind,
+}
+
+/// The operator's decision on a pending [`ApprovalRequest`], as carried on
+/// [`Event::ApprovalResolved`]. Wire-stable mirror of the internal
+/// `tools::approval::ApprovalDecision` enum (which is deliberately not a wire
+/// type — it has no `Serialize`/`Deserialize` and lives only inside
+/// `horizon-agent`), so the on-disk JSONL event log records an explicit,
+/// `Deserialize`-able shape rather than depending on the internal enum's
+/// representation. `Approve` carries no payload; `Deny` carries an optional
+/// human-supplied reason string (the same one `Command::DenyToolCall` accepts
+/// today).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub enum ApprovalDecisionPayload {
+    Approve,
+    Deny {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+    },
+}
+
+/// Payload for [`Event::ApprovalResolved`]. Pairs with the preceding
+/// `Event::ApprovalRequested` to bound the wait-time interval an analyst
+/// needs (`requested.event_at -> resolved.event_at`, both columns on
+/// `agent_events`); `occurrence_id` matches the request's `occurrence_id` so
+/// the join survives a provider-reused `call_id` or a sandbox-denial retry
+/// (which re-mints the occurrence).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ApprovalResolved {
+    pub call_id: ToolCallId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub occurrence_id: Option<OccurrenceId>,
+    pub decision: ApprovalDecisionPayload,
+}
+
+/// Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`
+/// of the most recent `TurnEnded` event in this session's frame at the
+/// moment the human resumed, recovered via
+/// [`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows
+/// which guard's halt the operator overrode (`HaltedByIterationCap` /
+/// `HaltedByDoomLoop` / the legacy bare `Halted`). `Unknown` when no
+/// preceding `TurnEnded` exists — the no-op-replay / idle-session case
+/// (see the `Event::ContinueTurnRequested` doc comment for why that
+/// distinction still matters operationally).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ContinueTurnRequested {
+    pub resumed_from: TurnEndReason,
 }
 
 /// Distinguishes the shape of a pending [`ApprovalRequest`] -- what

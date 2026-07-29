@@ -135,6 +135,19 @@ impl Store {
             // and the raw record in `agent_events` is what the rig session's
             // resume path replays it from (`providers::rig::history`).
             | Event::HistoryCleared(_)
+            // Operator-intervention audit records (`ApprovalResolved` /
+            // `ContinueTurnRequested`): no dedicated projection table --
+            // they are pure audit signals whose primary consumer is the raw
+            // `agent_events` row (the `requested -> resolved` join for
+            // approval-wait times, and the `TurnEnded -> ContinueTurnRequested`
+            // join for continue-turn usage). The order-derived
+            // `agent_approvals.outcome` (populated by `ToolCallStarted` /
+            // `ToolCallFinished` arms above) stays in place as a derived,
+            // best-effort projection of `ApprovalResolved::decision` for
+            // backward compatibility with existing queries; the new event
+            // is the authoritative source from now on.
+            | Event::ApprovalResolved(_)
+            | Event::ContinueTurnRequested(_)
             | Event::Error(_)
             | Event::Exited(_) => Ok(false),
             // Skew catch-all (`Event::Unknown`'s doc): an event this build
