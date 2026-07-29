@@ -75,8 +75,16 @@ impl WorkspaceShell {
                 self.focus_active(window, cx);
             }
             CommandId::TerminateActiveSession => {
-                self.workspace.exit_workspace_mode();
+                // Terminate before exiting workspace mode: `exit_workspace_
+                // mode` clears `workspace_mode_cursor`, and
+                // `terminate_active_session` resolves its target through
+                // `cursor_session_id` (the cursor pane, falling back to the
+                // focused pane outside the mode). Exiting first would erase
+                // the cursor before the terminate could read it, silently
+                // reverting to the focused pane -- the exact behavior this
+                // reorder exists to prevent.
                 self.workspace.terminate_active_session();
+                self.workspace.exit_workspace_mode();
                 self.reconcile(window, cx);
                 self.focus_active(window, cx);
             }
@@ -316,7 +324,7 @@ impl WorkspaceShell {
         CommandState {
             tab_count: self.workspace.tab_count(),
             visible_pane_count: self.workspace.visible_panes().len(),
-            has_active_session: self.workspace.active_session_id().is_some(),
+            has_active_session: self.workspace.cursor_session_id().is_some(),
             detached_session_count: self.workspace.detached_session_count(),
             has_pending_approval,
             has_turn_in_flight,
