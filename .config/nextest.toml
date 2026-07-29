@@ -57,6 +57,7 @@ default-filter = '''
         + test(/^tools::tests::a_configured_grant_makes_an_out_of_workspace_write/)
         + test(/^tools::tests::approved_git_commit_writes_linked_metadata/)
         + test(/^tools::tests::judge_approved_filesystem_retry_reruns_sandboxed/)
+        + test(/^tools::tests::an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded/)
         + test(/^session::setup::tests::isolation_announcement::/)
         + test(/^worktree::tests::create_isolated_worktree_branches/)
         + test(/outside_a_git_repository$/)

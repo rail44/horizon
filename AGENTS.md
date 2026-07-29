@@ -54,7 +54,11 @@ covers them when the branch lands, which is the same division of labour
 the branch-handoff flow already uses. Do not hand-build an exclusion
 list: a failure *outside* the profile's skip set is a real finding, and
 one session burned 92 rounds growing a 30-term filter one failure at a
-time before this profile existed (`docs/issues/010`).
+time before this profile existed (`docs/issues/010`). When you add a
+boundary test that cannot pass under containment, also add it to the
+`sandboxed` profile's filter in `.config/nextest.toml` — the skip set is
+not self-maintaining, and a missed exclusion surfaces as a red test
+rather than a skipped one.
 
 The last step is the session-wire skew checker
 (`docs/remoc-adoption-design.md` §4): it diffs the committed wire-schema
