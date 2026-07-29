@@ -104,6 +104,26 @@ impl Workspace {
             .and_then(|pane| pane.session_id)
     }
 
+    /// The session attached to the pane the workspace-mode cursor sits on
+    /// -- the free-floating cursor while the mode is active, or simply the
+    /// focused pane otherwise (see [`cursor_pane_id`]). This is the
+    /// kind-agnostic "operation target" counterpart of
+    /// [`active_session_id`]: `terminate_active_session` resolves through
+    /// it so that terminating inside workspace mode hits the pane under the
+    /// cursor rather than whichever pane still holds keyboard focus,
+    /// mirroring how the agent commands (`active_agent_session`) already
+    /// resolve through [`cursor_pane_id`] instead of the focused pane.
+    ///
+    /// [`cursor_pane_id`]: Self::cursor_pane_id
+    /// [`active_session_id`]: Self::active_session_id
+    pub fn cursor_session_id(&self) -> Option<SessionId> {
+        let pane_id = self.cursor_pane_id()?;
+        self.panes
+            .iter()
+            .find(|pane| pane.id == pane_id)
+            .and_then(|pane| pane.session_id)
+    }
+
     /// Test-only now: the GPUI shell's recursive renderer
     /// (`src/workspace.rs`, `docs/recursive-layout-design.md`'s slice 2)
     /// resolves a terminal pane's session by `PaneId`

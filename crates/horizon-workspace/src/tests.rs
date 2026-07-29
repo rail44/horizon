@@ -606,6 +606,39 @@ fn terminate_active_session_returns_removed_session() {
 }
 
 #[test]
+fn terminate_active_session_targets_the_cursor_not_focus_in_workspace_mode() {
+    // Inside workspace mode the cursor and focus diverge: `hjkl` moves the
+    // cursor (the operation target) without touching focus (where keyboard
+    // input flows). `terminate_active_session` must follow the cursor, so
+    // the session under it is the one that gets killed -- not the focused
+    // pane's session. Outside the mode the two coincide by construction
+    // (`cursor_pane_id` falls back to `tab.active`), so the non-mode case
+    // is already covered by `terminate_active_session_returns_removed_session`.
+    let mut workspace = Workspace::mvp();
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let second_session = SessionId::new();
+    let second = workspace.split_active(PaneKind::Terminal, Some(second_session));
+    let first = workspace.visible_pane_id(0).expect("first pane");
+
+    // Focus the first pane, then move the workspace-mode cursor onto the
+    // second so the two diverge.
+    workspace.activate_visible_pane(0);
+    workspace.enter_workspace_mode();
+    workspace.move_cursor(Direction::Right);
+    assert_eq!(workspace.cursor_pane_id(), Some(second));
+    assert!(
+        workspace.is_active_pane(first),
+        "focus must stay on the first pane while the cursor roams"
+    );
+
+    // The cursor sits on `second`; terminate must hit that session, not the
+    // focused (first) pane's.
+    assert_eq!(workspace.terminate_active_session(), Some(second_session));
+    assert!(!workspace.session_is_referenced(second_session));
+    assert!(workspace.session_is_referenced(first_session));
+}
+
+#[test]
 fn terminate_unknown_session_is_noop() {
     let mut workspace = Workspace::mvp();
 

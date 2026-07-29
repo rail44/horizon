@@ -43,8 +43,16 @@ impl Workspace {
         true
     }
 
+    /// Terminates the session under the workspace-mode cursor (or the
+    /// focused pane's session when the mode is inactive -- see
+    /// [`cursor_session_id`]). Resolving through the cursor rather than
+    /// the focused pane means `Terminate Active Session` run from inside
+    /// workspace mode hits the pane the cursor is on, not whichever pane
+    /// still holds keyboard focus.
+    ///
+    /// [`cursor_session_id`]: Workspace::cursor_session_id
     pub fn terminate_active_session(&mut self) -> Option<SessionId> {
-        let session_id = self.active_session_id()?;
+        let session_id = self.cursor_session_id()?;
         self.terminate_session(session_id).then_some(session_id)
     }
 
