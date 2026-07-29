@@ -13,6 +13,14 @@ pub enum CommandId {
     CancelAgentTurn,
     ContinueAgentTurn,
     ReloadSessionRuntime,
+    /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
+    /// decision 3). Deliberately separate from
+    /// [`CommandId::ReloadSessionRuntime`] and deliberately destructive:
+    /// picking up a `horizon-terminal-core` change means replacing the
+    /// process that owns every PTY, so every terminal session -- and
+    /// whatever is running inside it -- ends. The close-vs-terminate
+    /// discipline applies to daemons too.
+    ReloadTerminalRuntime,
     OpenSessionManager,
     ReloadConfig,
     /// Opens a new terminal tab whose cwd is the active session's
@@ -165,8 +173,17 @@ pub fn core_commands() -> Vec<CommandSpec> {
             id: CommandId::ReloadSessionRuntime,
             title: "Reload Session Runtime",
             category: CommandCategory::Agent,
-            description: "Restart horizon-sessiond and reconnect every agent session.",
+            description: "Restart horizon-sessiond and reconnect every agent session. \
+                          Terminals are unaffected.",
             destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::ReloadTerminalRuntime,
+            title: "Reload Terminal Runtime",
+            category: CommandCategory::Workspace,
+            description: "Restart horizon-terminald. Terminates every terminal session and its \
+                          shell.",
+            destructive: true,
         },
         CommandSpec {
             id: CommandId::OpenSessionManager,
@@ -205,6 +222,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::NewTab
         | CommandId::FocusNextPane
         | CommandId::ReloadSessionRuntime
+        | CommandId::ReloadTerminalRuntime
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
@@ -262,7 +280,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 16);
+        assert_eq!(commands.len(), 17);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -277,12 +295,14 @@ mod tests {
         assert_eq!(commands[10].title, "Cancel Agent Turn");
         assert_eq!(commands[11].id, CommandId::ContinueAgentTurn);
         assert_eq!(commands[11].title, "Continue Agent Turn");
-        assert_eq!(commands[13].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[13].title, "Manage Sessions");
-        assert_eq!(commands[14].id, CommandId::ReloadConfig);
-        assert_eq!(commands[14].title, "Reload Config");
-        assert_eq!(commands[15].id, CommandId::OpenTerminalInSessionDirectory);
-        assert_eq!(commands[15].title, "Open Terminal in Session Directory");
+        assert_eq!(commands[13].id, CommandId::ReloadTerminalRuntime);
+        assert_eq!(commands[13].title, "Reload Terminal Runtime");
+        assert_eq!(commands[14].id, CommandId::OpenSessionManager);
+        assert_eq!(commands[14].title, "Manage Sessions");
+        assert_eq!(commands[15].id, CommandId::ReloadConfig);
+        assert_eq!(commands[15].title, "Reload Config");
+        assert_eq!(commands[16].id, CommandId::OpenTerminalInSessionDirectory);
+        assert_eq!(commands[16].title, "Open Terminal in Session Directory");
     }
 
     #[test]
@@ -311,15 +331,24 @@ mod tests {
     }
 
     #[test]
-    fn only_terminate_commands_are_marked_destructive() {
+    fn only_session_ending_commands_are_marked_destructive() {
+        // `ReloadTerminalRuntime` belongs here with the two explicit
+        // terminates: restarting `horizon-terminald` ends every terminal
+        // session and the processes inside them
+        // (`docs/terminald-split-design.md` decision 3). Its sibling
+        // `ReloadSessionRuntime` does not -- since the split it restarts
+        // only the agent daemon, whose sessions are resumed from the event
+        // log rather than killed.
         for command in core_commands() {
             let expected = matches!(
                 command.id,
-                CommandId::TerminateActiveSession | CommandId::TerminateAllDetachedSessions
+                CommandId::TerminateActiveSession
+                    | CommandId::TerminateAllDetachedSessions
+                    | CommandId::ReloadTerminalRuntime
             );
             assert_eq!(
                 command.destructive, expected,
-                "{:?} should only be destructive if it terminates session(s)",
+                "{:?} should only be destructive if it ends session(s)",
                 command.id
             );
         }

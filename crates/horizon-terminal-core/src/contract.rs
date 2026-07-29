@@ -205,7 +205,7 @@ pub enum SelectionCommand {
 
 /// A demuxed [`TerminalCommand::RequestScrollWindow`], routed onto the
 /// session loop's own `window_rx` channel by the host's PTY writer thread
-/// (`run_writer`, `horizon-sessiond`) — see [`crate::CoreReceivers`]. The
+/// (`run_writer`, `horizon-terminald`) — see [`crate::CoreReceivers`]. The
 /// loop answers by calling `TerminalCore::snapshot_window(anchor, height)`
 /// and putting the resulting window on the events mpsc as
 /// [`TerminalUpdate::ScrollWindow`] (`docs/terminal-scrollback-design.md`

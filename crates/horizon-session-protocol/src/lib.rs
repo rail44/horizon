@@ -1,13 +1,33 @@
-//! The session-daemon wire, v10 onwards: one `#[rtc::remote]` hub trait
-//! ([`SessionHub`]) over a remoc connection, replacing the JSONL envelope
-//! protocol this crate used to own (`Envelope`, `kind` dispatch,
-//! `request_id` correlation, line framing — all deleted with the cutover;
-//! see `docs/remoc-adoption-design.md` §2's mapping table). The agent and
+//! The session-daemon wire, v10 onwards: `#[rtc::remote]` hub traits over a
+//! remoc connection, replacing the JSONL envelope protocol this crate used
+//! to own (`Envelope`, `kind` dispatch, `request_id` correlation, line
+//! framing — all deleted with the cutover; see
+//! `docs/remoc-adoption-design.md` §2's mapping table). The agent and
 //! terminal vocabularies remain sister crates that never reference each
 //! other; this crate is the one place that names both — the "thin shared
 //! layer" `docs/session-daemon-design.md` decision 3 allows — and the
 //! dependency direction is inverted accordingly (this crate depends on the
 //! vocabulary crates, never the reverse).
+//!
+//! Since v17 there are **two** hubs, one per daemon
+//! (`docs/terminald-split-design.md`): [`SessionHub`], served by
+//! `horizon-sessiond` on its socket, carries the agent domain only, and
+//! [`TerminalHub`], served by `horizon-terminald` on its own sibling
+//! socket, carries the terminal domain. Both share this crate's
+//! negotiation vocabulary ([`ClientHello`], [`VersionRange`],
+//! [`HubError`]), the codec pin, and the size caps, so a client speaks the
+//! same handshake to either daemon.
+//!
+//! **The terminal slice is append-only from v17 on** (design decision 5):
+//! `horizon-terminald` is deliberately rarely restarted — a running one
+//! keeps its PTYs across every `Reload Session Runtime` — so a reshape of
+//! [`TerminalHub`], [`TerminalAttachment`], or the `horizon-terminal-core`
+//! vocabularies is a *heavy* change that forces every terminal session to
+//! die on the next `Reload Terminal Runtime`. Evolve it by appending (new
+//! methods, new `#[serde(default)]` fields, new variants before the
+//! `#[serde(other)] Unknown` catch-all) and retire slots as tombstones
+//! rather than removing them. The agent slice keeps the ordinary freedom
+//! the §4 skew discipline grants (v14/v15/v16 are all reshapes of it).
 //!
 //! Adoption conditions (binding, §1 of the design doc), as implemented
 //! here:
@@ -380,7 +400,29 @@ impl DecodeSkipLog {
 /// approval.rs`); the actual outbound `Command::ContinueTurn` it forwards
 /// is unchanged, so an old daemon running against a v16 client handles it
 /// exactly as before.
-pub const SESSION_PROTOCOL_VERSION: u32 = 16;
+///
+/// Version 17: **the terminald split** (`docs/terminald-split-design.md`).
+/// The single [`SessionHub`] becomes two hubs on two sockets:
+/// `horizon-sessiond` keeps `hello`/`list_agents`/`new_agent`/
+/// `attach_agent`/`drain`, and the three terminal methods move verbatim
+/// onto the new [`TerminalHub`] that `horizon-terminald` serves. Removing
+/// methods from an rtc trait is the bluntest reshape this wire has: the
+/// macro's request enum is index-encoded under Postbag, so every surviving
+/// agent method shifts index and a v16 daemon cannot decode a v17 client's
+/// requests at all (nor vice versa). [`MIN_SUPPORTED_PROTOCOL_VERSION`]
+/// therefore rises to 17 with it -- the second time this has happened (v11's
+/// frame-path reshape was the first), and for the same reason: there is no
+/// compatibility code that could make the pairing work, so `hello` rejects
+/// it and the auto-drain-and-respawn path (§6) recovers.
+///
+/// One transition wart, deliberately accepted rather than papered over: the
+/// drain that recovery sends is itself index-shifted, so a *still-running
+/// v16 `horizon-sessiond`* decodes it as one of its own other methods and
+/// keeps running. The client reports that honestly ("kept accepting
+/// connections after the drain call; stop it manually") instead of looping.
+/// One `kill` of the stale daemon, once, at this version boundary; every
+/// later version pairing keeps the drain aligned because `drain` stays put.
+pub const SESSION_PROTOCOL_VERSION: u32 = 17;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -409,8 +451,13 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 16;
 /// (`Event::HistoryCleared`) is the same shape of change for the same
 /// reason and likewise does not raise this floor: an older peer reads the
 /// new event as `Unknown` and skips it, which costs it only the transcript's
-/// compaction divider -- never a message, a tool call, or a result.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 11;
+/// compaction divider -- never a message, a tool call, or a result. v17
+/// (the terminald split) *does* raise it, to 17: removing three methods
+/// from [`SessionHub`] shifts every surviving method's index under the
+/// index-encoded request enum, which leaves no compatibility code behind on
+/// either side -- exactly v11's situation. See
+/// [`SESSION_PROTOCOL_VERSION`]'s v17 note.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 17;
 
 /// The first negotiated version at which the daemon answers
 /// `TerminalCommand::RequestScrollWindow` with a served window
@@ -479,11 +526,12 @@ impl ClientHello {
     }
 }
 
-/// The daemon's `hello` reply: the negotiated version plus the
+/// `horizon-sessiond`'s `hello` reply: the negotiated version plus the
 /// connection-global channels (`docs/remoc-adoption-design.md` §2 — what
 /// used to be connection-global envelope kinds now rides channels handed
 /// over here; everything session-scoped rides the per-attachment channels
-/// instead).
+/// instead). Every channel here is agent-domain, which is why
+/// [`TerminalHubHello`] carries none of them.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct HubHello {
     /// The highest mutually supported version — the version this
@@ -507,6 +555,29 @@ pub struct HubHello {
     /// Replaces the `SkippedLines` control envelope.
     #[schemars(schema_with = "channel_schema::<String>")]
     pub skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>,
+}
+
+/// `horizon-terminald`'s `hello` reply. Deliberately channel-free: every
+/// connection-global channel [`HubHello`] hands over belongs to the agent
+/// domain (host tools, the event log's startup diagnostic), and the
+/// terminal domain's only streams are per-attachment
+/// ([`TerminalAttachment`]).
+///
+/// `binary_id` is load-bearing beyond diagnostics here — it is the terminald
+/// connection's skew insurance (`docs/terminald-split-design.md` decision
+/// 6). A terminald that outlives many UI rebuilds may be running an older
+/// binary than the client that connects to it, and the layer *below* the
+/// negotiated version (remoc/chmux framing, the Postbag codec) is not
+/// covered by version negotiation at all — the tmux 3.6 lesson. The client
+/// records this id at `hello` and names it if a post-`hello` decode failure
+/// suggests exactly that kind of skew, so the failure surfaces as a clean
+/// refusal pointing at `Reload Terminal Runtime` rather than as silent
+/// misbehavior.
+#[derive(Serialize, Deserialize, JsonSchema)]
+pub struct TerminalHubHello {
+    /// The highest mutually supported version (see [`HubHello::negotiated`]).
+    pub negotiated: u32,
+    pub binary_id: String,
 }
 
 /// The schema stand-in for a remoc channel half: on the wire it is a chmux
@@ -613,22 +684,27 @@ impl From<rtc::CallError> for HubError {
     }
 }
 
-/// The session hub — the one `#[rtc::remote]` trait that replaces the
-/// envelope protocol (`docs/remoc-adoption-design.md` §2). The daemon
-/// serves it over the unix socket; [`hello`](Self::hello) must be the
-/// first call on every connection. `hello` and
-/// [`drain`](Self::drain) are the version-stable surface (the
-/// conversations that must keep working across future protocol versions,
-/// like the JSONL era's `session_control` kind); everything else may
-/// evolve additively under the §4 skew discipline.
+/// The terminal hub — `horizon-terminald`'s whole rtc surface
+/// (`docs/terminald-split-design.md` decision 1). Carved off [`SessionHub`]
+/// in v17 so terminal hosting lives in its own rarely-restarted process:
+/// `Reload Session Runtime` drains the *agent* daemon and never touches a
+/// PTY, while `Reload Terminal Runtime` is the explicit, destructive
+/// counterpart for this one.
+///
+/// **Append-only from here on** (design decision 5, owner-accepted): every
+/// restart of the daemon serving this trait kills real interactive shells,
+/// so a reshape is a heavy, user-visible change. New methods and new
+/// `#[serde(default)]`/`Unknown`-guarded vocabulary go on the end; a retired
+/// method becomes a tombstone that errors, never a hole. The version range
+/// [`hello`](Self::hello) negotiates still gates *behavior* the same way it
+/// does on [`SessionHub`].
 #[rtc::remote]
-pub trait SessionHub {
-    /// Version negotiation (`docs/remoc-adoption-design.md` §3): the first
-    /// call on every connection. Replaces the exact-match JSONL handshake
-    /// with `[min_supported, current]` range intersection.
-    async fn hello(&self, client: ClientHello) -> Result<HubHello, HubError>;
-
-    // -- terminal domain --
+pub trait TerminalHub {
+    /// Version negotiation, identical in shape to [`SessionHub::hello`] —
+    /// the first call on every connection, and (with
+    /// [`drain`](Self::drain)) the version-stable surface a
+    /// range-rejected client may still use.
+    async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError>;
 
     /// Every live terminal session, sorted by id. Replaces the
     /// request-id-correlated `TerminalControl::List`/`ListResult` pair.
@@ -650,7 +726,28 @@ pub trait SessionHub {
     /// no snapshot-then-diffs dance.
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
-    // -- agent domain --
+    /// Flush-and-exit: shuts every hosted terminal down and exits. The
+    /// destructive half of `Reload Terminal Runtime`; like
+    /// [`SessionHub::drain`] the call itself typically errors because the
+    /// process is gone before a reply can travel.
+    async fn drain(&self) -> Result<(), HubError>;
+}
+
+/// The agent session hub — `horizon-sessiond`'s rtc surface
+/// (`docs/remoc-adoption-design.md` §2). The daemon serves it over its unix
+/// socket; [`hello`](Self::hello) must be the first call on every
+/// connection. `hello` and [`drain`](Self::drain) are the version-stable
+/// surface (the conversations that must keep working across future protocol
+/// versions, like the JSONL era's `session_control` kind); everything else
+/// may evolve additively under the §4 skew discipline.
+///
+/// Terminal hosting left this trait in v17 — see [`TerminalHub`].
+#[rtc::remote]
+pub trait SessionHub {
+    /// Version negotiation (`docs/remoc-adoption-design.md` §3): the first
+    /// call on every connection. Replaces the exact-match JSONL handshake
+    /// with `[min_supported, current]` range intersection.
+    async fn hello(&self, client: ClientHello) -> Result<HubHello, HubError>;
 
     /// Every live agent session. Replaces
     /// `Control::SessionList`/`SessionListResult`.
@@ -670,10 +767,12 @@ pub trait SessionHub {
     // -- lifecycle --
 
     /// Flush-and-exit, replacing `SessionControl::Drain`: the daemon
-    /// flushes its event log to disk, shuts its terminals down, and
-    /// exits. The call itself typically errors (the process is gone
-    /// before a reply can travel); callers observe completion as the
-    /// socket refusing connections, same as before.
+    /// flushes its event log to disk and exits. The call itself typically
+    /// errors (the process is gone before a reply can travel); callers
+    /// observe completion as the socket refusing connections, same as
+    /// before. Since v17 this no longer touches a single PTY — terminals
+    /// belong to `horizon-terminald`, whose own
+    /// [`TerminalHub::drain`] is the destructive counterpart.
     async fn drain(&self) -> Result<(), HubError>;
 }
 
@@ -734,9 +833,8 @@ mod tests {
             };
         assert_eq!(
             variants,
-            "unknown variant `__bogus`, expected one of `Hello`, `ListTerminals`, \
-             `CreateTerminal`, `AttachTerminal`, `ListAgents`, `NewAgent`, `AttachAgent`, \
-             `Drain` at line 1 column 10",
+            "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `NewAgent`, \
+             `AttachAgent`, `Drain` at line 1 column 10",
         );
 
         // Argument names per method, from serde's missing-field errors.
@@ -761,16 +859,6 @@ mod tests {
             probe("Hello")
         );
         assert!(
-            probe("CreateTerminal").starts_with("missing field `session_id`"),
-            "{}",
-            probe("CreateTerminal")
-        );
-        assert!(
-            probe("AttachTerminal").starts_with("missing field `session_id`"),
-            "{}",
-            probe("AttachTerminal")
-        );
-        assert!(
             probe("NewAgent").starts_with("missing field `new`"),
             "{}",
             probe("NewAgent")
@@ -780,11 +868,55 @@ mod tests {
             "{}",
             probe("AttachAgent")
         );
+    }
+
+    /// [`TerminalHub`]'s half of the same mechanical check — and the guard
+    /// behind the v17 split's central claim that the terminal methods moved
+    /// *verbatim*: the same names, the same argument names, on the daemon
+    /// that now owns them.
+    #[test]
+    fn terminal_hub_request_enum_matches_the_documented_method_surface() {
+        let variants =
+            match serde_json::from_str::<TerminalHubReqRef<WireCodec>>("{\"__bogus\":null}") {
+                Ok(_) => panic!("a bogus variant must fail"),
+                Err(error) => error.to_string(),
+            };
+        assert_eq!(
+            variants,
+            "unknown variant `__bogus`, expected one of `Hello`, `ListTerminals`, \
+             `CreateTerminal`, `AttachTerminal`, `Drain` at line 1 column 10",
+        );
+
+        let probe = |method: &str| {
+            let json = format!(
+                "{{\"{method}\": {{\"__reply_tx\": {{\"port\": null, \"data\": null, \
+                 \"codec\": null}}}}}}"
+            );
+            match serde_json::from_str::<TerminalHubReqRef<WireCodec>>(&json) {
+                Ok(_) => format!("{method}: no further required fields"),
+                Err(error) => error.to_string(),
+            }
+        };
+        assert!(
+            probe("Hello").starts_with("missing field `client`"),
+            "{}",
+            probe("Hello")
+        );
+        assert!(
+            probe("CreateTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("CreateTerminal")
+        );
+        assert!(
+            probe("AttachTerminal").starts_with("missing field `session_id`"),
+            "{}",
+            probe("AttachTerminal")
+        );
         // `create_terminal`'s second argument, past the first.
         let spec_probe = "{\"CreateTerminal\": {\"__reply_tx\": {\"port\": null, \
              \"data\": null, \"codec\": null}, \"session_id\": \
              \"00000000-0000-0000-0000-000000000000\"}}";
-        match serde_json::from_str::<SessionHubReqRef<WireCodec>>(spec_probe) {
+        match serde_json::from_str::<TerminalHubReqRef<WireCodec>>(spec_probe) {
             Ok(_) => panic!("spec must still be required"),
             Err(error) => assert!(
                 error.to_string().starts_with("missing field `spec`"),

@@ -58,7 +58,6 @@
 
 mod hub;
 mod session;
-mod terminal;
 mod worktree;
 
 use std::path::{Path, PathBuf};
@@ -76,7 +75,6 @@ use horizon_session_protocol::{
 use hub::Hub;
 use remoc::rtc::{Client as _, ServerShared as _};
 use session::{Connection, SessiondState};
-use terminal::TerminalHost;
 use tokio::net::{UnixListener, UnixStream};
 
 /// Reported in this binary's `hello` reply's `binary_id`. The negotiated
@@ -149,9 +147,8 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
-    let terminals = TerminalHost::new();
 
-    run(listener, &socket_path, state, terminals).await
+    run(listener, &socket_path, state).await
 }
 
 /// Opens this process's own event log writer, resumes every session found
@@ -284,7 +281,6 @@ async fn run(
     listener: UnixListener,
     socket_path: &Path,
     state: Arc<SessiondState>,
-    terminals: TerminalHost,
 ) -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
@@ -292,13 +288,12 @@ async fn run(
         tokio::select! {
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
-                if let Err(err) = handle_connection(stream, state.clone(), terminals.clone()).await {
+                if let Err(err) = handle_connection(stream, state.clone()).await {
                     eprintln!("horizon-sessiond: connection error: {err}");
                 }
             }
             _ = sigterm.recv() => {
                 eprintln!("horizon-sessiond: SIGTERM received, shutting down");
-                terminals.shutdown_all();
                 break;
             }
         }
@@ -320,11 +315,7 @@ async fn run(
 /// (`docs/remoc-adoption-design.md` §3); a range-rejected client can still
 /// call `drain`, which is how the auto-recovery path restarts a stale
 /// daemon at the right version.
-async fn handle_connection(
-    stream: UnixStream,
-    state: Arc<SessiondState>,
-    terminals: TerminalHost,
-) -> anyhow::Result<()> {
+async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> anyhow::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let connect = remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
         remoc::Cfg::default(),
@@ -354,7 +345,7 @@ async fn handle_connection(
     let mut conn_task = tokio::spawn(conn);
 
     let connection = Connection::new(state);
-    let hub = Hub::new(connection.clone(), terminals.clone(), BINARY_ID);
+    let hub = Hub::new(connection.clone(), BINARY_ID);
     let (server, mut client) = SessionHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
     // Effective placement of the rtc size caps (see the `RTC_MAX_*`
     // constants): the request cap must be set on the client *before* it
@@ -387,7 +378,6 @@ async fn handle_connection(
     // the process, not the connection), but their bridges to this
     // connection are dead.
     connection.disconnect();
-    terminals.clear_subscribers();
     conn_task.abort();
     Ok(())
 }

@@ -1,0 +1,26 @@
+[package]
+name = "horizon-terminald"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+crossbeam-channel = "0.5"
+# The socket-path convention only (`socket::default_terminald_socket_path`),
+# which lives beside sessiond's so the two cannot drift apart. Nothing of the
+# agent runtime is used here -- see this crate's `main` module doc for the
+# dependency-graph note that follows from it.
+horizon-agent = { path = "../horizon-agent" }
+horizon-session-protocol = { path = "../horizon-session-protocol" }
+horizon-terminal-core = { path = "../horizon-terminal-core" }
+portable-pty = "0.9.0"
+remoc = { workspace = true }
+sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
+uuid = { version = "1.18", features = ["v4"] }
+
+[dev-dependencies]
+termwiz = { version = "0.23.3", features = ["use_serde"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

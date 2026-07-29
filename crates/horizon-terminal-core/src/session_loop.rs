@@ -101,7 +101,7 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 /// damage, so an idle terminal causes no extra wakeups.
 ///
 /// This is session-loop-local by design: it is the shape a future
-/// `sessiond` would use to decide what to stream over a socket, so it must
+/// `terminald` would use to decide what to stream over a socket, so it must
 /// not leak into the UI layer.
 fn notify_snapshot(
     core: &TerminalCore,
@@ -739,7 +739,7 @@ mod tests {
     /// `ScrollWindowRequest` on `window_rx` is served by
     /// `TerminalCore::snapshot_window` and comes back out as a
     /// `TerminalUpdate::ScrollWindow` on the events mpsc — the same round-trip
-    /// the sessiond command/event plumbing carries. Crucially it must **not**
+    /// the terminald command/event plumbing carries. Crucially it must **not**
     /// disturb the live frame watch: serving a window is a pure read, so no
     /// new `TerminalFrame` is produced and the live viewport stays at the tail
     /// (the no-side-effect invariant, §2.2).

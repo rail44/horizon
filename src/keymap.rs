@@ -136,6 +136,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "deny-tool-call" => Some(CommandId::DenyToolCall),
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
         "reload-session-runtime" => Some(CommandId::ReloadSessionRuntime),
+        "reload-terminal-runtime" => Some(CommandId::ReloadTerminalRuntime),
         "reload-config" => Some(CommandId::ReloadConfig),
         "manage-sessions" => Some(CommandId::OpenSessionManager),
         _ => None,

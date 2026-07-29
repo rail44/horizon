@@ -1,6 +1,7 @@
 # terminald 分離 — ターミナルを reload の巻き添えから外す
 
-Status: designed 2026-07-30（オーナー決定）。実装はフェーズ分割で着手。
+Status: **implemented 2026-07-30**（wire v17）。決定 1–7 すべて実装済み。
+実装の記録は末尾「実装記録」に。
 
 ## 動機（実測）
 
@@ -80,3 +81,78 @@ Claude Code）が道連れになるのが現在最大の運用痛。
   小さくなった terminald の上で再検討する方が安全。
 - **agent サブプロセス化（c2）**: 分割を一段深くした形だが persistence
   （単一 writer スレッド）の再設計が付随し、fit が最低。
+
+## 実装記録（2026-07-30、wire v17）
+
+The split landed as one change; what follows is what a reader of the code
+needs that the decisions above do not already say.
+
+**Shape.** `horizon-terminald` is a new workspace crate
+(`crates/horizon-terminald`) with `TerminalHost` moved into it verbatim and
+its own `main` (bind-first accept loop, no persistence to resume, no
+readiness gate). `horizon-sessiond` dropped `terminal.rs`, its
+`portable-pty`/`sysinfo`/`horizon-terminal-core` dependencies, and the three
+terminal hub methods; its `drain` no longer touches a PTY.
+
+**Protocol.** One crate (`horizon-session-protocol`) now holds *two*
+`#[rtc::remote]` traits: `TerminalHub` (hello / list_terminals /
+create_terminal / attach_terminal / drain, replying `TerminalHubHello`) and
+the narrowed `SessionHub` (hello / list_agents / new_agent / attach_agent /
+drain). `HubError`, `ClientHello`, `VersionRange`, the codec pin and every
+size cap stay shared, so one handshake serves both daemons and one artifact
+(`schema/session-wire.json`, now with a `terminal_hub` section) documents
+both wires.
+
+Wire cost, as anticipated: removing methods from the middle of an
+index-encoded request enum is a hard reshape, so `SESSION_PROTOCOL_VERSION`
+is 17 **and** `MIN_SUPPORTED_PROTOCOL_VERSION` rises to 17 with it (only the
+second time, after v11). One transition wart is accepted rather than hidden:
+the automatic drain a v17 client sends to a still-running *v16* sessiond is
+itself index-shifted, so that daemon ignores it and the client reports
+"kept accepting connections after the drain call; stop it manually". One
+manual kill, once, at this boundary.
+
+**Client runtime.** `src/sessiond/` hosts two runtimes: `SessiondHandle`
+(agent ops) and `TerminaldHandle` (terminal ops), each with its own
+connection, op queue, `RuntimeControl`, and route table (`AgentRoutes` /
+`TerminalRoutes` in `routing.rs`; `common.rs` holds what is genuinely
+shared). Splitting the route tables removed a coupling the design doc did
+not name: the single `Routes` used to fan a connection failure out to *both*
+domains, so a dead agent daemon painted every terminal pane with an error.
+Terminald's connection additionally issues one `list_terminals` probe right
+after `hello` — decision 6's insurance — and refuses cleanly, naming the
+peer's `binary_id` and `Reload Terminal Runtime`, when that probe fails on a
+still-live connection. Per-item decode failures on the live attachment
+channels stay tolerant (skipped, rate-limit logged): one poisoned frame must
+not kill every running shell, which is the outcome this split exists to
+prevent. What the probe does *not* catch is written down at
+`terminald::establish`.
+
+**UI.** `Reload Session Runtime` now drops only agent sessions, agent
+entities, and agent pane views; terminal panes keep their views (and thus
+their scroll/selection state) because their sessions never died.
+`Reload Terminal Runtime` (palette, `reload-terminal-runtime` keybinding id,
+`horizon reload-terminal-runtime`) is the destructive counterpart and owns
+what used to be collateral damage: terminating the terminal model sessions,
+reseeding a pane, and re-adopting anything that survived a refused drain.
+`spawn_workspace_restore` now takes both handles and validates both runtimes
+before adopting; its cross-inventory conflict check is unchanged in logic but
+now compares reports from two processes.
+
+**Acceptance.** `horizon-terminald::e2e`'s
+`a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`
+spawns both daemons, performs the real `Reload Session Runtime` sequence
+against sessiond (rtc drain → exit 0 → respawn on the same socket), and then
+proves the terminal session is still listed, still attachable, still carrying
+its retained frame, and still running a shell that answers new input. The
+client-side half is
+`draining_the_agent_runtime_leaves_the_terminal_runtime_untouched` in
+`src/sessiond/tests.rs`.
+
+**Deliberately not done.** `horizon-terminald` still depends on
+`horizon-session-protocol`, which names the agent vocabulary, so
+`horizon-agent` (and DuckDB) sits in the terminal daemon's *link* graph
+without a single symbol being used. That is build-time only — process,
+socket, and trait separation all hold — and carving the protocol crate's
+domain-free foundation into its own crate is tracked as follow-up
+(`docs/tasks/backlog.md`) so the wire itself moves exactly once.

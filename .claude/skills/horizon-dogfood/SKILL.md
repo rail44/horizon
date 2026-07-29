@@ -101,6 +101,8 @@ quote event-log lines (seq numbers) and CLI output.
 - The event log and DuckDB projection are the owner's real data — read
   freely, never write, never delete.
 - Do not `reload-session-runtime` or `reload-config` casually: they
-  affect the owner's whole live instance.
+  affect the owner's whole live instance. `reload-terminal-runtime` is worse
+  still — it kills every PTY the owner has open (including whatever CLI is
+  running in them), so never run it unasked.
 - Approving/denying affects real sessions; when in doubt, deny and
   report instead.

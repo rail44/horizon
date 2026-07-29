@@ -292,7 +292,7 @@ impl TerminalHost {
                 Ok(Err(error)) => return Err(error),
                 Err(_timeout) => {
                     eprintln!(
-                        "horizon-sessiond: terminal spawn attempt {attempt}/\
+                        "horizon-terminald: terminal spawn attempt {attempt}/\
                          {MAX_SPAWN_ATTEMPTS} for {session_id} did not report back within \
                          {TERMINAL_SPAWN_TIMEOUT:?}; retrying with a fresh attempt"
                     );
@@ -328,7 +328,7 @@ impl TerminalHost {
             None => true,
             Some(discarded) => {
                 eprintln!(
-                    "horizon-sessiond: discarding a late duplicate terminal spawn for \
+                    "horizon-terminald: discarding a late duplicate terminal spawn for \
                      {session_id} (an earlier attempt already won)"
                 );
                 let _ = discarded.killer.lock().unwrap().kill();
@@ -446,8 +446,9 @@ fn spawn_terminal(
     let mut command = CommandBuilder::new(&spec.shell);
     command.args(&spec.args);
     command.env("TERM", &spec.term);
-    // Pairs with the fixed `xterm-256color` TERM (see `workspace.rs`'s
-    // `terminal_spawn_spec`, the shell crate) so truecolor detection works
+    // Pairs with the fixed `xterm-256color` TERM (see
+    // `workspace/session_lifecycle.rs`'s `terminal_spawn_spec`, the shell
+    // crate) so truecolor detection works
     // in tools that gate on COLORTERM rather than TERM alone -- only when
     // the inherited environment doesn't already set it, so an already
     // truecolor-aware launch environment (or an explicit override) is
@@ -658,7 +659,7 @@ fn run_writer(
             // this build can't name is logged and dropped -- never written
             // to the PTY, never guessed at.
             TerminalCommand::Unknown => {
-                eprintln!("horizon-sessiond: ignoring unknown terminal command from a newer peer");
+                eprintln!("horizon-terminald: ignoring unknown terminal command from a newer peer");
             }
         }
     }

@@ -93,7 +93,8 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
-`reload-session-runtime`, `reload-config`, `sessions`, `state` (each takes
+`reload-session-runtime`, `reload-terminal-runtime`, `reload-config`,
+`sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.
 

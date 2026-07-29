@@ -7,13 +7,17 @@
 //! exists to attribute where the time goes, not to enforce a budget).
 //!
 //! Measures the wire-level round trip -- `TerminalCommand` sent over the
-//! real Unix socket to a real `horizon-sessiond`, to `TerminalUpdate`
+//! real Unix socket to a real `horizon-terminald`, to `TerminalUpdate`
 //! arriving back -- for: a plain shell's kernel-level PTY echo (the floor),
 //! a synthetic TUI that brackets redraws in DEC private mode 2026
 //! (BSU/ESU) under several sub-variants (well-behaved single write,
 //! multi-chunk, delayed-ESU, never-closed), and a bare DECRQM(2026)
 //! capability probe matching the pattern real ink/Claude-Code-style apps
 //! use to detect synchronized-output support before ever opening a window.
+//!
+//! Moved from `horizon-sessiond`'s test directory to this crate's by the
+//! v17 terminald split (`docs/terminald-split-design.md`) -- the daemon it
+//! probes is `horizon-terminald` now.
 //!
 //! This intentionally reuses `tests/e2e.rs`'s spawn/handshake/wire-helper
 //! shapes rather than importing them (a `tests/*.rs` file is its own
@@ -22,7 +26,7 @@
 //!
 //! Run explicitly, e.g.:
 //! ```sh
-//! cargo test -p horizon-sessiond --test latency_probe -- --ignored --nocapture --test-threads=1
+//! cargo test -p horizon-terminald --test latency_probe -- --ignored --nocapture --test-threads=1
 //! ```
 
 use std::io::ErrorKind;
@@ -31,7 +35,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use horizon_session_protocol::{
-    CappedWatchReceiver, ClientHello, SessionHub as _, SessionHubClient, TerminalAttachment,
+    CappedWatchReceiver, ClientHello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
     WireCodec, FRAME_MAX_ITEM_BYTES,
 };
 use horizon_terminal_core::{
@@ -43,77 +47,59 @@ use termwiz::input::{KeyCode, Modifiers};
 use tokio::net::UnixStream;
 
 const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
-const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-sessiond";
+const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-terminald";
 
-fn resolve_sessiond_binary() -> PathBuf {
+fn resolve_terminald_binary() -> PathBuf {
     if let Ok(runtime_var) = std::env::var(CARGO_BIN_EXE_VAR) {
         let path = PathBuf::from(runtime_var);
         if path.is_file() {
             return path;
         }
     }
-    PathBuf::from(env!("CARGO_BIN_EXE_horizon-sessiond"))
+    PathBuf::from(env!("CARGO_BIN_EXE_horizon-terminald"))
 }
 
-fn spawn_sessiond(command: &mut Command) -> Child {
+fn spawn_terminald(command: &mut Command) -> Child {
     match command.spawn() {
         Ok(child) => child,
         Err(first_error) if first_error.kind() == ErrorKind::NotFound => {
             std::thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
-            command.spawn().expect("failed to spawn horizon-sessiond")
+            command.spawn().expect("failed to spawn horizon-terminald")
         }
-        Err(error) => panic!("failed to spawn horizon-sessiond: {error}"),
+        Err(error) => panic!("failed to spawn horizon-terminald: {error}"),
     }
 }
 
-struct SessiondProcess {
+struct TerminaldProcess {
     child: Child,
     socket_path: PathBuf,
-    event_log_path: PathBuf,
-    state_db_path: PathBuf,
 }
 
-impl SessiondProcess {
-    /// Hermetic spawn: throwaway socket/event-log/state-db paths and a
-    /// nonexistent config file, exactly like `tests/e2e.rs`'s
-    /// `SessiondProcess::spawn` -- never touches a real developer's
-    /// `~/.config/horizon` or real event log.
+impl TerminaldProcess {
+    /// Throwaway socket path per run. Unlike the pre-v17 version of this
+    /// probe (which spawned `horizon-sessiond` and had to point its event
+    /// log and DuckDB projection at scratch files), `horizon-terminald` owns
+    /// no persistence at all, so there is nothing to isolate but the socket.
     fn spawn() -> Self {
         let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
         let socket_path = std::env::temp_dir().join(format!("hzn-latprobe-{short_id}.sock"));
-        let event_log_path =
-            std::env::temp_dir().join(format!("hzn-latprobe-events-{short_id}.jsonl"));
-        let state_db_path =
-            std::env::temp_dir().join(format!("hzn-latprobe-state-{short_id}.duckdb"));
-        let missing_config_path =
-            std::env::temp_dir().join(format!("hzn-latprobe-no-config-{short_id}.toml"));
 
-        let mut command = Command::new(resolve_sessiond_binary());
+        let mut command = Command::new(resolve_terminald_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
-            .env("HORIZON_CONFIG", &missing_config_path)
-            .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-            .env("HORIZON_AGENT_STATE_DB", &state_db_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null());
-        let child = spawn_sessiond(&mut command);
-        Self {
-            child,
-            socket_path,
-            event_log_path,
-            state_db_path,
-        }
+        let child = spawn_terminald(&mut command);
+        Self { child, socket_path }
     }
 }
 
-impl Drop for SessiondProcess {
+impl Drop for TerminaldProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_file(&self.socket_path);
-        let _ = std::fs::remove_file(&self.event_log_path);
-        let _ = std::fs::remove_file(&self.state_db_path);
     }
 }
 
@@ -125,7 +111,7 @@ async fn connect_with_retry(path: &std::path::Path) -> UnixStream {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     panic!(
-        "horizon-sessiond never accepted a connection on {}",
+        "horizon-terminald never accepted a connection on {}",
         path.display()
     );
 }
@@ -134,7 +120,7 @@ async fn connect_with_retry(path: &std::path::Path) -> UnixStream {
 /// mux task (aborted on drop). The v10 successor of the JSONL
 /// connect-and-handshake this probe used to open by hand.
 struct HubClient {
-    hub: SessionHubClient<WireCodec>,
+    hub: TerminalHubClient<WireCodec>,
     conn_task: tokio::task::JoinHandle<()>,
 }
 
@@ -148,7 +134,7 @@ async fn connect_hub(socket_path: &std::path::Path) -> HubClient {
     let stream = connect_with_retry(socket_path).await;
     let (read_half, write_half) = stream.into_split();
     let (conn, _base_tx, mut base_rx) =
-        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
+        remoc::Connect::io::<_, _, (), TerminalHubClient<WireCodec>, WireCodec>(
             remoc::Cfg::default(),
             read_half,
             write_half,
@@ -311,7 +297,7 @@ async fn wait_for_marker(
 #[tokio::test]
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_baseline_shell_echo() {
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
@@ -446,7 +432,7 @@ while True:
 
 async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: Duration) {
     let script = write_fixture(&format!("hzn-latprobe-sync-tui-{mode}.py"), SYNC_TUI_SCRIPT);
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
@@ -532,7 +518,7 @@ async fn probe_synthetic_sync_output_multi_chunk() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_delayed_esu() {
     let script = write_fixture("hzn-latprobe-sync-tui-delayed-esu.py", SYNC_TUI_SCRIPT);
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
@@ -581,7 +567,7 @@ async fn probe_synthetic_sync_output_delayed_esu() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_malformed() {
     let script = write_fixture("hzn-latprobe-sync-tui-malformed.py", SYNC_TUI_SCRIPT);
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
@@ -675,7 +661,7 @@ while True:
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_decrqm_negotiation_bare_query() {
     let script = write_fixture("hzn-latprobe-decrqm-probe.py", DECRQM_PROBE_SCRIPT);
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {
@@ -725,7 +711,7 @@ async fn probe_decrqm_negotiation_bare_query() {
     let _ = std::fs::remove_file(&script);
 }
 
-/// Best-effort: real Claude Code, hosted by a real `horizon-sessiond`,
+/// Best-effort: real Claude Code, hosted by a real `horizon-terminald`,
 /// typed into character by character. Requires a working, already-
 /// authenticated `claude` on `PATH` -- skips (with a printed reason)
 /// rather than failing if it can't find one, since this is exploratory and
@@ -744,7 +730,7 @@ async fn probe_real_claude_composer_typing() {
         return;
     };
 
-    let sessiond = SessiondProcess::spawn();
+    let sessiond = TerminaldProcess::spawn();
     let client = connect_hub(&sessiond.socket_path).await;
 
     let TerminalAttachment {

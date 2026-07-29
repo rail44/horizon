@@ -1,158 +1,38 @@
+//! The `horizon-sessiond` (agent runtime) client connection: connect,
+//! negotiate, dispatch agent ops, recover from a stale daemon generation.
+//!
+//! Terminal traffic left this module in v17 — it has its own connection to
+//! its own daemon in [`super::terminald`] (`docs/terminald-split-design.md`).
+//! What is left here is exactly the agent domain plus the connection-global
+//! host-tool exchange, which means a `Drain` sent from here can no longer
+//! take a single PTY with it.
+
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolResponse};
 use horizon_session_protocol::{
     legacy, CappedReceiver, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub as _,
-    SessionHubClient, TerminalAttachment, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
+    SessionHubClient, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
     RTC_MAX_REQUEST_BYTES, SESSION_PROTOCOL_VERSION, TOOL_IO_MAX_ITEM_BYTES,
 };
-use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use remoc::rch;
 use remoc::rtc::Client as _;
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::sync::Notify;
 use tokio::task::JoinHandle;
-use uuid::Uuid;
 
-use super::routing::Routes;
+use super::common::{
+    classify_connect_error, establish_timeout, wait_until_refusing, with_deadline, EstablishError,
+    RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
+};
+use super::routing::AgentRoutes;
 
-/// The bound on the whole remoc establishment sequence — chmux handshake,
-/// base-channel handover, and the `hello` rtc call. A healthy v10 daemon
-/// completes it in milliseconds (its accept loop serves the hub before it
-/// even opens its event log); what this bounds is the *cross-generation*
-/// case (`docs/remoc-adoption-design.md` §6): a still-running JSONL
-/// daemon blocks in `read_line` waiting for a newline our chmux hello
-/// never contains (measured — the v9 pre-hello loop is *silent* against
-/// chmux bytes), so it presents as this timeout — never chmux's own raw
-/// 60 s `ChMux(Timeout)`.
-const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(5);
-
-/// Test-only override for [`ESTABLISH_TIMEOUT`]
-/// (`HORIZON_TEST_ESTABLISH_TIMEOUT_MS`): the silence-escalation tests
-/// below would otherwise take `SILENCE_MISMATCH_THRESHOLD × 5 s` of real
-/// wall clock per stale daemon. Never set in production.
-fn establish_timeout() -> Duration {
-    std::env::var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .map(Duration::from_millis)
-        .unwrap_or(ESTABLISH_TIMEOUT)
-}
-
-/// How many *consecutive* silent establish timeouts equal "a JSONL
-/// generation daemon holds the socket" (`docs/remoc-adoption-design.md`
-/// §6's bounded-timeout detection). One timeout is not evidence — a
-/// healthy daemon can be transiently unresponsive (its one-at-a-time
-/// accept loop busy, host under load) and the once-per-runtime recovery
-/// budget must not be burned on that — but a *v9 daemon is silent every
-/// time* (measured: its pre-hello `read_line` never completes on chmux
-/// bytes), so persistence is the signal.
-const SILENCE_MISMATCH_THRESHOLD: u32 = 3;
-
-/// Deadline for one established-phase rtc call (`list_terminals`,
-/// `list_agents`, `attach_terminal`, `attach_agent`, `new_agent`). Not
-/// tight on purpose: `list_agents`/`new_agent`/`attach_agent` legitimately
-/// block on the daemon's resume-readiness gate (a large event log takes
-/// real seconds to resume), so a short deadline would misreport a healthy
-/// startup as a failure. A timeout fails only that op — the runtime and
-/// connection survive.
-const OP_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// [`OP_TIMEOUT`]'s sibling for `create_terminal`, which is bounded
-/// daemon-side by up to 3 × 10 s PTY spawn attempts (see
-/// `TerminalHost::create`'s watchdog) — the client deadline must sit
-/// above that whole budget or it would give up on a spawn the daemon is
-/// still legitimately retrying.
-const CREATE_TERMINAL_TIMEOUT: Duration = Duration::from_secs(45);
-
-pub(super) struct RuntimeControl {
-    cancelled: AtomicBool,
-    established: AtomicBool,
-    /// The version `hello` negotiated, or `0` before the first establishment.
-    /// Read live by terminal panes to gate the v12 scrollback windowing
-    /// surface (`docs/terminal-scrollback-design.md` §4): a pane only sends
-    /// `RequestScrollWindow` when this is ≥ 12, otherwise it keeps today's
-    /// round-trip `Scroll`. Set once per establishment (alongside
-    /// `mark_established`) and **not cleared on disconnect** — it holds the
-    /// most recently negotiated version until the next establishment
-    /// overwrites it. A dead connection is surfaced through reachability (the
-    /// per-pane `RuntimeReachability`, plus the pane dropping its window when
-    /// the channels close), not by zeroing this. This is the runtime
-    /// instance's own control, replaced wholesale on `Reload Session Runtime`,
-    /// so a reload against a different daemon version simply reads the fresh
-    /// control.
-    negotiated: AtomicU32,
-    notify: Notify,
-    stopped: (Mutex<bool>, Condvar),
-}
-
-impl RuntimeControl {
-    pub(super) fn new() -> Self {
-        Self {
-            cancelled: AtomicBool::new(false),
-            established: AtomicBool::new(false),
-            negotiated: AtomicU32::new(0),
-            notify: Notify::new(),
-            stopped: (Mutex::new(false), Condvar::new()),
-        }
-    }
-
-    /// The most recently negotiated protocol version, or `None` before the
-    /// first establishment. `None` and any value below 12 both gate the
-    /// scrollback windowing surface off (conservative: never send a window
-    /// request a peer might not answer).
-    pub(super) fn negotiated(&self) -> Option<u32> {
-        match self.negotiated.load(Ordering::Acquire) {
-            0 => None,
-            version => Some(version),
-        }
-    }
-
-    fn set_negotiated(&self, version: u32) {
-        self.negotiated.store(version, Ordering::Release);
-    }
-
-    pub(super) fn cancel(&self) {
-        self.cancelled.store(true, Ordering::Release);
-        self.notify.notify_waiters();
-    }
-
-    pub(super) fn is_established(&self) -> bool {
-        self.established.load(Ordering::Acquire)
-    }
-
-    pub(super) fn wait_stopped(&self) {
-        let (lock, wake) = &self.stopped;
-        let mut stopped = lock.lock().unwrap();
-        while !*stopped {
-            stopped = wake.wait(stopped).unwrap();
-        }
-    }
-
-    async fn cancelled(&self) {
-        let notified = self.notify.notified();
-        if self.cancelled.load(Ordering::Acquire) {
-            return;
-        }
-        notified.await;
-    }
-
-    fn mark_established(&self) {
-        self.established.store(true, Ordering::Release);
-    }
-
-    fn mark_stopped(&self) {
-        let (lock, wake) = &self.stopped;
-        *lock.lock().unwrap() = true;
-        wake.notify_all();
-    }
-}
+/// The daemon this module talks to, named in every classified error.
+const DAEMON: &str = "horizon-sessiond";
 
 /// One typed request from the sync world to the runtime — the v10
 /// replacement for the raw-envelope FIFO. Requests that used to need a
@@ -167,20 +47,6 @@ pub(super) enum Op {
         session_id: contract::SessionId,
         commands: UnboundedReceiver<Command>,
     },
-    CreateTerminal {
-        session_id: Uuid,
-        spec: Box<TerminalSpawnSpec>,
-        commands: UnboundedReceiver<TerminalCommand>,
-    },
-    AttachTerminal {
-        session_id: Uuid,
-        commands: UnboundedReceiver<TerminalCommand>,
-        /// `true` exactly when the daemon reported a successful attach.
-        reply: crossbeam_channel::Sender<bool>,
-    },
-    TerminalList {
-        reply: crossbeam_channel::Sender<Result<Vec<TerminalSummary>, String>>,
-    },
     SessionList {
         reply: crossbeam_channel::Sender<Result<Vec<wire::SessionSummary>, String>>,
     },
@@ -192,7 +58,7 @@ pub(super) fn spawn(
     socket_path: PathBuf,
     control_socket: PathBuf,
     mut ops: UnboundedReceiver<Op>,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
 ) {
     std::thread::spawn(move || {
@@ -367,7 +233,7 @@ async fn recover_generation_mismatch(
     message: &str,
     mismatch_recovery_attempted: &mut bool,
     socket_path: &Path,
-    routes: &Arc<Routes>,
+    routes: &Arc<AgentRoutes>,
     control: &Arc<RuntimeControl>,
 ) -> ControlFlow<()> {
     if *mismatch_recovery_attempted {
@@ -409,7 +275,7 @@ async fn recover_generation_mismatch(
 pub(super) fn spawn_test_stream<S>(
     stream: S,
     mut ops: UnboundedReceiver<Op>,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
 ) where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
@@ -447,58 +313,17 @@ pub(super) fn spawn_test_stream<S>(
     });
 }
 
-enum StreamEnd {
-    /// A transient pre-hello failure — connection drop, IO error, base
-    /// channel EOF, or the `hello` call's own transport failure
-    /// (`HubError::Call`). Retried with backoff, exactly like the JSONL
-    /// era's `PreHelloTransport`; **never** consumes the once-per-runtime
-    /// mismatch-recovery budget (a daemon crash or a busy host must not
-    /// eat the one automatic drain-and-restart this runtime gets).
-    PreHelloTransport {
-        message: String,
-    },
-    /// The peer stayed silent for the whole establish deadline. One
-    /// occurrence is treated like a transient (retried); only
-    /// [`SILENCE_MISMATCH_THRESHOLD`] *consecutive* silences escalate to
-    /// the generation-mismatch recovery, because persistent silence is
-    /// exactly how a real v9 JSONL daemon presents (measured: its
-    /// pre-hello `read_line` blocks forever on chmux bytes) while a
-    /// healthy remoc daemon answers in milliseconds.
-    Silence {
-        message: String,
-    },
-    /// Positive garbage evidence: the peer *sent bytes that are not
-    /// chmux* (a length-prefix/framing violation — e.g. JSONL text reads
-    /// as an absurd frame length — or a chmux protocol error). No healthy
-    /// remoc daemon can produce this, so it consumes the recovery budget
-    /// immediately. A daemon that died mid-handshake does **not** land
-    /// here (that is [`Self::PreHelloTransport`]).
-    GenerationMismatch {
-        message: String,
-    },
-    /// The daemon speaks remoc and answered `hello` with an explicit
-    /// version-range rejection. Recoverable via an rtc `drain`; consumes
-    /// the recovery budget.
-    VersionRejected {
-        message: String,
-    },
-    Fatal(String),
-    EstablishedFailure(String),
-    Cancelled,
-    Dropped,
-}
-
 /// What a successful establishment hands the op loop.
 struct Live {
     hub: SessionHubClient<WireCodec>,
     host_tool_responses: rch::mpsc::Sender<HostToolResponse, WireCodec>,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
 }
 
 async fn run_stream<S>(
     stream: S,
     ops: &mut UnboundedReceiver<Op>,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
 ) -> StreamEnd
 where
@@ -525,10 +350,6 @@ where
         host_tool_responses,
         skipped_lines,
     } = hello;
-    // Publish the negotiated version for the sync world's terminal panes to
-    // gate the v12 scrollback windowing surface on (see `RuntimeControl::
-    // negotiated`). Set after `mark_established` so a pane observing
-    // establishment also sees the version.
     control.set_negotiated(negotiated);
 
     // Connection-global inbound pumps.
@@ -564,45 +385,6 @@ where
     end
 }
 
-enum EstablishError {
-    /// See [`StreamEnd::PreHelloTransport`].
-    Transient(String),
-    /// See [`StreamEnd::Silence`].
-    Silence(String),
-    /// See [`StreamEnd::GenerationMismatch`] — received non-chmux bytes.
-    Garbage(String),
-    /// The daemon's hub rejected our version range.
-    Rejected(String),
-    Fatal(String),
-}
-
-/// Classifies a failed `Connect::io`: framing/protocol violations are
-/// positive "the peer is not speaking chmux" evidence (measured: a JSONL
-/// line read as a chmux length prefix fails instantly with a
-/// `LengthDelimitedCodecError` under `ErrorKind::InvalidData`; a decodable
-/// frame with an invalid multiplex message is `ChMuxError::Protocol`);
-/// everything else — closes, resets, plain IO errors — is transient.
-fn classify_connect_error(
-    error: &remoc::ConnectError<std::io::Error, std::io::Error>,
-) -> EstablishError {
-    use remoc::chmux::ChMuxError;
-    let garbage = match error {
-        remoc::ConnectError::ChMux(ChMuxError::Protocol(_)) => true,
-        remoc::ConnectError::ChMux(ChMuxError::StreamError(io_error)) => {
-            io_error.kind() == std::io::ErrorKind::InvalidData
-        }
-        _ => false,
-    };
-    if garbage {
-        EstablishError::Garbage(format!(
-            "sessiond sent bytes that are not remoc/chmux (likely a stale pre-v10 JSONL \
-             daemon): {error}"
-        ))
-    } else {
-        EstablishError::Transient(format!("remoc connect to sessiond failed: {error}"))
-    }
-}
-
 type EstablishedParts = (
     SessionHubClient<WireCodec>,
     HubHello,
@@ -610,11 +392,11 @@ type EstablishedParts = (
 );
 
 /// Runs the remoc connect + base handover + `hello`, each leg bounded by
-/// one shared [`ESTABLISH_TIMEOUT`] deadline. The chmux multiplexer task
-/// is spawned as soon as the connect completes (adoption condition 3 — it
-/// must be polled concurrently with everything that follows) and is
-/// aborted before returning on every failure path, so a timed-out
-/// establishment never leaks a task still holding the socket.
+/// one shared establish deadline. The chmux multiplexer task is spawned as
+/// soon as the connect completes (adoption condition 3 — it must be polled
+/// concurrently with everything that follows) and is aborted before
+/// returning on every failure path, so a timed-out establishment never
+/// leaks a task still holding the socket.
 async fn establish<S>(stream: S) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
@@ -630,7 +412,7 @@ where
     );
     let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
         Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => return Err(classify_connect_error(&error)),
+        Ok(Err(error)) => return Err(classify_connect_error(DAEMON, &error)),
         Err(_elapsed) => {
             return Err(EstablishError::Silence(format!(
                 "sessiond sent no remoc handshake within {timeout:?}"
@@ -703,7 +485,7 @@ where
 
 fn spawn_host_tool_pump(
     mut host_tools: CappedReceiver<wire::HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
 ) {
     tokio::spawn(async move {
         let mut skips = DecodeSkipLog::new("host-tool requests");
@@ -732,9 +514,9 @@ fn spawn_skipped_lines_pump(mut skipped_lines: CappedReceiver<String, CONTROL_MA
 }
 
 /// Dispatches one op. Every rtc call runs on its own task (the calls are
-/// independent and a slow one — a PTY spawn, a large replay — must not
-/// stall command forwarding for other sessions), holding clones of the
-/// hub client and routes.
+/// independent and a slow one — a large replay — must not stall command
+/// forwarding for other sessions), holding clones of the hub client and
+/// routes.
 fn handle_op(op: Op, live: &Live) {
     match op {
         Op::NewAgent { new, commands } => {
@@ -772,62 +554,6 @@ fn handle_op(op: Op, live: &Live) {
                 }
             });
         }
-        Op::CreateTerminal {
-            session_id,
-            spec,
-            commands,
-        } => {
-            let hub = live.hub.clone();
-            let routes = live.routes.clone();
-            tokio::spawn(async move {
-                match with_deadline(
-                    CREATE_TERMINAL_TIMEOUT,
-                    "create_terminal",
-                    hub.create_terminal(session_id, *spec),
-                )
-                .await
-                {
-                    Ok(attachment) => {
-                        run_terminal_attachment(routes, session_id, attachment, commands).await
-                    }
-                    // What the JSONL wire delivered as a
-                    // `TerminalUpdate::Error` on the update stream.
-                    Err(error) => routes.terminal_failed(session_id, error),
-                }
-            });
-        }
-        Op::AttachTerminal {
-            session_id,
-            commands,
-            reply,
-        } => {
-            let hub = live.hub.clone();
-            let routes = live.routes.clone();
-            tokio::spawn(async move {
-                match with_deadline(
-                    OP_TIMEOUT,
-                    "attach_terminal",
-                    hub.attach_terminal(session_id),
-                )
-                .await
-                {
-                    Ok(attachment) => {
-                        let _ = reply.send(true);
-                        run_terminal_attachment(routes, session_id, attachment, commands).await;
-                    }
-                    Err(_error) => {
-                        let _ = reply.send(false);
-                    }
-                }
-            });
-        }
-        Op::TerminalList { reply } => {
-            let hub = live.hub.clone();
-            tokio::spawn(async move {
-                let result = with_deadline(OP_TIMEOUT, "terminal list", hub.list_terminals()).await;
-                let _ = reply.send(result);
-            });
-        }
         Op::SessionList { reply } => {
             let hub = live.hub.clone();
             tokio::spawn(async move {
@@ -854,119 +580,10 @@ fn handle_op(op: Op, live: &Live) {
     }
 }
 
-/// Bounds one established-phase rtc call. A deadline expiry fails only
-/// that call (the reply channel gets an error, or the routes get a
-/// per-session failure) — the runtime and the connection stay up, because
-/// a wedged single call must not take down every other live attachment.
-async fn with_deadline<T>(
-    deadline: Duration,
-    what: &str,
-    call: impl std::future::Future<Output = Result<T, HubError>>,
-) -> Result<T, String> {
-    match tokio::time::timeout(deadline, call).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(format!("{what} failed: {error}")),
-        Err(_elapsed) => Err(format!("{what} did not answer within {deadline:?}")),
-    }
-}
-
-/// One live terminal attachment: forwards handle commands to the daemon,
-/// routes full frames (from the `watch<TerminalFrame>`, wire v11) and
-/// non-frame events to the pane, until either side goes away.
-async fn run_terminal_attachment(
-    routes: Arc<Routes>,
-    session_id: Uuid,
-    attachment: TerminalAttachment,
-    mut commands: UnboundedReceiver<TerminalCommand>,
-) {
-    let TerminalAttachment {
-        mut frames,
-        mut events,
-        commands: remote_commands,
-    } = attachment;
-    let mut frame_skips = DecodeSkipLog::new("terminal frames");
-    let mut event_skips = DecodeSkipLog::new("terminal events");
-    let mut command_skips = DecodeSkipLog::new("terminal commands");
-
-    // `false` once the frame watch is closed (or its port setup failed): we
-    // stop polling it, but keep servicing `events` so a clean shutdown's
-    // `Exited` (which races the watch close) is never dropped — otherwise a
-    // frames-close winning the select would strand a zombie pane.
-    let mut frames_open = true;
-
-    // Deliver the seed frame first: the watch receiver's initial value (the
-    // daemon-retained latest frame on attach, or the empty create-time seed)
-    // is read with `borrow`, not `changed` — `changed` only fires for
-    // genuinely newer values, so without this an idle reattach would show a
-    // blank grid forever. A non-final error (a skewed/undecodable seed value,
-    // `is_final() == false`) is skipped, self-healing on the next frame; a
-    // final error means the frame port is gone, so stop polling it.
-    match frames.borrow_and_update() {
-        Ok(seed) => routes.route_terminal_frame(session_id, seed.clone()),
-        Err(err) if err.is_final() => frames_open = false,
-        Err(err) => frame_skips.note(&err),
-    }
-
-    loop {
-        tokio::select! {
-            command = commands.recv() => match command {
-                Some(command) => {
-                    if let Err(err) = remote_commands.send(command).await {
-                        // rch latches remote-send errors on the sender
-                        // (one failure means every later send fails too),
-                        // so any send error ends the attachment rather
-                        // than skip-looping. Oversized commands are
-                        // enforced daemon-side as per-item *receive*
-                        // skips, so they never surface here.
-                        command_skips.note(&err);
-                        break;
-                    }
-                }
-                // The pane's handle (and its bridge thread) are gone.
-                None => break,
-            },
-            changed = frames.changed(), if frames_open => match changed {
-                // A new frame is available. The watch keeps only the latest,
-                // so a slow UI skips intermediate frames and converges on the
-                // final value here (§5 Option A / spike §1c) — the client's
-                // own row-comparison then invalidates just the changed rows.
-                Ok(()) => match frames.borrow_and_update() {
-                    Ok(frame) => routes.route_terminal_frame(session_id, frame.clone()),
-                    // Non-final (a `Deserialize`/`MaxItemSizeExceeded` value
-                    // the watch publishes but keeps the channel for): skip
-                    // it and wait for the next frame, exactly like the events
-                    // and seed paths (adoption condition 2, self-heal §5).
-                    Err(err) if !err.is_final() => frame_skips.note(&err),
-                    // Final: the frame port is gone. Stop polling frames but
-                    // keep servicing events for a still-pending `Exited`.
-                    Err(_) => frames_open = false,
-                },
-                // The watch (sender or connection) is gone — same handling:
-                // stop polling frames, keep draining events.
-                Err(_closed) => frames_open = false,
-            },
-            event = events.recv() => match event {
-                Ok(Some(update)) => {
-                    let exited = matches!(update, TerminalUpdate::Exited);
-                    routes.route_terminal_update(session_id, update);
-                    if exited {
-                        break;
-                    }
-                }
-                Ok(None) => break,
-                Err(err) if err.is_final() => break,
-                // Adoption condition 2: one undecodable event is skipped;
-                // the channel survives.
-                Err(err) => event_skips.note(&err),
-            },
-        }
-    }
-}
-
-/// One live agent attachment — the agent-domain twin of
-/// [`run_terminal_attachment`].
+/// One live agent attachment: forwards handle commands to the daemon and
+/// routes events to the pane, until either side goes away.
 async fn run_agent_attachment(
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
     session_id: contract::SessionId,
     attachment: horizon_session_protocol::AgentAttachment,
     mut commands: UnboundedReceiver<Command>,
@@ -982,7 +599,10 @@ async fn run_agent_attachment(
             command = commands.recv() => match command {
                 Some(command) => {
                     if let Err(err) = remote_commands.send(command).await {
-                        // See the terminal runner: send errors latch.
+                        // rch latches remote-send errors on the sender (one
+                        // failure means every later send fails too), so any
+                        // send error ends the attachment rather than
+                        // skip-looping.
                         command_skips.note(&err);
                         break;
                     }
@@ -998,13 +618,6 @@ async fn run_agent_attachment(
         }
     }
 }
-
-/// Per-probe budget for a drained daemon's process to actually exit,
-/// observed as its socket refusing connections -- the same signal (and the
-/// same 2s budget) as `super::wait_for_drain`, which the explicit `Reload
-/// Session Runtime` flow uses.
-const DRAIN_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
-const DRAIN_POLL: Duration = Duration::from_millis(50);
 
 /// Gracefully stops a JSONL-generation daemon by sending it a
 /// `session_control` `Drain` *at its own envelope version* on a fresh
@@ -1051,6 +664,13 @@ async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
 /// Gracefully stops a remoc daemon whose version range doesn't overlap
 /// ours: `hello` and `drain` are the version-stable hub surface, so the
 /// drain travels as an ordinary rtc call on a fresh connection.
+///
+/// One documented exception, at the v16→v17 boundary only: the terminald
+/// split removed methods from the middle of `SessionHub`, which shifts
+/// every later method's index under the index-encoded request enum, so a
+/// *still-running v16 sessiond* decodes this drain as a different method
+/// and keeps accepting. The error below is then the honest outcome and
+/// names the manual fix (see `SESSION_PROTOCOL_VERSION`'s v17 note).
 async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
@@ -1108,22 +728,5 @@ async fn establish_for_drain(
             conn_task.abort();
             Err(format!("no hub client handed over: {other:?}"))
         }
-    }
-}
-
-/// True once `socket_path` refuses connections (the daemon process is
-/// gone -- its drain exit leaves the socket file behind, so file
-/// existence proves nothing); false if it still accepts when
-/// [`DRAIN_EXIT_TIMEOUT`] runs out.
-async fn wait_until_refusing(socket_path: &Path) -> bool {
-    let deadline = tokio::time::Instant::now() + DRAIN_EXIT_TIMEOUT;
-    loop {
-        if tokio::net::UnixStream::connect(socket_path).await.is_err() {
-            return true;
-        }
-        if tokio::time::Instant::now() >= deadline {
-            return false;
-        }
-        tokio::time::sleep(DRAIN_POLL).await;
     }
 }

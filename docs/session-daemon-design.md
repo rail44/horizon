@@ -92,6 +92,20 @@ hosted by a daemon, with the UI as a reconnecting client.
    accepts "sessiond reload terminates terminal sessions; agent sessions
    restore from the log."
 
+   **Superseded 2026-07-30 by `docs/terminald-split-design.md` (wire
+   v17).** The accepted cost turned out to be the largest day-to-day
+   operational pain: 67% of measured daemon restarts were agent-side only,
+   and each one killed the interactive CLIs running in the panes. The fix
+   is not the live-PTY hand-off this decision ruled out (still ruled out —
+   no precedent, total loss on failure) but a *second daemon*:
+   `horizon-terminald` owns the PTYs and is rarely restarted, so
+   `Reload Session Runtime` no longer touches them and a new, explicitly
+   destructive `Reload Terminal Runtime` is the only command that does.
+   The half of this decision that stands is the reasoning about terminal
+   state being unreplayable — which is exactly why the backstop is still
+   the workspace snapshot restore, and why the terminal wire slice is now
+   append-only.
+
 6. **One client connection; leave room for `client_id`.** Inherit
    agentd's single-connection simplification. Multi-client fan-out
    (same session in two windows; a future headless viewer observing a

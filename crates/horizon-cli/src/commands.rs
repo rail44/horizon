@@ -34,6 +34,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::CancelTurn { .. } => "cancel-turn",
         Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::ReloadSessionRuntime => "reload-session-runtime",
+        Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::OpenTerminalInSessionDirectory => "open-terminal-in-session-directory",
         Subcommand::Sessions => "sessions",
@@ -132,6 +133,9 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             serde_json::json!({ "session_id": session_id }),
         ),
         Subcommand::ReloadSessionRuntime => invoke("reload-session-runtime", serde_json::json!({})),
+        Subcommand::ReloadTerminalRuntime => {
+            invoke("reload-terminal-runtime", serde_json::json!({}))
+        }
         Subcommand::ReloadConfig => invoke("reload-config", serde_json::json!({})),
         Subcommand::OpenTerminalInSessionDirectory => {
             invoke("open-terminal-in-session-directory", serde_json::json!({}))
@@ -410,6 +414,23 @@ mod tests {
             panic!("expected an Invoke request");
         };
         assert_eq!(deny.command, "deny");
+    }
+
+    #[test]
+    fn reload_terminal_runtime_is_a_bare_invoke_named_like_its_command() {
+        // `docs/terminald-split-design.md` decision 3: the CLI verb is the
+        // external name of `CommandId::ReloadTerminalRuntime`, carries no
+        // arguments, and stays distinct from `reload-session-runtime` --
+        // one restarts the agent daemon, the other kills every PTY.
+        assert_eq!(
+            external_name(&Subcommand::ReloadTerminalRuntime),
+            "reload-terminal-runtime"
+        );
+        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadTerminalRuntime, None) else {
+            panic!("expected an invoke request");
+        };
+        assert_eq!(invoke.command, "reload-terminal-runtime");
+        assert_eq!(invoke.args, serde_json::json!({}));
     }
 
     #[test]

@@ -1,47 +1,70 @@
-//! Horizon's single eager client runtime for the shared session daemon —
-//! since v10, a remoc `SessionHub` client (`docs/remoc-adoption-design.md`
-//! §2). The public shape is unchanged from the JSONL era: [`SessiondHandle`]
-//! is a sync API, started eagerly and non-blocking, backed by one dedicated
-//! current-thread tokio runtime on a background OS thread; internally the
-//! raw-envelope FIFO and the `Routes` correlation maps became typed
-//! [`connection::Op`]s (rtc calls return futures, so replies ride their own
-//! channels) and per-attachment channel bridges. The sync-world ⇄ tokio
-//! boundary did not move.
+//! Horizon's eager client runtimes for the session daemons — since v10
+//! remoc hub clients (`docs/remoc-adoption-design.md` §2), and since v17
+//! **two of them**: [`SessiondHandle`] speaks to `horizon-sessiond` (the
+//! agent runtime) and [`TerminaldHandle`] to `horizon-terminald` (the
+//! terminal runtime), each over its own socket, connection, op queue, and
+//! `RuntimeControl` (`docs/terminald-split-design.md`).
+//!
+//! That separation is the whole point: reloading one runtime drains and
+//! respawns exactly one daemon and leaves the other's sessions — and, for
+//! terminals, the interactive processes running inside them — untouched. It
+//! also means a failure is domain-scoped: a dead agent runtime fans errors
+//! only into agent transcripts, because the two connections keep separate
+//! route tables (`routing::AgentRoutes` / `routing::TerminalRoutes`).
+//!
+//! Both handles keep the shape the JSONL era established: a sync API,
+//! started eagerly and non-blocking, backed by one dedicated current-thread
+//! tokio runtime on a background OS thread. The sync-world ⇄ tokio boundary
+//! did not move.
 
+mod common;
 mod connection;
 mod routing;
+mod terminald;
 
 use std::path::Path;
 use std::sync::Arc;
 
-use connection::Op;
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{self, Command, ProviderEvent};
 use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-use routing::Routes;
+use routing::{AgentRoutes, TerminalRoutes};
 use uuid::Uuid;
+
+use common::RuntimeControl;
 
 /// The sync world's overall budget for one queued list request: the op may
 /// legitimately wait out connection establishment (retries with backoff)
-/// plus the runtime's own per-call deadline (`connection::OP_TIMEOUT`,
-/// 30 s), so this sits above both. The old JSONL shape blocked forever
-/// here; a bounded wait turns a wedged runtime into an error the caller
-/// can render instead of a UI hang.
+/// plus the runtime's own per-call deadline (`common::OP_TIMEOUT`, 30 s), so
+/// this sits above both. The old JSONL shape blocked forever here; a bounded
+/// wait turns a wedged runtime into an error the caller can render instead
+/// of a UI hang.
 const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
+/// The client runtime for `horizon-sessiond`: agent sessions and the
+/// connection-global host-tool exchange.
 #[derive(Clone)]
 pub(crate) struct SessiondHandle {
-    ops: tokio::sync::mpsc::UnboundedSender<Op>,
-    routes: Arc<Routes>,
-    control: Arc<connection::RuntimeControl>,
+    ops: tokio::sync::mpsc::UnboundedSender<connection::Op>,
+    routes: Arc<AgentRoutes>,
+    control: Arc<RuntimeControl>,
+    _lifetime: Arc<RuntimeLifetime>,
+}
+
+/// The client runtime for `horizon-terminald`: terminal sessions only.
+#[derive(Clone)]
+pub(crate) struct TerminaldHandle {
+    ops: tokio::sync::mpsc::UnboundedSender<terminald::Op>,
+    routes: Arc<TerminalRoutes>,
+    control: Arc<RuntimeControl>,
     _lifetime: Arc<RuntimeLifetime>,
 }
 
 struct RuntimeLifetime {
-    control: Arc<connection::RuntimeControl>,
+    control: Arc<RuntimeControl>,
 }
 
 impl Drop for RuntimeLifetime {
@@ -51,14 +74,15 @@ impl Drop for RuntimeLifetime {
 }
 
 pub(crate) struct SessiondResponder {
-    ops: tokio::sync::mpsc::WeakUnboundedSender<Op>,
+    ops: tokio::sync::mpsc::WeakUnboundedSender<connection::Op>,
 }
 
-/// A live view of `WorkspaceShell::sessiond`, threaded into panes that can
+/// A live view of `WorkspaceShell::terminald`, threaded into panes that can
 /// outlive a single runtime instance -- currently just the theme settings
-/// view (`src/theme_settings/mod.rs`). A `SessiondHandle` cloned once at
-/// pane-construction time goes stale across `Reload Session Runtime`:
-/// `WorkspaceShell::sessiond` is `None` from the moment the old handle is
+/// view (`src/theme_settings/mod.rs`), which re-pushes the terminal color
+/// scheme on a live apply. A `TerminaldHandle` cloned once at
+/// pane-construction time goes stale across `Reload Terminal Runtime`:
+/// `WorkspaceShell::terminald` is `None` from the moment the old handle is
 /// taken until the async drain finishes and a fresh one lands, and
 /// `WorkspaceShell::reconcile` never recreates a pane view that already
 /// exists in `self.panes` -- so a pane whose view happens to be
@@ -66,20 +90,20 @@ pub(crate) struct SessiondResponder {
 /// the reload; only the view cache is cleared) would otherwise capture
 /// `None` forever. This slot is cloned cheaply (an `Rc`) and always
 /// reflects whatever `WorkspaceShell` currently holds, as long as it's kept
-/// in sync at every `self.sessiond` write site.
+/// in sync at every `self.terminald` write site.
 #[derive(Clone, Default)]
-pub(crate) struct SessiondSlot(std::rc::Rc<std::cell::RefCell<Option<SessiondHandle>>>);
+pub(crate) struct TerminaldSlot(std::rc::Rc<std::cell::RefCell<Option<TerminaldHandle>>>);
 
-impl SessiondSlot {
-    pub(crate) fn new(handle: Option<SessiondHandle>) -> Self {
+impl TerminaldSlot {
+    pub(crate) fn new(handle: Option<TerminaldHandle>) -> Self {
         Self(std::rc::Rc::new(std::cell::RefCell::new(handle)))
     }
 
-    pub(crate) fn get(&self) -> Option<SessiondHandle> {
+    pub(crate) fn get(&self) -> Option<TerminaldHandle> {
         self.0.borrow().clone()
     }
 
-    pub(crate) fn set(&self, handle: Option<SessiondHandle>) {
+    pub(crate) fn set(&self, handle: Option<TerminaldHandle>) {
         *self.0.borrow_mut() = handle;
     }
 }
@@ -87,7 +111,7 @@ impl SessiondSlot {
 pub(crate) struct AgentSessionHandle {
     inner: contract::SessionHandle,
     session_id: contract::SessionId,
-    routes: Arc<Routes>,
+    routes: Arc<AgentRoutes>,
 }
 
 pub(crate) struct TerminalSessionHandle {
@@ -100,11 +124,11 @@ pub(crate) struct TerminalSessionHandle {
     /// The non-frame events (title/bell/clipboard/exit/error).
     events: Receiver<TerminalUpdate>,
     session_id: Uuid,
-    routes: Arc<Routes>,
-    /// The runtime's connection control, read only for its live negotiated
-    /// protocol version — the pane gates the v12 scrollback windowing surface
-    /// on it (`TerminalSessionHandle::negotiated_version`).
-    control: Arc<connection::RuntimeControl>,
+    routes: Arc<TerminalRoutes>,
+    /// The terminal runtime's connection control, read only for its live
+    /// negotiated protocol version — the pane gates the v12 scrollback
+    /// windowing surface on it (`TerminalSessionHandle::negotiated_version`).
+    control: Arc<RuntimeControl>,
 }
 
 impl AgentSessionHandle {
@@ -141,8 +165,8 @@ impl TerminalSessionHandle {
     /// scrolls locally within the served window) only when this is ≥ 12,
     /// otherwise it keeps today's round-trip `Scroll`
     /// (`docs/terminal-scrollback-design.md` §4). Read live so a
-    /// `Reload Session Runtime` against a different daemon version is honored
-    /// without recreating the handle.
+    /// `Reload Terminal Runtime` against a different daemon version is
+    /// honored without recreating the handle.
     pub(crate) fn negotiated_version(&self) -> Option<u32> {
         self.control.negotiated()
     }
@@ -157,7 +181,7 @@ impl Drop for TerminalSessionHandle {
 impl SessiondResponder {
     pub(crate) fn respond_host_tool(&self, response: HostToolResponse) {
         if let Some(ops) = self.ops.upgrade() {
-            let _ = ops.send(Op::HostToolResponse(response));
+            let _ = ops.send(connection::Op::HostToolResponse(response));
         }
     }
 }
@@ -167,14 +191,14 @@ impl SessiondHandle {
         Arc::ptr_eq(&self.routes, &other.routes)
     }
 
-    /// Starts the one process-wide socket runtime and returns before the
+    /// Starts the agent-runtime connection and returns before the
     /// connection (or the `hello` negotiation) completes. Typed requests
     /// enqueue onto the op queue meanwhile; once the hub is live each op
     /// is *dispatched* in queue order but *executed* on its own task, so
     /// there is no cross-op completion-order guarantee — a slow
-    /// `create_terminal` does not delay a `terminal_list` behind it, and
-    /// two lists may complete in either order. Per-session ordering is
-    /// carried by each attachment's own channels, not the op queue.
+    /// `new_agent` does not delay a `list_agents` behind it, and two lists
+    /// may complete in either order. Per-session ordering is carried by
+    /// each attachment's own channels, not the op queue.
     pub(crate) fn start(
         socket_path: &Path,
         control_socket: &Path,
@@ -199,13 +223,13 @@ impl SessiondHandle {
         Self,
         Receiver<HostToolRequest>,
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
-        tokio::sync::mpsc::UnboundedReceiver<Op>,
+        tokio::sync::mpsc::UnboundedReceiver<connection::Op>,
     ) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
         let (host_tool_tx, host_tool_rx) = unbounded();
         let (workspace_root_tx, workspace_root_rx) = unbounded();
-        let routes = Arc::new(Routes::new(host_tool_tx, workspace_root_tx));
-        let control = Arc::new(connection::RuntimeControl::new());
+        let routes = Arc::new(AgentRoutes::new(host_tool_tx, workspace_root_tx));
+        let control = Arc::new(RuntimeControl::new());
         let lifetime = Arc::new(RuntimeLifetime {
             control: control.clone(),
         });
@@ -264,7 +288,7 @@ impl SessiondHandle {
         isolate: bool,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
-        let _ = self.ops.send(Op::NewAgent {
+        let _ = self.ops.send(connection::Op::NewAgent {
             new: wire::SessionNew {
                 session_id,
                 provider_id,
@@ -280,7 +304,7 @@ impl SessiondHandle {
 
     pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
-        let _ = self.ops.send(Op::AttachAgent {
+        let _ = self.ops.send(connection::Op::AttachAgent {
             session_id,
             commands,
         });
@@ -321,13 +345,112 @@ impl SessiondHandle {
         )
     }
 
+    pub(crate) fn responder(&self) -> SessiondResponder {
+        SessiondResponder {
+            ops: self.ops.downgrade(),
+        }
+    }
+
+    pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .ops
+            .send(connection::Op::SessionList { reply: reply_tx })
+            .is_err()
+        {
+            return Err("session runtime stopped before the agent list was sent".to_string());
+        }
+        reply_rx
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the agent list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the agent list completed".to_string()
+                }
+            })?
+    }
+
+    fn drain(&self) {
+        let _ = self.ops.send(connection::Op::Drain);
+    }
+
+    /// Asks the daemon to exit, if this runtime ever reached it. `true`
+    /// means a drain was actually sent and the caller should wait for the
+    /// socket to stop accepting (`wait_for_drain`); `false` means there was
+    /// nothing live to drain and the runtime was simply cancelled.
+    pub(crate) fn begin_reload(&self) -> bool {
+        if self.control.is_established() {
+            self.drain();
+            true
+        } else {
+            self.control.cancel();
+            false
+        }
+    }
+
+    pub(crate) fn stop_and_wait(&self) {
+        self.control.cancel();
+        self.control.wait_stopped();
+    }
+}
+
+impl TerminaldHandle {
+    pub(crate) fn same_runtime(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.routes, &other.routes)
+    }
+
+    /// Starts the terminal-runtime connection. Same eager, non-blocking
+    /// contract as [`SessiondHandle::start`] — a `create_terminal` queued
+    /// before the daemon is even up is dispatched once it is.
+    pub(crate) fn start(socket_path: &Path, control_socket: &Path) -> Self {
+        let (handle, ops) = Self::parts();
+        terminald::spawn(
+            socket_path.to_path_buf(),
+            control_socket.to_path_buf(),
+            ops,
+            handle.routes.clone(),
+            handle.control.clone(),
+        );
+        handle
+    }
+
+    fn parts() -> (Self, tokio::sync::mpsc::UnboundedReceiver<terminald::Op>) {
+        let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
+        let routes = Arc::new(TerminalRoutes::new());
+        let control = Arc::new(RuntimeControl::new());
+        let lifetime = Arc::new(RuntimeLifetime {
+            control: control.clone(),
+        });
+        (
+            Self {
+                ops: ops_tx,
+                routes,
+                control,
+                _lifetime: lifetime,
+            },
+            ops_rx,
+        )
+    }
+
+    #[cfg(test)]
+    fn start_on_stream<S>(stream: S) -> Self
+    where
+        S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+    {
+        let (handle, ops) = Self::parts();
+        terminald::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
+        handle
+    }
+
     pub(crate) fn start_terminal(
         &self,
         session_id: Uuid,
         spec: TerminalSpawnSpec,
     ) -> TerminalSessionHandle {
         let (handle, commands) = self.register_terminal(session_id);
-        let _ = self.ops.send(Op::CreateTerminal {
+        let _ = self.ops.send(terminald::Op::CreateTerminal {
             session_id,
             spec: Box::new(spec),
             commands,
@@ -335,10 +458,10 @@ impl SessiondHandle {
         handle
     }
 
-    /// The terminal twin of [`Self::register_agent`]. The bridge's sending
-    /// half is also registered with [`Routes`] so a broadcast
-    /// ([`Self::broadcast_terminal_color_scheme`]) can inject commands
-    /// without a pane's handle.
+    /// The terminal twin of [`SessiondHandle::register_agent`]. The bridge's
+    /// sending half is also registered with [`TerminalRoutes`] so a
+    /// broadcast ([`Self::broadcast_terminal_color_scheme`]) can inject
+    /// commands without a pane's handle.
     fn register_terminal(
         &self,
         session_id: Uuid,
@@ -392,8 +515,12 @@ impl SessiondHandle {
 
     pub(crate) fn terminal_list(&self) -> Result<Vec<TerminalSummary>, String> {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self.ops.send(Op::TerminalList { reply: reply_tx }).is_err() {
-            return Err("session runtime stopped before terminal list was sent".to_string());
+        if self
+            .ops
+            .send(terminald::Op::TerminalList { reply: reply_tx })
+            .is_err()
+        {
+            return Err("terminal runtime stopped before terminal list was sent".to_string());
         }
         reply_rx
             .recv_timeout(SYNC_REPLY_TIMEOUT)
@@ -402,7 +529,7 @@ impl SessiondHandle {
                     "the terminal list did not complete in time".to_string()
                 }
                 crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the terminal list completed".to_string()
+                    "terminal runtime stopped before the terminal list completed".to_string()
                 }
             })?
     }
@@ -417,7 +544,7 @@ impl SessiondHandle {
             let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
             let sent = self
                 .ops
-                .send(Op::AttachTerminal {
+                .send(terminald::Op::AttachTerminal {
                     session_id,
                     commands,
                     reply: reply_tx,
@@ -443,33 +570,14 @@ impl SessiondHandle {
             .collect()
     }
 
-    pub(crate) fn responder(&self) -> SessiondResponder {
-        SessiondResponder {
-            ops: self.ops.downgrade(),
-        }
-    }
-
-    pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self.ops.send(Op::SessionList { reply: reply_tx }).is_err() {
-            return Err("session runtime stopped before the agent list was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the agent list did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the agent list completed".to_string()
-                }
-            })?
-    }
-
     fn drain(&self) {
-        let _ = self.ops.send(Op::Drain);
+        let _ = self.ops.send(terminald::Op::Drain);
     }
 
+    /// The destructive half of `Reload Terminal Runtime` — see
+    /// [`SessiondHandle::begin_reload`] for the return contract. Draining
+    /// terminald kills every PTY it hosts, which is why only that one
+    /// explicitly-destructive command calls this.
     pub(crate) fn begin_reload(&self) -> bool {
         if self.control.is_established() {
             self.drain();
@@ -486,6 +594,9 @@ impl SessiondHandle {
     }
 }
 
+/// Waits for a drained daemon's socket to stop accepting connections — the
+/// observable completion signal for both daemons' drains (a drain exit
+/// leaves the socket *file* behind, so file existence proves nothing).
 pub(crate) fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
     const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
     const POLL: std::time::Duration = std::time::Duration::from_millis(50);
@@ -496,7 +607,8 @@ pub(crate) fn wait_for_drain(socket_path: &Path) -> Result<(), String> {
         }
         if std::time::Instant::now() >= deadline {
             return Err(format!(
-                "horizon-sessiond did not drain within {:.1}s",
+                "the daemon at {} did not drain within {:.1}s",
+                socket_path.display(),
                 TIMEOUT.as_secs_f64()
             ));
         }

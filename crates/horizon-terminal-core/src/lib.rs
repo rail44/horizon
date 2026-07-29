@@ -9,7 +9,7 @@
 //! `crates/horizon-agent` already went through.
 //!
 //! Out of scope, deliberately: PTY ownership (`portable-pty`, threads,
-//! environment setup) stays in `horizon-sessiond`, while color *resolution*
+//! environment setup) stays in `horizon-terminald`, while color *resolution*
 //! against a live theme stays in Horizon's `theme::resolve`
 //! (`src/theme/ansi.rs`). This crate only ever sees bytes in, and hands
 //! back logical colors/commands/updates over plain channels.

@@ -27,8 +27,13 @@ use tokio::net::UnixStream;
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// The binary name `horizon-sessiond` is spawned as/looked up as -- see
-/// [`resolve_sessiond_binary`].
+/// [`resolve_daemon_binary`].
 const SESSIOND_BINARY_NAME: &str = "horizon-sessiond";
+
+/// [`SESSIOND_BINARY_NAME`]'s terminal-daemon sibling
+/// (`docs/terminald-split-design.md` decision 1): same spawn-or-connect
+/// shape, same discovery rules, a different process on a different socket.
+const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
 
 /// Connects immediately when sessiond is already listening; otherwise starts
 /// it once and keeps retrying with capped backoff until its socket is ready.
@@ -38,10 +43,31 @@ pub async fn connect_or_spawn_retrying(
     socket_path: &Path,
     control_socket: &Path,
 ) -> Result<UnixStream, String> {
+    connect_or_spawn_daemon(socket_path, control_socket, SESSIOND_BINARY_NAME).await
+}
+
+/// [`connect_or_spawn_retrying`]'s `horizon-terminald` twin. The terminal
+/// daemon is deliberately long-lived (it survives every `Reload Session
+/// Runtime`), so in practice this connects to an already-running process far
+/// more often than it spawns one -- but the on-demand spawn is what makes a
+/// first launch, or a recovery after `Reload Terminal Runtime`, need no
+/// separate supervisor.
+pub async fn connect_or_spawn_terminald_retrying(
+    socket_path: &Path,
+    control_socket: &Path,
+) -> Result<UnixStream, String> {
+    connect_or_spawn_daemon(socket_path, control_socket, TERMINALD_BINARY_NAME).await
+}
+
+async fn connect_or_spawn_daemon(
+    socket_path: &Path,
+    control_socket: &Path,
+    binary_name: &str,
+) -> Result<UnixStream, String> {
     if let Ok(stream) = UnixStream::connect(socket_path).await {
         return Ok(stream);
     }
-    spawn_sessiond(socket_path, control_socket)?;
+    spawn_daemon(socket_path, control_socket, binary_name)?;
 
     let mut delay = RETRY_DELAY;
     loop {
@@ -53,28 +79,32 @@ pub async fn connect_or_spawn_retrying(
     }
 }
 
-fn spawn_sessiond(socket_path: &Path, control_socket: &Path) -> Result<(), String> {
-    let binary = resolve_sessiond_binary();
-    sessiond_command(&binary, socket_path, control_socket)
+fn spawn_daemon(
+    socket_path: &Path,
+    control_socket: &Path,
+    binary_name: &str,
+) -> Result<(), String> {
+    let binary = resolve_daemon_binary(binary_name);
+    daemon_command(&binary, socket_path, control_socket)
         .spawn()
         .map(|_child| ())
         .map_err(|err| {
             format!(
                 "failed to spawn {} ({err}) -- run `cargo build --workspace` to build \
-                 horizon-sessiond, then try again",
+                 {binary_name}, then try again",
                 binary.display()
             )
         })
 }
 
-/// Builds the `horizon-sessiond --socket <path>` command [`spawn_sessiond`]
-/// spawns, injecting `HORIZON_SOCKET` into its environment so sessiond's own
-/// `bash` tool (and anything else a session might shell out to) defaults to
-/// targeting *this* Horizon instance's control socket --
-/// `docs/cli-control-plane-design.md`'s "Discovery" decision. Split out from
-/// `spawn_sessiond` so the env injection is directly assertable without
-/// actually spawning a process (see this module's tests).
-fn sessiond_command(
+/// Builds the `<daemon> --socket <path>` command [`spawn_daemon`] spawns,
+/// injecting `HORIZON_SOCKET` into its environment so the daemon's own
+/// children (sessiond's `bash` tool, terminald's PTY shells, and anything
+/// else they shell out to) default to targeting *this* Horizon instance's
+/// control socket -- `docs/cli-control-plane-design.md`'s "Discovery"
+/// decision. Split out from `spawn_daemon` so the env injection is directly
+/// assertable without actually spawning a process (see this module's tests).
+fn daemon_command(
     binary: &Path,
     socket_path: &Path,
     control_socket: &Path,
@@ -87,27 +117,27 @@ fn sessiond_command(
     command
 }
 
-/// Where to look for the `horizon-sessiond` binary: first, right next to
-/// Horizon's own executable (the shape `cargo build --workspace`/`cargo run`
-/// produces -- both binaries land in the same `target/debug` or
+/// Where to look for a daemon binary: first, right next to Horizon's own
+/// executable (the shape `cargo build --workspace`/`cargo run` produces --
+/// every workspace binary lands in the same `target/debug` or
 /// `target/release` directory), falling back to a bare name resolved
 /// through `PATH` (an installed deployment, or a developer who's put it
 /// there themselves). The dev-flow gotcha this exists for: `cargo run`
 /// alone only rebuilds the `horizon` binary, and `target/debug` is not on
 /// `PATH` by default, so a bare `Command::new("horizon-sessiond")` would
 /// reliably fail to find a workspace build even though one exists two
-/// directories away -- see [`spawn_sessiond`]'s error message for the
+/// directories away -- see [`spawn_daemon`]'s error message for the
 /// resulting actionable hint when neither location has it.
-fn resolve_sessiond_binary() -> PathBuf {
+fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let candidate = dir.join(SESSIOND_BINARY_NAME);
+            let candidate = dir.join(binary_name);
             if candidate.is_file() {
                 return candidate;
             }
         }
     }
-    PathBuf::from(SESSIOND_BINARY_NAME)
+    PathBuf::from(binary_name)
 }
 
 #[cfg(test)]
@@ -115,8 +145,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sessiond_command_injects_the_control_socket_env_var() {
-        let command = sessiond_command(
+    fn daemon_command_injects_the_control_socket_env_var() {
+        let command = daemon_command(
             Path::new("/usr/bin/horizon-sessiond"),
             Path::new("/tmp/x.sock"),
             Path::new("/tmp/horizon-control-test.sock"),
@@ -130,6 +160,26 @@ mod tests {
         assert_eq!(
             value,
             Some(std::ffi::OsStr::new("/tmp/horizon-control-test.sock"))
+        );
+    }
+
+    /// Both daemons resolve through the same "next to the running
+    /// executable, else `PATH`" rule, differing only in the file name --
+    /// the property `Reload Terminal Runtime` relies on to respawn
+    /// `horizon-terminald` from a `cargo build --workspace` tree.
+    #[test]
+    fn both_daemon_binaries_resolve_by_name_through_the_same_rule() {
+        assert_eq!(
+            resolve_daemon_binary(SESSIOND_BINARY_NAME)
+                .file_name()
+                .unwrap(),
+            std::ffi::OsStr::new("horizon-sessiond")
+        );
+        assert_eq!(
+            resolve_daemon_binary(TERMINALD_BINARY_NAME)
+                .file_name()
+                .unwrap(),
+            std::ffi::OsStr::new("horizon-terminald")
         );
     }
 }

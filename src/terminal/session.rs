@@ -705,7 +705,7 @@ fn version_supports_structured_input(negotiated: Option<u32>) -> bool {
     })
 }
 
-/// Whether the `TerminalCommand` channel to `horizon-sessiond` is known dead.
+/// Whether the `TerminalCommand` channel to `horizon-terminald` is known dead.
 /// Mirrors `agent::session::RuntimeReachability` (backlog #35): a failed send
 /// used to be a silent `let _ = ...` no-op. Kept as a free-standing state
 /// machine so its transitions are unit-testable without a GPUI `Context`.
@@ -810,7 +810,7 @@ pub(crate) struct TerminalSession {
     /// Last error message from `TerminalUpdate::Error`, or a synthetic message
     /// when the update channel closes unexpectedly.
     error: RefCell<Option<String>>,
-    /// Whether the command channel to sessiond is known dead.
+    /// Whether the command channel to terminald is known dead.
     runtime: Cell<RuntimeReachability>,
     traffic_trace: TrafficTraceStats,
     /// Wakes the tiny notify pump spawned in `spawn` so a `dispatch`
@@ -1153,7 +1153,7 @@ impl TerminalSession {
     /// preserving the scrolled position would mean round-tripping a `Scroll`
     /// to the anchor *before* the selection, but the daemon demuxes `Scroll`
     /// and `SelectionStart` onto separate channels with no cross-channel
-    /// ordering (`horizon-sessiond` `run_writer` → the session loop's
+    /// ordering (`horizon-terminald` `run_writer` → the session loop's
     /// `select!`), so the selection could anchor before the scroll lands.
     /// Returning to the live edge avoids that race; preserving the position is
     /// left to phase 3 (ordered scroll+select, or a client-owned selection
