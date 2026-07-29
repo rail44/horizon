@@ -350,7 +350,37 @@ impl DecodeSkipLog {
 /// 11 and interoperate. Nothing else moved: the `/models` lookup, the
 /// provider-view projection, and the cleared set itself all live inside
 /// `horizon-sessiond` and cross no channel.
-pub const SESSION_PROTOCOL_VERSION: u32 = 15;
+/// Version 16: **operator-intervention audit events**
+/// (`Event::ApprovalResolved`, `Event::ContinueTurnRequested`). The event
+/// log is this project's primary post-hoc analysis surface (the
+/// `docs/research/` reports, the 2026-07-28 session aa95e066 dogfooding
+/// retrospective), and the pre-v16 log left two operator-action shapes
+/// recoverable only by inference from surrounding events: a human's
+/// approve/deny on a pending `ApprovalRequested` (only the order-derived
+/// `ToolCallStarted`/`ToolCallFinished` carried the resolution, and only
+/// by sequence position -- itself fragile under reused `call_id` or
+/// sandbox-denial retries), and a human's `ContinueTurn` after a guard
+/// halt (`docs/issues/002-agent-iteration-cap-halts-real-work.md` decision
+/// 3 -- the resume itself left no event at all, so an analyst couldn't
+/// tell a 3-Continue-turns run from a 0-Continue-turns one without reading
+/// the rig session loop's code). Both gaps close by adding two new
+/// variants before the enum's `#[serde(other)] Unknown` catch-all, per
+/// the same "keep `Unknown` last" convention v14/v15 introduced. The
+/// Postbag-index shift that follows is the bump's mechanical reason (the
+/// schema checker classifies it as a reordering reshape); decodability
+/// stays preserved in the same direction as v14/v15 -- an older peer
+/// decodes the new events as `Unknown` and skips them, costing the audit
+/// row but nothing the user-facing transcript relies on (both events are
+/// audit-only: no frame item, no projection table row, so an older peer's
+/// UI is byte-identical to a same-build replay that simply never got
+/// them). [`MIN_SUPPORTED_PROTOCOL_VERSION`] stays 11 and v16↔v11 still
+/// negotiate 11 and interoperate. The events are emitted at the sessiond
+/// seam where `Command::ApproveToolCall`/`DenyToolCall`/`ContinueTurn`
+/// land in `dispatch_inbound_command` (`crates/horizon-sessiond/src/session/
+/// approval.rs`); the actual outbound `Command::ContinueTurn` it forwards
+/// is unchanged, so an old daemon running against a v16 client handles it
+/// exactly as before.
+pub const SESSION_PROTOCOL_VERSION: u32 = 16;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised

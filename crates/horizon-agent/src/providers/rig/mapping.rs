@@ -136,6 +136,15 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::AssistantTextDelta(_)
             | Event::ToolCallStarted(_)
             | Event::ApprovalRequested(_)
+            // Operator-intervention audit events (`SESSION_PROTOCOL_VERSION`
+            // v16): deliberately do not contribute to the provider's view
+            // of history -- the resolved approval is already represented
+            // by the `ToolCallStarted`/`ToolCallFinished` that follow, and
+            // the continue-turn by the *next* turn's events. Including the
+            // audit row itself would invent an operator message the model
+            // never received live.
+            | Event::ApprovalResolved(_)
+            | Event::ContinueTurnRequested(_)
             | Event::ProviderRequestSent(_)
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished

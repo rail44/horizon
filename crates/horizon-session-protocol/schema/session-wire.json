@@ -80,6 +80,37 @@
         }
       ]
     },
+    "ApprovalDecisionPayload": {
+      "description": "The operator's decision on a pending [`ApprovalRequest`], as carried on\n[`Event::ApprovalResolved`]. Wire-stable mirror of the internal\n`tools::approval::ApprovalDecision` enum (which is deliberately not a wire\ntype — it has no `Serialize`/`Deserialize` and lives only inside\n`horizon-agent`), so the on-disk JSONL event log records an explicit,\n`Deserialize`-able shape rather than depending on the internal enum's\nrepresentation. `Approve` carries no payload; `Deny` carries an optional\nhuman-supplied reason string (the same one `Command::DenyToolCall` accepts\ntoday).",
+      "oneOf": [
+        {
+          "enum": [
+            "Approve"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Deny": {
+              "properties": {
+                "reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "Deny"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "ApprovalKind": {
       "description": "Distinguishes the shape of a pending [`ApprovalRequest`] -- what\n`tools::approval::resolve_bash` needs to tell an ordinary approval, a\nsandbox-denial retry, and a network-domain-denial retry apart, since the\nthree resolve an Approve decision differently (`docs/agent-approval-\ndesign.md`'s \"Denial UX\" and leg 4b's \"denial -> approval -> retry\nflow\"). Also lets the UI render each kind with its own copy without\nhaving to sniff `ApprovalRequest::reason`'s free text (today it doesn't,\nbut this keeps that door open).",
       "oneOf": [
@@ -234,6 +265,32 @@
       "required": [
         "call_id",
         "reason"
+      ],
+      "type": "object"
+    },
+    "ApprovalResolved": {
+      "description": "Payload for [`Event::ApprovalResolved`]. Pairs with the preceding\n`Event::ApprovalRequested` to bound the wait-time interval an analyst\nneeds (`requested.event_at -> resolved.event_at`, both columns on\n`agent_events`); `occurrence_id` matches the request's `occurrence_id` so\nthe join survives a provider-reused `call_id` or a sandbox-denial retry\n(which re-mints the occurrence).",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "decision": {
+          "$ref": "#/$defs/ApprovalDecisionPayload"
+        },
+        "occurrence_id": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/OccurrenceId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "call_id",
+        "decision"
       ],
       "type": "object"
     },
@@ -395,6 +452,18 @@
           "type": "string"
         }
       ]
+    },
+    "ContinueTurnRequested": {
+      "description": "Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`\nof the most recent `TurnEnded` event in this session's frame at the\nmoment the human resumed, recovered via\n[`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows\nwhich guard's halt the operator overrode (`HaltedByIterationCap` /\n`HaltedByDoomLoop` / the legacy bare `Halted`). `Unknown` when no\npreceding `TurnEnded` exists — the no-op-replay / idle-session case\n(see the `Event::ContinueTurnRequested` doc comment for why that\ndistinction still matters operationally).",
+      "properties": {
+        "resumed_from": {
+          "$ref": "#/$defs/TurnEndReason"
+        }
+      },
+      "required": [
+        "resumed_from"
+      ],
+      "type": "object"
     },
     "Error": {
       "properties": {
@@ -588,6 +657,32 @@
           },
           "required": [
             "HistoryCleared"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A human resolved a pending `ApprovalRequested`. Emitted at the\nsessiond seam where `Command::ApproveToolCall`/`DenyToolCall` lands\nin `dispatch_inbound_command` (`crates/horizon-sessiond/src/session/\napproval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the\nresolution may then go on to produce — so the audit row exists\nregardless of which `ApprovalOutcome` variant `resolve_approval`\nreturns, including the `AlreadyResolved` duplicate-click case.\n\nThis is the **authoritative** record of who resolved a pending\napproval and how (the existing `agent_approvals.outcome` column\nstays populated by the order-derived `ToolCallStarted`/`Tool\nCallFinished` path for backward compatibility, but it is a derived\nbest-effort projection — collapsed rows and reused `call_id`s can\nmis-stamp it; this event is what analysis reads first).\n`Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the\n`requested -> resolved` interval an analyst wants for wait-time\nnumbers; `ApprovalResolved::occurrence_id` carries the same\n`OccurrenceId` the matching `ApprovalRequested` was minted with\n(sandbox-denial-retry always has one; older logs may not — see\n`ApprovalRequest::occurrence_id` for the `serde` rationale).\n\nDeliberately carries only the *human* decision: judge-issued\napprovals (`tools::approval::resolve_auto_approval`, the enforcing\njudge's auto-resolve path) do not produce this event, because the\nwhole point is to surface what the operator did, not what the\nbackground model decided. Auto-approvals are still visible via\n`agent_approvals.outcome` and the `judge_*` event log records\n(`docs/agent-approval-design.md`'s \"Judge design\").\n\nAudit-only: no frame item, no projection table row. The transcript\nalready shows the resolution as the approval-row state changing\n(approve → `ToolCallStarted` / `ToolCallFinished`; deny →\n`ToolCallFinished` with `denied: true`); adding a row here would\nduplicate that signal for the user while doing nothing for SQL\nanalytics that read `agent_events` directly.",
+          "properties": {
+            "ApprovalResolved": {
+              "$ref": "#/$defs/ApprovalResolved"
+            }
+          },
+          "required": [
+            "ApprovalResolved"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A human resumed a turn the turn-loop guard halted via\n`Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-\nhalts-real-work.md`'s decision 3 — \"Continue is one action\").\nEmitted at the same sessiond seam as `ApprovalResolved`.\n`resumed_from` carries the `TurnEndReason` of the most recent\n`TurnEnded` event in this session's frame at the moment of\ndispatch — `AgentFrame::last_turn_end_reason` is the accessor —\nso an analyst can read \"human resumed after an iteration-cap\nhalt\" / \"...after a doom-loop halt\" from this row alone. A\n`ContinueTurn` arriving for a session with nothing halted (a\nno-op replay, or one sent to an idle session) still emits this\nevent with `resumed_from = Unknown`, so analytics can count\nattempted-but-idle continue-turns without a separate missing-\ndata signal: that count is itself a useful operator-behavior\nnumber (a non-zero one likely means a UI keybinding race).\n\nAudit-only: same as `ApprovalResolved`. The transcript already\nshows the resumed turn's `TurnEnded` receipt and the next turn's\nevents; the audit row sits in the event log alongside them.",
+          "properties": {
+            "ContinueTurnRequested": {
+              "$ref": "#/$defs/ContinueTurnRequested"
+            }
+          },
+          "required": [
+            "ContinueTurnRequested"
           ],
           "type": "object"
         }
@@ -2408,5 +2503,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 15
+  "x-session-protocol-version": 16
 }
