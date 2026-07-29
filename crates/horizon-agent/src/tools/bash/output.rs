@@ -48,7 +48,10 @@ pub(super) fn cap(full: &str, cap_chars: usize, spill_path: Option<&Path>) -> Ca
     let tail: String = chars[chars.len() - tail_len..].iter().collect();
 
     let location = match spill_path {
-        Some(path) => format!("full output at {}", path.display()),
+        Some(path) => format!(
+            "full output at {} — re-filter with `fs.read` or `fs.grep` instead of re-running",
+            path.display()
+        ),
         None => "the full output could not be saved to a temp file".to_string(),
     };
 

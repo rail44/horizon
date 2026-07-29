@@ -209,7 +209,9 @@ pub fn definitions() -> Vec<Definition> {
                 session (a `cd` in the command carries forward to the next call). Requires user \
                 approval. Output is stdout+stderr combined, capped in-context with the full \
                 output always spilled to a temp file whose path is returned. A non-zero exit \
-                code is a normal result, not an error."
+                code is a normal result, not an error. When you need a different slice of a \
+                command's output, read or grep the spilled file (`output_file`) instead of \
+                re-running the command."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
