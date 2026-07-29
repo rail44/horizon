@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Local quality gate — same checks AGENTS.md requires before finishing work.
 set -e
 
@@ -32,8 +32,19 @@ done
 echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"
 cargo clippy --workspace --all-targets --locked -- -D warnings
 
-echo "pre-commit: cargo nextest run --workspace --locked"
-cargo nextest run --workspace --locked
+# Inside a Horizon sandboxed agent session the default nextest profile
+# cannot pass (AGENTS.md): tests that probe the host boundary are skipped
+# only by the `sandboxed` profile. The sandbox redirects TMPDIR to a
+# worktree-internal `.horizon-sandbox-tmp` directory
+# (`crates/horizon-sandbox/src/tmpdir.rs`), so that path suffix is the
+# reliable marker that this commit is running contained.
+if case "$TMPDIR" in *.horizon-sandbox-tmp) true;; *) false;; esac; then
+  echo "pre-commit: cargo nextest run --profile sandboxed --workspace --locked"
+  cargo nextest run --profile sandboxed --workspace --locked
+else
+  echo "pre-commit: cargo nextest run --workspace --locked"
+  cargo nextest run --workspace --locked
+fi
 
 echo "pre-commit: scripts/check-wire-schema.sh"
 ./scripts/check-wire-schema.sh
