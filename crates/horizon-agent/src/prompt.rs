@@ -132,11 +132,17 @@ fn is_git_repository(cwd: &Path) -> bool {
 ///    follow reliably (cells C5/C7b) — so the decomposition is stated in
 ///    the entry sentence itself: split the investigation into independent,
 ///    narrowly scoped questions and launch them as parallel calls in one
-///    response. The same amendment appends a closing sentence prescribing
+///    response. The same amendment appended a closing sentence prescribing
 ///    *continued* delegation of narrow follow-up questions during
-///    implementation. That closing sentence is a new prescription, not a
-///    measured one: it is to be measured on the next dogfood run, and comes
-///    back out if delegation granularity does not move.
+///    implementation, explicitly marked to-be-measured. **Removed
+///    2026-07-29 (owner decision) after two runs measured it inert**: both
+///    session aa95e066 (M3, zero task launches across rounds 73-426) and
+///    session 7b75d486 (GLM-5.2, zero mid-implementation launches, 91% of
+///    post-report reads landing on files a child had already covered)
+///    ignored it entirely — consistent with the probe finding that
+///    mid-stream prescriptions lose to transcript momentum while
+///    entry-point ones stick (`docs/research/agent-delegation-and-batching-
+///    probes-2026-07-27.md`, cell MI).
 ///
 /// `tools::catalog`'s `task` description carries the matching amendments.
 pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
@@ -150,10 +156,7 @@ pub const DELEGATION_ROUTING_SECTION: &str = "Delegation:\n\
      components. State the question and the exact deliverable (relevant files, line numbers, a \
      step plan). Do not grep/read/bash to orient yourself first. Keep working while it runs; its \
      report will arrive as a notification, and you implement the changes yourself in this \
-     session — task agents cannot write files; never delegate the implementation itself. While \
-     implementing, keep delegating narrow follow-up questions (where is something defined, how \
-     is it used) to task instead of reading through the code yourself — results arrive as \
-     notifications while you keep working.";
+     session — task agents cannot write files; never delegate the implementation itself.";
 
 /// Builds the system prompt (rig calls this the completion request's
 /// "preamble") from session environment facts, followed by any

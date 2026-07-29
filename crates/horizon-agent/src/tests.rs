@@ -1197,11 +1197,12 @@ fn delegation_routing_section_asks_for_parallel_decomposition() {
         ),
         "{section}"
     );
+    // The "keep delegating during implementation" closing sentence was
+    // removed 2026-07-29 after two runs measured it inert (see the
+    // DELEGATION_ROUTING_SECTION doc comment); assert it stays out so a
+    // future edit does not resurrect an instruction known not to work.
     assert!(
-        section.contains(
-            "While implementing, keep delegating narrow follow-up questions (where is something \
-             defined, how is it used) to task instead of reading through the code yourself"
-        ),
+        !section.contains("keep delegating narrow follow-up questions"),
         "{section}"
     );
     // The decomposition must sit inside the implementation entry, before
