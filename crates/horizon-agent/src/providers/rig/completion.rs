@@ -996,24 +996,32 @@ fn multi_tool_call_message(count: usize) -> Message {
 /// unrestricted behavior: every tool in `tools::definitions()` is advertised
 /// to the provider, unchanged from before this parameter existed.
 ///
-/// One tool is filtered beyond the allowlist: `task_output` is advertised
+/// Two tools are filtered beyond the allowlist. `task_output` is advertised
 /// only when `task` itself is (`docs/agent-async-task-design.md` decision
 /// 3, "advertise it only alongside `task`"). It is the same conditional
 /// seam `prompt::DELEGATION_ROUTING_SECTION` rides on
 /// (`session::advertises_task_tool`), decided from the same allowlist —
 /// a session that cannot launch a task can never own one to read, so
-/// offering the fetch tool would only be a call it must fail.
+/// offering the fetch tool would only be a call it must fail. `web_search`
+/// is advertised only when `EXA_API_KEY` is set in the process environment:
+/// without the key the Exa adapter can only return a "not configured" error,
+/// so advertising it buys a round that cannot succeed (`web_fetch` needs no
+/// key and stays advertised).
 pub(super) fn rig_tool_definitions(allowed_tool_ids: Option<&[String]>) -> Vec<ToolDefinition> {
     let allows = |id: &str| match allowed_tool_ids {
         Some(allowed) => allowed.iter().any(|allowed| allowed == id),
         None => true,
     };
     let advertises_task = allows(crate::tools::TASK_TOOL_ID);
+    let exa_configured = std::env::var(crate::config::EXA_API_KEY_VAR)
+        .map(|value| !value.trim().is_empty())
+        .unwrap_or(false);
     definitions()
         .into_iter()
         .filter(|definition| {
             allows(&definition.id)
                 && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
+                && (exa_configured || definition.id != "web_search")
         })
         .map(rig_tool_definition_from_horizon)
         .collect()

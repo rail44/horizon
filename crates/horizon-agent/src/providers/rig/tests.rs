@@ -2549,6 +2549,10 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
 
 #[test]
 fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
+    // `web_search` is environment-gated on `EXA_API_KEY` (see
+    // `rig_tool_definitions`); set it so this test's "every catalog tool"
+    // assertion is independent of the host's environment.
+    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
     let all = crate::tools::definitions();
 
     let definitions = rig_tool_definitions(None);
@@ -2585,6 +2589,47 @@ fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let definitions = rig_tool_definitions(Some(&allowed));
 
     assert!(definitions.is_empty());
+}
+
+// --- web_search advertise gating on EXA_API_KEY -------------------------
+//
+// `web_search` is the one tool whose adapter cannot run without a secret
+// in the process environment. Advertising it when the key is absent only buys
+// a "not configured" error round, so `rig_tool_definitions` drops it unless
+// `EXA_API_KEY` is set. `web_fetch` needs no key and stays advertised.
+
+#[test]
+fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
+    std::env::remove_var(crate::config::EXA_API_KEY_VAR);
+
+    let definitions = rig_tool_definitions(None);
+    let names: HashSet<&str> = definitions
+        .iter()
+        .map(|definition| definition.name.as_str())
+        .collect();
+    assert!(
+        !names.contains("web_search"),
+        "web_search must not be advertised when EXA_API_KEY is unset: {names:?}"
+    );
+    assert!(
+        names.contains("web_fetch"),
+        "web_fetch is keyless and must remain advertised: {names:?}"
+    );
+}
+
+#[test]
+fn web_search_is_advertised_when_exa_api_key_is_set() {
+    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+
+    let definitions = rig_tool_definitions(None);
+    let names: HashSet<&str> = definitions
+        .iter()
+        .map(|definition| definition.name.as_str())
+        .collect();
+    assert!(
+        names.contains("web_search"),
+        "web_search must be advertised when EXA_API_KEY is set: {names:?}"
+    );
 }
 
 // --- role_adjusted_config: a role narrows the process-wide RigAgentConfig -
