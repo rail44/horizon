@@ -1,4 +1,4 @@
-use serde_json::json;
+use serde_json::{json, Value};
 
 use crate::contract::{
     Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallId, ToolCallRequest,
@@ -229,6 +229,41 @@ fn execute_tier1_bash(
     let network = tool_state.network_proxy();
 
     let call_id = request.call_id.clone();
+
+    // Same-command re-filter short-circuit (`tools/bash/recent.rs`): if this
+    // command's base (the part before the first pipe) matches a prior bash
+    // run whose full output was spilled to a temp file that still exists,
+    // and no file-modifying tool call (`fs.write`/`fs.edit`, or a `bash`
+    // call with a *different* base) has run in between, skip execution and
+    // return a guidance result pointing at the existing spill file instead.
+    // The model can re-filter with `fs.read`/`fs.grep` without re-running the
+    // command — the "same command, different `| tail`/`| grep` filter" pattern
+    // that burned ~1.2M input tokens in a single session
+    // (`docs/research/agent-editing-phase-analysis-2026-07-28.md`).
+    //
+    // This runs after `classify_call` returned `Contained` (the sandbox
+    // verdict, line 78-83) and before `spawn_sandboxed`, so neither the
+    // sandbox nor the approval gate is affected. A stale or missing spill
+    // file falls through to a real run, and an intervening modification
+    // blocks the short-circuit so genuinely changed code always gets a
+    // fresh execution.
+    if let Some(command) = request.input.get("command").and_then(Value::as_str) {
+        let frame = runtime.live_state.frame();
+        if let Some(prior) = crate::tools::bash::find_reusable_output(&frame, command) {
+            let mut output = crate::tools::bash::guidance_output(command, &prior);
+            annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+            return Execution::Auto(vec![
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallFinished(ToolCallResult::new(
+                    call_id,
+                    request.occurrence_id.clone(),
+                    output,
+                )),
+            ]);
+        }
+    }
+
     let events = vec![
         Event::StateChanged(SessionState::ToolRunning),
         Event::ToolCallStarted(call_id.clone()),
