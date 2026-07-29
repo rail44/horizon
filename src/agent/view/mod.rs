@@ -213,6 +213,16 @@ impl Render for AgentView {
             .flex()
             .flex_col()
             .bg(rgb(crate::theme::background()))
+            // Apply the config-driven font family (`[ui] font_family`) and
+            // size (`[terminal] font_size`) at the pane root so every child
+            // -- the Markdown transcript (gpui-component's `TextView`, which
+            // reads `window.text_style()`), the composer `Input`, the status
+            // line, and the tool-call rows -- inherits the same font as the
+            // terminal instead of falling back to gpui-component's built-in
+            // default. Children with their own `.text_size()` (labels, tool
+            // rows, status) keep their deliberate sub-sizes.
+            .font(crate::terminal::resolved_font())
+            .text_size(px(crate::terminal::font_size()))
             .track_focus(&self.focus_handle)
             // The wrapper gets a definite flex allocation first; the cached
             // transcript then fills those exact bounds. Auto-grow composer and

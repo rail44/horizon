@@ -96,7 +96,7 @@ pub(crate) fn resolved_font() -> Font {
 /// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
 pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
 
-fn font_size() -> f32 {
+pub(crate) fn font_size() -> f32 {
     static SIZE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *SIZE.get_or_init(|| {
         horizon_config::load()

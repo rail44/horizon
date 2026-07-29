@@ -265,7 +265,7 @@ impl AgentTranscript {
                 )
                 .child(
                     div()
-                        .text_size(px(13.0))
+                        .text_size(px(crate::terminal::font_size()))
                         .text_color(theme::text_primary())
                         .child(text),
                 )
@@ -288,7 +288,7 @@ impl AgentTranscript {
                     )
                     .child(
                         TextView::markdown(id, text)
-                            .text_size(px(13.0))
+                            .text_size(px(crate::terminal::font_size()))
                             .text_color(theme::text_primary()),
                     )
                     .into_any_element()
