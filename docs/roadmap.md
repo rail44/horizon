@@ -460,6 +460,14 @@ lands:
   `close_range(CLOSE_RANGE_CLOEXEC)` on Linux, bounded `fcntl` loop on
   macOS/BSD — which also fixes upstream #7742/#7893; Horizon consumes
   it via `[patch.crates-io]`). Item stays open tracking that work.
+  **terminald split designed 2026-07-30
+  (`docs/terminald-split-design.md`)**: terminals move to their own
+  rarely-restarted daemon so agent-runtime reloads (67% of daemon
+  restarts, measured) stop killing PTYs; the terminal wire slice moves
+  to append-only discipline (tmux precedent), with binary_id-keyed
+  clean refusal as the below-the-schema insurance. Phased: UI-side
+  resume wiring + config-only reload first, then the daemon split.
+
 
 
 - **Terminal presentation wave** — all five slices merged 2026-07-18
