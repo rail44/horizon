@@ -494,13 +494,13 @@ pub fn render_agent_transcript(events: &[Event]) -> String {
             Event::Unknown => lines.push("unknown event (skipped)".to_string()),
             Event::StateChanged(state) => lines.push(format!("state: {state:?}")),
             Event::ReasoningDelta(delta) => {
-                lines.push(format!("{}: {}", role_label(delta.role), delta.text));
+                lines.push(format!("{}: {}", delta.role.log_label(), delta.text));
             }
             Event::AssistantTextDelta(delta) => {
-                lines.push(format!("{} delta: {}", role_label(delta.role), delta.text));
+                lines.push(format!("{} delta: {}", delta.role.log_label(), delta.text));
             }
             Event::MessageCommitted(message) => {
-                lines.push(format!("{}: {}", role_label(message.role), message.text));
+                lines.push(format!("{}: {}", message.role.log_label(), message.text));
             }
             Event::ToolCallRequested(request) => {
                 lines.push(format!(
@@ -823,18 +823,6 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
             | AgentFrameItem::Exited(_)
             | AgentFrameItem::TurnEnded { .. }
     )
-}
-
-#[cfg(test)]
-fn role_label(role: MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "user",
-        MessageRole::TaskNotification => "task",
-        MessageRole::AutoContinue => "continue",
-        // Unknown renders as assistant-authored -- see `MessageRole::
-        // Unknown`'s doc (never invent user words).
-        MessageRole::Assistant | MessageRole::Unknown => "assistant",
-    }
 }
 
 #[cfg(test)]
