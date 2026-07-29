@@ -45,6 +45,50 @@ max-threads = 1
 # (backlog 43/66), not containment; excluding those would hide real
 # regressions. If a test outside this list fails in a sandboxed session,
 # it is a finding, not noise.
+#
+# --- 2026-08 expansion: 33 failures observed running the sandboxed profile
+# inside containment. Each is the host boundary the sandbox enforces; the
+# integrator's full gate runs all of them outside containment. Grouped by
+# mechanism with the observed failure mode, so the next reader can tell
+# signal from noise.
+#
+# Control-plane Unix-socket IPC -- `binary_id(horizon-cli::integration)` and
+# `test(/^host::listener::tests::/)`. `horizon-cli::integration` binds a stub
+# `UnixListener` speaking `horizon_control::wire`, and `host::listener::tests`
+# bind the real listener -- both at `std::env::temp_dir()`. Under containment
+# $TMPDIR is provisioned under this session's (deep) worktree, so the socket
+# path exceeds SUN_LEN and `bind()` fails with `InvalidInput` ("path must be
+# shorter than SUN_LEN") before the sandbox even sees the call. Outside
+# containment $TMPDIR is /tmp and both pass. (Two `horizon-cli::integration`
+# cases -- `a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic`
+# and `usage_error_exits_with_code_two` -- don't bind and would pass, but ride
+# along with the whole integration binary; the full gate covers them.)
+#
+# The sandbox's own boundary enforcer -- `binary_id(horizon-sandbox::linux_supervised_helper)`
+# and `(binary_id(horizon-sandbox-proxy) & test(/^tests::/))`.
+# `linux_supervised_helper` spawns a real `horizon-sandbox-helper` that installs
+# a combined seccomp listener -- under the outer sandbox that fails with EBUSY
+# (a sandbox cannot nest another sandbox under itself); several cases
+# additionally bind a TCP proxy endpoint the sandbox refuses.
+# `horizon-sandbox-proxy` `tests::*` bind a real loopback TCP origin/proxy the
+# sandbox denies (Permission denied on `127.0.0.1:0`). Scoped to `tests::*`
+# because the crate's `allowlist::tests`/`handler::tests` are pure logic and
+# pass under containment.
+#
+# Exa adapter loopback mock -- `test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)`. Spawns a loopback TCP mock server (`127.0.0.1:0`) for the
+# adapter to talk to; the sandbox denies loopback binds, so it fails at
+# `TcpListener::bind` (Permission denied) before any adapter logic runs. Not a
+# real Exa network call -- a localhost mock stopped by the loopback bind denial.
+#
+# `suggest_grants` system-root assumption --
+# `test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants/)`. Relies on two `temp_dir` siblings sharing only a system root as their common
+# ancestor (so no honest shared tree exists and per-attempt grants are
+# returned). Under containment $TMPDIR lives under the workspace, so the
+# siblings' common ancestor is a normal directory and `suggest_grants`
+# (correctly) offers it as one shared `DirectoryTree` grant -- the
+# `grants.len() >= 2` assertion then fails. The logic is right; the test needs
+# $TMPDIR to be /tmp (system-rooted), which containment cannot provide. Same
+# family as the `outside_a_*_repository` skips (needs a dir outside the repo).
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -62,5 +106,11 @@ default-filter = '''
         + test(/^worktree::tests::create_isolated_worktree_branches/)
         + test(/outside_a_git_repository$/)
         + test(/outside_any_repository_is_none$/)
+        + binary_id(horizon-cli::integration)
+        + test(/^host::listener::tests::/)
+        + binary_id(horizon-sandbox::linux_supervised_helper)
+        + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
+        + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
+        + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
     )
 '''
