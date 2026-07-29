@@ -112,13 +112,20 @@ pub(super) struct TransientRejection {
     /// input for tuning the launch ceiling in `tools::explore::children`
     /// dynamically -- deliberately not built now.
     pub(super) retry_after: Option<Duration>,
+    /// Whether a transport failure (`status: None`) occurred mid-stream —
+    /// the response had started but a body decode failed (rig renders it
+    /// as `Http client error: error decoding response body: ...`) — rather
+    /// than pre-send (the request never reached the model). Only meaningful
+    /// when `status` is `None`; always `false` for status-based rejections.
+    pub(super) mid_stream: bool,
 }
 
 impl TransientRejection {
     fn describe(&self) -> String {
         match self.status {
             Some(status) => format!("HTTP {status}"),
-            None => "connection failure".to_string(),
+            None if self.mid_stream => "transport failure (mid-stream decode)".to_string(),
+            None => "transport failure (pre-send)".to_string(),
         }
     }
 }
@@ -126,9 +133,13 @@ impl TransientRejection {
 /// One attempt's outcome as [`with_pre_generation_retry`] needs to see it.
 pub(super) struct Attempt<T> {
     pub(super) result: anyhow::Result<T>,
-    /// Whether the provider had begun answering by the time this attempt
-    /// ended. Once true, no failure of this attempt may be retried.
-    pub(super) generation_started: bool,
+    /// Whether this attempt produced durable output — a `ToolCallRequested`
+    /// or `MessageCommitted` event — by the time it ended. Once true, no
+    /// failure of this attempt may be retried: a retry could duplicate the
+    /// committed tool call or message in history. Reasoning and text
+    /// deltas are volatile (never entered history), so an attempt that
+    /// only streamed those is still safe to retry.
+    pub(super) durable_output_emitted: bool,
 }
 
 /// How a retried provider request finally ended.
@@ -150,10 +161,10 @@ pub(super) enum Retried<T> {
 /// contract error or a stream timeout.
 pub(super) fn retryable_rejection(
     attempt: u32,
-    generation_started: bool,
+    durable_output_emitted: bool,
     message: &str,
 ) -> Option<TransientRejection> {
-    if generation_started || attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
+    if durable_output_emitted || attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
         return None;
     }
     if let Some(status) = rejected_status(message) {
@@ -162,6 +173,7 @@ pub(super) fn retryable_rejection(
             .then(|| TransientRejection {
                 status: Some(status),
                 retry_after: named_retry_after(message),
+                mid_stream: false,
             });
     }
     message
@@ -169,6 +181,7 @@ pub(super) fn retryable_rejection(
         .then_some(TransientRejection {
             status: None,
             retry_after: None,
+            mid_stream: message.contains("error decoding response body"),
         })
 }
 
@@ -251,7 +264,7 @@ pub(super) async fn sleep_unless_cancelled(delay: Duration, token: &Cancellation
 }
 
 /// Sends one provider request, re-sending it while the provider keeps
-/// rejecting it before generating anything.
+/// rejecting it before producing any durable output.
 ///
 /// Generic over the attempt so the loop itself is testable without a
 /// provider: the real caller passes a closure that runs one
@@ -268,14 +281,14 @@ where
     loop {
         let Attempt {
             result,
-            generation_started,
+            durable_output_emitted,
         } = attempt().await;
         let error = match result {
             Ok(value) => return Retried::Ok(value),
             Err(error) => error,
         };
         let message = format!("{error:#}");
-        let Some(rejection) = retryable_rejection(number, generation_started, &message) else {
+        let Some(rejection) = retryable_rejection(number, durable_output_emitted, &message) else {
             return Retried::Failed(error);
         };
         let backoff = retry_backoff(number, rejection.retry_after, jitter_permille());
@@ -284,7 +297,7 @@ where
         // legible next time.
         eprintln!(
             "horizon-agent: provider rejected attempt {number}/{PROVIDER_REQUEST_MAX_ATTEMPTS} \
-             before generating anything ({}); retrying in {backoff:?}: {}",
+             before any durable output ({}); retrying in {backoff:?}: {}",
             rejection.describe(),
             truncate_for_log(&message),
         );
@@ -371,6 +384,17 @@ pub(super) struct TurnCompletion {
     /// a byte heuristic (`docs/agent-compaction-design.md`; crush and
     /// opencode both drive the same decision off actual usage tokens).
     pub(super) input_tokens: Option<u64>,
+    /// The provider started streaming one or more tool calls but never
+    /// finalized them — the response was truncated mid-stream (rig's
+    /// `take_finalized_tool_calls` dropped the incomplete calls with only
+    /// a `tracing::debug`). Distinct from `failed` (the request itself
+    /// errored) and from an empty `requested_tool_call_ids` (which could
+    /// be a normal text-only reply): a truncated turn must not be misread
+    /// as `Completed`.
+    pub(super) truncated: bool,
+    /// How many tool calls the provider started but never finalized, when
+    /// `truncated` is true. Zero otherwise.
+    pub(super) truncated_tool_call_count: usize,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -448,6 +472,8 @@ pub(super) async fn complete_rig_turn(
         cancelled: false,
         failed: false,
         input_tokens: None,
+        truncated: false,
+        truncated_tool_call_count: 0,
     }
 }
 
@@ -468,7 +494,7 @@ async fn rig_openai_turn_with_retry(
     token: &CancellationToken,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
     let outcome = with_pre_generation_retry(token, || async {
-        let mut generation_started = false;
+        let mut durable_output_emitted = false;
         let result = rig_openai_turn_streaming(
             config,
             environment,
@@ -477,12 +503,12 @@ async fn rig_openai_turn_with_retry(
             history.clone(),
             events_tx.clone(),
             token,
-            &mut generation_started,
+            &mut durable_output_emitted,
         )
         .await;
         Attempt {
             result,
-            generation_started,
+            durable_output_emitted,
         }
     })
     .await;
@@ -511,7 +537,7 @@ async fn rig_openai_turn_streaming(
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
-    generation_started: &mut bool,
+    durable_output_emitted: &mut bool,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
     let client = openai_completions_client(config)?;
     let model = client.completion_model(&config.model);
@@ -603,12 +629,6 @@ async fn rig_openai_turn_streaming(
         // status here rather than from stream establishment (rig sends the
         // HTTP request lazily, on the stream's first poll).
         let chunk = chunk?;
-        // Any decoded chunk proves the provider accepted the request and
-        // started answering it, so from here on a retry could duplicate a
-        // generation -- see `retryable_rejection`. Set before the match so
-        // text, reasoning, tool-call deltas, and the final usage frame all
-        // count.
-        *generation_started = true;
         if !first_token_seen {
             first_token_seen = true;
             // The gap between `ProviderRequestSent` above and this event is
@@ -638,7 +658,10 @@ async fn rig_openai_turn_streaming(
                     );
                 }
             }
-            StreamedAssistantContent::ToolCall { mut tool_call, .. } => {
+            StreamedAssistantContent::ToolCall {
+                mut tool_call,
+                internal_call_id,
+            } => {
                 reasoning_buffer.flush();
                 text_buffer.flush();
                 // The provider payload records the provider's raw emission
@@ -661,6 +684,8 @@ async fn rig_openai_turn_streaming(
                     Event::ToolCallRequested(request),
                     provider_payload,
                 ));
+                tool_call_progress.note_finalized(&internal_call_id);
+                *durable_output_emitted = true;
                 tool_calls.push(tool_call);
             }
             // Tool-call arguments can arrive as many small chunks (a 4.7KB
@@ -719,6 +744,7 @@ async fn rig_openai_turn_streaming(
             })
             .into(),
         );
+        *durable_output_emitted = true;
     }
 
     // `stream.choice` is only aggregated when the stream runs to its end;
@@ -741,6 +767,9 @@ async fn rig_openai_turn_streaming(
         }
     };
 
+    let truncated_ids = tool_call_progress.truncated_ids();
+    let truncated = !cancelled && !truncated_ids.is_empty();
+
     Ok((
         assistant_message,
         TurnCompletion {
@@ -749,6 +778,8 @@ async fn rig_openai_turn_streaming(
             cancelled,
             failed: false,
             input_tokens,
+            truncated,
+            truncated_tool_call_count: truncated_ids.len(),
         },
     ))
 }

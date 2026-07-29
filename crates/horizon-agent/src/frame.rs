@@ -830,6 +830,7 @@ fn role_label(role: MessageRole) -> &'static str {
     match role {
         MessageRole::User => "user",
         MessageRole::TaskNotification => "task",
+        MessageRole::AutoContinue => "continue",
         // Unknown renders as assistant-authored -- see `MessageRole::
         // Unknown`'s doc (never invent user words).
         MessageRole::Assistant | MessageRole::Unknown => "assistant",

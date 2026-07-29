@@ -357,13 +357,30 @@ async fn run_session_loop(
                     move || deterministic_rig_response(&fallback_text),
                 )
                 .await;
-                apply_turn_outcome(
+                if let Some(outcome) = handle_truncation_recovery(
                     outcome,
-                    &events_tx,
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
                     &mut rig_history,
+                    &events_tx,
+                    &mut clearing,
+                    &mut guard,
                     &mut pending_tool_calls,
                     &mut cancelled_call_ids,
-                );
+                )
+                .await
+                {
+                    apply_turn_outcome(
+                        outcome,
+                        &events_tx,
+                        &mut rig_history,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                }
                 continue;
             }
         };
@@ -436,13 +453,30 @@ async fn run_session_loop(
                     move || deterministic_rig_response(&fallback_text),
                 )
                 .await;
-                apply_turn_outcome(
+                if let Some(outcome) = handle_truncation_recovery(
                     outcome,
-                    &events_tx,
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
                     &mut rig_history,
+                    &events_tx,
+                    &mut clearing,
+                    &mut guard,
                     &mut pending_tool_calls,
                     &mut cancelled_call_ids,
-                );
+                )
+                .await
+                {
+                    apply_turn_outcome(
+                        outcome,
+                        &events_tx,
+                        &mut rig_history,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                }
             }
             Command::ToolCallResult(result) => {
                 if cancelled_call_ids.remove(&result.call_id) {
@@ -553,13 +587,30 @@ async fn run_session_loop(
                     },
                 )
                 .await;
-                apply_turn_outcome(
+                if let Some(outcome) = handle_truncation_recovery(
                     outcome,
-                    &events_tx,
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
                     &mut rig_history,
+                    &events_tx,
+                    &mut clearing,
+                    &mut guard,
                     &mut pending_tool_calls,
                     &mut cancelled_call_ids,
-                );
+                )
+                .await
+                {
+                    apply_turn_outcome(
+                        outcome,
+                        &events_tx,
+                        &mut rig_history,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                }
             }
             Command::ContinueTurn => {
                 let Some(result) = pending_halt_result.take() else {
@@ -624,13 +675,30 @@ async fn run_session_loop(
                     },
                 )
                 .await;
-                apply_turn_outcome(
+                if let Some(outcome) = handle_truncation_recovery(
                     outcome,
-                    &events_tx,
+                    &mut commands,
+                    &mut inbox,
+                    &config,
+                    &environment,
+                    &extra_sections,
                     &mut rig_history,
+                    &events_tx,
+                    &mut clearing,
+                    &mut guard,
                     &mut pending_tool_calls,
                     &mut cancelled_call_ids,
-                );
+                )
+                .await
+                {
+                    apply_turn_outcome(
+                        outcome,
+                        &events_tx,
+                        &mut rig_history,
+                        &mut pending_tool_calls,
+                        &mut cancelled_call_ids,
+                    );
+                }
             }
             Command::Cancel { .. } => {
                 if !cancel_outstanding_tool_calls(
@@ -776,6 +844,122 @@ pub(super) fn apply_turn_outcome(
         let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
     } else {
         pending_tool_calls.extend(outcome.requested_tool_calls);
+    }
+}
+
+/// The synthetic continuation prompt injected after the harness detects
+/// the provider truncated tool calls mid-stream. The model is told its
+/// previous response was cut short and asked to continue the work it
+/// described in its reasoning.
+fn truncation_continuation_prompt(truncated_count: usize) -> String {
+    format!(
+        "The provider cut short {truncated_count} tool call(s) in your previous \
+         response — the call(s) started streaming but were never finalized. \
+         Continue the work you described in your reasoning and re-issue the \
+         tool call(s)."
+    )
+}
+
+/// Handles a turn outcome that may be truncated: if the provider started
+/// streaming tool calls but never finalized them (`outcome.truncated`), the
+/// turn is closed as `Failed` and the harness automatically continues with a
+/// synthetic prompt, up to [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times
+/// before falling back to `WaitingForUser`.
+///
+/// Returns `None` when the truncation was fully handled (the caller should
+/// do nothing further), or `Some(outcome)` when the turn was not truncated
+/// (the caller should pass it to `apply_turn_outcome`).
+#[allow(clippy::too_many_arguments)]
+async fn handle_truncation_recovery(
+    mut outcome: TurnCompletion,
+    commands: &mut UnboundedReceiver<Command>,
+    inbox: &mut VecDeque<Command>,
+    config: &RigAgentConfig,
+    environment: &SessionEnvironment,
+    extra_sections: &[String],
+    rig_history: &mut Vec<Message>,
+    events_tx: &Sender<ProviderEvent>,
+    clearing: &mut ClearingState,
+    guard: &mut TurnLoopGuard,
+    pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
+    cancelled_call_ids: &mut HashSet<ToolCallId>,
+) -> Option<TurnCompletion> {
+    if !outcome.truncated {
+        guard.reset_truncation_counter();
+        return Some(outcome);
+    }
+
+    loop {
+        let count = outcome.truncated_tool_call_count;
+
+        // Cancel any finalized tool calls from the truncated turn — the
+        // turn is ending as Failed, so they must not hang as pending.
+        if !outcome.requested_tool_call_ids.is_empty() {
+            cancelled_call_ids.extend(outcome.requested_tool_call_ids.iter().cloned());
+            append_cancelled_tool_results_to_history(rig_history, &outcome.requested_tool_call_ids);
+            for call_id in &outcome.requested_tool_call_ids {
+                let _ = events_tx.send(
+                    Event::ToolCallFinished(cancelled_tool_call_result(call_id.clone())).into(),
+                );
+            }
+        }
+
+        // The event log must tell the truth: this was not a normal
+        // completion. The turn is Failed, not Completed.
+        let _ = events_tx.send(
+            Event::Error(Error {
+                message: format!(
+                    "Provider truncated {count} tool call(s) mid-stream — \
+                     the call(s) started streaming but were never finalized."
+                ),
+            })
+            .into(),
+        );
+        let _ = events_tx.send(Event::TurnEnded(TurnEndReason::Failed).into());
+
+        if !guard.record_truncation_continue() {
+            // Consecutive truncation cap exhausted: stop auto-continuing
+            // and let the user take over.
+            let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+            return None;
+        }
+
+        // Auto-continue: inject the synthetic continuation prompt and run
+        // the next turn, mirroring the TaskWake auto-start seam.
+        let text = truncation_continuation_prompt(count);
+        let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+        let _ = events_tx.send(
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::AutoContinue,
+                text: text.clone(),
+            })
+            .into(),
+        );
+        outcome = run_cancellable_turn(
+            commands,
+            inbox,
+            config,
+            environment,
+            extra_sections,
+            rig_history,
+            Message::user(text),
+            events_tx,
+            clearing,
+            || deterministic_rig_response("truncation recovery"),
+        )
+        .await;
+
+        if !outcome.truncated {
+            guard.reset_truncation_counter();
+            apply_turn_outcome(
+                outcome,
+                events_tx,
+                rig_history,
+                pending_tool_calls,
+                cancelled_call_ids,
+            );
+            return None;
+        }
     }
 }
 
@@ -925,11 +1109,18 @@ impl GuardHalt {
 /// RigAgentConfig` (formerly the hardcoded `TOOL_TURN_ITERATION_CAP`/
 /// `DOOM_LOOP_WINDOW` constants) and are fixed for the guard's lifetime;
 /// `reset` only clears the running counters below, never these.
+/// Maximum consecutive auto-continues after the provider truncated tool
+/// calls mid-stream before giving up and falling back to `WaitingForUser`
+/// (the owner's design: three consecutive truncation auto-continues,
+/// then stop).
+const MAX_CONSECUTIVE_TRUNCATION_CONTINUES: u32 = 3;
+
 #[derive(Debug)]
 pub(super) struct TurnLoopGuard {
     iteration_cap: u32,
     doom_loop_window: usize,
     consecutive_tool_turns: u32,
+    consecutive_truncation_continues: u32,
     recent_fingerprints: VecDeque<u64>,
 }
 
@@ -939,6 +1130,7 @@ impl TurnLoopGuard {
             iteration_cap,
             doom_loop_window,
             consecutive_tool_turns: 0,
+            consecutive_truncation_continues: 0,
             recent_fingerprints: VecDeque::new(),
         }
     }
@@ -947,6 +1139,7 @@ impl TurnLoopGuard {
     /// when a `Command::UserMessage` starts a fresh interaction.
     pub(super) fn reset(&mut self) {
         self.consecutive_tool_turns = 0;
+        self.consecutive_truncation_continues = 0;
         self.recent_fingerprints.clear();
     }
 
@@ -970,6 +1163,21 @@ impl TurnLoopGuard {
         let is_doom_loop = self.recent_fingerprints.len() == self.doom_loop_window
             && self.recent_fingerprints.iter().all(|fp| *fp == fingerprint);
         is_doom_loop.then_some(GuardHalt::DoomLoopDetected)
+    }
+
+    /// Records that a truncation-triggered auto-continue is about to run.
+    /// Returns `true` while under the cap (the continue may proceed),
+    /// `false` once the cap is exceeded (the session must fall back to
+    /// `WaitingForUser`).
+    pub(super) fn record_truncation_continue(&mut self) -> bool {
+        self.consecutive_truncation_continues += 1;
+        self.consecutive_truncation_continues <= MAX_CONSECUTIVE_TRUNCATION_CONTINUES
+    }
+
+    /// Resets the truncation counter — called when a turn completes
+    /// without truncation, breaking the consecutive-truncation streak.
+    pub(super) fn reset_truncation_counter(&mut self) {
+        self.consecutive_truncation_continues = 0;
     }
 }
 
