@@ -8,7 +8,7 @@ use rig_core::OneOrMany;
 
 use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
-    ToolCallId, ToolCallRequest, ToolCallResult,
+    ProviderSide, ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use crate::tools::cancelled_tool_call_result;
 
@@ -108,24 +108,10 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
     let messages = events
         .iter()
         .filter_map(|event| match event {
-            Event::MessageCommitted(message) => match message.role {
-                // A background-`task` notification replays as a plain
-                // user-role text message because that is exactly what the
-                // provider was sent live (`providers::rig::session`'s
-                // injection): a replayed history that disagreed with the
-                // sent one would change the model's view of its own past.
-                // The distinct role exists for persistence and the
-                // transcript, not for the provider -- see
-                // `MessageRole::TaskNotification`.
-                MessageRole::User | MessageRole::TaskNotification | MessageRole::AutoContinue => {
-                    Some(Message::user(message.text.clone()))
-                }
-                // Unknown replays as assistant-authored -- see
-                // `MessageRole::Unknown`'s doc (never invent user words).
-                MessageRole::Assistant | MessageRole::Unknown => {
-                    Some(Message::assistant(message.text.clone()))
-                }
-            },
+            Event::MessageCommitted(message) => Some(match message.role.provider_side() {
+                ProviderSide::User => Message::user(message.text.clone()),
+                ProviderSide::Assistant => Message::assistant(message.text.clone()),
+            }),
             Event::ToolCallRequested(request) => {
                 Some(Message::from(rig_tool_call_from_request(request)))
             }

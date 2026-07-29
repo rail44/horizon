@@ -294,24 +294,30 @@ impl AgentTranscript {
                     .into_any_element()
             };
         match item {
-            AgentFrameItem::Message(message) => Some(match message.role {
-                MessageRole::User => block("you", theme::accent(), message.text.clone()),
-                // A background-`task` completion notification: system
-                // authored, not the human's words, so it gets its own
-                // muted label rather than the "you" block.
-                MessageRole::TaskNotification => block("task", theme::info(), message.text.clone()),
-                // A system-authored auto-continuation after truncation:
-                // same muted treatment as a task notification.
-                MessageRole::AutoContinue => block("continue", theme::info(), message.text.clone()),
+            AgentFrameItem::Message(message) => {
+                // The label string is centralized in
+                // `MessageRole::display_label`; only the color (accent for
+                // the human's own messages, muted info for everything else)
+                // and the plain-vs-markdown rendering choice are local here.
+                let label = message.role.display_label();
+                let color = if message.role == MessageRole::User {
+                    theme::accent()
+                } else {
+                    theme::info()
+                };
                 // Unknown renders as agent-authored -- see `MessageRole::
                 // Unknown`'s doc (never invent user words).
-                MessageRole::Assistant | MessageRole::Unknown => markdown_block(
-                    "agent",
-                    theme::info(),
-                    ("agent-message", index),
-                    message.text.clone(),
-                ),
-            }),
+                if matches!(message.role, MessageRole::Assistant | MessageRole::Unknown) {
+                    Some(markdown_block(
+                        label,
+                        color,
+                        ("agent-message", index),
+                        message.text.clone(),
+                    ))
+                } else {
+                    Some(block(label, color, message.text.clone()))
+                }
+            }
             AgentFrameItem::AssistantTextDelta(delta) => Some(markdown_block(
                 "agent…",
                 theme::info(),

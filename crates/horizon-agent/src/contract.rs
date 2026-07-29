@@ -538,6 +538,87 @@ pub enum MessageRole {
     Unknown,
 }
 
+/// Which side of a provider conversation a [`MessageRole`] replays as.
+/// Internal to `horizon-agent` -- not on the wire; see
+/// [`MessageRole::provider_side`].
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProviderSide {
+    User,
+    Assistant,
+}
+
+impl MessageRole {
+    /// Short human-readable tag for logs and the text projection
+    /// (`frame::render_agent_transcript`). `Unknown` renders as
+    /// assistant-authored -- see [`MessageRole::Unknown`]'s doc.
+    pub fn log_label(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::TaskNotification => "task",
+            Self::AutoContinue => "continue",
+            // Unknown renders as assistant-authored -- see
+            // `MessageRole::Unknown`'s doc (never invent user words).
+            Self::Assistant | Self::Unknown => "assistant",
+        }
+    }
+
+    /// The snake_case key written to DuckDB's `agent_messages.role` column
+    /// and read back by `query::parse_role`. Each role is projected
+    /// honestly under its own label; readers already fall back to
+    /// assistant for unrecognized labels.
+    pub fn db_key(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Assistant => "assistant",
+            // A system-injected background-`task` completion notification --
+            // never a human turn, so it is projected as its own label
+            // rather than inflating "user" message counts.
+            Self::TaskNotification => "task_notification",
+            // A system-injected auto-continuation after the harness detected
+            // the provider truncated tool calls mid-stream -- never a human
+            // turn, so it is projected as its own label.
+            Self::AutoContinue => "auto_continue",
+            // Skew catch-all: projected honestly; readers already fall back
+            // to assistant for unrecognized labels (`query::parse_role`).
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Which side of the provider conversation this role replays as. A
+    /// background-`task` notification / auto-continuation replays as a plain
+    /// user-role text message because that is exactly what the provider was
+    /// sent live (`providers::rig::session`'s injection): a replayed history
+    /// that disagreed with the sent one would change the model's view of its
+    /// own past. The distinct role exists for persistence and the transcript,
+    /// not for the provider -- see [`MessageRole::TaskNotification`].
+    /// `Unknown` replays as assistant-authored (never invent user words).
+    pub fn provider_side(self) -> ProviderSide {
+        match self {
+            Self::User | Self::TaskNotification | Self::AutoContinue => ProviderSide::User,
+            // Unknown replays as assistant-authored -- see
+            // `MessageRole::Unknown`'s doc (never invent user words).
+            Self::Assistant | Self::Unknown => ProviderSide::Assistant,
+        }
+    }
+
+    /// The display label shown in the transcript view.
+    pub fn display_label(self) -> &'static str {
+        match self {
+            Self::User => "you",
+            // A background-`task` completion notification: system authored,
+            // not the human's words, so it gets its own muted label rather
+            // than the "you" block.
+            Self::TaskNotification => "task",
+            // A system-authored auto-continuation after truncation: same
+            // muted treatment as a task notification.
+            Self::AutoContinue => "continue",
+            // Unknown renders as agent-authored -- see
+            // `MessageRole::Unknown`'s doc (never invent user words).
+            Self::Assistant | Self::Unknown => "agent",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct MessageDelta {
     pub role: MessageRole,
@@ -1169,5 +1250,63 @@ mod json_value_tests {
         let encoded = serde_json::to_value(&request).unwrap();
         let decoded: ApprovalRequest = serde_json::from_value(encoded).unwrap();
         assert_eq!(decoded, request);
+    }
+}
+
+/// Pins the exact output of every [`MessageRole`] mapping so a refactor
+/// cannot silently change a role's label, DB key, provider side, or display
+/// label. Adding a `MessageRole` variant forces a new arm in each mapping's
+/// non-exhaustive match (one compile cycle, all at once); this test then
+/// forces the author to pin the new variant's expected output too.
+#[cfg(test)]
+mod message_role_tests {
+    use super::*;
+
+    #[test]
+    fn log_label_is_pinned_per_variant() {
+        assert_eq!(MessageRole::User.log_label(), "user");
+        assert_eq!(MessageRole::Assistant.log_label(), "assistant");
+        assert_eq!(MessageRole::TaskNotification.log_label(), "task");
+        assert_eq!(MessageRole::AutoContinue.log_label(), "continue");
+        assert_eq!(MessageRole::Unknown.log_label(), "assistant");
+    }
+
+    #[test]
+    fn db_key_is_pinned_per_variant() {
+        assert_eq!(MessageRole::User.db_key(), "user");
+        assert_eq!(MessageRole::Assistant.db_key(), "assistant");
+        assert_eq!(MessageRole::TaskNotification.db_key(), "task_notification");
+        assert_eq!(MessageRole::AutoContinue.db_key(), "auto_continue");
+        assert_eq!(MessageRole::Unknown.db_key(), "unknown");
+    }
+
+    #[test]
+    fn provider_side_is_pinned_per_variant() {
+        assert_eq!(MessageRole::User.provider_side(), ProviderSide::User);
+        assert_eq!(
+            MessageRole::TaskNotification.provider_side(),
+            ProviderSide::User
+        );
+        assert_eq!(
+            MessageRole::AutoContinue.provider_side(),
+            ProviderSide::User
+        );
+        assert_eq!(
+            MessageRole::Assistant.provider_side(),
+            ProviderSide::Assistant
+        );
+        assert_eq!(
+            MessageRole::Unknown.provider_side(),
+            ProviderSide::Assistant
+        );
+    }
+
+    #[test]
+    fn display_label_is_pinned_per_variant() {
+        assert_eq!(MessageRole::User.display_label(), "you");
+        assert_eq!(MessageRole::Assistant.display_label(), "agent");
+        assert_eq!(MessageRole::TaskNotification.display_label(), "task");
+        assert_eq!(MessageRole::AutoContinue.display_label(), "continue");
+        assert_eq!(MessageRole::Unknown.display_label(), "agent");
     }
 }

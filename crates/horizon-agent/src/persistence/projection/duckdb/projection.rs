@@ -4,8 +4,7 @@ use duckdb::{params, OptionalExt};
 #[cfg(test)]
 use crate::contract::SessionId;
 use crate::contract::{
-    ApprovalRequest, Event, Message, MessageDelta, MessageRole, ToolCallRequest, ToolCallResult,
-    TurnEndReason,
+    ApprovalRequest, Event, Message, MessageDelta, ToolCallRequest, ToolCallResult, TurnEndReason,
 };
 
 use super::Store;
@@ -173,7 +172,7 @@ impl Store {
                 event_id,
                 session_id,
                 sequence,
-                role_text(message.role),
+                message.role.db_key(),
                 &message.text,
                 is_delta,
             ],
@@ -470,23 +469,5 @@ fn turn_end_reason_text(reason: TurnEndReason) -> &'static str {
         // Skew catch-all: projected honestly rather than guessed into one
         // of the four design-doc labels.
         TurnEndReason::Unknown => "unknown",
-    }
-}
-
-fn role_text(role: MessageRole) -> &'static str {
-    match role {
-        MessageRole::User => "user",
-        MessageRole::Assistant => "assistant",
-        // A system-injected background-`task` completion notification --
-        // never a human turn, so it is projected as its own label rather
-        // than inflating "user" message counts.
-        MessageRole::TaskNotification => "task_notification",
-        // A system-injected auto-continuation after the harness detected
-        // the provider truncated tool calls mid-stream -- never a human
-        // turn, so it is projected as its own label.
-        MessageRole::AutoContinue => "auto_continue",
-        // Skew catch-all: projected honestly; readers already fall back to
-        // assistant for unrecognized labels (`query::parse_role`).
-        MessageRole::Unknown => "unknown",
     }
 }
