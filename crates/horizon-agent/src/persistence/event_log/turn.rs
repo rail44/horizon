@@ -32,7 +32,9 @@ impl TurnTracker {
         if self.current_turn_id.is_none()
             && matches!(
                 event,
-                Event::MessageCommitted(message) if message.role == MessageRole::TaskNotification
+                Event::MessageCommitted(message)
+                    if message.role == MessageRole::TaskNotification
+                        || message.role == MessageRole::AutoContinue
             )
         {
             self.current_turn_id = Some(Uuid::new_v4().to_string());

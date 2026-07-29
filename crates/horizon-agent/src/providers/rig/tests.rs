@@ -101,9 +101,10 @@ fn rejected_with(status: &str, body: &str) -> String {
 /// drive a real provider from a unit test, so the decision function is the
 /// testable surface (the loop it feeds is covered separately below).
 ///
-/// Retryable only when the provider said "not now" *and* nothing of the
-/// response had been decoded yet — a rejection before the first chunk is
-/// provably a no-op on the provider side, so re-sending cannot duplicate a
+/// Retryable only when the provider said "not now" *and* no durable output
+/// had been emitted yet — a rejection before any `ToolCallRequested` or
+/// `MessageCommitted` is provably safe to re-send (reasoning and text deltas
+/// are volatile, never entered history), so re-sending cannot duplicate a
 /// generation.
 #[test]
 fn rejections_before_generation_are_classified_as_retryable() {
@@ -140,13 +141,52 @@ fn rejections_before_generation_are_classified_as_retryable() {
     )
     .expect("a connection failure is retryable");
     assert_eq!(transport.status, None);
+    assert!(!transport.mid_stream, "pre-send is not mid-stream");
+}
+
+/// A mid-stream transport failure (the response started but a body decode
+/// failed — r30's `error decoding response body`) is retryable when no
+/// durable output was emitted: reasoning and text deltas are volatile, so
+/// re-sending cannot duplicate a generation.
+#[test]
+fn a_mid_stream_transport_failure_with_no_durable_output_is_retryable() {
+    let rejection = retryable_rejection(
+        1,
+        false, // no ToolCallRequested or MessageCommitted
+        "ProviderError: Http client error: error decoding response body: \
+         trailing comma at line 1 column 42",
+    )
+    .expect("a mid-stream failure with no durable output is retryable");
+    assert_eq!(rejection.status, None);
+    assert!(
+        rejection.mid_stream,
+        "error decoding response body is mid-stream"
+    );
+}
+
+/// The same mid-stream failure is NOT retryable once durable output was
+/// emitted — a tool call or committed message is already in history, and a
+/// retry could duplicate it.
+#[test]
+fn a_mid_stream_transport_failure_after_durable_output_is_not_retried() {
+    assert!(
+        retryable_rejection(
+            1,
+            true, // a ToolCallRequested was emitted
+            "ProviderError: Http client error: error decoding response body: \
+             trailing comma at line 1 column 42",
+        )
+        .is_none(),
+        "a mid-stream failure after durable output must not be retried"
+    );
 }
 
 /// Everything else stays fatal exactly as before: a 4xx that is not 429
-/// describes the request itself, a failure after the first decoded chunk
-/// could be duplicated by a retry, the attempt budget is finite, and the
-/// response-stream timeout is deliberately excluded (silence proves nothing
-/// about whether generation started — see `PROVIDER_STREAM_IDLE_TIMEOUT`).
+/// describes the request itself, a failure after durable output was
+/// emitted could be duplicated by a retry, the attempt budget is finite,
+/// and the response-stream timeout is deliberately excluded (silence
+/// proves nothing about whether durable output was emitted — see
+/// `PROVIDER_STREAM_IDLE_TIMEOUT`).
 #[test]
 fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
     for status in [
@@ -169,7 +209,7 @@ fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
             &rejected_with("429 Too Many Requests", "slow down")
         )
         .is_none(),
-        "a rejection after generation started must never be retried"
+        "a rejection after durable output must never be retried"
     );
 
     assert!(
@@ -242,12 +282,12 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
                     "503 Service Unavailable",
                     "upstream is unwell"
                 ))),
-                generation_started: false,
+                durable_output_emitted: false,
             }
         } else {
             Attempt {
                 result: Ok("the answer"),
-                generation_started: true,
+                durable_output_emitted: true,
             }
         }
     })
@@ -257,10 +297,10 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
     assert_eq!(attempts.get(), 2);
 }
 
-/// A failure after the provider started answering ends the turn on the
-/// first attempt — the standing no-duplicate-generation rule.
+/// A failure after the provider produced durable output ends the turn
+/// on the first attempt — the standing no-duplicate-generation rule.
 #[tokio::test]
-async fn a_failure_after_generation_started_ends_the_turn_without_retrying() {
+async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
 
@@ -271,7 +311,7 @@ async fn a_failure_after_generation_started_ends_the_turn_without_retrying() {
                 "429 Too Many Requests",
                 "slow down"
             ))),
-            generation_started: true,
+            durable_output_emitted: true,
         }
     })
     .await;
@@ -296,7 +336,7 @@ async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
                 "429 Too Many Requests",
                 "slow down"
             ))),
-            generation_started: false,
+            durable_output_emitted: false,
         }
     })
     .await;
@@ -542,6 +582,48 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
         events.as_slice(),
         [Event::ToolCallRequested(request)] if request.tool_id == "workspace.snapshot"
     ));
+}
+
+/// The truncation detector: a call that received streaming deltas
+/// (`note_name`/`note_delta`) but was never finalized (`note_finalized`)
+/// appears in `truncated_ids`. This is the r29 shape — the provider
+/// started streaming a tool call's arguments but hit its output ceiling
+/// mid-argument, and rig's `take_finalized_tool_calls` dropped the
+/// incomplete call.
+#[test]
+fn tool_call_progress_buffer_detects_truncation_when_a_started_call_is_never_finalized() {
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut buffer = ToolCallProgressBuffer::new(tx, &RigAgentConfig::default());
+
+    // Two calls received deltas.
+    buffer.note_name("call-a", "fs.write".to_string());
+    buffer.note_delta("call-a", "{\"path\":\"/tmp/x\"");
+    buffer.note_name("call-b", "fs.read".to_string());
+    buffer.note_delta("call-b", "{\"path\":\"/tmp/y\"");
+
+    // Only call-a was finalized; call-b was truncated.
+    buffer.note_finalized("call-a");
+
+    let truncated = buffer.truncated_ids();
+    assert_eq!(truncated, vec!["call-b".to_string()]);
+}
+
+/// No truncation when every started call was finalized — the normal
+/// stream shape.
+#[test]
+fn tool_call_progress_buffer_reports_no_truncation_when_all_started_calls_are_finalized() {
+    let (tx, _rx) = crossbeam_channel::unbounded();
+    let mut buffer = ToolCallProgressBuffer::new(tx, &RigAgentConfig::default());
+
+    buffer.note_name("call-a", "fs.write".to_string());
+    buffer.note_delta("call-a", "{\"path\":\"/tmp/x\"}");
+    buffer.note_finalized("call-a");
+
+    buffer.note_name("call-b", "fs.read".to_string());
+    buffer.note_delta("call-b", "{\"path\":\"/tmp/y\"}");
+    buffer.note_finalized("call-b");
+
+    assert!(buffer.truncated_ids().is_empty());
 }
 
 /// The minting site is what makes every per-occurrence consumer possible
@@ -1353,6 +1435,64 @@ fn turn_loop_guard_reset_clears_fingerprint_window() {
     assert_eq!(
         guard.record_fingerprint(fingerprint),
         Some(GuardHalt::DoomLoopDetected)
+    );
+}
+
+/// The truncation auto-continue cap: `record_truncation_continue` returns
+/// `true` for the first three calls and `false` on the fourth.
+#[test]
+fn turn_loop_guard_truncation_continue_caps_at_three() {
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+
+    assert!(
+        guard.record_truncation_continue(),
+        "first truncation continue"
+    );
+    assert!(guard.record_truncation_continue(), "second");
+    assert!(guard.record_truncation_continue(), "third");
+    assert!(
+        !guard.record_truncation_continue(),
+        "fourth truncation must stop auto-continuing"
+    );
+}
+
+/// The truncation counter resets alongside the rest of the guard — a
+/// fresh interaction (`guard.reset()`) clears the streak.
+#[test]
+fn turn_loop_guard_truncation_counter_resets_on_reset() {
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+
+    guard.record_truncation_continue();
+    guard.record_truncation_continue();
+
+    guard.reset();
+
+    assert!(guard.record_truncation_continue(), "first after reset");
+    assert!(guard.record_truncation_continue(), "second after reset");
+    assert!(guard.record_truncation_continue(), "third after reset");
+    assert!(
+        !guard.record_truncation_continue(),
+        "fourth after reset must stop"
+    );
+}
+
+/// `reset_truncation_counter` alone (without resetting the whole guard)
+/// breaks the streak — called when a turn completes without truncation.
+#[test]
+fn turn_loop_guard_reset_truncation_counter_breaks_the_streak() {
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+
+    guard.record_truncation_continue();
+    guard.record_truncation_continue();
+
+    guard.reset_truncation_counter();
+
+    assert!(guard.record_truncation_continue(), "first after reset");
+    assert!(guard.record_truncation_continue(), "second after reset");
+    assert!(guard.record_truncation_continue(), "third after reset");
+    assert!(
+        !guard.record_truncation_continue(),
+        "fourth after reset must stop"
     );
 }
 

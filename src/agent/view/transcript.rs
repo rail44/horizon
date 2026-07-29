@@ -300,6 +300,9 @@ impl AgentTranscript {
                 // authored, not the human's words, so it gets its own
                 // muted label rather than the "you" block.
                 MessageRole::TaskNotification => block("task", theme::info(), message.text.clone()),
+                // A system-authored auto-continuation after truncation:
+                // same muted treatment as a task notification.
+                MessageRole::AutoContinue => block("continue", theme::info(), message.text.clone()),
                 // Unknown renders as agent-authored -- see `MessageRole::
                 // Unknown`'s doc (never invent user words).
                 MessageRole::Assistant | MessageRole::Unknown => markdown_block(

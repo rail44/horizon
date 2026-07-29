@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crossbeam_channel::Sender;
@@ -91,6 +92,16 @@ pub(super) struct ToolCallProgressBuffer {
     bytes: usize,
     last_flush: Instant,
     flush_interval: std::time::Duration,
+    /// Every `internal_call_id` that ever received a streaming delta —
+    /// the "started" side of the truncation detector. A call that started
+    /// streaming but was never finalized (the provider hit its output
+    /// ceiling mid-argument, and rig's `take_finalized_tool_calls` dropped
+    /// the incomplete call) appears here but not in `finalized`.
+    started: HashSet<String>,
+    /// Every `internal_call_id` that was finalized into a complete
+    /// `ToolCall` — the "finalized" side. The set difference `started −
+    /// finalized` is the truncated set.
+    finalized: HashSet<String>,
 }
 
 impl ToolCallProgressBuffer {
@@ -102,6 +113,8 @@ impl ToolCallProgressBuffer {
             bytes: 0,
             last_flush: Instant::now(),
             flush_interval: std::time::Duration::from_millis(config.stream_flush_interval_ms),
+            started: HashSet::new(),
+            finalized: HashSet::new(),
         }
     }
 
@@ -129,7 +142,26 @@ impl ToolCallProgressBuffer {
         self.flush_now();
     }
 
+    /// Records that a tool call was finalized into a complete `ToolCall`
+    /// (the `StreamedAssistantContent::ToolCall` arm in
+    /// `rig_openai_turn_streaming`), keyed by the same `internal_call_id`
+    /// the delta arm used. This is the "finalized" side of the truncation
+    /// detector.
+    pub(super) fn note_finalized(&mut self, internal_call_id: &str) {
+        self.finalized.insert(internal_call_id.to_string());
+    }
+
+    /// The `internal_call_id`s that received streaming deltas but were
+    /// never finalized — non-empty when the provider truncated tool calls
+    /// mid-stream. Empty for a normal stream (every started call is
+    /// finalized). The caller guards on `!cancelled` since a cancelled
+    /// turn may have started-but-unfinalized calls by design.
+    pub(super) fn truncated_ids(&self) -> Vec<String> {
+        self.started.difference(&self.finalized).cloned().collect()
+    }
+
     fn ensure_key(&mut self, key: &str) {
+        self.started.insert(key.to_string());
         if self.key.as_deref() != Some(key) {
             self.key = Some(key.to_string());
             self.tool_id = None;

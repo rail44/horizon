@@ -481,6 +481,10 @@ fn role_text(role: MessageRole) -> &'static str {
         // never a human turn, so it is projected as its own label rather
         // than inflating "user" message counts.
         MessageRole::TaskNotification => "task_notification",
+        // A system-injected auto-continuation after the harness detected
+        // the provider truncated tool calls mid-stream -- never a human
+        // turn, so it is projected as its own label.
+        MessageRole::AutoContinue => "auto_continue",
         // Skew catch-all: projected honestly; readers already fall back to
         // assistant for unrecognized labels (`query::parse_role`).
         MessageRole::Unknown => "unknown",

@@ -117,7 +117,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
                 // The distinct role exists for persistence and the
                 // transcript, not for the provider -- see
                 // `MessageRole::TaskNotification`.
-                MessageRole::User | MessageRole::TaskNotification => {
+                MessageRole::User | MessageRole::TaskNotification | MessageRole::AutoContinue => {
                     Some(Message::user(message.text.clone()))
                 }
                 // Unknown replays as assistant-authored -- see
