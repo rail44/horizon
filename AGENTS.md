@@ -58,7 +58,12 @@ time before this profile existed (`docs/issues/010`). When you add a
 boundary test that cannot pass under containment, also add it to the
 `sandboxed` profile's filter in `.config/nextest.toml` — the skip set is
 not self-maintaining, and a missed exclusion surfaces as a red test
-rather than a skipped one.
+rather than a skipped one. nextest filter expressions (the string inside
+`default-filter` and the like) accept no `#` comments — put each
+exclusion's reason in a TOML `#` comment above the section, not inside the
+filter string. When a run dumps many failures, parse `cargo nextest run
+--format json` with `jq` rather than grepping the prose log — it is more
+reliable and cheaper.
 
 The last step is the session-wire skew checker
 (`docs/remoc-adoption-design.md` §4): it diffs the committed wire-schema
