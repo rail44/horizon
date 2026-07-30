@@ -7,7 +7,7 @@
 //! do. See `agent::tools::approval::ApprovalOutcome::Started` for the split
 //! this forces: approval folds a "running" frame immediately and kicks off
 //! this module's `spawn`, whose eventual result is delivered back to the
-//! session loop over a channel (`crates/horizon-sessiond/src/session.rs`
+//! session loop over a channel (`crates/horizon-agentd/src/session.rs`
 //! wires it up) rather than being returned synchronously.
 //!
 //! Panic safety: a job's work function running to completion without
@@ -48,7 +48,7 @@ pub(crate) use git::{approved_metadata_roots, metadata_writable_roots, requires_
 pub(crate) use recent::{find_reusable_output, guidance_output};
 
 /// A bash call's outcome, delivered from the background thread that ran it
-/// back to the session loop. `crates/horizon-sessiond/src/session.rs`
+/// back to the session loop. `crates/horizon-agentd/src/session.rs`
 /// registers an unbounded `crossbeam_channel` per session (see
 /// `register_session_runtime`) and selects on it alongside provider events,
 /// folding a received completion into the session's `LiveState`/`Frames`
@@ -254,7 +254,7 @@ fn spawn_host(
                 }
                 // `occurrence_id` is `None` at every construction site in
                 // this module: an enqueued bash job is handed a `call_id`
-                // and nothing else. The sessiond's fold sites
+                // and nothing else. The agentd's fold sites
                 // (`fold_finished_bash_result` and the two denial folds)
                 // stamp the originating request's occurrence on the way
                 // out -- see `exec::run_sandboxed`'s comment on the same
@@ -508,7 +508,7 @@ pub fn kill_if_running(call_id: &ToolCallId) {
 /// discarded — the same idempotence pattern
 /// `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved` uses for a
 /// duplicate approve/deny. Called from
-/// `horizon_sessiond::session::fold_bash_completion`, on the session loop,
+/// `horizon_agentd::session::fold_bash_completion`, on the session loop,
 /// right before folding.
 ///
 /// Occurrence-scoped rather than call_id-keyed

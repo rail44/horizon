@@ -1,4 +1,4 @@
-//! The agent domain's wire vocabulary for `horizon-sessiond`'s socket —
+//! The agent domain's wire vocabulary for `horizon-agentd`'s socket —
 //! the payload types that cross the process boundary, and nothing else.
 //!
 //! The v10 remoc cutover (`docs/remoc-adoption-design.md` §2) deleted this
@@ -49,7 +49,7 @@ pub enum AgentWireEvent {
     SessionModel(String),
     /// Live correction of a freshly isolated session's authoritative
     /// `workspace_root` (and derivation edge) — sent once, right after
-    /// `horizon-sessiond` resolves the session's isolated worktree, which
+    /// `horizon-agentd` resolves the session's isolated worktree, which
     /// only finishes *after* `new_agent` already returned. Not sent at all
     /// when isolation fails and degrades to a shared spawn (nothing to
     /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
@@ -94,10 +94,10 @@ pub struct SessionSummary {
     /// worktree has been revalidated.
     #[serde(default)]
     pub parent_session_id: Option<SessionId>,
-    /// This session's *actual* confinement directory, as `horizon-sessiond`
+    /// This session's *actual* confinement directory, as `horizon-agentd`
     /// itself resolved it -- the authoritative counterpart to `SessionNew.
     /// workspace_root` (that field is only ever the caller's pre-spawn
-    /// value; for an isolated session, `horizon-sessiond` overrides it with
+    /// value; for an isolated session, `horizon-agentd` overrides it with
     /// the worktree path it creates, which the caller cannot know in
     /// advance since worktree creation finishes asynchronously, after
     /// `new_agent` already returned -- see
@@ -121,10 +121,10 @@ pub struct SessionNew {
     pub provider_id: ProviderId,
     #[serde(default)]
     pub role_id: Option<RoleId>,
-    /// The directory `horizon-sessiond`'s file tools should confine this
+    /// The directory `horizon-agentd`'s file tools should confine this
     /// session to (`tools::state::ToolSessionState::workspace_root`).
     /// `None` keeps today's behavior -- the session falls back to
-    /// `horizon-sessiond`'s own process cwd (`session::run_session`'s
+    /// `horizon-agentd`'s own process cwd (`session::run_session`'s
     /// `ToolSessionState::for_current_dir` call). Unlike `role_id` above,
     /// this is a brand-new field, not a reshape of an existing one, so it's
     /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
@@ -136,7 +136,7 @@ pub struct SessionNew {
     /// only if that cwd can't be read) and records the same value on the
     /// session's `WorkspaceSession::workspace_root` -- so a session's
     /// workspace root tracks whichever Horizon window spawned it, not
-    /// `horizon-sessiond`'s own cwd (one shared, long-lived daemon per
+    /// `horizon-agentd`'s own cwd (one shared, long-lived daemon per
     /// user, started from whatever directory happened to be current the
     /// first time it was launched).
     #[serde(default)]
@@ -151,13 +151,13 @@ pub struct SessionNew {
     /// nothing active). Additive, like `workspace_root` above.
     #[serde(default)]
     pub spawn_source_session_id: Option<SessionId>,
-    /// Whether `horizon-sessiond` should give this session its own git
+    /// Whether `horizon-agentd` should give this session its own git
     /// worktree, branched from `spawn_source_session_id`'s directory,
     /// instead of confining it to `workspace_root` directly -- decision 3's
     /// per-spawn isolation knob. The origin-based default (palette: shared;
     /// CLI/control-plane: isolated) plus any explicit per-spawn override are
     /// both resolved client-side before this ever reaches the wire;
-    /// `horizon-sessiond` just executes whatever concrete choice arrives
+    /// `horizon-agentd` just executes whatever concrete choice arrives
     /// here (see `docs/session-relationship-design.md` decision 3). `false`
     /// (via `#[serde(default)]`) reproduces today's shared-directory
     /// behavior for a peer built before this field existed.
@@ -195,7 +195,7 @@ mod tests {
     // human decision on every wire-shape change, now belongs to the
     // committed schema artifact and its checkers: any wire change shows up
     // as a diff of `crates/horizon-session-protocol/schema/session-wire.json`
-    // (drift-enforced by `crates/horizon-sessiond/tests/wire_schema.rs`,
+    // (drift-enforced by `crates/horizon-agentd/tests/wire_schema.rs`,
     // where the v1-v10 bump history those tests narrated now lives), and
     // `scripts/check-wire-schema.sh` fails any non-additive change that
     // doesn't bump `SESSION_PROTOCOL_VERSION` alongside it.

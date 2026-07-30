@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Merge-time skew-discipline check for the session-wire schema artifact
 # (docs/remoc-adoption-design.md §4 rule 3, second half). The nextest drift
-# test (crates/horizon-sessiond/tests/wire_schema.rs) already guarantees the
+# test (crates/horizon-agentd/tests/wire_schema.rs) already guarantees the
 # committed artifact matches the live wire types; this script compares that
 # artifact against the merge-base's copy and fails if any change is a
 # *reshape* (removed/renamed/reordered/retyped, or newly required) rather

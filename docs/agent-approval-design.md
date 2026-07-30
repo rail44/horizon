@@ -75,7 +75,7 @@ product-owned API. Decisions:
 
 - **Horizon owns a thin unified API** (shape informed by Codex's
   `SandboxManager`/`SandboxExecRequest`/`SandboxType` dispatch),
-  applied per command at the `horizon-sessiond` spawn site.
+  applied per command at the `horizon-agentd` spawn site.
 - **Linux** (updated 2026-07-19, backlog-60 option C, merge `61b446e`):
   nono's Landlock backend — `Sandbox::apply_auto` applied on a
   throwaway thread that then spawns the child from that same thread
@@ -157,17 +157,17 @@ product-owned API. Decisions:
   not merely unrouted); an empty allowlist denies both; and a direct,
   unbridged `/dev/tcp` connect attempt stays exactly as blocked under
   `Proxied` as it is under `Disabled` today.
-  **Leg 4a (wiring) landed 2026-07-19**: `horizon-sessiond` now owns one
+  **Leg 4a (wiring) landed 2026-07-19**: `horizon-agentd` now owns one
   `AllowlistProxy`+`UdsBridge` pair for the whole process
-  (`crates/horizon-sessiond/src/network.rs`), built on its own dedicated
+  (`crates/horizon-agentd/src/network.rs`), built on its own dedicated
   tokio runtime — constructing and driving it inline in `main`'s own
   `#[tokio::main]` body panics ("cannot start/drop a runtime from within a
   runtime"), so it's built on a plain `std::thread::spawn` (mirroring
   `horizon-agent`'s own per-call nested-runtime pattern in
   `tools::bash::exec::run_inner`) and torn down via `Runtime::
   shutdown_background` (not the default blocking `Drop`) on the graceful
-  SIGTERM path. The bridge socket path is derived from `horizon-sessiond`'s
-  own `--socket`/`$HORIZON_SESSIOND_SOCKET`-resolved path (sibling file,
+  SIGTERM path. The bridge socket path is derived from `horizon-agentd`'s
+  own `--socket`/`$HORIZON_AGENTD_SOCKET`-resolved path (sibling file,
   same directory), so it's already scoped per-daemon-instance without a new
   config key. `tools::execution::execute_tier1_bash` now threads
   `ToolSessionState::bridge_socket()` (`Option<PathBuf>`, injected the same
@@ -194,7 +194,7 @@ product-owned API. Decisions:
   bridge) still hits the unconditional seccomp cut.
   **Leg 4b (per-session domain approval) landed, resumed on the nono
   foundation**: two decisions bundled with it. *Proxy relocation* (owner
-  decision) — ownership moved from `horizon-sessiond` to `horizon-agent`
+  decision) — ownership moved from `horizon-agentd` to `horizon-agent`
   (`crate::network::NetworkProxy` deleted; `horizon-agent`'s `tools::
   network::SessionNetworkProxy` is the new home), since the agent
   implementation already owns every other piece of per-session tool state
@@ -223,7 +223,7 @@ product-owned API. Decisions:
   `Finished` — `result` is a genuine, already-computed outcome (the call
   ran; it just couldn't reach some host), annotated with `denied_domains`
   and a forced `is_error: true` regardless of the wrapped shell's own exit
-  code. `horizon-sessiond`'s `fold_domain_denied` reissues a fresh
+  code. `horizon-agentd`'s `fold_domain_denied` reissues a fresh
   `ToolCallRequested` + a differently-**kinded** `ApprovalRequested`
   (`contract::ApprovalKind::DomainDenialRetry { domains, prior_result }`,
   alongside the default `Standard` for ordinary approvals) — the kind lets
@@ -264,7 +264,7 @@ product-owned API. Decisions:
   **Mechanism reconciliation (2026-07-19, post-nono migration):** the
   leg-4a/4b paragraphs above describe the containment mechanism as it
   stood when each leg landed (bwrap `--ro-bind`, a `seccomp` `socket(2)`
-  cut, `horizon-sessiond/src/network.rs`). The sandbox backend has since
+  cut, `horizon-agentd/src/network.rs`). The sandbox backend has since
   migrated to nono (backlog 60, option C) and the proxy has moved into
   `horizon-agent`, so the *current* mechanism reads: direct egress is cut
   by nono's `NetworkMode::Blocked` (Landlock, not a bespoke seccomp
@@ -549,14 +549,14 @@ refactoring wave folds into this item.
    documented fallback) — see the "Network is its own layer" bullet
    above for the shape and what's left for sessiond-wiring/config/judge.*
    *Leg 4a (sessiond wiring) landed 2026-07-19: one long-lived proxy per
-   `horizon-sessiond` process, tier-1 sandboxed `bash` picks `Proxied`
+   `horizon-agentd` process, tier-1 sandboxed `bash` picks `Proxied`
    over `Disabled` when the bridge is up — see the "Network is its own
    layer" bullet's "Leg 4a" note for the shape, the nested-runtime
    pitfall it worked around, and the honest (still-refused, empty
    allowlist) behavior this leaves for a network-using command.*
    *Leg 4b (per-session domain approval) landed: ownership moved to
    `horizon-agent` (one `SessionNetworkProxy` per isolated,
-   sandbox-eligible session, no longer one per `horizon-sessiond`
+   sandbox-eligible session, no longer one per `horizon-agentd`
    process), a session's allowlist can now grow at runtime
    (`Allowlist::allow`), a denial is attributed to its domain
    independent of the sandboxed process's own exit code
@@ -588,7 +588,7 @@ refactoring wave folds into this item.
    flaw — fix so approval analytics can measure the judge's effect)
    and backlog 48 (identical-edit resubmission feedback).
    **Enforcing mode landed 2026-07-23** (`crates/horizon-agent/src/judge/`,
-   `crates/horizon-sessiond/src/session.rs`): all typed approval candidates
+   `crates/horizon-agentd/src/session.rs`): all typed approval candidates
    are held behind the asynchronous judge. `AutoApprove` enters the existing
    approved execute/retry path; explicit escalation, model error, timeout,
    rate limiting, and unparseable output expose the unchanged human prompt.

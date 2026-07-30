@@ -7,7 +7,7 @@
 //! level and, for the poisoned-item rule, through a live `rch::mpsc`
 //! channel. The frozen types are the *executable* form of the schema
 //! artifact (`schema/session-wire.json`); the artifact's own drift/additive
-//! checks live in `crates/horizon-sessiond/tests/wire_schema.rs` and
+//! checks live in `crates/horizon-agentd/tests/wire_schema.rs` and
 //! `scripts/check-wire-schema.sh`.
 //!
 //! v10 note: the catch-all is `#[serde(other)] Unknown` (a plain unit

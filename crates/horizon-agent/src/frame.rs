@@ -244,7 +244,7 @@ impl AgentFrame {
     /// double-folding a late result that arrives after the call already
     /// resolved: `agent::tools::approval`'s `ApprovalOutcome::AlreadyResolved`
     /// check, and the bash tool's `should_fold_completion` (called from
-    /// `horizon-sessiond`'s `fold_bash_completion`), both key off this.
+    /// `horizon-agentd`'s `fold_bash_completion`), both key off this.
     ///
     /// Scoped to items at-or-after the latest `ToolCallRequested` for
     /// `call_id` (same "most recent occurrence" reading

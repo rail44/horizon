@@ -2,7 +2,7 @@
 # full schema.
 
 # The two daemon `e2e` integration test binaries
-# (crates/horizon-sessiond/tests/e2e.rs, crates/horizon-terminald/tests/e2e.rs)
+# (crates/horizon-agentd/tests/e2e.rs, crates/horizon-terminald/tests/e2e.rs)
 # spawn a real daemon child process per test -- terminald's spawn real PTYs
 # backed by a real shell, and its acceptance test spawns *both* daemons. Under
 # nextest's default per-binary parallelism, that means dozens of real
@@ -24,7 +24,7 @@
 # serializing them against each other -- not just within each binary -- is
 # what removes self-contention as a variable.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon-sessiond::e2e) + binary_id(horizon-terminald::e2e)'
+filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e)'
 test-group = 'daemon-e2e'
 
 [test-groups.daemon-e2e]
@@ -35,13 +35,13 @@ max-threads = 1
 # --workspace --locked`). It excludes exactly the tests whose *subject
 # matter* is the host boundary the sandbox exists to enforce: they bind
 # real sockets, write to literal `/tmp`, need directories outside any
-# repository, or spawn a real `horizon-sessiond`. Under containment those
+# repository, or spawn a real `horizon-agentd`. Under containment those
 # cannot pass, and making them pass would mean removing the containment
 # they verify -- so a sandboxed session skips them and the integrator's
 # full gate (`profile.default`) runs them (`docs/issues/010`).
 #
 # `binary_id(horizon-terminald::e2e)` joins that list for the same reason as
-# sessiond's: it binds real sockets under /tmp and spawns real daemon
+# agentd's: it binds real sockets under /tmp and spawns real daemon
 # processes (its acceptance test spawns both daemons and drains one), none of
 # which a contained session can do.
 #
@@ -103,7 +103,7 @@ max-threads = 1
 default-filter = '''
     not (
         binary_id(horizon-agent::tier1_network_containment)
-        + binary_id(horizon-sessiond::e2e)
+        + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
         + (binary_id(horizon::bin/horizon) & test(/^sessiond::tests::/))
         + test(/^tools::network::/)

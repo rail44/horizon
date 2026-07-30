@@ -3,13 +3,13 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 binary="${1:-$repo_root/target/debug/horizon}"
-sessiond_binary="$(dirname "$binary")/horizon-sessiond"
+agentd_binary="$(dirname "$binary")/horizon-agentd"
 # Terminal sessions live in horizon-terminald since the v17 split
 # (docs/terminald-split-design.md): this check restarts the UI against the
 # same *both* daemons, so terminald gets its own isolated socket too.
 terminald_binary="$(dirname "$binary")/horizon-terminald"
 out="$(mktemp -d "${TMPDIR:-/tmp}/horizon-restore-check.XXXXXX")"
-sessiond_socket="$out/sessiond.sock"
+agentd_socket="$out/agentd.sock"
 terminald_socket="$out/terminald.sock"
 runtime_dir="$out/runtime"
 control_socket="$runtime_dir/horizon/control.sock"
@@ -19,7 +19,7 @@ app_pid=""
 host_runtime_dir="${XDG_RUNTIME_DIR:-}"
 wayland_display="${WAYLAND_DISPLAY:-}"
 
-if [[ ! -x "$binary" || ! -x "$sessiond_binary" || ! -x "$terminald_binary" ]]; then
+if [[ ! -x "$binary" || ! -x "$agentd_binary" || ! -x "$terminald_binary" ]]; then
   echo "build the workspace first: cargo build --workspace" >&2
   exit 1
 fi
@@ -36,7 +36,7 @@ cleanup() {
   cleanup_app
   while read -r pid; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
-  done < <(pgrep -f "^${sessiond_binary} --socket ${sessiond_socket}$" 2>/dev/null || true)
+  done < <(pgrep -f "^${agentd_binary} --socket ${agentd_socket}$" 2>/dev/null || true)
   while read -r pid; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done < <(pgrep -f "^${terminald_binary} --socket ${terminald_socket}$" 2>/dev/null || true)
@@ -51,7 +51,7 @@ start_app() {
   if [[ -n "$host_runtime_dir" && -n "$wayland_display" ]]; then
     ln -sf "$host_runtime_dir/$wayland_display" "$runtime_dir/$wayland_display"
   fi
-  HORIZON_SESSIOND_SOCKET="$sessiond_socket" \
+  HORIZON_AGENTD_SOCKET="$agentd_socket" \
     HORIZON_TERMINALD_SOCKET="$terminald_socket" \
     XDG_RUNTIME_DIR="$runtime_dir" \
     HORIZON_WORKSPACE_STATE="$state_file" \

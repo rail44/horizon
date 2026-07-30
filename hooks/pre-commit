@@ -17,7 +17,7 @@ cargo fmt --all -- --check
 # Touching the sources rather than `cargo clean -p`: both force the
 # rebuild, but clean also deletes this worktree's finished binaries from
 # `target/`, which breaks `cargo run` and leaves Horizon with no
-# `horizon-sessiond` to respawn.
+# `horizon-agentd` to respawn.
 echo "pre-commit: touch workspace sources (force rebuild from this checkout)"
 git ls-files -z '*.rs' | while IFS= read -r -d '' f; do
   # A tracked file deleted in the working tree (mid-refactor, before the

@@ -2,7 +2,7 @@
 //!
 //! This module deliberately contains no Horizon session or UI types. Its
 //! caller is a dedicated helper executable, never the multi-threaded
-//! `horizon-sessiond` host. Seccomp notification handling will be added to the
+//! `horizon-agentd` host. Seccomp notification handling will be added to the
 //! parent side of this fork without changing that ownership boundary.
 
 use crate::linux::{

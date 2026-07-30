@@ -83,7 +83,7 @@ use std::process::{Child, Command};
 /// under a sandboxed command's first writable root (see `crate::tmpdir`'s
 /// module doc) -- e.g. `<root>/.horizon-sandbox-tmp`. Exposed so callers
 /// that manage the writable root's lifecycle themselves (e.g.
-/// `horizon-sessiond`'s isolated-worktree cleanup) can special-case this
+/// `horizon-agentd`'s isolated-worktree cleanup) can special-case this
 /// specific directory without duplicating the literal.
 pub const SCRATCH_DIR_NAME: &str = ".horizon-sandbox-tmp";
 

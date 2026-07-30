@@ -33,7 +33,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
         Subcommand::ContinueTurn { .. } => "continue-turn",
-        Subcommand::ReloadSessionRuntime => "reload-session-runtime",
+        Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
         Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
         Subcommand::OpenTerminalInSessionDirectory => "open-terminal-in-session-directory",
@@ -132,7 +132,7 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
             "continue-turn",
             serde_json::json!({ "session_id": session_id }),
         ),
-        Subcommand::ReloadSessionRuntime => invoke("reload-session-runtime", serde_json::json!({})),
+        Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
         Subcommand::ReloadTerminalRuntime => {
             invoke("reload-terminal-runtime", serde_json::json!({}))
         }
@@ -420,7 +420,7 @@ mod tests {
     fn reload_terminal_runtime_is_a_bare_invoke_named_like_its_command() {
         // `docs/terminald-split-design.md` decision 3: the CLI verb is the
         // external name of `CommandId::ReloadTerminalRuntime`, carries no
-        // arguments, and stays distinct from `reload-session-runtime` --
+        // arguments, and stays distinct from `reload-agent-runtime` --
         // one restarts the agent daemon, the other kills every PTY.
         assert_eq!(
             external_name(&Subcommand::ReloadTerminalRuntime),
@@ -434,10 +434,10 @@ mod tests {
     }
 
     #[test]
-    fn reload_session_runtime_and_reload_config_are_bare_invokes() {
+    fn reload_agent_runtime_and_reload_config_are_bare_invokes() {
         assert_eq!(
-            external_name(&Subcommand::ReloadSessionRuntime),
-            "reload-session-runtime"
+            external_name(&Subcommand::ReloadAgentRuntime),
+            "reload-agent-runtime"
         );
         assert_eq!(external_name(&Subcommand::ReloadConfig), "reload-config");
 

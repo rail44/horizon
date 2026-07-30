@@ -76,7 +76,7 @@ fn grants_for_project(
             Ok(()) => true,
             Err(error) => {
                 eprintln!(
-                    "horizon-sessiond: ignoring configured grant {} for project {}: {error}",
+                    "horizon-agentd: ignoring configured grant {} for project {}: {error}",
                     grant.path.display(),
                     project_root.display()
                 );
@@ -115,7 +115,7 @@ pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
 /// didn't actually happen -- matching decision 2's "the edge exists only
 /// via isolation" for the *actual* outcome, not merely the request. A
 /// `contract::Event::Error` is also emitted so the failure is visible in
-/// the session's own transcript rather than only sessiond's stderr.
+/// the session's own transcript rather than only agentd's stderr.
 ///
 /// On success, also pushes a live `Control::WorkspaceRootResolved`
 /// announcement (mirroring `resolve_and_announce_session_model`'s shape) so
@@ -151,7 +151,7 @@ pub(super) fn resolve_and_create_isolated_worktree(
         }
         Err(error) => {
             eprintln!(
-                "horizon-sessiond: failed to create isolated worktree for {session_id:?}: {error}"
+                "horizon-agentd: failed to create isolated worktree for {session_id:?}: {error}"
             );
             send_session_event(
                 state,

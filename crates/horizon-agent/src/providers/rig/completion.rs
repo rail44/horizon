@@ -309,7 +309,7 @@ where
 }
 
 /// Keeps a provider error body (which can be arbitrarily long) from
-/// dominating sessiond's stderr.
+/// dominating agentd's stderr.
 fn truncate_for_log(message: &str) -> String {
     const LIMIT: usize = 300;
     if message.chars().count() <= LIMIT {

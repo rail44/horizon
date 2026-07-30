@@ -36,12 +36,12 @@ pub use shared_store::SharedDuckdbStore;
 /// A newtype around `Arc<Mutex<Store>>`, not a plain alias: `Store` is
 /// crate-internal (its query/append API has no external consumer -- see
 /// the 2026-07-18 interface audit), but this handle itself is real API
-/// `horizon-sessiond` holds, clones, and threads through construction
+/// `horizon-agentd` holds, clones, and threads through construction
 /// (`SharedDuckdbStore`, `ToolSessionState`/`RecallContext`) -- a bare
 /// `pub type` alias over a `pub(crate)` `Store` would leak the private type
 /// into a public signature (`private_interfaces`). Only this crate's own
 /// code, which actually queries the store, reaches inside via [`Self::
-/// lock`]; `horizon-sessiond` never does (confirmed by grep at the time of
+/// lock`]; `horizon-agentd` never does (confirmed by grep at the time of
 /// this narrowing) -- it only clones and passes the handle along.
 #[derive(Clone)]
 pub struct DuckdbStoreHandle(Arc<Mutex<Store>>);
@@ -63,7 +63,7 @@ pub(crate) struct Store {
     conn: Connection,
     /// Whether opening this store had to migrate a pre-`event_at`
     /// `agent_events` table (see [`Self::migrate_legacy_agent_events_schema`]).
-    /// Not test-only: `horizon-sessiond`'s startup rebuild-skip check
+    /// Not test-only: `horizon-agentd`'s startup rebuild-skip check
     /// (task 2 of the readiness fix) reads this via [`Self::
     /// migrated_legacy_schema`] to know it must not trust the projection's
     /// existing `agent_sessions.last_sequence` high-water mark -- a
@@ -1550,7 +1550,7 @@ mod tests {
     /// End-to-end for the *live* projection (task 1 of the recall work),
     /// not just the rebuild-at-startup path the tests above cover: drives
     /// real appends through `event_log::WriterHandle::open_silently(path,
-    /// Some(duckdb_path))` -- the exact seam `horizon-sessiond`'s
+    /// Some(duckdb_path))` -- the exact seam `horizon-agentd`'s
     /// `open_persistence` uses -- then queries through the *shared*
     /// `Arc<Mutex<Store>>` handle the writer thread itself hands back (via
     /// the second `open_silently` receiver), not a fresh independent
@@ -1974,7 +1974,7 @@ mod tests {
     /// `(session_id, sequence)` pair, which a real event log does carry --
     /// must cost only itself. DuckDB aborts an explicit transaction on the
     /// first failing statement and its `COMMIT` then discards everything,
-    /// so before this the whole rebuild was lost and `horizon-sessiond`
+    /// so before this the whole rebuild was lost and `horizon-agentd`
     /// disabled the live projection for the run.
     #[test]
     fn rebuild_skips_an_unprojectable_record_and_projects_the_rest() {

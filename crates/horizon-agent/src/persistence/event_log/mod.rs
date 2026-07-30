@@ -22,7 +22,7 @@ pub const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
 pub const AGENT_EVENT_LOG_VERSION: u32 = 1;
 
 /// Host-resolved session placement needed to restore the same confinement
-/// after `horizon-sessiond` restarts. This is deliberately event-log
+/// after `horizon-agentd` restarts. This is deliberately event-log
 /// metadata rather than a conversational [`Event`]: every newly appended
 /// record carries the latest authoritative value, while old records decode
 /// with `Record::session_context == None` and retain their legacy resume
@@ -143,7 +143,7 @@ impl ReadReport {
     /// A short human-readable summary of lines `read` had to skip, or
     /// `None` when the file parsed cleanly. Every consumer of the raw JSONL
     /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
-    /// rebuild `open_silently` drives, and `horizon-sessiond`'s
+    /// rebuild `open_silently` drives, and `horizon-agentd`'s
     /// `open_persistence`) reports this instead of silently discarding
     /// evidence that the file has corrupt or torn lines.
     pub fn skipped_summary(&self) -> Option<String> {
@@ -609,7 +609,7 @@ mod tests {
     /// A record written before `role_id` existed has no such key in its
     /// JSON at all -- `#[serde(default)]` must still parse it (as `None`),
     /// not treat it as corrupt. Regression guard for resuming a log written
-    /// by a pre-role build of `horizon-sessiond`.
+    /// by a pre-role build of `horizon-agentd`.
     #[test]
     fn reads_a_pre_role_record_with_no_role_id_key() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
@@ -696,7 +696,7 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// Models `horizon-sessiond`'s normal-exit shutdown path
+    /// Models `horizon-agentd`'s normal-exit shutdown path
     /// (`flush_event_log_before_exit`, called on `SessionControl::Drain`
     /// right before `std::process::exit(0)`): flush the writer before the
     /// process tears the background thread down, and confirm whatever was
@@ -737,7 +737,7 @@ mod tests {
     }
 
     /// Proves the chosen design: a single process-global `WriterHandle`
-    /// shared by every session hosted in a `horizon-sessiond` process (see
+    /// shared by every session hosted in a `horizon-agentd` process (see
     /// the doc comment on `WriterHandle`) cannot tear lines no matter how
     /// many "sessions" hammer it concurrently, because all appends funnel
     /// through one channel to one thread with one open file.

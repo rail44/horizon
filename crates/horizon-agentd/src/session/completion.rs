@@ -381,7 +381,7 @@ fn fold_filesystem_denied(
 
 /// This session's confinement root, as recorded when it started -- the
 /// workspace half of the suggestion shaping's input. `None` for a session
-/// with no root (or one sessiond no longer tracks), in which case every
+/// with no root (or one agentd no longer tracks), in which case every
 /// attempt is treated as outside, which is the conservative reading.
 fn session_workspace_root(state: &Arc<SessiondState>, session_id: SessionId) -> Option<PathBuf> {
     let root = state
@@ -1076,7 +1076,7 @@ mod tests {
         // see `begin_reissued_approval`'s doc comment (and
         // `backlog 42 / 55`). The test only seeded the original request
         // with `occurrence_id: None` (no provider-side identity yet at the
-        // sessiond layer in this test path), so we check that the reissue
+        // agentd layer in this test path), so we check that the reissue
         // stamp is *some* `Some(_)` and that it doesn't match the
         // original's `None` -- the important invariant is "the reissue is
         // a distinct occurrence, not a verbatim forward".

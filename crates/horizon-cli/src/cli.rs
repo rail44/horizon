@@ -91,8 +91,8 @@ pub enum Subcommand {
     ContinueTurn {
         session_id: String,
     },
-    ReloadSessionRuntime,
-    /// `reload-session-runtime`'s terminal-daemon counterpart
+    ReloadAgentRuntime,
+    /// `reload-agent-runtime`'s terminal-daemon counterpart
     /// (`docs/terminald-split-design.md` decision 3). Destructive: it
     /// restarts the process that owns every PTY, so every terminal session
     /// ends with it.
@@ -100,7 +100,7 @@ pub enum Subcommand {
     ReloadConfig,
     /// Opens a new terminal tab whose cwd is the active session's directory
     /// (`docs/session-relationship-design.md` decision 4a) -- a bare invoke
-    /// like `ReloadSessionRuntime`/`ReloadConfig`, since v1 always targets
+    /// like `ReloadAgentRuntime`/`ReloadConfig`, since v1 always targets
     /// "whichever session is active", never a client-supplied id.
     OpenTerminalInSessionDirectory,
     Sessions,
@@ -137,7 +137,7 @@ Subcommands:\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
-  reload-session-runtime\n  \
+  reload-agent-runtime\n  \
   reload-terminal-runtime\n  \
   reload-config\n  \
   open-terminal-in-session-directory\n  \
@@ -285,9 +285,9 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "continue-turn")?;
             Subcommand::ContinueTurn { session_id }
         }
-        "reload-session-runtime" => {
-            reject_extra(&mut positionals, "reload-session-runtime")?;
-            Subcommand::ReloadSessionRuntime
+        "reload-agent-runtime" | "reload-session-runtime" => {
+            reject_extra(&mut positionals, "reload-agent-runtime")?;
+            Subcommand::ReloadAgentRuntime
         }
         "reload-terminal-runtime" => {
             reject_extra(&mut positionals, "reload-terminal-runtime")?;
@@ -674,10 +674,15 @@ mod tests {
             }
         );
         assert_eq!(
+            parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
+            Subcommand::ReloadAgentRuntime
+        );
+        // The pre-rename alias `reload-session-runtime` must still parse.
+        assert_eq!(
             parse(&args(&["reload-session-runtime"]))
                 .unwrap()
                 .subcommand,
-            Subcommand::ReloadSessionRuntime
+            Subcommand::ReloadAgentRuntime
         );
         assert_eq!(
             parse(&args(&["reload-terminal-runtime"]))

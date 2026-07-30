@@ -38,7 +38,7 @@
 //! still keys on the explore role id alone (`roles::is_exploration`).
 //!
 //! **The seam.** This crate cannot spawn a session: hosting one is
-//! `horizon-sessiond`'s job (`docs/agent-runtime-split-design.md`). So
+//! `horizon-agentd`'s job (`docs/agent-runtime-split-design.md`). So
 //! [`ExplorationHost`] is a daemon-provided capability handle, installed on
 //! `ToolSessionState` at session construction exactly like the recall
 //! store, the network proxy, and the judge already are
@@ -47,7 +47,7 @@
 //! an actionable error result, never a silent no-op. Its daemon-side
 //! implementation is written against a named "subscribe to another
 //! session's stop/completion events" abstraction
-//! (`horizon-sessiond`'s `session::subscription`), so approval forwarding
+//! (`horizon-agentd`'s `session::subscription`), so approval forwarding
 //! for future write-capable children is one more event kind on the same
 //! seam rather than a new one.
 //!
@@ -86,7 +86,7 @@ pub(crate) use notify::{register_wake, unregister_wake};
 /// Deliberately *not* the same string as `roles::EXPLORE_ROLE_ID`, which
 /// stays `"explore"`. That one is a persistence and cleanup identity -- it
 /// is written into the event log, decides which sessions
-/// `horizon-sessiond` refuses to resume at startup, and filters the
+/// `horizon-agentd` refuses to resume at startup, and filters the
 /// client-visible session list -- so renaming it would touch resume paths
 /// and already-persisted records while buying nothing the model can see.
 pub(crate) const TOOL_ID: &str = "task";
@@ -113,7 +113,7 @@ pub struct StartedExploration {
 }
 
 /// The daemon capability `task` is built on: spawn a peer session,
-/// subscribe to its events, terminate it. Implemented by `horizon-sessiond`
+/// subscribe to its events, terminate it. Implemented by `horizon-agentd`
 /// (`session::SessiondExplorationHost`) and installed on the requester's
 /// `ToolSessionState`; the requester's own workspace root, provider, and
 /// session id are baked into the implementation at construction, so this

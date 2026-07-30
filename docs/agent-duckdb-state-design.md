@@ -244,7 +244,7 @@ DuckDB is rebuilt from JSONL and is not the primary append path.
 > catch-up that trusts the mark to mean "everything at or below this
 > sequence is already fully present": it would try to insert that same
 > `event_id` again and fail on `agent_events`'s primary key. Reproduced in
-> practice by `horizon-sessiond`'s own e2e suite
+> practice by `horizon-agentd`'s own e2e suite
 > (`stale_log_triggers_duckdb_rebuild_on_respawn`) once a resumed session's
 > live thread appended a record near a hard `SIGKILL`. Fixed by wrapping
 > `Store::append_record`'s own body in its own transaction for the live

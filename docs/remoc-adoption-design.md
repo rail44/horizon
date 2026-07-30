@@ -22,7 +22,7 @@ document.
 
 ### Why remoc
 
-Horizon's UI ⇄ `horizon-sessiond` IPC is hand-rolled: a JSONL envelope
+Horizon's UI ⇄ `horizon-agentd` IPC is hand-rolled: a JSONL envelope
 (`horizon-session-protocol`), string `kind` dispatch onto sister
 vocabularies, request-id correlation maps for the few call-shaped
 exchanges, and per-connection frame baselines. Every new exchange re-pays
@@ -425,7 +425,7 @@ Staged PR sequence, each independently green — **all four landed 2026-07-21**:
 ## 7. Test strategy
 
 - **Real-socket e2e stays the house style.** The
-  `crates/horizon-sessiond/tests/e2e.rs` approach — spawn the actual
+  `crates/horizon-agentd/tests/e2e.rs` approach — spawn the actual
   daemon binary, talk over the actual unix socket — ports to remoc
   clients and remains the proof for attach/reconnect, PTY survival, cwd
   resolution, and drain. The `Connect::io` both-ends rule (adoption
@@ -481,7 +481,7 @@ Inherited unchanged:
 - One client connection with the `client_id`/multi-subscriber hedge
   (decision 6) — rtc attach calls make future fan-out additive.
 - Socket discovery, spawn-on-demand, explicit destructive
-  `Reload Session Runtime`, drain semantics.
+  `Reload Agent Runtime`, drain semantics.
 - PR #18's mismatch auto-recovery decisions, extended across the
   transport generation (§6).
 - The event log's format and forward-compat guard (out of scope, §6).
@@ -495,7 +495,7 @@ Inherited unchanged:
   the decisions §8 maps.
 - `crates/horizon-session-protocol/src/lib.rs` (remoc hub and wire policy),
   `src/sessiond/` (remoc client runtime),
-  `crates/horizon-sessiond/src/terminal.rs` (full-frame watch publisher),
+  `crates/horizon-agentd/src/terminal.rs` (full-frame watch publisher),
   `crates/horizon-terminal-core/src/types/frame.rs` (snapshot type),
   `crates/horizon-agent/src/wire.rs` (agent vocabulary).
 - remoc CHANGELOG (chmux v2→v3 compatibility note; 0.18.0 default-codec

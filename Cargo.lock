@@ -3647,6 +3647,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-agentd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "crossbeam-channel",
+ "horizon-agent",
+ "horizon-config",
+ "horizon-sandbox",
+ "horizon-session-protocol",
+ "horizon-terminal-core",
+ "remoc",
+ "schemars 1.2.1",
+ "serde_json",
+ "sysinfo 0.39.6",
+ "tempfile",
+ "termwiz",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "horizon-cli"
 version = "0.1.0"
 dependencies = [
@@ -3719,27 +3740,6 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
-name = "horizon-sessiond"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "crossbeam-channel",
- "horizon-agent",
- "horizon-config",
- "horizon-sandbox",
- "horizon-session-protocol",
- "horizon-terminal-core",
- "remoc",
- "schemars 1.2.1",
- "serde_json",
- "sysinfo 0.39.6",
- "tempfile",
- "termwiz",
  "tokio",
  "uuid",
 ]

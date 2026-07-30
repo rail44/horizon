@@ -29,7 +29,7 @@ impl HostTools for NoHostTools {
     }
 }
 
-/// A scripted stand-in for `horizon-sessiond`'s real task host: it hands
+/// A scripted stand-in for `horizon-agentd`'s real task host: it hands
 /// the tool one half of a channel the test drives event by event, and
 /// records every `terminate` call so the teardown requirements are directly
 /// assertable. Deterministic and offline -- no provider, no session thread,
@@ -95,7 +95,7 @@ impl ExplorationHost for ScriptedHost {
     }
 }
 
-/// A requester session wired exactly as `horizon-sessiond`'s `run_session`
+/// A requester session wired exactly as `horizon-agentd`'s `run_session`
 /// wires one.
 struct Requester {
     session_id: SessionId,
@@ -124,7 +124,7 @@ impl Requester {
 
     /// Runs one tool call through the same entry point the session loop
     /// uses, folding whatever it produces into this session's live state
-    /// (as `horizon-sessiond`'s `handle_provider_event` does), and returns
+    /// (as `horizon-agentd`'s `handle_provider_event` does), and returns
     /// the call's own result output.
     fn call(&self, call_id: &str, tool_id: &str, input: serde_json::Value) -> serde_json::Value {
         let processing = process_agent_provider_event(

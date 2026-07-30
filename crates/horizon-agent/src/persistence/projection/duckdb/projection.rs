@@ -318,7 +318,7 @@ impl Store {
     /// match.
     ///
     /// When `occurrence_id` is `Some`, this targets the specific approval
-    /// row it was stamped on (the sessiond's
+    /// row it was stamped on (the agentd's
     /// `begin_reissued_approval` mints a fresh one per reissue, see
     /// `session/approval.rs`) and nothing else. When it is `None` --
     /// the `ToolCallStarted` arm, which carries no occurrence, and

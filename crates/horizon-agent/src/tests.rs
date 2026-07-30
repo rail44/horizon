@@ -199,7 +199,7 @@ fn runtime_state_store_accumulates_events_into_frame() {
     assert_eq!(store.frame(), frame);
 }
 
-/// `LiveState::with_event_log_and_history` is `horizon-sessiond`'s seam for
+/// `LiveState::with_event_log_and_history` is `horizon-agentd`'s seam for
 /// resuming a persisted session at startup (`docs/agent-runtime-split-
 /// design.md` step 4): the seeded history must show up in the very first
 /// frame (not just after a fresh event arrives) and in `events()` — the
@@ -1354,7 +1354,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
 /// `Event` has no `#[serde(tag = "...")]` -- serde's default externally
 /// tagged representation is `{"VariantName": {...}}`, which is what both
 /// the wire (the `AgentWireEvent::Event` envelope around it) and the
-/// JSONL log store. The wire-schema generator (`crates/horizon-sessiond/
+/// JSONL log store. The wire-schema generator (`crates/horizon-agentd/
 /// tests/wire_schema.rs`) consumes this same shape.
 #[test]
 fn operator_intervention_events_round_trip_through_serde_json() {

@@ -3,7 +3,7 @@
 //! See `AGENTS.md`'s "Configuration" section for the user-facing summary
 //! and `config.example.toml` at the repo root for every knob with its
 //! default. This module owns locating and parsing the TOML file into a
-//! [`RawConfig`]; `horizon-sessiond`'s `config` module and the shell
+//! [`RawConfig`]; `horizon-agentd`'s `config` module and the shell
 //! crate's `keymap`/`theme`/`terminal` modules each read the section
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
@@ -41,8 +41,8 @@
 //!   `CommandId::ReloadConfig` arm in the shell crate's `workspace.rs`,
 //!   fed by [`reload`]) re-reads the file and applies `[theme]`
 //!   (`theme::reload_from`) and `[keybindings]` (`workspace::apply_bindings`)
-//!   live. `[provider]` picks up on `Reload Session Runtime` (a fresh
-//!   `horizon-sessiond` process re-reads the file, no full UI restart
+//!   live. `[provider]` picks up on `Reload Agent Runtime` (a fresh
+//!   `horizon-agentd` process re-reads the file, no full UI restart
 //!   needed); `[terminal]`/`[ui]` need a full UI restart.
 //! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
 //!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
@@ -295,7 +295,7 @@ fn home_dir() -> Option<PathBuf> {
     horizon_sandbox::home_dir()
 }
 
-/// Every validated `[[grants.project]]` entry -- what `horizon-sessiond`
+/// Every validated `[[grants.project]]` entry -- what `horizon-agentd`
 /// consults at session spawn to decide which trees this session's project
 /// may write to (`grants::trees_for_project`). Entries this crate refused
 /// (over-broad, unexpandable) are already dropped, having warned on stderr
@@ -407,7 +407,7 @@ pub fn reload_from_path(path: Option<&Path>) -> Result<RawConfig, String> {
 /// process must never observe the developer's real
 /// `~/.config/horizon/config.toml`. The `CommandId::ReloadConfig` arm
 /// (this function's one caller) is therefore not unit-tested directly --
-/// like `reload_session_runtime`, which spawns a real process, there is
+/// like `reload_agent_runtime`, which spawns a real process, there is
 /// nothing left to exercise here once `reload_from_path` (this module's
 /// tests) and the theme/keymap apply functions it feeds (`theme::reload_from`'s
 /// and the shell crate's `keymap::resolve_keybindings`'s own tests) are

@@ -35,6 +35,6 @@
 # build-dir split. A baked-in `CARGO_BIN_EXE_*` path can therefore be
 # transiently missing at the exact instant a consumer spawns it; see
 # `docs/tasks/backlog.md` #36 for the confirmed mechanism, a local
-# repro, and the mitigation in `crates/horizon-sessiond/tests/e2e.rs`.
+# repro, and the mitigation in `crates/horizon-agentd/tests/e2e.rs`.
 [build]
 build-dir = "{cargo-cache-home}/horizon-build-dir"

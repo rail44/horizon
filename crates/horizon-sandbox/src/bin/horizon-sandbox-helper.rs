@@ -4,7 +4,7 @@
 //!
 //! nono's `Sandbox::apply_auto` self-applies Seatbelt to the *whole
 //! calling process*, irreversibly -- there is no thread-scoped variant the
-//! way Linux's Landlock has. Horizon's own process (and `horizon-sessiond`)
+//! way Linux's Landlock has. Horizon's own process (and `horizon-agentd`)
 //! must stay unsandboxed, so the policy can't be applied in-process the
 //! way `linux::spawn` does it. This binary exists solely to be that
 //! separate process: `macos::spawn` execs it with the serialized policy

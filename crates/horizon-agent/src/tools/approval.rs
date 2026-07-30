@@ -25,12 +25,12 @@ pub enum ApprovalOutcome {
     /// Horizon executed (or, for a deny, short-circuited) the tool
     /// app-side, synchronously. `events` are exactly the events that were
     /// just folded into the session's `LiveState` (in order) — this is
-    /// what the one production caller uses: `horizon-sessiond` (the only
+    /// what the one production caller uses: `horizon-agentd` (the only
     /// place agent sessions run today — see `crate::client`'s module doc,
     /// there is no in-process fallback) forwards `events` over the wire to
     /// Horizon, since a whole-frame snapshot isn't the wire's
     /// event-envelope shape (`resolve_and_forward` in
-    /// `crates/horizon-sessiond/src/session.rs`, which discards `frame`
+    /// `crates/horizon-agentd/src/session.rs`, which discards `frame`
     /// via `..`). `frame` — the session's updated live frame, already
     /// folded through the session's `LiveState` — is kept for a caller
     /// that wants the whole updated frame directly instead of replaying
@@ -50,8 +50,8 @@ pub enum ApprovalOutcome {
     /// exposed — but there is no `command` yet. The eventual result arrives
     /// later on the per-session `async_results` channel registered by
     /// `register_session_runtime` and is folded (and forwarded to the
-    /// provider) by `fold_tool_completion` in `horizon-sessiond`'s session
-    /// loop (`crates/horizon-sessiond/src/session.rs`), not by this call.
+    /// provider) by `fold_tool_completion` in `horizon-agentd`'s session
+    /// loop (`crates/horizon-agentd/src/session.rs`), not by this call.
     Started {
         events: Vec<Event>,
         frame: AgentFrame,
@@ -71,7 +71,7 @@ pub enum ApprovalOutcome {
     /// side effects (or, for `bash`, spawn a second concurrent process for
     /// the same call), and forwarding would emit a second `ToolCallResult`.
     /// Every caller that reaches this logs the drop rather than silently
-    /// swallowing it — see `horizon-sessiond`'s `session::resolve_and_forward`.
+    /// swallowing it — see `horizon-agentd`'s `session::resolve_and_forward`.
     AlreadyResolved,
 }
 
@@ -587,7 +587,7 @@ fn resolve_filesystem_denial_retry(
 /// the retry is approved and becomes the live attempt (backlog 55, owner
 /// decision 2026-07-28).
 ///
-/// Both denial-retry folds in `horizon-sessiond`
+/// Both denial-retry folds in `horizon-agentd`
 /// (`session::completion::fold_domain_denied`/`fold_filesystem_denied`)
 /// park the first attempt's genuine outcome on the reissued approval and
 /// emit no `ToolCallFinished` for it, because the two decisions want

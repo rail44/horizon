@@ -3,13 +3,13 @@
 //! `horizon_sandbox_proxy::AllowlistProxy`, so a tier-1 sandboxed `bash`
 //! call's `NetworkPolicy::Proxied { proxy_addr }` names a proxy this crate
 //! itself owns, rather than one threaded in as a
-//! start-session argument from `horizon-sessiond` (leg 4a's shape --
-//! `horizon-sessiond`'s own `network.rs` is gone).
+//! start-session argument from `horizon-agentd` (leg 4a's shape --
+//! `horizon-agentd`'s own `network.rs` is gone).
 //!
 //! **Ownership moved from the daemon to here** (owner decision, leg 4b):
 //! the proxy's responsibility sits with the agent implementation, which
 //! already owns every other piece of per-session tool state (`tools::state::
-//! ToolSessionState`) -- `horizon-sessiond` becomes a pure consumer, handing
+//! ToolSessionState`) -- `horizon-agentd` becomes a pure consumer, handing
 //! this crate an `isolated`/sandbox-availability fact and getting back a
 //! handle it threads into `ToolSessionState` exactly like `with_skills`/
 //! `with_config_path` already do.
@@ -39,7 +39,7 @@
 //! rather than duplicated per session. The runtime is process-lifetime
 //! (never explicitly shut down): as a `'static`, it's simply reclaimed by
 //! the OS at process exit like every other thread, the same posture
-//! `horizon-sessiond`'s now-deleted `network.rs` already accepted for the
+//! `horizon-agentd`'s now-deleted `network.rs` already accepted for the
 //! abrupt `Control::Drain`/`std::process::exit(0)` paths. A session's own
 //! `SessionNetworkProxy`, by contrast, *is* torn down on that session's own
 //! `Drop` (via `AllowlistProxy`'s own `Drop` impl) and is safe to drop from
@@ -104,7 +104,7 @@ impl SessionNetworkProxy {
     /// is approved yet) on the shared [`network_runtime`]. Fallible: a bind
     /// failure is
     /// reported to the caller rather than panicking -- the caller
-    /// (`horizon-sessiond`'s `session::run_session`) degrades to no network
+    /// (`horizon-agentd`'s `session::run_session`) degrades to no network
     /// proxy for the session, the same `NetworkPolicy::Disabled` fallback
     /// tier-1 sandboxed `bash` already had before leg 4a.
     ///
@@ -112,7 +112,7 @@ impl SessionNetworkProxy {
     /// leg 4a's own `NetworkProxy::start`): this may be called from a
     /// thread already inside some *other* tokio runtime's context (e.g. a
     /// session's own dedicated thread, or an async task on `horizon-
-    /// sessiond`'s accept-loop runtime), and tokio hard-panics
+    /// agentd`'s accept-loop runtime), and tokio hard-panics
     /// ("cannot start a runtime from within a runtime") on any attempt to
     /// `block_on` a *different* runtime from such a thread. A bare OS
     /// thread has no such context, so it can safely drive `network_runtime()`

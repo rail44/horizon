@@ -124,7 +124,7 @@ pub(super) fn begin_reissued_approval(
 
 /// A `Command` envelope arriving from Horizon for this session.
 /// `ApproveToolCall`/`DenyToolCall` are resolved right here (decision 2:
-/// "Approval decisions stay in Horizon... resolved in sessiond") via
+/// "Approval decisions stay in Horizon... resolved in agentd") via
 /// `tools::approval::resolve_approval`; `ContinueTurn` is special-cased to
 /// emit an audit event (`Event::ContinueTurnRequested`) recording the
 /// `TurnEndReason` of the most recent `TurnEnded` item in the live frame
@@ -267,10 +267,10 @@ pub(super) fn forward_approval_outcome(
         // repeated-approval OOM incident) from re-executing anything: every
         // one after the first lands here and is dropped, logged rather than
         // silently swallowed so a runaway burst like that incident's is
-        // visible in sessiond's own stderr.
+        // visible in agentd's own stderr.
         ApprovalOutcome::AlreadyResolved => {
             eprintln!(
-                "horizon-sessiond: dropped duplicate approve/deny for session {session_id:?}, \
+                "horizon-agentd: dropped duplicate approve/deny for session {session_id:?}, \
                  call {logged_call_id:?} (already resolved)"
             );
         }

@@ -407,13 +407,13 @@ deviation rather than asking for a mock update):
   reads the actionable version instead.
   - **What actually emitted the `TurnEnded(Cancelled)` behind the ghost,
     given the owner never clicked a cancel/stop control**:
-    `horizon-sessiond`'s own `resume_persisted_sessions` (crash/restart
-    recovery, `crates/horizon-sessiond/src/session.rs`) synthesizes
+    `horizon-agentd`'s own `resume_persisted_sessions` (crash/restart
+    recovery, `crates/horizon-agentd/src/session.rs`) synthesizes
     exactly this — drains every outstanding tool call as cancelled, then
     a `TurnEnded(Cancelled)` — for any session found `is_turn_in_flight()`
     (which includes `WaitingForApproval`) when sessiond starts back up.
     This runs automatically on every sessiond respawn, including
-    `Reload Session Runtime` after a rebuild — exactly the iterate/
+    `Reload Agent Runtime` after a rebuild — exactly the iterate/
     rebuild/reload loop this very review cycle was running. No explicit
     cancel needed at all; it's correct, intentional cleanup on its own
     (verified: it does drain the *entire* outstanding set, not just
@@ -692,7 +692,7 @@ deviation rather than asking for a mock update):
   `group_into_turns` now opens a segment at the first item of *any* type,
   not just a user `Message` (invariant 2), so a structural gap -- e.g. a
   provider continuation after a daemon-synthesized `TurnEnded` on a
-  `horizon-sessiond` respawn, round 4's own finding -- can no longer
+  `horizon-agentd` respawn, round 4's own finding -- can no longer
   leave items permanently outside every span either; and (2)
   `render_item`'s `ToolCallRequested`/`ToolCallFinished` arms no longer
   fall back to raw JSON at all -- `AgentView::render_orphan_tool_row`
@@ -935,7 +935,7 @@ deviation rather than asking for a mock update):
   nor `SessionNew`/`SessionSummary` carried a model string and
   `RoleDefinition.model` was never serialized. Closed with a session-
   scoped, ephemeral wire signal rather than the `SessionSummary` field
-  route originally sketched: `horizon-sessiond` resolves a session's
+  route originally sketched: `horizon-agentd` resolves a session's
   model synchronously at spawn time (`contract::Provider::resolved_model`,
   a new trait method mirroring `start_session`'s own `role_adjusted_config`
   resolution — role override if the role has one, else the provider's
@@ -976,7 +976,7 @@ deviation rather than asking for a mock update):
   stays 4) — a new `Control` variant is additive the same way prior
   `Control` growth (`ToolCallProgress`, `SkippedLines`) was: an old peer
   that doesn't recognize `session_model` just logs and drops that one
-  envelope (`horizon-sessiond`'s `main`/`horizon`'s `routing::dispatch`
+  envelope (`horizon-agentd`'s `main`/`horizon`'s `routing::dispatch`
   both treat a single malformed/unrecognized envelope as non-fatal), never
   a connection-ending error.
 

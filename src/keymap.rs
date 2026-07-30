@@ -135,7 +135,9 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "approve-tool-call" => Some(CommandId::ApproveToolCall),
         "deny-tool-call" => Some(CommandId::DenyToolCall),
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
-        "reload-session-runtime" => Some(CommandId::ReloadSessionRuntime),
+        // `reload-session-runtime` is the pre-rename alias, kept so existing
+        // user config.toml bindings keep working silently.
+        "reload-agent-runtime" | "reload-session-runtime" => Some(CommandId::ReloadAgentRuntime),
         "reload-terminal-runtime" => Some(CommandId::ReloadTerminalRuntime),
         "reload-config" => Some(CommandId::ReloadConfig),
         "manage-sessions" => Some(CommandId::OpenSessionManager),

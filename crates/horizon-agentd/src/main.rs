@@ -1,4 +1,4 @@
-//! `horizon-sessiond`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
+//! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
 //! agent-runtime split. Owns the Unix socket, the `hello` handshake, and (as
 //! of step 3) real agent sessions: `session_new` spawns the provider/tool/
 //! persistence machinery this binary hosts (see `session::run_session`),
@@ -15,7 +15,7 @@
 //! milliseconds), and the old ordering did all of that *before* binding: a
 //! client racing to connect during that window would time out its own
 //! retry budget, conclude nothing was listening, and spawn a second
-//! `horizon-sessiond` -- which itself would replay the whole log a second
+//! `horizon-agentd` -- which itself would replay the whole log a second
 //! time before discovering the first instance already owns the socket (see
 //! `bind_listener`'s stale-socket handling). Binding first makes that whole
 //! failure mode structurally impossible in the normal path: a client's
@@ -79,7 +79,7 @@ use tokio::net::{UnixListener, UnixStream};
 
 /// Reported in this binary's `hello` reply's `binary_id`. The negotiated
 /// protocol version is carried separately in the same `HubHello`.
-const BINARY_ID: &str = concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"));
+const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
 
 /// How long an accepted connection gets to complete the remoc (chmux)
 /// handshake before the daemon gives up on it. A v10 client completes it
@@ -88,20 +88,20 @@ const BINARY_ID: &str = concat!("horizon-sessiond/", env!("CARGO_PKG_VERSION"));
 /// of which may wedge the one-at-a-time accept loop for chmux's raw 60 s.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Test-only hook (`crates/horizon-sessiond/tests/e2e.rs`): when set to a
+/// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
 /// opening the event log, so a test can prove the bind-first ordering
 /// (hello answers well before this delay elapses; `session_list`/
 /// `session_load` don't) instead of relying on incidental timing. Never set
 /// in production.
-const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_RESUME_DELAY_MS";
+const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let socket_path =
         socket_path_from_args(std::env::args().skip(1)).unwrap_or_else(default_socket_path);
 
-    // `horizon-sessiond` is now the one process that reads Horizon's config
+    // `horizon-agentd` is now the one process that reads Horizon's config
     // file directly (see `docs/agent-runtime-split-design.md`'s "the child
     // owns the event log and DuckDB projection", extended by the
     // 2026-07-18 config-narrowing wave's consolidation onto
@@ -119,7 +119,7 @@ async fn main() -> anyhow::Result<()> {
     // the `config.read`/`config.write` agent tools' one and only target.
     let config_path = horizon_config::resolved_path();
     eprintln!(
-        "horizon-sessiond: starting on {} (model={})",
+        "horizon-agentd: starting on {} (model={})",
         socket_path.display(),
         agent_config.rig.model
     );
@@ -182,7 +182,7 @@ fn spawn_resume_task(
             open_persistence(&agent_config);
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
-        // Step 4: "sessiond restart = read own log, rebuild rig_history, mark
+        // Step 4: "agentd restart = read own log, rebuild rig_history, mark
         // turns that died mid-flight as cancelled ... sessions are live
         // again".
         session::resume_persisted_sessions(&state, records);
@@ -224,9 +224,9 @@ fn test_resume_delay() -> Option<Duration> {
 /// ("Skipped-lines status reporting is omitted").
 ///
 /// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
-/// open`]: this function already prints its own `horizon-sessiond`-prefixed
+/// open`]: this function already prints its own `horizon-agentd`-prefixed
 /// skipped-lines summary just below, so the shared writer module's own
-/// generic summary line would otherwise double up in sessiond's stderr.
+/// generic summary line would otherwise double up in agentd's stderr.
 /// `open_silently`'s `duckdb_path` argument is this binary's only real
 /// production use of the live DuckDB projection (see the module doc): the
 /// event log's own writer thread rebuilds (or skips, if already current)
@@ -255,7 +255,7 @@ fn open_persistence(
             let skipped_summary = report.skipped_summary();
             if let Some(summary) = &skipped_summary {
                 eprintln!(
-                    "horizon-sessiond: {summary} while opening {}",
+                    "horizon-agentd: {summary} while opening {}",
                     agent_config.persistence.event_log_path.display()
                 );
             }
@@ -263,13 +263,13 @@ fn open_persistence(
         }
         Ok(WriterInit::Failed(error)) => {
             eprintln!(
-                "horizon-sessiond: event log unavailable ({error}); persistence disabled for this run"
+                "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
             );
             (None, Vec::new(), None, duckdb_rx)
         }
         Err(_) => {
             eprintln!(
-                "horizon-sessiond: event log writer thread exited before reporting startup status; \
+                "horizon-agentd: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
             (None, Vec::new(), None, duckdb_rx)
@@ -289,11 +289,11 @@ async fn run(
             accepted = listener.accept() => {
                 let (stream, _addr) = accepted?;
                 if let Err(err) = handle_connection(stream, state.clone()).await {
-                    eprintln!("horizon-sessiond: connection error: {err}");
+                    eprintln!("horizon-agentd: connection error: {err}");
                 }
             }
             _ = sigterm.recv() => {
-                eprintln!("horizon-sessiond: SIGTERM received, shutting down");
+                eprintln!("horizon-agentd: SIGTERM received, shutting down");
                 break;
             }
         }
@@ -326,14 +326,14 @@ async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> any
         Ok(Ok(connected)) => connected,
         Ok(Err(error)) => {
             eprintln!(
-                "horizon-sessiond: dropping a connection that failed the remoc handshake \
+                "horizon-agentd: dropping a connection that failed the remoc handshake \
                  (a pre-v10 JSONL client, or not a Horizon client at all): {error}"
             );
             return Ok(());
         }
         Err(_elapsed) => {
             eprintln!(
-                "horizon-sessiond: dropping a connection with no remoc handshake within \
+                "horizon-agentd: dropping a connection with no remoc handshake within \
                  {CONNECT_TIMEOUT:?} (a pre-v10 JSONL client, or not a Horizon client at all)"
             );
             return Ok(());
@@ -368,7 +368,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> any
     tokio::select! {
         served = server.serve(true) => {
             if let Err(error) = served {
-                eprintln!("horizon-sessiond: hub serve error: {error}");
+                eprintln!("horizon-agentd: hub serve error: {error}");
             }
         }
         _ = &mut conn_task => {}
@@ -384,7 +384,7 @@ async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> any
 
 /// Binds `path`, handling the stale-socket case: if a socket file already
 /// exists there but nothing is accepting connections on it (a previous
-/// `horizon-sessiond` that didn't shut down cleanly), remove it and rebind.
+/// `horizon-agentd` that didn't shut down cleanly), remove it and rebind.
 /// If something *is* accepting, refuses to steal the path out from under a
 /// live instance.
 async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
@@ -392,13 +392,13 @@ async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
         match UnixStream::connect(path).await {
             Ok(_stream) => {
                 anyhow::bail!(
-                    "{} is already accepting connections -- is another horizon-sessiond running?",
+                    "{} is already accepting connections -- is another horizon-agentd running?",
                     path.display()
                 );
             }
             Err(_) => {
                 eprintln!(
-                    "horizon-sessiond: removing stale socket {} (nothing was accepting)",
+                    "horizon-agentd: removing stale socket {} (nothing was accepting)",
                     path.display()
                 );
                 std::fs::remove_file(path)?;

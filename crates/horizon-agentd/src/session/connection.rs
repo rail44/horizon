@@ -23,7 +23,7 @@ use super::state::{lock_unpoisoned, SessiondState};
 /// ordered against [`SessiondState::mark_resume_ready`] (`Control::
 /// SessionList`/`SessionLoad`'s own readiness gate), so a client can see a
 /// resumed session as "listed" before its thread has gotten anywhere near
-/// this channel. Under real contention (many sessiond processes competing
+/// this channel. Under real contention (many agentd processes competing
 /// for CPU/disk, e.g. the full workspace test suite running in parallel)
 /// that DuckDB rebuild-or-open wait can genuinely take several seconds,
 /// and a timeout here has no way to distinguish "thread not there yet"
@@ -115,7 +115,7 @@ impl Connection {
     /// logged and dropped rather than panicking.
     pub(crate) fn route_command(&self, session_id: SessionId, command: Command) {
         if !self.state.send_command(session_id, command) {
-            eprintln!("horizon-sessiond: command for unknown session {session_id:?}");
+            eprintln!("horizon-agentd: command for unknown session {session_id:?}");
         }
     }
 

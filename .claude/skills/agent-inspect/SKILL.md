@@ -228,7 +228,7 @@ attribution the query above gives you): `ls -la "$(dirname "$LOG")"/horizon-bash
 ## DuckDB projection
 
 **The projection is live now (as of the recall work), and the recipes below
-"work" while `horizon-sessiond` is running — but may silently lag.**
+"work" while `horizon-agentd` is running — but may silently lag.**
 Previously the projection was only rebuilt at startup, then the store was
 closed; now the event-log writer thread opens the store once at startup
 and *keeps it open* for the rest of the process's life, live-appending
@@ -245,7 +245,7 @@ session's most recent few events, "did this just happen"), **prefer the
 JSONL recipes earlier in this doc** — they read the same file the writer
 itself appends to, with no separate database engine's checkpoint timing in
 the way. For a guaranteed-current DuckDB read, stop sessiond first (a plain
-kill/stop, or `horizon reload-session-runtime`; agent sessions survive it,
+kill/stop, or `horizon reload-agent-runtime`; agent sessions survive it,
 and since the 2026-07-30 terminald split it no longer ends the UI's terminal
 sessions either — that was verified true on 2026-07-25, before terminals
 moved to their own daemon), or
@@ -259,7 +259,7 @@ with Horizon and must be installed independently. The projection lives at
 `~/.local/share/horizon/agent-state.duckdb`), unless `HORIZON_AGENT_STATE_DB`
 relocates it — environment-only, no config-file key
 (`AgentPersistenceConfig` in `crates/horizon-agent/src/config.rs`). There is
-nothing to inspect only if `horizon-sessiond` has never started, or the file
+nothing to inspect only if `horizon-agentd` has never started, or the file
 was deleted since.
 
 Schema (`crates/horizon-agent/src/persistence/projection/duckdb/schema.rs`):

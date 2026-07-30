@@ -81,7 +81,7 @@ truth for which ones are destructive in this build.
 
 ## Runtime/config reload
 
-- `horizon reload-session-runtime` — respawn `horizon-sessiond` (recovers from a
+- `horizon reload-agent-runtime` — respawn `horizon-agentd` (recovers from a
   stale/rebuilt agent binary). Terminal sessions are unaffected: they live in
   a separate daemon (`docs/terminald-split-design.md`).
 - `horizon reload-terminal-runtime` — respawn `horizon-terminald`, the daemon

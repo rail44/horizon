@@ -10,7 +10,7 @@
 //! session's workspace root -- the untrusted-repository boundary
 //! (`docs/trust-boundaries.md`). `config.write` deliberately does not go
 //! through it: its one and only target is the single config file
-//! `horizon-sessiond` itself resolves (`$HORIZON_CONFIG` >
+//! `horizon-agentd` itself resolves (`$HORIZON_CONFIG` >
 //! `$XDG_CONFIG_HOME/horizon/config.toml` > `~/.config/horizon/config.toml`,
 //! via `horizon_config::resolved_path()`) and injects into this session's
 //! `ToolSessionState::config_path` at spawn time -- a host-owned file

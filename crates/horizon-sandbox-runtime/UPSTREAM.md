@@ -40,7 +40,7 @@ The extraction retains only:
   `CONTINUE` after inspecting child-owned pointer memory.
 
 It runs only inside Horizon's dedicated single-threaded helper process;
-running it directly in multi-threaded `horizon-sessiond` would violate the
+running it directly in multi-threaded `horizon-agentd` would violate the
 upstream implementation's pre-fork requirement. Horizon's bounded,
 credential-authenticated report socket is a local addition. Live fd injection,
 PTY, rollback, trust interception, URL opening, profile saving, tool

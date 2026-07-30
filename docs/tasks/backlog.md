@@ -5,10 +5,10 @@ up. Numbering is stable and shared with the archive: resolved and closed
 entries live in `backlog-resolved.md` keeping their original numbers
 (split 2026-07-18).
 
-28. **[PARTIALLY RESOLVED 5c3f725, e478e6e] `horizon-sessiond` socket e2e
+28. **[PARTIALLY RESOLVED 5c3f725, e478e6e] `horizon-agentd` socket e2e
     flakes under the full parallel nextest run** — `terminal_create_diff_
     reconnect_attach_and_shutdown_over_the_real_socket` (`crates/
-    horizon-sessiond/tests/e2e.rs`) spawns a real PTY backed by a real
+    horizon-agentd/tests/e2e.rs`) spawns a real PTY backed by a real
     interactive shell (`/bin/sh -i`). Under **realistic** load -- a plain
     `cargo nextest run --workspace` with no extra synthetic stress, the
     actual shape of the original flake reports -- this is dramatically
@@ -35,7 +35,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (`.config/nextest.toml`) serializing every test in the `horizon-
     sessiond::e2e` binary against each other (`max-threads = 1`), removing
     self-contention as a variable; (3) a production fix in `crates/
-    horizon-sessiond/src/terminal.rs`'s `TerminalHost::create` --
+    horizon-agentd/src/terminal.rs`'s `TerminalHost::create` --
     previously a stuck PTY spawn could wedge that connection's entire
     message loop forever (`Command::spawn` blocks its calling thread with
     no way to interrupt it); now each spawn attempt is bounded to 10s
@@ -83,7 +83,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     emptying the workspace on purpose — see its doc comment). Whether
     that distinction holds or reload should also restore-to-empty is an
     owner call; one small site either way.
-    **Moot as posed:** `Reload Session Runtime` no longer terminates a
+    **Moot as posed:** `Reload Agent Runtime` no longer terminates a
     single terminal session (`docs/terminald-split-design.md` decision 2),
     so it never empties the workspace and never reseeds. The reseed moved,
     unchanged, to `reload_terminal_runtime` — where the "operational side
@@ -94,7 +94,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
 51. **Session-protocol version mismatch is treated as transient: the UI
     retries the hello forever instead of surfacing an actionable state.**
     First hit live on the v5→v6 bump (2026-07-19): the owner's
-    long-lived `horizon-sessiond` (started before the bump, speaking v5)
+    long-lived `horizon-agentd` (started before the bump, speaking v5)
     rejected the new UI's v6 `Hello`, and the UI looped
     "hello transport failed, retrying" on stderr indefinitely. The
     daemon *surviving UI restarts is the design*, so every wire-shape
@@ -103,11 +103,11 @@ entries live in `backlog-resolved.md` keeping their original numbers
     detected and named on the daemon side ("this build speaks v5,
     received v6") — the UI should classify it as permanent, stop
     retrying, and present the remedy ("session runtime is older than
-    this build — Reload Session Runtime; its terminal sessions will
+    this build — Reload Agent Runtime; its terminal sessions will
     end"), ideally as a one-action prompt rather than log spam.
     **Worse (owner observation, same incident): the app is inoperable
     during initial load while the hello retry loops, so the palette —
-    and with it Reload Session Runtime, the in-app remedy — is
+    and with it Reload Agent Runtime, the in-app remedy — is
     unreachable; the only exit today is killing the daemon process
     externally.** That contradicts `src/sessiond/`'s stated
     non-blocking connect/spawn intent: whatever the fix surfaces, the
@@ -119,7 +119,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     daemons that can be stale independently, so this item's fix has to
     cover both connections. What changed in its favour: the two runtimes'
     failures no longer bleed into each other (separate route tables), the
-    remedy differs per daemon (`Reload Session Runtime` vs. the
+    remedy differs per daemon (`Reload Agent Runtime` vs. the
     destructive `Reload Terminal Runtime`), and a stale *terminald* is
     much more likely than a stale sessiond because that daemon is
     deliberately long-lived — which is also why the terminald connection
@@ -204,7 +204,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     update after `Create`, both times is the signature of a genuine hang,
     not merely "slower under load" (a scaling delay would show up at
     varying points below the ceiling, not pinned to it).
-    `crates/horizon-sessiond/src/terminal.rs`'s `spawn_terminal` calls
+    `crates/horizon-agentd/src/terminal.rs`'s `spawn_terminal` calls
     `portable_pty`'s `MasterPty::spawn_command`
     (`portable-pty-0.9.0/src/unix.rs:228`), which sets a `pre_exec` closure
     run in the fork()'d child *before* `execve`. That closure calls
@@ -253,7 +253,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     fork that drops or reworks `close_random_fds`, increase `MAX_SPAWN_
     ATTEMPTS`/add inter-attempt backoff in `terminal.rs` if the residual
     rate ever proves disruptive in practice, or get a live capture (attach
-    `strace`/`gdb` to a hung `horizon-sessiond` test process before its
+    `strace`/`gdb` to a hung `horizon-agentd` test process before its
     `Drop`-triggered cleanup fires) to actually confirm or rule out the
     fork-safety hypothesis. Worth tracking because this isn't just a test
     hazard -- if real, it means a real user's terminal spawn could
@@ -289,9 +289,9 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (`c325cd0`), so this is defense-in-depth: make the model operation
     itself refuse (early return) when the active tab isn't found, with
     a regression test calling it directly. Mechanical.
-53. **[RESOLVED ca36ea9-follow-up] `horizon-sessiond`'s worktree tests
+53. **[RESOLVED ca36ea9-follow-up] `horizon-agentd`'s worktree tests
     leaked real `git` operations onto the enclosing repository.** Merged
-    same-day incident (`ca36ea9`, 2026-07-19): `crates/horizon-sessiond/
+    same-day incident (`ca36ea9`, 2026-07-19): `crates/horizon-agentd/
     src/worktree.rs`'s "isolated" tests shell out to `git -C <TempDir>
     ...`, which looks correctly scoped, but `-C` does not override an
     already-set `GIT_DIR`/`GIT_WORK_TREE`/`GIT_INDEX_FILE` environment
@@ -331,7 +331,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     class of leak) — `core.bare`, `git status --porcelain`, and any stray
     `refs/heads/horizon/*` — and re-asserts it unchanged on drop, so any
     future escape fails loudly at the offending test. Verified: 13
-    consecutive `cargo nextest run -p horizon-sessiond worktree` passes
+    consecutive `cargo nextest run -p horizon-agentd worktree` passes
     with no flake, canary green throughout.
 
 54. **Owner-deferred design consultation: shared-spawn lineage

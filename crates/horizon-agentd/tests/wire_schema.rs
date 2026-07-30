@@ -12,10 +12,10 @@
 //! To regenerate after an intentional wire change:
 //!
 //! ```sh
-//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond wire_schema
+//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agentd wire_schema
 //! ```
 //!
-//! This generator lives in `horizon-sessiond` (rather than the protocol
+//! This generator lives in `horizon-agentd` (rather than the protocol
 //! crate that hosts the artifact) because the daemon already links the agent
 //! wire vocabulary through `horizon-session-protocol`'s own re-exports. Since
 //! the v17 terminald split (`docs/terminald-split-design.md`) the terminal
@@ -31,7 +31,7 @@
 //! (`docs/remoc-adoption-design.md` §2). The document therefore has two
 //! sections instead of the old `envelope`+`kinds`:
 //!
-//! - `hub`: every rtc method of `horizon-sessiond`'s `SessionHub` mapped to
+//! - `hub`: every rtc method of `horizon-agentd`'s `SessionHub` mapped to
 //!   its request/reply payload types (`hello`'s `ClientHello`→`HubHello`, the
 //!   agent attach calls, `drain`).
 //! - `terminal_hub`: the same for `horizon-terminald`'s `TerminalHub`
@@ -120,7 +120,7 @@ fn generate_wire_schema() -> Value {
         },
     });
 
-    // `horizon-sessiond`'s hub: the agent domain.
+    // `horizon-agentd`'s hub: the agent domain.
     let hub = json!({
         "hello": {
             "request": generator.subschema_for::<ClientHello>().to_value(),
@@ -170,7 +170,7 @@ fn generate_wire_schema() -> Value {
         "title": "horizon-session-wire",
         "$comment": "Generated from the live wire types (the SessionHub rtc trait and the \
                      vocabularies its channels carry). Regenerate with \
-                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond \
+                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agentd \
                      wire_schema`; additive-vs-reshape classification of changes is \
                      scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
         PROTOCOL_VERSION_KEY: SESSION_PROTOCOL_VERSION,
@@ -275,14 +275,14 @@ fn committed_wire_schema_artifact_is_current() {
         panic!(
             "failed to read the committed wire-schema artifact at {}: {error}\n\
              regenerate it with: HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run \
-             -p horizon-sessiond wire_schema",
+             -p horizon-agentd wire_schema",
             path.display()
         )
     });
     assert_eq!(
         committed, generated,
         "the committed wire-schema artifact is stale. A wire type changed shape; \
-         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond \
+         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agentd \
          wire_schema` and commit the artifact diff alongside the change \
          (scripts/check-wire-schema.sh classifies it as additive or reshape)."
     );

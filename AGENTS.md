@@ -22,17 +22,17 @@ cargo run
 
 `cargo build --workspace` is the canonical build command: `cargo run` alone
 only rebuilds the root `horizon` binary, and Horizon's sessions run inside
-**two** daemons Horizon spawns on demand — `horizon-sessiond`
-(`crates/horizon-sessiond`) hosts agent sessions, `horizon-terminald`
+**two** daemons Horizon spawns on demand — `horizon-agentd`
+(`crates/horizon-agentd`) hosts agent sessions, `horizon-terminald`
 (`crates/horizon-terminald`) owns every PTY (see
 `docs/agent-runtime-split-design.md` and `docs/terminald-split-design.md`).
 If either binary was never built (or is stale after a change on its side),
 `cargo run` still starts Horizon but that domain's panes fail to spawn a
 runtime — run `cargo build --workspace` first (and again after touching
-`crates/horizon-agent`/`crates/horizon-sessiond`, or
+`crates/horizon-agent`/`crates/horizon-agentd`, or
 `crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
 matching reload command from the command palette to retry:
-`Reload Session Runtime` restarts the agent daemon and leaves terminals
+`Reload Agent Runtime` restarts the agent daemon and leaves terminals
 alone, `Reload Terminal Runtime` restarts the terminal daemon and is
 explicitly destructive (every terminal session, and whatever is running in
 it, ends).
@@ -52,7 +52,7 @@ instead of the default one** (`cargo nextest run --profile sandboxed
 --workspace --locked`; the other three steps are unchanged). 63 tests
 verify the host boundary the sandbox enforces — they bind real sockets,
 write to literal `/tmp`, need directories outside any repository, or
-spawn a real `horizon-sessiond` — so they cannot pass from inside
+spawn a real `horizon-agentd` — so they cannot pass from inside
 containment, and making them pass would mean removing the containment
 they verify. The profile skips exactly those (`.config/nextest.toml`
 lists them with reasons); the integrator running the default profile
@@ -77,12 +77,12 @@ artifact (`crates/horizon-session-protocol/schema/session-wire.json`)
 against the merge-base's copy and fails on any non-additive change that
 doesn't bump `SESSION_PROTOCOL_VERSION` with it. If you changed a wire
 type, regenerate the artifact first:
-`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond
+`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agentd
 wire_schema` (a stale artifact is itself a red nextest test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the
-`horizon-sessiond`/`horizon-terminald`/`horizon-agent` crates. nextest runs
+`horizon-agentd`/`horizon-terminald`/`horizon-agent` crates. nextest runs
 each test in its own process (no cross-test env leakage) but does not run
 doctests; the workspace currently has none — add `cargo test --doc` here if
 that changes.
@@ -171,11 +171,11 @@ re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
 derived terminal colors) and `[keybindings]` (built-in defaults plus every
 chord/command override, unbinding whatever the previous apply's chords
 were first — see `workspace::apply_bindings`) live; `[provider]` picks up
-on `Reload Session Runtime` (a fresh `horizon-sessiond` process re-reads
+on `Reload Agent Runtime` (a fresh `horizon-agentd` process re-reads
 the file, no full UI restart needed). `[terminal]`/`[ui]` are read once at
 UI startup and need a full restart. See `config.example.toml` at the repo
 root for every knob, and `crates/horizon-config` for the loader (the
-single file-schema/parse/path-resolution owner; `horizon-sessiond` depends
+single file-schema/parse/path-resolution owner; `horizon-agentd` depends
 on it directly, and `horizon-agent` takes the resolved `[provider]` values
 as plain arguments rather than parsing the file itself — see that crate's
 `config` module doc).
@@ -196,7 +196,7 @@ distinct from `HORIZON_GPUI_DRIVE`, which bypasses that pipeline entirely
 
 `scripts/check-workspace-restore.sh` is the isolated UI-restart recovery
 check: it creates two terminal tabs plus a split, restarts the UI against the
-same sessiond and persisted workspace, and verifies stable session ids,
+same agentd and persisted workspace, and verifies stable session ids,
 layout, and a restored terminal frame.
 
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
@@ -241,7 +241,7 @@ The shell is GPUI-based (the Floem shell retired at tag
 - `agent/` — the agent pane: per-session model entities (`session.rs`, folding
   events through the shared `LiveState`), and the view (Markdown transcript, composer,
   approvals). Contract/providers/tools/persistence live in
-  `crates/horizon-agent`, hosted by `crates/horizon-sessiond` — see
+  `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
   `docs/agent-runtime-split-design.md`.
 - `palette.rs` / `session_manager.rs` / `view_chooser.rs` — the control
   surface modals, all delegates over gpui-component's searchable List.

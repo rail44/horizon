@@ -39,7 +39,7 @@ pub enum NetworkPolicy {
 
 /// A command's sandbox policy: writable roots, readable scope, network
 /// posture. Constructed by the caller (the future tool-call spawn site in
-/// `horizon-sessiond`); this crate only ever consumes it. `Serialize`/
+/// `horizon-agentd`); this crate only ever consumes it. `Serialize`/
 /// `Deserialize` back both backends' exec-helper handoff (the policy crosses
 /// a process boundary as JSON -- see `linux::spawn`, `macos::spawn`, and
 /// `src/bin/horizon-sandbox-helper.rs`).

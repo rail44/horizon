@@ -29,7 +29,7 @@ pub(crate) struct Provider {
     /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
     /// session's own dedicated rig thread (`start_session`/
     /// `spawn_rig_session`), which blocks on it (never this method, and
-    /// never sessiond's async accept loop) until the event-log writer's own
+    /// never agentd's async accept loop) until the event-log writer's own
     /// rebuild-or-open decision is known.
     duckdb_cell: SharedDuckdbStore,
 }

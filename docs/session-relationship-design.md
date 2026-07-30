@@ -147,7 +147,7 @@ that's sent over the wire -- so the model and the daemon never disagree
 on what a session's root is. Two scope calls worth recording: (1) it's
 agent-only for now -- terminal sessions have no `workspace_root` sourcing
 mechanism to read from yet (the pid-sampling cwd inheritance in
-`horizon-sessiond::terminal::resolve_cwd` is spawn-time-only and keyed by
+`horizon-agentd::terminal::resolve_cwd` is spawn-time-only and keyed by
 *terminal* session id, not exposed to the shell), so a terminal active
 session simply disables the command rather than fabricating an
 approximate answer. The original second limitation (no persistence across a
@@ -156,7 +156,7 @@ Per-row "open its directory" on an arbitrary session (decision 4b) landed
 alongside the lineage view itself -- see below.
 
 Decisions 1-3 and 5's core landed: the lineage tree lives daemon-side, in
-`horizon-sessiond`'s in-memory `SessionEntry` (`parent_session_id`/
+`horizon-agentd`'s in-memory `SessionEntry` (`parent_session_id`/
 `workspace_root`/`worktree`) -- additive over the wire as `SessionSummary.
 parent_session_id`/`workspace_root` and `SessionNew.spawn_source_session_id`/
 `isolate` (no `CONTRACT_VERSION` bump). An isolated spawn gets a real git worktree
@@ -180,7 +180,7 @@ creation resolves *after* `Control::SessionNew` already returned (it's
 real IO on the new session's own thread), so the shell's pre-spawn
 `workspace_root` value is only ever the inherited-cwd guess for an
 isolated session, not the real worktree path. `SessionSummary.
-workspace_root` is `horizon-sessiond`'s authoritative answer once
+workspace_root` is `horizon-agentd`'s authoritative answer once
 resolved; `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore`
 (the two places the shell already re-lists sessions from the daemon) now
 overwrite the model's stored root with it, so `OpenTerminalInSessionDirectory`
@@ -188,7 +188,7 @@ opens the real worktree once one of those sweeps has run.
 
 2026-07-19 dogfooding fix: the "still eventual, not live" gap above is
 closed. `resolve_and_create_isolated_worktree`
-(`crates/horizon-sessiond/src/session.rs`) now pushes a session-scoped
+(`crates/horizon-agentd/src/session.rs`) now pushes a session-scoped
 `wire::Control::WorkspaceRootResolved { workspace_root, parent_session_id }`
 the moment isolation resolves, mirroring `Control::SessionModel`'s own
 live-announce shape and additive-`#[serde(default)]`/no-version-bump

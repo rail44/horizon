@@ -30,7 +30,7 @@ use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
 /// fields mean recall degrades to a clear error instead of a silent no-op
 /// or a silent "search everything".
 ///
-/// Only `horizon-sessiond`'s real session construction site
+/// Only `horizon-agentd`'s real session construction site
 /// (`session::run_session`) populates both fields. Every other
 /// `ToolSessionState` construction site -- this crate's own tests
 /// (`ToolSessionState::new`/`without_root`), and Horizon's UI-side
@@ -93,7 +93,7 @@ struct Inner {
     /// embedded builtins plus any `.horizon/skills/` discovered from the
     /// session's cwd, per `skills`' module doc (v2). Empty
     /// ([`SkillRegistry::default`]) at every construction site except the
-    /// one production call site (`horizon-sessiond`'s `session::run_session`),
+    /// one production call site (`horizon-agentd`'s `session::run_session`),
     /// which installs the real per-session registry via
     /// [`ToolSessionState::with_skills`] right after construction --
     /// mirroring how [`RecallContext`] is threaded in, except this seat is
@@ -111,7 +111,7 @@ struct Inner {
     /// doc -- it has no dependency on `horizon-config`), so it's injected
     /// post-construction the same way [`Self::with_skills`] injects the
     /// skill registry: the one production call site
-    /// (`horizon-sessiond`'s `session::run_session`, which resolves it via
+    /// (`horizon-agentd`'s `session::run_session`, which resolves it via
     /// `horizon_config::resolved_path()`) calls
     /// [`ToolSessionState::with_config_path`] right after construction.
     /// `None` everywhere else (this crate's own tests, Horizon's UI-side
@@ -126,7 +126,7 @@ struct Inner {
     /// 1: `policy::classify_call`). Deliberately *not* inferred from
     /// `workspace_root`'s path shape here (e.g. "lives under
     /// `.horizon/worktrees/`") -- the daemon already knows the real
-    /// outcome of its own worktree creation (see `horizon-sessiond`'s
+    /// outcome of its own worktree creation (see `horizon-agentd`'s
     /// `resolve_and_create_isolated_worktree`), so this is threaded in
     /// after construction the same way [`Self::with_skills`]/[`Self::
     /// with_config_path`] are, rather than re-derived. `false` everywhere
@@ -146,7 +146,7 @@ struct Inner {
     /// drain denied hosts) the same way `bash_cwd` already crosses that
     /// boundary. Injected post-construction the same way [`Self::
     /// with_skills`]/[`Self::with_config_path`] are: the one production
-    /// call site (`horizon-sessiond`'s `session::run_session`) is the only
+    /// call site (`horizon-agentd`'s `session::run_session`) is the only
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
     network: Option<Arc<SessionNetworkProxy>>,
@@ -162,14 +162,14 @@ struct Inner {
     /// explicitly installs one via [`Self::with_judge`]) -- see
     /// `JudgeHandle::new`. Injected post-construction the same way
     /// [`Self::with_network_proxy`] is: the one production call site
-    /// (`horizon-sessiond`'s `session::run_session`) is the only place that
+    /// (`horizon-agentd`'s `session::run_session`) is the only place that
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
     judge: Option<Arc<JudgeHandle>>,
     /// This session's handle onto the daemon's spawn/subscribe/terminate
     /// capability for parallel exploration sessions (`tools::explore`,
     /// `docs/agent-explore-design.md`). Injected post-construction the same
-    /// way [`Self::judge`]/[`Self::network`] are: only `horizon-sessiond`'s
+    /// way [`Self::judge`]/[`Self::network`] are: only `horizon-agentd`'s
     /// `session::run_session` can host a peer session, and only it knows
     /// this session's workspace root and provider -- both of which the
     /// exploration must share. `None` (every construction site in this
@@ -231,7 +231,7 @@ impl ToolSessionState {
     }
 
     /// Installs this session's real skill registry after construction --
-    /// the one production call site (`horizon-sessiond`'s
+    /// the one production call site (`horizon-agentd`'s
     /// `session::run_session`) uses this to attach the per-session
     /// [`SkillRegistry::discover`] result once it's built, without adding a
     /// parameter to [`Self::for_current_dir`] (see [`Inner::skills`]'s doc
@@ -287,7 +287,7 @@ impl ToolSessionState {
     }
 
     /// Installs the domain store also passed to
-    /// [`SessionNetworkProxy::start_with_policy`] by sessiond.
+    /// [`SessionNetworkProxy::start_with_policy`] by agentd.
     pub fn with_domain_policy(mut self, domains: SessionDomainPolicy) -> Self {
         if let Some(inner) = Rc::get_mut(&mut self.inner) {
             inner.domains = domains;
@@ -360,7 +360,7 @@ impl ToolSessionState {
     /// never a fallback root that fails open. `tools` is the resolved
     /// `[agent]` tool tuning, and `recall` is this session's recall context
     /// (see [`RecallContext`]) -- both passed in by the caller
-    /// (`horizon-sessiond`'s `session::run_session`, the one production call
+    /// (`horizon-agentd`'s `session::run_session`, the one production call
     /// site) rather than resolved here — this crate can't read Horizon's
     /// config file itself (see `config`'s module doc), and the caller has
     /// already resolved a full `AgentConfig` (and knows its own session id)
@@ -398,7 +398,7 @@ impl ToolSessionState {
     /// starts with them writable and a write inside one is never a boundary
     /// crossing. Same construction-time-only safety contract as
     /// [`Self::with_skills`]/[`Self::with_config_path`]: the one production
-    /// call site is `horizon-sessiond`'s `session::run_session`, which is
+    /// call site is `horizon-agentd`'s `session::run_session`, which is
     /// also the only place that can resolve this session's project root.
     ///
     /// Grants that no longer revalidate are dropped here rather than
@@ -523,8 +523,8 @@ pub struct SessionRuntime {
 
 thread_local! {
     // LiveState's inner Rc<RefCell<..>> is confined to a single thread, so
-    // this registry is too. It bridges `horizon-sessiond`'s session loop
-    // (`crates/horizon-sessiond/src/session.rs`, where a session's runtime
+    // this registry is too. It bridges `horizon-agentd`'s session loop
+    // (`crates/horizon-agentd/src/session.rs`, where a session's runtime
     // is created via `register_session_runtime`) and the approve/deny
     // command handling on that same thread, which don't otherwise share
     // scope.

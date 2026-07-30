@@ -68,9 +68,9 @@ The full path of one scroll tick today:
 2. `send_scroll` (`src/terminal/session.rs:356`) dispatches
    `TerminalCommand::Scroll(TerminalScroll { lines, point })` onto the
    attachment's `commands` mpsc sender.
-3. The daemon receives it (`crates/horizon-sessiond/src/hub.rs`, the
+3. The daemon receives it (`crates/horizon-agentd/src/hub.rs`, the
    per-subscriber `command_rx` pump → `terminals.handle_command`), demuxes
-   it in `run_writer` (`crates/horizon-sessiond/src/terminal.rs:611`) onto
+   it in `run_writer` (`crates/horizon-agentd/src/terminal.rs:611`) onto
    `scroll_tx`, and the session loop's `scroll_rx` arm
    (`crates/horizon-terminal-core/src/session_loop.rs:217`) calls
    `core.handle_scroll`.
@@ -319,7 +319,7 @@ Additive, under `docs/remoc-adoption-design.md` §4:
   `JsonSchema`; the committed artifact
   (`crates/horizon-session-protocol/schema/session-wire.json`, which strips
   `Unknown` catch-alls and documents only what a peer may legally *send*)
-  regenerates in `crates/horizon-sessiond/tests/wire_schema.rs`
+  regenerates in `crates/horizon-agentd/tests/wire_schema.rs`
   (`HORIZON_BLESS_WIRE_SCHEMA=1` to bless) and shows as reviewable diff text,
   waved through by the `x-session-protocol-version` bump. A new hub method
   would also land in the artifact's `hub` section (and must update the
@@ -465,10 +465,10 @@ phase and the cache/eviction phase are gone entirely:
 - `crates/horizon-terminal-core/src/core.rs`, `core/render.rs`,
   `session_loop.rs`, `types/frame.rs` — the emulator core, the viewport
   snapshot, the loop, the frame vocabulary.
-- `crates/horizon-sessiond/src/hub.rs`, `terminal.rs` — the per-subscriber
+- `crates/horizon-agentd/src/hub.rs`, `terminal.rs` — the per-subscriber
   channel bridges and the command demux.
 - `crates/horizon-session-protocol/src/lib.rs`, `schema_check.rs`,
-  `crates/horizon-sessiond/tests/wire_schema.rs`,
+  `crates/horizon-agentd/tests/wire_schema.rs`,
   `crates/horizon-session-protocol/schema/session-wire.json` — the attachment
   shape, version constants, the additive classifier, the committed artifact.
 - `src/terminal/mod.rs`, `session.rs`, `input.rs` — the client scroll path,

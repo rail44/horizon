@@ -2,9 +2,9 @@
 //! (`docs/terminald-split-design.md`). Owns every PTY and the terminal
 //! emulation loops (`horizon-terminal-core`), served over its own unix
 //! socket as the [`TerminalHub`] rtc trait — a sibling of, and completely
-//! independent from, `horizon-sessiond`'s agent hub.
+//! independent from, `horizon-agentd`'s agent hub.
 //!
-//! **Why this is a separate process.** `Reload Session Runtime` restarts the
+//! **Why this is a separate process.** `Reload Agent Runtime` restarts the
 //! agent runtime constantly (an agent-side rebuild, a `[provider]` change);
 //! before this split it also killed every PTY, taking the interactive CLIs
 //! running in them down with it, because one process hosted both. Two thirds
@@ -18,9 +18,9 @@
 //! terminald may be an older binary than the UI that connects to it, and the
 //! only honest response to a below-the-schema mismatch is a clean refusal
 //! naming `Reload Terminal Runtime` — never silent misbehavior (the tmux 3.6
-//! lesson; decision 6, implemented client-side in `src/sessiond/`).
+//! lesson; decision 6, implemented client-side in `src/agentd/`).
 //!
-//! **No persistence, no readiness gate.** Unlike sessiond, this daemon owns
+//! **No persistence, no readiness gate.** Unlike agentd, this daemon owns
 //! no event log and no DuckDB projection, so there is nothing to resume at
 //! startup and nothing to flush on drain: bind, accept, serve. A terminal
 //! session's whole state lives in its PTY and its emulator, and the
@@ -60,7 +60,7 @@ use tokio::net::{UnixListener, UnixStream};
 const BINARY_ID: &str = concat!("horizon-terminald/", env!("CARGO_PKG_VERSION"));
 
 /// How long an accepted connection gets to complete the remoc (chmux)
-/// handshake before the daemon gives up on it — the same bound sessiond
+/// handshake before the daemon gives up on it — the same bound agentd
 /// applies, for the same reason: a peer that is not speaking chmux (a port
 /// scanner, a stale generation) must not wedge the one-at-a-time accept
 /// loop for chmux's raw 60 s.
@@ -106,14 +106,14 @@ async fn run(
 
 /// One connection at a time by construction: [`run`]'s accept loop awaits
 /// this to completion before accepting the next connection (multi-client
-/// support is explicitly out of scope, exactly as for sessiond). Establish
+/// support is explicitly out of scope, exactly as for agentd). Establish
 /// the remoc connection (bounded by [`CONNECT_TIMEOUT`]), hand the client
 /// its `TerminalHubClient` over the base channel, then serve the [`Hub`]
 /// with per-call task spawning until the client goes away.
 ///
 /// A dropped connection is *not* a session lifecycle event: the terminals
 /// keep running (process-scoped), which is the whole point — a UI restart,
-/// or a `Reload Session Runtime` that happens to reconnect everything, finds
+/// or a `Reload Agent Runtime` that happens to reconnect everything, finds
 /// them alive and re-attaches.
 async fn handle_connection(stream: UnixStream, terminals: TerminalHost) -> anyhow::Result<()> {
     let (read_half, write_half) = stream.into_split();

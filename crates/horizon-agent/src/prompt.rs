@@ -49,7 +49,7 @@ impl SessionEnvironment {
     /// is `workspace_root` -- an isolated session's isolated worktree, or a
     /// plain shared directory, already resolved by the caller
     /// (`contract::StartSession::workspace_root`, threaded in by
-    /// `horizon-sessiond`'s `session::run_session`). Falls back to this
+    /// `horizon-agentd`'s `session::run_session`). Falls back to this
     /// process's own `cwd` only when `workspace_root` is `None` (a session
     /// with no workspace concept at all), and to `/` if even that can't be
     /// read (rare -- e.g. the directory was removed out from under the

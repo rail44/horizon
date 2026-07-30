@@ -22,7 +22,7 @@ use crate::view_chooser::Placement;
 ///
 /// This used to run on the *session*-runtime reload path, where it was pure
 /// collateral damage — the daemon restart killed the PTYs whether the user
-/// wanted it or not. Since the split, `Reload Session Runtime` leaves
+/// wanted it or not. Since the split, `Reload Agent Runtime` leaves
 /// terminals alone entirely and this belongs to the one command that is
 /// explicitly destructive.
 fn prepare_workspace_for_terminal_runtime_reload(workspace: &mut Workspace) {
@@ -42,7 +42,7 @@ fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> b
         && !(failed
             && matches!(
                 id,
-                CommandId::ReloadSessionRuntime | CommandId::ReloadTerminalRuntime
+                CommandId::ReloadAgentRuntime | CommandId::ReloadTerminalRuntime
             ))
 }
 
@@ -161,7 +161,7 @@ impl WorkspaceShell {
             // sessions, their entities, and their pane views all stay
             // exactly where they are, so the shells running inside them
             // never notice (`docs/terminald-split-design.md` decision 2).
-            CommandId::ReloadSessionRuntime => {
+            CommandId::ReloadAgentRuntime => {
                 if self.reload_in_progress {
                     return;
                 }
@@ -184,7 +184,7 @@ impl WorkspaceShell {
                     !matches!(view, PaneView::Composite(CompositePane::Agent(_)))
                 });
                 cx.notify();
-                self.reload_session_runtime(old, cx);
+                self.reload_agent_runtime(old, cx);
             }
             CommandId::ReloadTerminalRuntime => {
                 if self.reload_in_progress {
@@ -442,7 +442,7 @@ mod tests {
         assert!(command_blocked_by_restore(
             true,
             false,
-            CommandId::ReloadSessionRuntime
+            CommandId::ReloadAgentRuntime
         ));
         assert!(command_blocked_by_restore(
             true,
@@ -453,7 +453,7 @@ mod tests {
         assert!(!command_blocked_by_restore(
             true,
             true,
-            CommandId::ReloadSessionRuntime
+            CommandId::ReloadAgentRuntime
         ));
         assert!(!command_blocked_by_restore(
             true,

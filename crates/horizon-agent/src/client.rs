@@ -1,13 +1,13 @@
-//! Horizon-side client for `horizon-sessiond`: spawn-or-connect (decision 4 in
+//! Horizon-side client for `horizon-agentd`: spawn-or-connect (decision 4 in
 //! `docs/agent-runtime-split-design.md`). Transport-agnostic on purpose --
 //! this module hands back a raw, connected `UnixStream`; the v10 remoc
 //! connection (and the `hello` range negotiation that rides it as the
-//! first rtc call) is owned by the shared `src/sessiond` runtime.
+//! first rtc call) is owned by the shared `src/agentd` runtime.
 //!
-//! `horizon-sessiond` is the *only* place agent sessions run -- there is no
+//! `horizon-agentd` is the *only* place agent sessions run -- there is no
 //! in-process fallback or daemon feature flag.
 //!
-//! Horizon has no process-wide Tokio runtime; `src/sessiond` owns a dedicated
+//! Horizon has no process-wide Tokio runtime; `src/agentd` owns a dedicated
 //! current-thread runtime on a background OS thread so a slow or failing
 //! daemon never blocks window startup.
 
@@ -18,24 +18,24 @@ use tokio::net::UnixStream;
 
 /// Starting delay for [`connect_or_spawn_retrying`]'s exponential backoff
 /// (doubling, capped at 1s -- see that function). Verified still generous
-/// after `horizon-sessiond`'s bind-first startup fix (it binds the socket
+/// after `horizon-agentd`'s bind-first startup fix (it binds the socket
 /// as its first action, before reading its event log or resuming any
 /// session -- see that binary's `main` module doc): a freshly spawned
-/// sessiond's `connect` now succeeds within milliseconds of process start
+/// agentd's `connect` now succeeds within milliseconds of process start
 /// regardless of event-log size, since nothing before `bind_listener`
 /// touches the log.
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
-/// The binary name `horizon-sessiond` is spawned as/looked up as -- see
+/// The binary name `horizon-agentd` is spawned as/looked up as -- see
 /// [`resolve_daemon_binary`].
-const SESSIOND_BINARY_NAME: &str = "horizon-sessiond";
+const SESSIOND_BINARY_NAME: &str = "horizon-agentd";
 
 /// [`SESSIOND_BINARY_NAME`]'s terminal-daemon sibling
 /// (`docs/terminald-split-design.md` decision 1): same spawn-or-connect
 /// shape, same discovery rules, a different process on a different socket.
 const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
 
-/// Connects immediately when sessiond is already listening; otherwise starts
+/// Connects immediately when agentd is already listening; otherwise starts
 /// it once and keeps retrying with capped backoff until its socket is ready.
 /// The Horizon-side shared runtime owns the handshake and all routing after
 /// this returns.
@@ -99,7 +99,7 @@ fn spawn_daemon(
 
 /// Builds the `<daemon> --socket <path>` command [`spawn_daemon`] spawns,
 /// injecting `HORIZON_SOCKET` into its environment so the daemon's own
-/// children (sessiond's `bash` tool, terminald's PTY shells, and anything
+/// children (agentd's `bash` tool, terminald's PTY shells, and anything
 /// else they shell out to) default to targeting *this* Horizon instance's
 /// control socket -- `docs/cli-control-plane-design.md`'s "Discovery"
 /// decision. Split out from `spawn_daemon` so the env injection is directly
@@ -124,7 +124,7 @@ fn daemon_command(
 /// through `PATH` (an installed deployment, or a developer who's put it
 /// there themselves). The dev-flow gotcha this exists for: `cargo run`
 /// alone only rebuilds the `horizon` binary, and `target/debug` is not on
-/// `PATH` by default, so a bare `Command::new("horizon-sessiond")` would
+/// `PATH` by default, so a bare `Command::new("horizon-agentd")` would
 /// reliably fail to find a workspace build even though one exists two
 /// directories away -- see [`spawn_daemon`]'s error message for the
 /// resulting actionable hint when neither location has it.
@@ -147,7 +147,7 @@ mod tests {
     #[test]
     fn daemon_command_injects_the_control_socket_env_var() {
         let command = daemon_command(
-            Path::new("/usr/bin/horizon-sessiond"),
+            Path::new("/usr/bin/horizon-agentd"),
             Path::new("/tmp/x.sock"),
             Path::new("/tmp/horizon-control-test.sock"),
         );
@@ -173,7 +173,7 @@ mod tests {
             resolve_daemon_binary(SESSIOND_BINARY_NAME)
                 .file_name()
                 .unwrap(),
-            std::ffi::OsStr::new("horizon-sessiond")
+            std::ffi::OsStr::new("horizon-agentd")
         );
         assert_eq!(
             resolve_daemon_binary(TERMINALD_BINARY_NAME)

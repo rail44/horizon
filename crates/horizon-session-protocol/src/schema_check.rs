@@ -6,7 +6,7 @@
 //!
 //! The division of labor:
 //!
-//! - `crates/horizon-sessiond/tests/wire_schema.rs` regenerates the schema
+//! - `crates/horizon-agentd/tests/wire_schema.rs` regenerates the schema
 //!   from the live wire types and fails on any drift from the committed
 //!   artifact (`crates/horizon-session-protocol/schema/session-wire.json`),
 //!   so every wire change is visible, reviewable text in its PR diff.

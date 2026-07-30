@@ -22,7 +22,7 @@
 //!   `horizon-agent` (`tools::network::SessionNetworkProxy`) on its own
 //!   dedicated tokio runtime -- not stood up per command (the cost profile
 //!   the sandbox survey rejected for `srt`), and no longer one shared
-//!   instance per `horizon-sessiond` process (leg 4a's shape): a per-session
+//!   instance per `horizon-agentd` process (leg 4a's shape): a per-session
 //!   allowlist is what makes an approved domain scoped to the session that
 //!   approved it, with zero cross-session leakage. This crate itself is
 //!   unaware of "session" as a concept -- it provides the standalone proxy,

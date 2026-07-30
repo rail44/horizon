@@ -69,14 +69,14 @@ pub struct ToolCallId(pub String);
 /// `OccurrenceId` is the second key. It is stamped on every
 /// `ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows
 /// out of Horizon. `#[serde(default)]` on the field sites means a peer (older
-/// sessiond, replayed pre-feature log) that never minted one decodes cleanly
+/// agentd, replayed pre-feature log) that never minted one decodes cleanly
 /// with `None`, and the consumers fall back to call_id + position scanning
 /// (`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is
 /// additive and needs no `SESSION_PROTOCOL_VERSION` bump.
 ///
 /// The string itself is a UUID v4 minted at the first emission point in
 /// `providers::rig::mapping::rig_tool_call_request` (and at
-/// `sessiond::session::approval::begin_reissued_approval` for reissues) --
+/// `horizon_agentd::session::approval::begin_reissued_approval` for reissues) --
 /// not the provider-supplied `call_id`, not a per-process counter, so a
 /// resumed session and a replayed log line up on the same value without any
 /// shared counter to coordinate.
@@ -228,8 +228,8 @@ pub enum Event {
     /// makes the placeholder's "re-fetch via recall" pointer honest.
     HistoryCleared(HistoryCleared),
     /// A human resolved a pending `ApprovalRequested`. Emitted at the
-    /// sessiond seam where `Command::ApproveToolCall`/`DenyToolCall` lands
-    /// in `dispatch_inbound_command` (`crates/horizon-sessiond/src/session/
+    /// agentd seam where `Command::ApproveToolCall`/`DenyToolCall` lands
+    /// in `dispatch_inbound_command` (`crates/horizon-agentd/src/session/
     /// approval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the
     /// resolution may then go on to produce — so the audit row exists
     /// regardless of which `ApprovalOutcome` variant `resolve_approval`
@@ -266,7 +266,7 @@ pub enum Event {
     /// A human resumed a turn the turn-loop guard halted via
     /// `Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-
     /// halts-real-work.md`'s decision 3 — "Continue is one action").
-    /// Emitted at the same sessiond seam as `ApprovalResolved`.
+    /// Emitted at the same agentd seam as `ApprovalResolved`.
     /// `resumed_from` carries the `TurnEndReason` of the most recent
     /// `TurnEnded` event in this session's frame at the moment of
     /// dispatch — `AgentFrame::last_turn_end_reason` is the accessor —
@@ -391,7 +391,7 @@ pub struct ProviderEvent {
     /// this is `Some`, it's folded as sidecar state rather than a frame item
     /// (`live::State::session_model`), and it's excluded from the persisted
     /// event log the same way (see `LiveState::extend_provider_events`).
-    /// Sent once, session-scoped, by `horizon-sessiond` at session start or
+    /// Sent once, session-scoped, by `horizon-agentd` at session start or
     /// (re)attach (`wire::AgentWireEvent::SessionModel`) -- see
     /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     pub session_model: Option<String>,
@@ -852,7 +852,7 @@ impl ToolCallResult {
 pub struct ApprovalRequest {
     pub call_id: ToolCallId,
     /// Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the
-    /// sessiond on every approval it emits (initial + every reissue) so the
+    /// agentd on every approval it emits (initial + every reissue) so the
     /// approval attaches to the specific occurrence the user is deciding,
     /// not just to a call_id that may have already been resolved by an
     /// earlier occurrence. See [`ToolCallRequest::occurrence_id`] for
@@ -1073,7 +1073,7 @@ pub trait Provider: Send + Sync {
     /// going to call one (the rig provider's deterministic fallback mode,
     /// used when no API key is configured -- see
     /// `providers::rig::Provider::resolved_model`'s doc comment). Used by
-    /// `horizon-sessiond` to surface a session's model to the UI from
+    /// `horizon-agentd` to surface a session's model to the UI from
     /// session start, ahead of any turn's `Event::ProviderRequestSent` --
     /// see `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String>;
@@ -1101,7 +1101,7 @@ impl ProviderRegistry {
 
     /// `duckdb_cell` is shared with (a clone of) whatever else in the
     /// process needs the same live DuckDB projection handle once it exists
-    /// (`horizon-sessiond`'s `SessiondState`, for the recall tools) -- see
+    /// (`horizon-agentd`'s `SessiondState`, for the recall tools) -- see
     /// `persistence::projection::duckdb::SharedDuckdbStore`'s doc comment.
     /// It's threaded in here (rather than resolved internally) because this
     /// registry -- and the rig provider it constructs -- is built at
@@ -1133,7 +1133,7 @@ impl ProviderRegistry {
     /// dispatching to the provider -- an unresolvable role id returns
     /// `None` here exactly like an unknown `provider_id` does, so a caller
     /// that already treats `None` as "fail loudly, don't start a role-less
-    /// session instead" (see `roles`'s module doc; `horizon-sessiond`'s
+    /// session instead" (see `roles`'s module doc; `horizon-agentd`'s
     /// `session::run_session` is the one production caller) gets that
     /// behavior for both failure modes without extra plumbing. This is the
     /// single choke point every session start goes through, so a role is
@@ -1163,7 +1163,7 @@ impl ProviderRegistry {
     /// Delegates to the named provider's [`Provider::resolved_model`].
     /// `None` for an unknown `provider_id` too -- same "nothing to report"
     /// shape as an unresolvable model, since the caller
-    /// (`horizon-sessiond`'s session spawn) already handles an unknown
+    /// (`horizon-agentd`'s session spawn) already handles an unknown
     /// provider as a hard session-start failure separately (see
     /// [`Self::start_session`]).
     pub fn resolved_model(

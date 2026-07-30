@@ -219,7 +219,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             AgentFrameItem::ApprovalRequested(request) => {
                 // Attribute to the entry that shares this approval's
                 // `occurrence_id` first (the per-occurrence identity the
-                // sessiond stamps on every reissue, see
+                // agentd stamps on every reissue, see
                 // `session/approval.rs::begin_reissued_approval`). For
                 // legacy `None` approvals (or replayed pre-feature logs)
                 // fall back to the prior `.rev()`-by-call_id semantic --
@@ -260,7 +260,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 // additive -- see `contract.rs`'s doc comment on
                 // `OccurrenceId`). It still uses the prior `.rev()`-
                 // by-call_id semantic; this is correct because the
-                // sessiond never reissues the same call_id's started
+                // agentd never reissues the same call_id's started
                 // signal without reissuing the request first, so the most
                 // recently requested entry is always the right target.
                 if let Some(entry) = building
@@ -283,7 +283,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 //   matches, not on the most recent request of that
                 //   call_id (which on provider-reuse is the *new* request,
                 //   the one the result does not answer to).
-                // * sandbox-denial-retry: sessiond's
+                // * sandbox-denial-retry: agentd's
                 //   `begin_reissued_approval` reissues the request with
                 //   a fresh `occurrence_id` (see
                 //   `session/approval.rs`). The first attempt's result
@@ -1279,7 +1279,7 @@ mod tests {
     }
 
     /// Domain-denial-retry shape, in the sequence the daemon actually
-    /// emits (`crates/horizon-sessiond/src/session/completion.rs`'s
+    /// emits (`crates/horizon-agentd/src/session/completion.rs`'s
     /// `fold_domain_denied` plus `tools::approval::
     /// resolve_domain_denial_retry`): a tier-1 auto-approved bash call
     /// starts, is refused a domain, and is *reissued* under the same
@@ -1329,7 +1329,7 @@ mod tests {
         ];
         let views = build_tool_call_views(&items);
         // Both attempts are visible -- two rows, same conceptual
-        // `call_id` (the sessiond reissues the id, only the occurrence is
+        // `call_id` (the agentd reissues the id, only the occurrence is
         // fresh).
         assert_eq!(views.len(), 2);
         assert_eq!(views[0].call_id, ToolCallId("bash:1".to_string()));

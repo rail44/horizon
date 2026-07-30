@@ -55,7 +55,7 @@ pub struct RawGrantsConfig {
 pub struct RawProjectGrant {
     /// The project's main-repository toplevel. A session working in a
     /// derived worktree of this repository resolves back to this root --
-    /// see `horizon-sessiond`'s `worktree::project_root`.
+    /// see `horizon-agentd`'s `worktree::project_root`.
     pub root: String,
     /// Directories granted read-write, as whole trees, to every session of
     /// this project.
