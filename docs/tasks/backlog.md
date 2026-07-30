@@ -74,7 +74,8 @@ entries live in `backlog-resolved.md` keeping their original numbers
 
 
 
-50. **Decide `Reload Session Runtime`'s residual auto-reseed.** The
+50. **[MOOT 2026-07-30 — terminald split] Decide `Reload Session
+    Runtime`'s residual auto-reseed.** The
     2026-07-19 empty-workspace correction removed auto-reseed from every
     termination path but deliberately kept `ensure_workspace_has_pane`
     in `reload_session_runtime` (killing every terminal session there is
@@ -82,6 +83,13 @@ entries live in `backlog-resolved.md` keeping their original numbers
     emptying the workspace on purpose — see its doc comment). Whether
     that distinction holds or reload should also restore-to-empty is an
     owner call; one small site either way.
+    **Moot as posed:** `Reload Session Runtime` no longer terminates a
+    single terminal session (`docs/terminald-split-design.md` decision 2),
+    so it never empties the workspace and never reseeds. The reseed moved,
+    unchanged, to `reload_terminal_runtime` — where the "operational side
+    effect, not a user emptying the workspace" reading is no longer a
+    judgement call but the literal contract of an explicitly destructive
+    command. Nothing left to decide.
 
 51. **Session-protocol version mismatch is treated as transient: the UI
     retries the hello forever instead of surfacing an actionable state.**
@@ -107,6 +115,38 @@ entries live in `backlog-resolved.md` keeping their original numbers
     Start at `src/sessiond/` (connect/hello retry, the startup
     operability gap) and the hello error surface in
     `crates/horizon-session-protocol`. Recorded 2026-07-19.
+    **Surface doubled 2026-07-30 (terminald split):** there are now two
+    daemons that can be stale independently, so this item's fix has to
+    cover both connections. What changed in its favour: the two runtimes'
+    failures no longer bleed into each other (separate route tables), the
+    remedy differs per daemon (`Reload Session Runtime` vs. the
+    destructive `Reload Terminal Runtime`), and a stale *terminald* is
+    much more likely than a stale sessiond because that daemon is
+    deliberately long-lived — which is also why the terminald connection
+    already refuses cleanly with a named remedy instead of retrying
+    forever (decision 6's post-hello probe). The sessiond side is still
+    as reported. Whoever takes this should read the terminald refusal
+    path first: it is the shape this item asks for, on one of the two
+    connections, and the honest question is whether the *presentation*
+    (an error event into panes plus stderr) is enough or a one-action
+    prompt is still wanted.
+
+70. **Carve the protocol crate's domain-free foundation out of
+    `horizon-session-protocol`.** After the terminald split
+    (`docs/terminald-split-design.md`), `horizon-terminald` depends on
+    `horizon-session-protocol` for the codec pin, version negotiation,
+    size caps, and its own `TerminalHub` — and that crate also names the
+    agent vocabulary, so `horizon-agent` (and therefore DuckDB) is in the
+    terminal daemon's link graph without one symbol being used. Runtime
+    independence is unaffected (separate process, socket, and hub trait);
+    the cost is conceptual plus a needless libduckdb link on the binary
+    whose whole point is being boring and long-lived. Shape: a small
+    domain-free `horizon-wire` crate (codec, `VersionRange`/`ClientHello`,
+    the `*_MAX_ITEM_BYTES` caps, `DecodeSkipLog`, `channel_schema`) that
+    both protocol crates depend on, with `horizon-session-protocol`
+    re-exporting it so no call site moves. Deliberately deferred out of
+    the split itself so the wire changed exactly once. Recorded
+    2026-07-30.
 
 65. **Verify `replace_all` retires the bash editing escapes.** Baseline,
     nineteen days of logs to 2026-07-26: 272 `fs.edit` calls, 9 editing

@@ -8,15 +8,18 @@
 //! Since the v10 remoc cutover (`docs/remoc-adoption-design.md`) these talk
 //! to the daemon over the actual `SessionHub` rtc trait on the actual unix
 //! socket, through the [`HubTestClient`] harness below: `hello` range
-//! negotiation, the terminal/agent attach calls returning channel-bearing
-//! attachments, and `drain`. Since v11 (§5 Option A) frame delivery is a
-//! snapshot-valued signal: the attachment's `frames` is an
-//! `rch::watch<TerminalFrame>` (full frames, latest-value) and its `events`
-//! mpsc carries the non-frame updates — so the terminal tests fold the watch
-//! toward a needle and assert a reattach reseeds the retained latest frame.
-//! Cross-generation recovery (a v10 UI meeting a JSONL daemon) is covered
-//! on the *client* side, in `src/sessiond/tests.rs`, where the runtime that
-//! owns the probe-drain-respawn sequence lives.
+//! negotiation, the agent attach calls returning channel-bearing
+//! attachments, and `drain`. Cross-generation recovery (a v10 UI meeting a
+//! JSONL daemon) is covered on the *client* side, in `src/sessiond/tests.rs`,
+//! where the runtime that owns the probe-drain-respawn sequence lives.
+//!
+//! **Terminals are not here any more.** The v17 split
+//! (`docs/terminald-split-design.md`) moved terminal hosting to
+//! `horizon-terminald`, so its e2e coverage — real PTYs, the frame watch, the
+//! attach/reseed dance — moved to `crates/horizon-terminald/tests/e2e.rs`
+//! with it. That file also owns the split's acceptance test, which spawns
+//! *both* daemons to prove a sessiond drain/respawn leaves a live terminald
+//! session attachable.
 //!
 //! The tests use a multi-thread runtime because the remoc chmux mux task
 //! must be polled concurrently with the test's own awaits (adoption
@@ -41,14 +44,9 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient,
-    VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
-    MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    CappedReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange,
+    WireCodec, CONTROL_MAX_ITEM_BYTES, MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
     TOOL_IO_MAX_ITEM_BYTES,
-};
-use horizon_terminal_core::{
-    TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
-    TerminalSummary, TerminalUpdate,
 };
 use remoc::rch;
 use tokio::net::UnixStream;
@@ -564,84 +562,6 @@ impl HubTestClient {
     }
 }
 
-const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
-
-/// The attachment's current frame — the watch's seed on attach (the
-/// daemon-retained latest frame), or the newest published frame.
-fn current_frame(
-    frames: &CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
-) -> TerminalFrame {
-    frames.borrow().expect("frame watch error").clone()
-}
-
-/// Reads the next non-frame event off an attachment's `events` channel, or
-/// panics on timeout/disconnect.
-async fn read_terminal_event(
-    events: &mut CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
-) -> TerminalUpdate {
-    tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, events.recv())
-        .await
-        .expect("timed out waiting for a terminal event")
-        .expect("terminal event channel error")
-        .expect("the daemon should keep the terminal attachment open")
-}
-
-async fn send_terminal_command(
-    commands: &rch::mpsc::Sender<TerminalCommand, WireCodec>,
-    command: TerminalCommand,
-) {
-    commands
-        .send(command)
-        .await
-        .expect("send a terminal command");
-}
-
-fn terminal_spec(
-    fallback_cwd: PathBuf,
-    spawn_source_session_id: Option<uuid::Uuid>,
-) -> TerminalSpawnSpec {
-    TerminalSpawnSpec {
-        shell: "/bin/sh".into(),
-        args: vec!["-i".into()],
-        term: "xterm-256color".into(),
-        scrollback_lines: 1_000,
-        color_scheme: TerminalColorScheme::default(),
-        control_socket: "/tmp/horizon-sessiond-e2e-control.sock".into(),
-        fallback_cwd,
-        spawn_source_session_id,
-        initial_size: TerminalSize::new(80, 24),
-    }
-}
-
-/// Folds the attachment's frame watch toward a frame whose text contains
-/// `needle`, returning it. Checks the current value first (the seed on
-/// attach), then awaits changes; the watch's latest-value semantics mean a
-/// slow reader skips intermediate frames and still converges on the needle.
-async fn collect_terminal_frame_until(
-    frames: &mut CappedWatchReceiver<TerminalFrame, FRAME_MAX_ITEM_BYTES>,
-    needle: &str,
-) -> TerminalFrame {
-    for _ in 0..1000 {
-        {
-            let frame = frames
-                .borrow_and_update()
-                .expect("frame watch error")
-                .clone();
-            if frame.text().contains(needle) {
-                return frame;
-            }
-        }
-        tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, frames.changed())
-            .await
-            .expect("timed out waiting for a terminal frame")
-            .expect("the frame watch closed before the needle arrived");
-    }
-    panic!(
-        "gave up waiting for {needle:?}; last frame: {:?}",
-        current_frame(frames).text()
-    );
-}
-
 /// Reads events from an agent attachment's channel until `predicate`
 /// matches one, returning every event observed (including the matching
 /// one), in arrival order. Skips the non-`Event` announcements
@@ -920,174 +840,6 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
         "horizon-sessiond should exit 0 after a post-rejection drain, got {status:?}"
     );
     conn_task.abort();
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socket() {
-    let sessiond = SessiondProcess::spawn();
-    let session_id = uuid::Uuid::new_v4();
-    let client = connect_hub(&sessiond.socket_path).await;
-
-    let mut attachment = client
-        .hub
-        .create_terminal(session_id, terminal_spec(std::env::temp_dir(), None))
-        .await
-        .expect("create should succeed");
-
-    send_terminal_command(
-        &attachment.commands,
-        TerminalCommand::Input(b"printf 'HORIZON_DIFF_MARKER\\n'\n".to_vec()),
-    )
-    .await;
-    // Full frames stream on the watch and converge on the marker.
-    let frame = collect_terminal_frame_until(&mut attachment.frames, "HORIZON_DIFF_MARKER").await;
-    assert!(frame.text().contains("HORIZON_DIFF_MARKER"));
-
-    // Disconnect this client entirely; the terminal session keeps running
-    // (process-scoped), so a fresh connection can reattach.
-    drop(attachment);
-    drop(client);
-
-    let client = connect_hub(&sessiond.socket_path).await;
-    let attachment = client
-        .hub
-        .attach_terminal(session_id)
-        .await
-        .expect("attach on a fresh connection should succeed");
-    // The reattach reseeds the full retained latest frame structurally: the
-    // watch's current value already carries the marker, with no snapshot
-    // request or baseline dance (§5 Option A).
-    let attached = current_frame(&attachment.frames);
-    assert!(
-        attached.text().contains("HORIZON_DIFF_MARKER"),
-        "attach must reseed the retained latest frame, got: {:?}",
-        attached.text()
-    );
-
-    let mut attachment = attachment;
-    send_terminal_command(
-        &attachment.commands,
-        TerminalCommand::Input(b"printf 'HORIZON_REATTACH_MARKER\\n'\n".to_vec()),
-    )
-    .await;
-    let reattached =
-        collect_terminal_frame_until(&mut attachment.frames, "HORIZON_REATTACH_MARKER").await;
-    assert!(reattached.text().contains("HORIZON_REATTACH_MARKER"));
-
-    send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
-    for _ in 0..20 {
-        if matches!(
-            read_terminal_event(&mut attachment.events).await,
-            TerminalUpdate::Exited
-        ) {
-            return;
-        }
-    }
-    panic!("terminal shutdown did not produce an exited event");
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
-    let sessiond = SessiondProcess::spawn();
-    let high_id = uuid::Uuid::from_u128(2);
-    let low_id = uuid::Uuid::from_u128(1);
-
-    let client = connect_hub(&sessiond.socket_path).await;
-    assert_eq!(client.hub.list_terminals().await.unwrap(), Vec::new());
-
-    // Create two terminals across two connections; both survive the
-    // disconnect (process-scoped sessions).
-    let high = client
-        .hub
-        .create_terminal(high_id, terminal_spec(std::env::temp_dir(), None))
-        .await
-        .unwrap();
-    // The attachment's frame watch carries a seed frame immediately.
-    let _ = current_frame(&high.frames);
-    drop(high);
-    drop(client);
-
-    let client = connect_hub(&sessiond.socket_path).await;
-    let low = client
-        .hub
-        .create_terminal(low_id, terminal_spec(std::env::temp_dir(), None))
-        .await
-        .unwrap();
-    let _ = current_frame(&low.frames);
-    drop(low);
-    drop(client);
-
-    let client = connect_hub(&sessiond.socket_path).await;
-    assert_eq!(
-        client.hub.list_terminals().await.unwrap(),
-        vec![
-            TerminalSummary { session_id: low_id },
-            TerminalSummary {
-                session_id: high_id
-            },
-        ]
-    );
-
-    let missing_id = uuid::Uuid::from_u128(3);
-    assert!(matches!(
-        client.hub.attach_terminal(missing_id).await,
-        Err(HubError::TerminalNotFound)
-    ));
-
-    let low = client.hub.attach_terminal(low_id).await.unwrap();
-    let high = client.hub.attach_terminal(high_id).await.unwrap();
-    send_terminal_command(&low.commands, TerminalCommand::Shutdown).await;
-    send_terminal_command(&high.commands, TerminalCommand::Shutdown).await;
-}
-
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
-    let sessiond = SessiondProcess::spawn();
-    let root = std::env::temp_dir().join(format!("hzn-cwd-e2e-{}", uuid::Uuid::new_v4()));
-    let source_cwd = root.join("source");
-    let fallback_cwd = root.join("fallback");
-    std::fs::create_dir_all(&source_cwd).unwrap();
-    std::fs::create_dir_all(&fallback_cwd).unwrap();
-    let source_cwd = source_cwd.canonicalize().unwrap();
-    let wide = TerminalSize::new(200, 24);
-
-    let source_id = uuid::Uuid::new_v4();
-    let target_id = uuid::Uuid::new_v4();
-    let client = connect_hub(&sessiond.socket_path).await;
-
-    let mut source_spec = terminal_spec(source_cwd.clone(), None);
-    source_spec.initial_size = wide;
-    let mut source = client
-        .hub
-        .create_terminal(source_id, source_spec)
-        .await
-        .unwrap();
-    send_terminal_command(
-        &source.commands,
-        TerminalCommand::Input(b"printf 'SOURCE_CWD:%s\\n' \"$PWD\"\n".to_vec()),
-    )
-    .await;
-    let source_needle = format!("SOURCE_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut source.frames, &source_needle).await;
-
-    let mut target_spec = terminal_spec(fallback_cwd.clone(), Some(source_id));
-    target_spec.initial_size = wide;
-    let mut target = client
-        .hub
-        .create_terminal(target_id, target_spec)
-        .await
-        .unwrap();
-    send_terminal_command(
-        &target.commands,
-        TerminalCommand::Input(b"printf 'TARGET_CWD:%s\\n' \"$PWD\"\n".to_vec()),
-    )
-    .await;
-    let target_needle = format!("TARGET_CWD:{}", source_cwd.display());
-    let _ = collect_terminal_frame_until(&mut target.frames, &target_needle).await;
-
-    send_terminal_command(&source.commands, TerminalCommand::Shutdown).await;
-    send_terminal_command(&target.commands, TerminalCommand::Shutdown).await;
-    std::fs::remove_dir_all(root).unwrap();
 }
 
 /// `new_agent` -> `UserMessage` -> the resulting events arrive over the

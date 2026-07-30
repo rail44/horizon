@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/horizon-agent",
     "crates/horizon-sessiond",
+    "crates/horizon-terminald",
     "crates/horizon-control",
     "crates/horizon-cli",
     "crates/horizon-session-protocol",

@@ -92,6 +92,12 @@ dump="$out/dump.txt"
 app_log="$out/app.log"
 sessiond_socket="$out/sessiond.sock"
 sessiond_binary="$(dirname "$binary")/horizon-sessiond"
+# The terminal pane this script drives lives in horizon-terminald since the
+# v17 split (docs/terminald-split-design.md), so it needs its own isolated
+# socket and its own cleanup -- a leaked terminald would keep the check's
+# PTY alive after the run.
+terminald_socket="$out/terminald.sock"
+terminald_binary="$(dirname "$binary")/horizon-terminald"
 
 marker="HORIZON_GPUI_CHECK_MARKER"
 # A single line, typed verbatim as PTY input (this script never
@@ -111,6 +117,9 @@ cleanup() {
   while read -r pid; do
     [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
   done < <(pgrep -f "^${sessiond_binary} --socket ${sessiond_socket}$" 2>/dev/null || true)
+  while read -r pid; do
+    [[ -n "$pid" ]] && kill "$pid" 2>/dev/null || true
+  done < <(pgrep -f "^${terminald_binary} --socket ${terminald_socket}$" 2>/dev/null || true)
 }
 trap cleanup EXIT
 
@@ -118,6 +127,7 @@ HORIZON_GPUI_DUMP="$dump" \
   HORIZON_GPUI_DRIVE="$drive_cmd" \
   HORIZON_GPUI_DRIVE_ENTER=1 \
   HORIZON_SESSIOND_SOCKET="$sessiond_socket" \
+  HORIZON_TERMINALD_SOCKET="$terminald_socket" \
   HORIZON_AGENT_EVENT_LOG="$out/events.jsonl" \
   HORIZON_AGENT_STATE_DB="$out/state.duckdb" \
   HORIZON_WORKSPACE_STATE="$out/workspace.json" \

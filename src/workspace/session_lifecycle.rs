@@ -1,9 +1,12 @@
-//! Session-creation and sessiond-runtime lifecycle: the one interactive
+//! Session-creation and daemon-runtime lifecycle: the one interactive
 //! and control-plane session-creation paths (`create_session`/
 //! `external_new_session`), pending-spawn staging consumed by
 //! `reconcile`, the startup/reload resume sweeps
 //! (`spawn_terminal_resume`/`spawn_agent_resume`/`spawn_workspace_restore`),
-//! `reload_session_runtime`, and the terminal-exit-to-terminate wiring
+//! the two independent reload paths (`reload_session_runtime` for
+//! `horizon-sessiond`, `reload_terminal_runtime` for `horizon-terminald` --
+//! see `docs/terminald-split-design.md` for why they must not be one), and
+//! the terminal-exit-to-terminate wiring
 //! (`wire_terminal_exit`/`handle_terminal_exited`). `reconcile` itself --
 //! bringing the session store and pane views in line with the model --
 //! lives here too, since every one of the above ends by calling it.
@@ -18,7 +21,7 @@ use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
-use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder};
+use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder, TerminaldHandle};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
@@ -140,10 +143,10 @@ impl WorkspaceShell {
                                     fallback_cwd: Self::default_terminal_cwd(),
                                 }
                             });
-                        let Some(sessiond) = self.sessiond.as_ref() else {
+                        let Some(terminald) = self.terminald.as_ref() else {
                             continue;
                         };
-                        let wire = sessiond
+                        let wire = terminald
                             .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
                         let exit_tx = self.terminal_exit_tx.clone();
                         self.sessions.insert(
@@ -231,11 +234,11 @@ impl WorkspaceShell {
                 self.workspace.pane_kind(pane_id),
                 Some(PaneKind::View(ViewKind::ThemeSettings))
             ) {
-                let sessiond = self.sessiond_slot.clone();
+                let terminald = self.terminald_slot.clone();
                 self.panes.insert(
                     pane_id,
                     PaneView::theme_settings(
-                        cx.new(|cx| ThemeSettingsView::new(sessiond, window, cx)),
+                        cx.new(|cx| ThemeSettingsView::new(terminald, window, cx)),
                     ),
                 );
             }
@@ -484,13 +487,25 @@ impl WorkspaceShell {
     /// Until this barrier opens, normal reconcile must not see the saved ids:
     /// it would interpret a missing entity as a request to create a new
     /// process with that id.
-    pub(super) fn spawn_workspace_restore(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
+    pub(super) fn spawn_workspace_restore(
+        &self,
+        handle: SessiondHandle,
+        terminal_handle: TerminaldHandle,
+        cx: &mut Context<Self>,
+    ) {
         let window_handle = self.window;
         let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
         let list_handle = handle.clone();
+        let list_terminal_handle = terminal_handle.clone();
         std::thread::spawn(move || {
+            // Two daemons, two inventories -- the cross-inventory conflict
+            // check below now compares reports from *different* processes
+            // (before the split one daemon reported both). Both must
+            // answer: a restore that adopted only half the sessions would
+            // let normal reconcile interpret the missing half as "create a
+            // new process with that id".
             let result = (|| {
-                let terminals = list_handle.terminal_list()?;
+                let terminals = list_terminal_handle.terminal_list()?;
                 let agents = list_handle.session_list()?;
                 Ok::<_, String>((terminals, agents))
             })();
@@ -518,6 +533,14 @@ impl WorkspaceShell {
                 .update(cx, |shell, _| {
                     let adopted = shell.sessiond.as_ref()?;
                     if !adopted.same_runtime(&handle) {
+                        return None;
+                    }
+                    // Both runtimes must still be the ones this restore
+                    // listed against -- a reload of *either* daemon while
+                    // the inventory was in flight invalidates the whole
+                    // restore, not half of it.
+                    let adopted_terminals = shell.terminald.as_ref()?;
+                    if !adopted_terminals.same_runtime(&terminal_handle) {
                         return None;
                     }
 
@@ -613,8 +636,9 @@ impl WorkspaceShell {
 
             let (attach_tx, mut attach_rx) = futures::channel::mpsc::unbounded();
             let attach_handle = handle.clone();
+            let attach_terminal_handle = terminal_handle.clone();
             std::thread::spawn(move || {
-                let terminals = attach_handle.attach_terminals(terminal_ids);
+                let terminals = attach_terminal_handle.attach_terminals(terminal_ids);
                 let agents = agent_ids
                     .into_iter()
                     .map(|id| {
@@ -637,6 +661,12 @@ impl WorkspaceShell {
                         return;
                     };
                     if !adopted.same_runtime(&handle) {
+                        return;
+                    }
+                    let Some(adopted_terminals) = shell.terminald.as_ref() else {
+                        return;
+                    };
+                    if !adopted_terminals.same_runtime(&terminal_handle) {
                         return;
                     }
 
@@ -707,7 +737,8 @@ impl WorkspaceShell {
                     // this push lands after the session it targets is
                     // already routable, the same ordering guarantee
                     // `Create` gets by carrying the scheme inline.
-                    adopted.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+                    adopted_terminals
+                        .broadcast_terminal_color_scheme(theme::terminal_color_scheme());
 
                     shell.restoring_workspace = false;
                     shell.workspace_restore_failed = false;
@@ -725,7 +756,7 @@ impl WorkspaceShell {
     /// terminal. Listing and attaching are split by a UI-thread comparison:
     /// the just-created terminal (and any session created while List is in
     /// flight) must not have its existing route replaced by an Attach.
-    pub(super) fn spawn_terminal_resume(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
+    pub(super) fn spawn_terminal_resume(&self, handle: TerminaldHandle, cx: &mut Context<Self>) {
         let window_handle = self.window;
         let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
         let list_handle = handle.clone();
@@ -739,7 +770,7 @@ impl WorkspaceShell {
             };
             let candidates = this
                 .update(cx, |shell, _| {
-                    let Some(adopted) = shell.sessiond.as_ref() else {
+                    let Some(adopted) = shell.terminald.as_ref() else {
                         return Vec::new();
                     };
                     if !adopted.same_runtime(&handle) {
@@ -769,7 +800,7 @@ impl WorkspaceShell {
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    let Some(adopted) = shell.sessiond.as_ref() else {
+                    let Some(adopted) = shell.terminald.as_ref() else {
                         return;
                     };
                     if !adopted.same_runtime(&handle) {
@@ -807,10 +838,16 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Drains the explicit old runtime on a background thread, then creates
-    /// exactly one fresh eager runtime and lists/loads persisted agents. The
-    /// caller has already removed terminal model sessions and dropped every
-    /// stale entity/view without sending semantic agent shutdown commands.
+    /// Drains the explicit old *agent* runtime on a background thread, then
+    /// creates exactly one fresh eager runtime and lists/loads persisted
+    /// agents. The caller has already dropped every stale agent entity and
+    /// agent pane view without sending semantic agent shutdown commands.
+    ///
+    /// Since the terminald split this touches nothing terminal-shaped: the
+    /// terminal daemon, its PTYs, this shell's `TerminalSession` entities and
+    /// their pane views all stay live across the whole sequence, so no
+    /// terminal resume sweep is needed either (there is nothing to
+    /// re-adopt — the attachments were never severed).
     pub(super) fn reload_session_runtime(
         &self,
         old: Option<SessiondHandle>,
@@ -837,15 +874,71 @@ impl WorkspaceShell {
                 return;
             }
             let _ = this.update(cx, |shell, cx| {
-                ensure_workspace_has_pane(&mut shell.workspace);
                 let (handle, host_tool_rx, workspace_root_rx) =
                     SessiondHandle::start(&restart_socket, &control_socket);
                 shell.sessiond = Some(handle.clone());
-                shell.sessiond_slot.set(Some(handle.clone()));
                 shell.reload_in_progress = false;
                 shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
                 shell.wire_workspace_root_updates(workspace_root_rx, cx);
                 shell.spawn_agent_resume(handle, cx);
+            });
+        })
+        .detach();
+    }
+
+    /// [`Self::reload_session_runtime`]'s terminal-daemon counterpart
+    /// (`docs/terminald-split-design.md` decision 3): drains the old
+    /// `horizon-terminald`, which kills every PTY it hosts, then starts a
+    /// fresh one and reseeds a pane so the workspace is not left empty by an
+    /// operational restart the user did not ask to empty it.
+    ///
+    /// The caller has already terminated the terminal *model* sessions
+    /// (`prepare_workspace_for_terminal_runtime_reload`) and dropped their
+    /// entities and views, so what follows is a clean bring-up. The resume
+    /// sweep still runs: if the old daemon refused to drain and the fresh
+    /// connection lands back on it, its surviving sessions are re-adopted
+    /// rather than orphaned.
+    pub(super) fn reload_terminal_runtime(
+        &self,
+        old: Option<TerminaldHandle>,
+        cx: &mut Context<Self>,
+    ) {
+        let socket_path = horizon_agent::socket::default_terminald_socket_path();
+        let restart_socket = socket_path.clone();
+        let control_socket = self.socket_path.clone();
+        let window_handle = self.window;
+        let (drained_tx, mut drained_rx) = futures::channel::mpsc::unbounded();
+        std::thread::spawn(move || {
+            if let Some(handle) = old {
+                if handle.begin_reload() {
+                    if let Err(error) = wait_for_drain(&socket_path) {
+                        eprintln!("horizon-terminald did not drain cleanly: {error}");
+                    }
+                }
+                handle.stop_and_wait();
+            }
+            let _ = drained_tx.unbounded_send(());
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            if drained_rx.next().await.is_none() {
+                return;
+            }
+            // Reconcile here rather than leaving it to the resume sweep:
+            // that sweep returns early when the fresh daemon reports no
+            // sessions (the normal case after a drain), which would leave
+            // the reseeded model pane without an entity or a view.
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    ensure_workspace_has_pane(&mut shell.workspace);
+                    let handle = TerminaldHandle::start(&restart_socket, &control_socket);
+                    shell.terminald = Some(handle.clone());
+                    shell.terminald_slot.set(Some(handle.clone()));
+                    shell.reload_in_progress = false;
+                    shell.reconcile(window, cx);
+                    shell.focus_active(window, cx);
+                    shell.spawn_terminal_resume(handle, cx);
+                });
             });
         })
         .detach();

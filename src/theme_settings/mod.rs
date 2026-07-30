@@ -91,23 +91,23 @@ pub(crate) struct ThemeSettingsView {
     status: Option<String>,
 
     _subscriptions: Vec<Subscription>,
-    /// A live-reading handle to `WorkspaceShell::sessiond`, so
+    /// A live-reading handle to `WorkspaceShell::terminald`, so
     /// [`Self::apply_live`] can re-push the live scheme to running
     /// terminal sessions on its own, without routing back through
-    /// `WorkspaceShell` -- see `SessiondHandle::
+    /// `WorkspaceShell` -- see `TerminaldHandle::
     /// broadcast_terminal_color_scheme`. Deliberately not a cloned
-    /// `Option<SessiondHandle>` captured once at construction: this view
-    /// can be (re)constructed while `Reload Session Runtime`'s async
-    /// drain is still in flight (`WorkspaceShell::sessiond` is `None`
+    /// `Option<TerminaldHandle>` captured once at construction: this view
+    /// can be (re)constructed while `Reload Terminal Runtime`'s async
+    /// drain is still in flight (`WorkspaceShell::terminald` is `None`
     /// then), and a plain clone would freeze on that `None` forever, since
     /// `reconcile` never rebuilds a pane view that already exists. See
-    /// `SessiondSlot`'s doc comment.
-    sessiond: crate::sessiond::SessiondSlot,
+    /// `TerminaldSlot`'s doc comment.
+    terminald: crate::sessiond::TerminaldSlot,
 }
 
 impl ThemeSettingsView {
     pub(crate) fn new(
-        sessiond: crate::sessiond::SessiondSlot,
+        terminald: crate::sessiond::TerminaldSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -238,7 +238,7 @@ impl ThemeSettingsView {
             dirty: false,
             status: None,
             _subscriptions: subscriptions,
-            sessiond,
+            terminald,
         }
     }
 
@@ -249,9 +249,9 @@ impl ThemeSettingsView {
     /// the window so every already-painted pane (terminal ANSI, chrome)
     /// picks it up immediately, then re-push the resolved terminal scheme
     /// to every running terminal session so a subsequent OSC 10/11/12
-    /// query reflects it too (`SessiondHandle::
+    /// query reflects it too (`TerminaldHandle::
     /// broadcast_terminal_color_scheme`). Pure math plus one global-state
-    /// write plus a fire-and-forget send over the already-open sessiond
+    /// write plus a fire-and-forget send over the already-open terminald
     /// connection (no reply awaited) -- cheap enough to call on every
     /// slider tick/color-picker drag frame.
     fn apply_live(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -260,8 +260,8 @@ impl ThemeSettingsView {
         theme::reload_from(&self.seed.to_raw_config());
         theme::apply_gpui_component_theme(cx);
         window.refresh();
-        if let Some(sessiond) = self.sessiond.get() {
-            sessiond.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+        if let Some(terminald) = self.terminald.get() {
+            terminald.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
         }
         cx.notify();
     }

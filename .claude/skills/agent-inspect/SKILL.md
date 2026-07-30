@@ -245,8 +245,10 @@ session's most recent few events, "did this just happen"), **prefer the
 JSONL recipes earlier in this doc** — they read the same file the writer
 itself appends to, with no separate database engine's checkpoint timing in
 the way. For a guaranteed-current DuckDB read, stop sessiond first (a plain
-kill/stop, or `horizon reload-session-runtime` — note it also ends the
-UI's terminal sessions, verified 2026-07-25; agent sessions survive), or
+kill/stop, or `horizon reload-session-runtime`; agent sessions survive it,
+and since the 2026-07-30 terminald split it no longer ends the UI's terminal
+sessions either — that was verified true on 2026-07-25, before terminals
+moved to their own daemon), or
 query a copied `*.duckdb` file (DuckDB may
 also keep a sibling `*.duckdb.wal` — copy both together, or checkpoint
 first if you have a live connection available).

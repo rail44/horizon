@@ -1,9 +1,10 @@
 # nextest configuration -- see https://nexte.st/docs/configuration for the
 # full schema.
 
-# `horizon-sessiond`'s `e2e` integration test binary (crates/horizon-sessiond/
-# tests/e2e.rs) spawns a real `horizon-sessiond` child process per test --
-# some tests additionally spawn a real PTY backed by a real shell. Under
+# The two daemon `e2e` integration test binaries
+# (crates/horizon-sessiond/tests/e2e.rs, crates/horizon-terminald/tests/e2e.rs)
+# spawn a real daemon child process per test -- terminald's spawn real PTYs
+# backed by a real shell, and its acceptance test spawns *both* daemons. Under
 # nextest's default per-binary parallelism, that means dozens of real
 # processes (and, in the terminal tests, real PTYs) all competing for CPU at
 # once, racing wall-clock timeouts against both each other *and* whatever
@@ -18,11 +19,15 @@
 # the binary's tests against *each other* removes self-contention entirely
 # as a variable, even though it can't do anything about contention from
 # processes outside this nextest invocation.
+# One shared group across both binaries, deliberately: they contend for the
+# same CPU and (in the acceptance test) for each other's daemons, so
+# serializing them against each other -- not just within each binary -- is
+# what removes self-contention as a variable.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon-sessiond::e2e)'
-test-group = 'sessiond-e2e'
+filter = 'binary_id(horizon-sessiond::e2e) + binary_id(horizon-terminald::e2e)'
+test-group = 'daemon-e2e'
 
-[test-groups.sessiond-e2e]
+[test-groups.daemon-e2e]
 max-threads = 1
 
 # `sandboxed` -- the profile an agent session running inside Horizon's own
@@ -34,6 +39,11 @@ max-threads = 1
 # cannot pass, and making them pass would mean removing the containment
 # they verify -- so a sandboxed session skips them and the integrator's
 # full gate (`profile.default`) runs them (`docs/issues/010`).
+#
+# `binary_id(horizon-terminald::e2e)` joins that list for the same reason as
+# sessiond's: it binds real sockets under /tmp and spawns real daemon
+# processes (its acceptance test spawns both daemons and drains one), none of
+# which a contained session can do.
 #
 # Filed from session aa95e066 (2026-07-28), which spent 92 rounds -- 21.6%
 # of the run -- growing a hand-rolled 30-term exclusion list one failure at
@@ -94,6 +104,7 @@ default-filter = '''
     not (
         binary_id(horizon-agent::tier1_network_containment)
         + binary_id(horizon-sessiond::e2e)
+        + binary_id(horizon-terminald::e2e)
         + (binary_id(horizon::bin/horizon) & test(/^sessiond::tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)

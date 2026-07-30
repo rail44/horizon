@@ -16,9 +16,14 @@
 //! ```
 //!
 //! This generator lives in `horizon-sessiond` (rather than the protocol
-//! crate that hosts the artifact) because the daemon is the one binary that
-//! already links every wire vocabulary through `horizon-session-protocol`'s
-//! own re-exports and the sister crates.
+//! crate that hosts the artifact) because the daemon already links the agent
+//! wire vocabulary through `horizon-session-protocol`'s own re-exports. Since
+//! the v17 terminald split (`docs/terminald-split-design.md`) the terminal
+//! vocabulary is no longer part of this *binary*'s graph, so it rides in as a
+//! dev-dependency: one artifact still documents both daemons' wires, because
+//! they share one version constant, one codec, and one negotiation
+//! handshake -- splitting the artifact would make the shared half
+//! unreviewable.
 //!
 //! ## What the v10 artifact documents
 //!
@@ -26,12 +31,19 @@
 //! (`docs/remoc-adoption-design.md` §2). The document therefore has two
 //! sections instead of the old `envelope`+`kinds`:
 //!
-//! - `hub`: every rtc method mapped to its request/reply payload types
-//!   (`hello`'s `ClientHello`→`HubHello`, the terminal/agent attach calls,
-//!   `drain`). The channel-bearing reply structs (`HubHello`,
-//!   `TerminalAttachment`, `AgentAttachment`) carry remoc channel halves,
-//!   which are chmux port references on the wire, not data — they appear
-//!   here as opaque markers.
+//! - `hub`: every rtc method of `horizon-sessiond`'s `SessionHub` mapped to
+//!   its request/reply payload types (`hello`'s `ClientHello`→`HubHello`, the
+//!   agent attach calls, `drain`).
+//! - `terminal_hub`: the same for `horizon-terminald`'s `TerminalHub`
+//!   (`hello`'s `ClientHello`→`TerminalHubHello`, `list_terminals`,
+//!   `create_terminal`, `attach_terminal`, `drain`) — a separate section
+//!   because it is a separate trait served by a separate process on a
+//!   separate socket since v17, and because the terminal slice is
+//!   append-only from here on (design decision 5), which this section makes
+//!   diff-visible on its own.
+//!   The channel-bearing reply structs (`HubHello`, `TerminalAttachment`,
+//!   `AgentAttachment`) carry remoc channel halves, which are chmux port
+//!   references on the wire, not data — they appear here as opaque markers.
 //! - `channels`: the vocabularies those channels carry
 //!   (`TerminalFrame` on the v11 frame watch, `TerminalUpdate` events,
 //!   `TerminalCommand`, `AgentWireEvent`/agent `Command`,
@@ -62,7 +74,7 @@ use horizon_agent::wire::{
 };
 use horizon_session_protocol::{
     schema_check::PROTOCOL_VERSION_KEY, AgentAttachment, ClientHello, HubError, HubHello,
-    TerminalAttachment, SESSION_PROTOCOL_VERSION,
+    TerminalAttachment, TerminalHubHello, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
@@ -80,10 +92,11 @@ fn generate_wire_schema() -> Value {
     // methods is documented as JSON `null` rather than a schema.
     let unit = json!({"type": "null"});
 
-    let hub = json!({
+    // `horizon-terminald`'s hub: the terminal domain, on its own socket.
+    let terminal_hub = json!({
         "hello": {
             "request": generator.subschema_for::<ClientHello>().to_value(),
-            "reply": generator.subschema_for::<HubHello>().to_value(),
+            "reply": generator.subschema_for::<TerminalHubHello>().to_value(),
             "error": generator.subschema_for::<HubError>().to_value(),
         },
         "list_terminals": {
@@ -100,6 +113,19 @@ fn generate_wire_schema() -> Value {
         "attach_terminal": {
             "request": generator.subschema_for::<uuid::Uuid>().to_value(),
             "reply": generator.subschema_for::<TerminalAttachment>().to_value(),
+        },
+        "drain": {
+            "request": unit,
+            "reply": unit,
+        },
+    });
+
+    // `horizon-sessiond`'s hub: the agent domain.
+    let hub = json!({
+        "hello": {
+            "request": generator.subschema_for::<ClientHello>().to_value(),
+            "reply": generator.subschema_for::<HubHello>().to_value(),
+            "error": generator.subschema_for::<HubError>().to_value(),
         },
         "list_agents": {
             "request": unit,
@@ -149,6 +175,7 @@ fn generate_wire_schema() -> Value {
                      scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
         PROTOCOL_VERSION_KEY: SESSION_PROTOCOL_VERSION,
         "hub": hub,
+        "terminal_hub": terminal_hub,
         "channels": channels,
         "$defs": defs,
     });

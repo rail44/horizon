@@ -874,7 +874,7 @@
       ]
     },
     "HubHello": {
-      "description": "The daemon's `hello` reply: the negotiated version plus the\nconnection-global channels (`docs/remoc-adoption-design.md` §2 — what\nused to be connection-global envelope kinds now rides channels handed\nover here; everything session-scoped rides the per-attachment channels\ninstead).",
+      "description": "`horizon-sessiond`'s `hello` reply: the negotiated version plus the\nconnection-global channels (`docs/remoc-adoption-design.md` §2 — what\nused to be connection-global envelope kinds now rides channels handed\nover here; everything session-scoped rides the per-attachment channels\ninstead). Every channel here is agent-domain, which is why\n[`TerminalHubHello`] carries none of them.",
       "properties": {
         "binary_id": {
           "type": "string"
@@ -1765,6 +1765,25 @@
       ],
       "type": "object"
     },
+    "TerminalHubHello": {
+      "description": "`horizon-terminald`'s `hello` reply. Deliberately channel-free: every\nconnection-global channel [`HubHello`] hands over belongs to the agent\ndomain (host tools, the event log's startup diagnostic), and the\nterminal domain's only streams are per-attachment\n([`TerminalAttachment`]).\n\n`binary_id` is load-bearing beyond diagnostics here — it is the terminald\nconnection's skew insurance (`docs/terminald-split-design.md` decision\n6). A terminald that outlives many UI rebuilds may be running an older\nbinary than the client that connects to it, and the layer *below* the\nnegotiated version (remoc/chmux framing, the Postbag codec) is not\ncovered by version negotiation at all — the tmux 3.6 lesson. The client\nrecords this id at `hello` and names it if a post-`hello` decode failure\nsuggests exactly that kind of skew, so the failure surfaces as a clean\nrefusal pointing at `Reload Terminal Runtime` rather than as silent\nmisbehavior.",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "negotiated": {
+          "description": "The highest mutually supported version (see [`HubHello::negotiated`]).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "negotiated",
+        "binary_id"
+      ],
+      "type": "object"
+    },
     "TerminalKeyInput": {
       "description": "A structured key event: key identity plus the platform-produced text,\nif any, that this key generated. Carried by `TerminalCommand::KeyInput`.",
       "properties": {
@@ -2434,6 +2453,46 @@
         "$ref": "#/$defs/SessionId"
       }
     },
+    "drain": {
+      "reply": {
+        "type": "null"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "hello": {
+      "error": {
+        "$ref": "#/$defs/HubError"
+      },
+      "reply": {
+        "$ref": "#/$defs/HubHello"
+      },
+      "request": {
+        "$ref": "#/$defs/ClientHello"
+      }
+    },
+    "list_agents": {
+      "reply": {
+        "items": {
+          "$ref": "#/$defs/SessionSummary"
+        },
+        "type": "array"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "new_agent": {
+      "reply": {
+        "$ref": "#/$defs/AgentAttachment"
+      },
+      "request": {
+        "$ref": "#/$defs/SessionNew"
+      }
+    }
+  },
+  "terminal_hub": {
     "attach_terminal": {
       "reply": {
         "$ref": "#/$defs/TerminalAttachment"
@@ -2470,21 +2529,10 @@
         "$ref": "#/$defs/HubError"
       },
       "reply": {
-        "$ref": "#/$defs/HubHello"
+        "$ref": "#/$defs/TerminalHubHello"
       },
       "request": {
         "$ref": "#/$defs/ClientHello"
-      }
-    },
-    "list_agents": {
-      "reply": {
-        "items": {
-          "$ref": "#/$defs/SessionSummary"
-        },
-        "type": "array"
-      },
-      "request": {
-        "type": "null"
       }
     },
     "list_terminals": {
@@ -2497,16 +2545,8 @@
       "request": {
         "type": "null"
       }
-    },
-    "new_agent": {
-      "reply": {
-        "$ref": "#/$defs/AgentAttachment"
-      },
-      "request": {
-        "$ref": "#/$defs/SessionNew"
-      }
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 16
+  "x-session-protocol-version": 17
 }

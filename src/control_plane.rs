@@ -249,6 +249,10 @@ fn dispatch_invoke(
             shell.execute_external(CommandId::ReloadSessionRuntime, window, cx);
             ok_body()
         }
+        "reload-terminal-runtime" => {
+            shell.execute_external(CommandId::ReloadTerminalRuntime, window, cx);
+            ok_body()
+        }
         other => error_body(format!("unknown external command `{other}`")),
     }
 }

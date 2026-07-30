@@ -9,12 +9,23 @@ use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{SessionId, Workspace};
 
-use super::WorkspaceShell;
+use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
 use crate::theme;
 use crate::view_chooser::Placement;
 
-fn prepare_workspace_for_runtime_reload(workspace: &mut Workspace) {
+/// Removes every terminal session from the model ahead of restarting
+/// `horizon-terminald` — the daemon that owns their PTYs is about to be
+/// replaced, so those sessions genuinely end
+/// (`docs/terminald-split-design.md` decision 3). Agent sessions are
+/// untouched: they live in the other daemon.
+///
+/// This used to run on the *session*-runtime reload path, where it was pure
+/// collateral damage — the daemon restart killed the PTYs whether the user
+/// wanted it or not. Since the split, `Reload Session Runtime` leaves
+/// terminals alone entirely and this belongs to the one command that is
+/// explicitly destructive.
+fn prepare_workspace_for_terminal_runtime_reload(workspace: &mut Workspace) {
     let terminals = workspace
         .session_summaries()
         .into_iter()
@@ -27,7 +38,12 @@ fn prepare_workspace_for_runtime_reload(workspace: &mut Workspace) {
 }
 
 fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> bool {
-    restoring && !(failed && id == CommandId::ReloadSessionRuntime)
+    restoring
+        && !(failed
+            && matches!(
+                id,
+                CommandId::ReloadSessionRuntime | CommandId::ReloadTerminalRuntime
+            ))
 }
 
 impl WorkspaceShell {
@@ -44,10 +60,10 @@ impl WorkspaceShell {
     /// right after `Reload Config` swaps the live scheme
     /// (`theme::reload_from`); the theme settings view's own live-apply
     /// path (`src/theme_settings/mod.rs`) calls the same
-    /// `SessiondHandle` method directly, since it holds its own clone.
+    /// `TerminaldHandle` method directly, since it holds its own clone.
     fn broadcast_terminal_color_scheme(&self) {
-        if let Some(sessiond) = &self.sessiond {
-            sessiond.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+        if let Some(terminald) = &self.terminald {
+            terminald.broadcast_terminal_color_scheme(theme::terminal_color_scheme());
         }
     }
 
@@ -141,13 +157,42 @@ impl WorkspaceShell {
                     self.open_terminal_in_directory(workspace_root, window, cx);
                 }
             }
+            // Agent runtime only, since the terminald split: terminal
+            // sessions, their entities, and their pane views all stay
+            // exactly where they are, so the shells running inside them
+            // never notice (`docs/terminald-split-design.md` decision 2).
             CommandId::ReloadSessionRuntime => {
                 if self.reload_in_progress {
                     return;
                 }
                 self.reload_in_progress = true;
                 let old = self.sessiond.take();
-                self.sessiond_slot.set(None);
+                if self.workspace_restore_failed {
+                    self.workspace = Workspace::mvp();
+                    self.restoring_workspace = false;
+                    self.workspace_restore_failed = false;
+                    self.persistence_ready = true;
+                    self.persist_workspace();
+                }
+                self.pending_agent_spawns.clear();
+                self.agent_sessions.clear();
+                // Only the agent panes' views are dropped: a terminal
+                // pane's view holds live scrollback/selection state bound
+                // to a session that is still running, and rebuilding it
+                // would throw that away for no reason.
+                self.panes.retain(|_, view| {
+                    !matches!(view, PaneView::Composite(CompositePane::Agent(_)))
+                });
+                cx.notify();
+                self.reload_session_runtime(old, cx);
+            }
+            CommandId::ReloadTerminalRuntime => {
+                if self.reload_in_progress {
+                    return;
+                }
+                self.reload_in_progress = true;
+                let old = self.terminald.take();
+                self.terminald_slot.set(None);
                 if self.workspace_restore_failed {
                     self.workspace = Workspace::mvp();
                     self.restoring_workspace = false;
@@ -155,17 +200,23 @@ impl WorkspaceShell {
                     self.persistence_ready = true;
                     self.persist_workspace();
                 } else {
-                    prepare_workspace_for_runtime_reload(&mut self.workspace);
+                    prepare_workspace_for_terminal_runtime_reload(&mut self.workspace);
                     self.persist_workspace();
                 }
                 self.pending_terminal_spawns.clear();
-                self.pending_agent_spawns.clear();
                 self.sessions.clear();
-                self.agent_sessions.clear();
-                self.panes.clear();
+                // Only the terminal panes' views go: their sessions are
+                // genuinely gone. The theme settings view stays even though
+                // it holds a terminald handle -- it holds the *slot*, which
+                // this command has just set to `None` and the respawn will
+                // refill, so it never goes stale (see `TerminaldSlot`), and
+                // rebuilding it would discard the user's unsaved seed edits.
+                self.panes.retain(|_, view| {
+                    !matches!(view, PaneView::Cached(CachedPaneLeaf::Terminal(_)))
+                });
                 self.last_focused_terminal = None;
                 cx.notify();
-                self.reload_session_runtime(old, cx);
+                self.reload_terminal_runtime(old, cx);
             }
         }
     }
@@ -343,23 +394,24 @@ mod tests {
     use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, SessionKind, Workspace};
 
-    use super::{command_blocked_by_restore, prepare_workspace_for_runtime_reload};
+    use super::{command_blocked_by_restore, prepare_workspace_for_terminal_runtime_reload};
     // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
     // mod`), not here -- unlike `command_blocked_by_restore`/
-    // `prepare_workspace_for_runtime_reload`, both defined in this file,
-    // it's no longer called by any production code in `commands.rs` (the
-    // 2026-07-18 "empty workspace is valid" change removed its
+    // `prepare_workspace_for_terminal_runtime_reload`, both defined in this
+    // file, it's no longer called by any production code in `commands.rs`
+    // (the 2026-07-18 "empty workspace is valid" change removed its
     // `TerminateActiveSession`/`external_terminate` call sites); its one
-    // remaining caller is `reload_session_runtime` in `session_lifecycle`.
+    // remaining caller is `reload_terminal_runtime` in
+    // `session_lifecycle`.
     use super::super::ensure_workspace_has_pane;
 
     #[test]
-    fn reload_prep_removes_terminals_but_retains_agent_model_and_pane() {
+    fn terminal_reload_prep_removes_terminals_but_retains_agent_model_and_pane() {
         let mut workspace = Workspace::mvp();
         let agent_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
         assert!(workspace.pane_location_for_session(agent_id).is_some());
 
-        prepare_workspace_for_runtime_reload(&mut workspace);
+        prepare_workspace_for_terminal_runtime_reload(&mut workspace);
 
         let summaries = workspace.session_summaries();
         assert_eq!(summaries.len(), 1);
@@ -369,9 +421,9 @@ mod tests {
     }
 
     #[test]
-    fn runtime_reload_reseeds_a_terminal_when_no_pane_survives() {
+    fn terminal_runtime_reload_reseeds_a_terminal_when_no_pane_survives() {
         let mut workspace = Workspace::mvp();
-        prepare_workspace_for_runtime_reload(&mut workspace);
+        prepare_workspace_for_terminal_runtime_reload(&mut workspace);
         assert_eq!(workspace.tab_count(), 0);
 
         let session_id = ensure_workspace_has_pane(&mut workspace).expect("fresh terminal");
@@ -384,17 +436,29 @@ mod tests {
     }
 
     #[test]
-    fn failed_restore_allows_only_the_explicit_runtime_reload_command() {
+    fn failed_restore_allows_only_the_explicit_runtime_reload_commands() {
+        // Both reloads are escape hatches out of a failed restore, and both
+        // stay blocked while a restore is merely *in progress*.
         assert!(command_blocked_by_restore(
             true,
             false,
             CommandId::ReloadSessionRuntime
+        ));
+        assert!(command_blocked_by_restore(
+            true,
+            false,
+            CommandId::ReloadTerminalRuntime
         ));
         assert!(command_blocked_by_restore(true, true, CommandId::NewTab));
         assert!(!command_blocked_by_restore(
             true,
             true,
             CommandId::ReloadSessionRuntime
+        ));
+        assert!(!command_blocked_by_restore(
+            true,
+            true,
+            CommandId::ReloadTerminalRuntime
         ));
         assert!(!command_blocked_by_restore(false, false, CommandId::NewTab));
     }

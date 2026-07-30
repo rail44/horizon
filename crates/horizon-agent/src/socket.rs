@@ -33,6 +33,28 @@ pub fn default_socket_path() -> PathBuf {
     default_socket_path_from(override_path, xdg_runtime_dir, uid)
 }
 
+/// [`default_socket_path`]'s sibling for `horizon-terminald`
+/// (`docs/terminald-split-design.md` decision 1): the terminal daemon binds
+/// its own socket next to sessiond's, so draining one never disturbs the
+/// other. Same resolution rules, one directory level and one file name
+/// apart -- `$HORIZON_TERMINALD_SOCKET`, else
+/// `$XDG_RUNTIME_DIR/horizon/terminald.sock`, else
+/// `/tmp/horizon-terminald-$UID.sock`. Kept here, beside sessiond's, so the
+/// two conventions cannot drift apart unnoticed.
+pub fn default_terminald_socket_path() -> PathBuf {
+    let override_path = std::env::var("HORIZON_TERMINALD_SOCKET").ok();
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+    // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
+    let uid = unsafe { libc::getuid() };
+    daemon_socket_path_from(
+        override_path,
+        xdg_runtime_dir,
+        uid,
+        "terminald.sock",
+        "horizon-terminald",
+    )
+}
+
 /// Pure resolution logic behind [`default_socket_path`], factored out for
 /// unit-testability without mutating process environment variables --
 /// `cargo test` runs tests in parallel within one process, so real env
@@ -43,12 +65,31 @@ fn default_socket_path_from(
     xdg_runtime_dir: Option<String>,
     uid: u32,
 ) -> PathBuf {
+    daemon_socket_path_from(
+        override_path,
+        xdg_runtime_dir,
+        uid,
+        "sessiond.sock",
+        "horizon-sessiond",
+    )
+}
+
+/// The shared resolution both daemons' defaults use, parameterized by the
+/// two names that differ: the file inside `$XDG_RUNTIME_DIR/horizon/`, and
+/// the `/tmp` fallback's prefix.
+fn daemon_socket_path_from(
+    override_path: Option<String>,
+    xdg_runtime_dir: Option<String>,
+    uid: u32,
+    file_name: &str,
+    tmp_prefix: &str,
+) -> PathBuf {
     if let Some(path) = override_path.filter(|path| !path.is_empty()) {
         return PathBuf::from(path);
     }
     match xdg_runtime_dir.filter(|dir| !dir.is_empty()) {
-        Some(dir) => PathBuf::from(dir).join("horizon").join("sessiond.sock"),
-        None => PathBuf::from(format!("/tmp/horizon-sessiond-{uid}.sock")),
+        Some(dir) => PathBuf::from(dir).join("horizon").join(file_name),
+        None => PathBuf::from(format!("/tmp/{tmp_prefix}-{uid}.sock")),
     }
 }
 
@@ -93,6 +134,36 @@ mod tests {
         assert_eq!(
             default_socket_path_from(Some("/tmp/scratch/sessiond.sock".to_string()), None, 1000),
             PathBuf::from("/tmp/scratch/sessiond.sock")
+        );
+    }
+
+    #[test]
+    fn the_terminald_default_is_a_sibling_of_sessionds() {
+        // Decision 1's "sibling socket": same directory, different file --
+        // so a drain aimed at one daemon can never reach the other.
+        assert_eq!(
+            daemon_socket_path_from(
+                None,
+                Some("/run/user/1000".to_string()),
+                1000,
+                "terminald.sock",
+                "horizon-terminald",
+            ),
+            PathBuf::from("/run/user/1000/horizon/terminald.sock")
+        );
+        assert_eq!(
+            daemon_socket_path_from(None, None, 1000, "terminald.sock", "horizon-terminald"),
+            PathBuf::from("/tmp/horizon-terminald-1000.sock")
+        );
+        assert_ne!(
+            daemon_socket_path_from(
+                None,
+                Some("/run/user/1000".to_string()),
+                1000,
+                "terminald.sock",
+                "horizon-terminald",
+            ),
+            default_socket_path_from(None, Some("/run/user/1000".to_string()), 1000)
         );
     }
 

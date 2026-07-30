@@ -92,6 +92,11 @@ pub enum Subcommand {
         session_id: String,
     },
     ReloadSessionRuntime,
+    /// `reload-session-runtime`'s terminal-daemon counterpart
+    /// (`docs/terminald-split-design.md` decision 3). Destructive: it
+    /// restarts the process that owns every PTY, so every terminal session
+    /// ends with it.
+    ReloadTerminalRuntime,
     ReloadConfig,
     /// Opens a new terminal tab whose cwd is the active session's directory
     /// (`docs/session-relationship-design.md` decision 4a) -- a bare invoke
@@ -133,6 +138,7 @@ Subcommands:\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
   reload-session-runtime\n  \
+  reload-terminal-runtime\n  \
   reload-config\n  \
   open-terminal-in-session-directory\n  \
   sessions\n  \
@@ -282,6 +288,10 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "reload-session-runtime" => {
             reject_extra(&mut positionals, "reload-session-runtime")?;
             Subcommand::ReloadSessionRuntime
+        }
+        "reload-terminal-runtime" => {
+            reject_extra(&mut positionals, "reload-terminal-runtime")?;
+            Subcommand::ReloadTerminalRuntime
         }
         "reload-config" => {
             reject_extra(&mut positionals, "reload-config")?;
@@ -668,6 +678,12 @@ mod tests {
                 .unwrap()
                 .subcommand,
             Subcommand::ReloadSessionRuntime
+        );
+        assert_eq!(
+            parse(&args(&["reload-terminal-runtime"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::ReloadTerminalRuntime
         );
         assert_eq!(
             parse(&args(&["reload-config"])).unwrap().subcommand,

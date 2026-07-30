@@ -5,6 +5,11 @@
 > Its socket override is `HORIZON_SESSIOND_SOCKET`, and the reload command is
 > `Reload Session Runtime` / `reload-session-runtime`. The implementation still
 > hosts agent sessions only at this point; terminal hosting is the next step.
+> **Update 2026-07-30:** terminal hosting did land in this process (wire
+> v10-v16) and then moved *out* again into its own daemon,
+> `horizon-terminald`, so that agent-runtime reloads stop killing PTYs — see
+> `docs/terminald-split-design.md`. `horizon-sessiond` is once again
+> agent-only, which is the shape this record describes.
 > Names below preserve the stages and symbols as they existed when each step
 > landed. The JSONL envelope wire of decision 4 (`wire::read_envelope`, the
 > `{v, kind, session_id?, payload}` framing) was retired 2026-07-21 for remoc

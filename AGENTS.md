@@ -21,15 +21,21 @@ cargo run
 ```
 
 `cargo build --workspace` is the canonical build command: `cargo run` alone
-only rebuilds the root `horizon` binary, and Horizon's terminal and agent
-sessions run inside `horizon-sessiond` (`crates/horizon-sessiond`), a separate
-workspace member Horizon spawns on demand (see
-`docs/agent-runtime-split-design.md`). If that binary was never built (or is
-stale after an agent-side change), `cargo run` still starts Horizon but
-agent panes fail to spawn a runtime — run `cargo build --workspace` first
-(and again after touching `crates/horizon-agent`/`crates/horizon-sessiond`),
-or use `Reload Session Runtime` from the command palette to retry after
-rebuilding.
+only rebuilds the root `horizon` binary, and Horizon's sessions run inside
+**two** daemons Horizon spawns on demand — `horizon-sessiond`
+(`crates/horizon-sessiond`) hosts agent sessions, `horizon-terminald`
+(`crates/horizon-terminald`) owns every PTY (see
+`docs/agent-runtime-split-design.md` and `docs/terminald-split-design.md`).
+If either binary was never built (or is stale after a change on its side),
+`cargo run` still starts Horizon but that domain's panes fail to spawn a
+runtime — run `cargo build --workspace` first (and again after touching
+`crates/horizon-agent`/`crates/horizon-sessiond`, or
+`crates/horizon-terminal-core`/`crates/horizon-terminald`), then use the
+matching reload command from the command palette to retry:
+`Reload Session Runtime` restarts the agent daemon and leaves terminals
+alone, `Reload Terminal Runtime` restarts the terminal daemon and is
+explicitly destructive (every terminal session, and whatever is running in
+it, ends).
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work — run it yourself and make sure all four are clean:
@@ -75,10 +81,11 @@ type, regenerate the artifact first:
 wire_schema` (a stale artifact is itself a red nextest test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
-from the repo root silently skip the `horizon-sessiond`/`horizon-agent`
-crates. nextest runs each test in its own process (no cross-test env
-leakage) but does not run doctests; the workspace currently has none —
-add `cargo test --doc` here if that changes.
+from the repo root silently skip the
+`horizon-sessiond`/`horizon-terminald`/`horizon-agent` crates. nextest runs
+each test in its own process (no cross-test env leakage) but does not run
+doctests; the workspace currently has none — add `cargo test --doc` here if
+that changes.
 
 The same gate runs as a pre-commit hook (`hooks/pre-commit`). One-time
 setup per clone:
@@ -219,13 +226,16 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `sessiond/` — the shell's one eager shared client runtime: non-blocking
-  connect/spawn, raw agent/terminal routing, and explicit drain.
+- `sessiond/` — the shell's two eager daemon client runtimes (one per
+  daemon: agent and terminal), each with its own connection, op queue, and
+  route table: non-blocking connect/spawn, per-domain routing, and explicit
+  per-daemon drain. See `docs/terminald-split-design.md` for why reloading
+  one must not disturb the other.
 - `terminal/` — the terminal pane: the daemon-backed per-session model entity
   (`session.rs`) and the view (grid painting, key/mouse/IME handling,
-  `input.rs` mapping). PTY ownership lives in `crates/horizon-sessiond`;
+  `input.rs` mapping). PTY ownership lives in `crates/horizon-terminald`;
   emulation and the session loop live in `crates/horizon-terminal-core` — see
-  `docs/session-daemon-design.md`;
+  `docs/session-daemon-design.md` and `docs/terminald-split-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
 - `agent/` — the agent pane: per-session model entities (`session.rs`, folding
