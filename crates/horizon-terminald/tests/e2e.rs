@@ -309,16 +309,37 @@ fn current_frame(
     frames.borrow().expect("frame watch error").clone()
 }
 
-/// Reads the next non-frame event off an attachment's `events` channel, or
-/// panics on timeout/disconnect.
-async fn read_terminal_event(
+/// Waits for the attachment to report that its session has ended after a
+/// `Shutdown`, skipping whatever non-exit events (title, bell, a final
+/// error) arrive first.
+///
+/// Two outcomes count as "ended", because the daemon produces them from the
+/// same critical section and production treats them identically
+/// (`run_terminal_attachment`'s `Exited` and `Ok(None)` arms both retire the
+/// pane): an explicit `TerminalUpdate::Exited`, or the events channel
+/// closing — `forward_updates` removes the subscriber and sends the exit
+/// under one lock, so a client can legitimately observe the close instead of
+/// the message. A timeout panics with everything that *was* seen, so a
+/// future flake says what the daemon did rather than only `Elapsed`.
+async fn wait_for_session_end(
     events: &mut CappedReceiver<TerminalUpdate, TERMINAL_EVENT_MAX_ITEM_BYTES>,
-) -> TerminalUpdate {
-    tokio::time::timeout(TERMINAL_UPDATE_TIMEOUT, events.recv())
-        .await
-        .expect("timed out waiting for a terminal event")
-        .expect("terminal event channel error")
-        .expect("the daemon should keep the terminal attachment open")
+) {
+    let deadline = tokio::time::Instant::now() + TERMINAL_UPDATE_TIMEOUT;
+    let mut seen = Vec::new();
+    loop {
+        match tokio::time::timeout_at(deadline, events.recv()).await {
+            Ok(Ok(Some(TerminalUpdate::Exited))) => return,
+            Ok(Ok(Some(other))) => seen.push(format!("{other:?}")),
+            // The attachment is gone -- the session ended with it.
+            Ok(Ok(None)) => return,
+            Ok(Err(error)) if error.is_final() => return,
+            Ok(Err(error)) => seen.push(format!("skipped an undecodable item: {error}")),
+            Err(_elapsed) => panic!(
+                "the session never reported an exit within {TERMINAL_UPDATE_TIMEOUT:?} after \
+                 Shutdown; events seen meanwhile: {seen:?}"
+            ),
+        }
+    }
 }
 
 async fn send_terminal_command(
@@ -495,15 +516,7 @@ async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socke
     assert!(reattached.text().contains("HORIZON_REATTACH_MARKER"));
 
     send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
-    for _ in 0..20 {
-        if matches!(
-            read_terminal_event(&mut attachment.events).await,
-            TerminalUpdate::Exited
-        ) {
-            return;
-        }
-    }
-    panic!("terminal shutdown did not produce an exited event");
+    wait_for_session_end(&mut attachment.events).await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
