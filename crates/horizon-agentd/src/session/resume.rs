@@ -16,7 +16,7 @@ use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
 use super::spawn::spawn_session_thread;
-use super::state::SessiondState;
+use super::state::{lock_unpoisoned, SessiondState};
 use crate::worktree;
 
 /// `docs/agent-runtime-split-design.md` step 4, "agentd start": reads the
@@ -70,7 +70,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             .iter()
             .rev()
             .find_map(|record| record.provider_id.clone())
-            .unwrap_or_else(|| state.providers.default_provider_id());
+            .unwrap_or_else(|| lock_unpoisoned(&state.providers).default_provider_id());
         // Mirrors `provider_id` just above: every record `Appender` writes
         // for a session carries the same `role_id` (see
         // `event_log::Appender::new`), so the last one found scanning from

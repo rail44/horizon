@@ -150,6 +150,14 @@ impl Connection {
         self.state.skipped_lines_summary()
     }
 
+    /// Delegates to [`SessiondState::reload_provider_config`] -- the
+    /// daemon-side half of a `Reload Config`: rebuild the provider
+    /// registry/agent config from the config file without respawning the
+    /// process. See that method's doc comment for the granularity.
+    pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
+        self.state.reload_provider_config()
+    }
+
     /// Every session a client may see. Exploration sessions
     /// (`docs/agent-explore-design.md` decision 3: "invisible to the UI")
     /// are withheld: they are never attached to a pane, they live only as

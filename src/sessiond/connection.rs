@@ -52,6 +52,9 @@ pub(super) enum Op {
     },
     HostToolResponse(HostToolResponse),
     Drain,
+    /// Fire-and-forget request to rebuild `[provider]` in the running
+    /// daemon without a respawn -- see [`SessionHub::reload_provider_config`].
+    ReloadProviderConfig,
 }
 
 pub(super) fn spawn(
@@ -575,6 +578,20 @@ fn handle_op(op: Op, live: &Live) {
                 // the socket refusing connections (`wait_for_drain`) --
                 // bounded so an unresponsive daemon can't pin this task.
                 let _ = tokio::time::timeout(establish_timeout(), hub.drain()).await;
+            });
+        }
+        Op::ReloadProviderConfig => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                if let Err(error) = with_deadline(
+                    OP_TIMEOUT,
+                    "reload_provider_config",
+                    hub.reload_provider_config(),
+                )
+                .await
+                {
+                    eprintln!("horizon-agentd client: provider config reload failed: {error}");
+                }
             });
         }
     }

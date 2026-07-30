@@ -41,8 +41,17 @@ pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<Agen
 /// every connection `horizon-agentd` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
 pub(crate) struct SessiondState {
-    pub(crate) providers: ProviderRegistry,
-    pub(crate) agent_config: AgentConfig,
+    /// The live provider registry, behind a `Mutex` so a `Reload Config`
+    /// can rebuild it in place (see [`Self::reload_provider_config`])
+    /// without a `Reload Agent Runtime`. Read at session-spawn time
+    /// (see `run`/`spawn`/`resume`); a running session keeps its spawn-time
+    /// config for its whole lifetime, so a swap takes effect for the next
+    /// session, not a running turn.
+    pub(crate) providers: Mutex<ProviderRegistry>,
+    /// Same swap story as `providers`: `[provider]`'s `base_url` is read at
+    /// spawn time for the enforcing judge (see `run_session`), so a live
+    /// reload updates it for new sessions.
+    pub(crate) agent_config: Mutex<AgentConfig>,
     /// `None` until [`Self::set_writer`] runs (or forever, if the event log
     /// couldn't be opened -- sessions still run, just without persistence,
     /// the same graceful degrade the deleted in-process agent runtime had).
@@ -124,8 +133,8 @@ impl SessiondState {
         project_grants: Vec<horizon_config::ProjectGrant>,
     ) -> Self {
         Self {
-            providers,
-            agent_config,
+            providers: Mutex::new(providers),
+            agent_config: Mutex::new(agent_config),
             writer: Mutex::new(writer),
             sessions: Mutex::new(HashMap::new()),
             pending_host_tool_requests: Mutex::new(HashMap::new()),
@@ -143,6 +152,32 @@ impl SessiondState {
 
     pub(crate) fn writer(&self) -> Option<WriterHandle> {
         self.writer.lock().unwrap().clone()
+    }
+
+    /// Re-reads `[provider]` from the config file at [`Self::config_path`] and
+    /// rebuilds both the provider registry and the agent config in place, so
+    /// a `Reload Config` can push a model/base-URL change to a running daemon
+    /// without a `Reload Agent Runtime` (which exists for agent-code reloads
+    /// -- see `docs/terminald-split-design.md` decision 2). A read/parse error
+    /// leaves the previous registry untouched and is returned to the caller;
+    /// a missing file resolves to built-in defaults, the same outcome
+    /// `Reload Config`'s UI-side `horizon_config::reload` already yields for
+    /// `[theme]`/`[keybindings]`. The swap takes effect for the *next* session
+    /// -- a running session cloned its `RigAgentConfig` into its own thread
+    /// at spawn and is unaffected.
+    pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
+        let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
+        let new_agent_config = AgentConfig::from_env_and_provider(
+            raw.provider.model.clone(),
+            raw.provider.base_url.clone(),
+        );
+        let new_providers = ProviderRegistry::builtin_with_config(
+            new_agent_config.clone(),
+            self.duckdb_cell.clone(),
+        );
+        *lock_unpoisoned(&self.agent_config) = new_agent_config;
+        *lock_unpoisoned(&self.providers) = new_providers;
+        Ok(())
     }
 
     pub(crate) fn set_writer(&self, writer: Option<WriterHandle>) {

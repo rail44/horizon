@@ -376,6 +376,16 @@ impl SessiondHandle {
         let _ = self.ops.send(connection::Op::Drain);
     }
 
+    /// Fire-and-forget: ask the running daemon to rebuild `[provider]` from
+    /// the config file without a respawn. Paired with `Reload Config`, which
+    /// already re-read the same file for `[theme]`/`[keybindings]` on the UI
+    /// side -- this pushes the `[provider]` half to the daemon. No reply is
+    /// waited on, so the UI thread never blocks on it; a failure is logged on
+    /// the runtime's task.
+    pub(crate) fn reload_provider_config(&self) {
+        let _ = self.ops.send(connection::Op::ReloadProviderConfig);
+    }
+
     /// Asks the daemon to exit, if this runtime ever reached it. `true`
     /// means a drain was actually sent and the caller should wait for the
     /// socket to stop accepting (`wait_for_drain`); `false` means there was

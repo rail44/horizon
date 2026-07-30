@@ -43,7 +43,7 @@ fn resolve_and_announce_session_model(
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,
 ) -> Option<String> {
-    let model = state.providers.resolved_model(provider_id, role_id);
+    let model = lock_unpoisoned(&state.providers).resolved_model(provider_id, role_id);
     if let Some(model) = &model {
         send_session_event(
             state,

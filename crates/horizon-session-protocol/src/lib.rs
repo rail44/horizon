@@ -422,7 +422,23 @@ impl DecodeSkipLog {
 /// connections after the drain call; stop it manually") instead of looping.
 /// One `kill` of the stale daemon, once, at this version boundary; every
 /// later version pairing keeps the drain aligned because `drain` stays put.
-pub const SESSION_PROTOCOL_VERSION: u32 = 17;
+///
+/// Version 18: **config-only `[provider]` reload** (`docs/terminald-split-
+/// design.md` phase 1). A new `reload_provider_config` method is appended to
+/// [`SessionHub`], letting `Reload Config` push a model/base-URL change to a
+/// running `horizon-agentd` without a respawn. This is additive in wire
+/// shape (an appended request-enum variant, appended *after* `drain` so
+/// `drain`'s index is stable), but the schema checker classifies a new key
+/// in the artifact's `hub` object as a reshape and therefore demands a bump.
+/// Rather than special-case the checker, the bump is accepted: `current` and
+/// [`MIN_SUPPORTED_PROTOCOL_VERSION`] rise together (lockstep) because the
+/// checker's conservative judgment acts as the guardrail here. A v18↔v17
+/// pairing has no overlapping range, so `hello` rejects it and the existing
+/// auto-drain-and-respawn path (§6) recovers — no feature-gate constant is
+/// introduced. `drain`'s index is unchanged (the new variant is appended
+/// after it), so the respawn recovery's drain call reaches a v17 daemon
+/// normally.
+pub const SESSION_PROTOCOL_VERSION: u32 = 18;
 
 /// The oldest protocol version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -457,7 +473,17 @@ pub const SESSION_PROTOCOL_VERSION: u32 = 17;
 /// index-encoded request enum, which leaves no compatibility code behind on
 /// either side -- exactly v11's situation. See
 /// [`SESSION_PROTOCOL_VERSION`]'s v17 note.
-pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 17;
+///
+/// v18 (`reload_provider_config`) raises this floor to 18 in lockstep with
+/// [`SESSION_PROTOCOL_VERSION`]. The wire change itself is additive (an
+/// appended request-enum variant after `drain`), but the schema checker
+/// conservatively classifies the artifact's new `hub` key as a reshape, so
+/// the bump is accepted rather than special-casing the checker. No
+/// compatibility code bridges a v18↔v17 pairing: the variant's index is
+/// stable (appended after `drain`), but the checker's bump demand is the
+/// guardrail, and `hello` rejects the mismatched pair, recovered by
+/// auto-drain-and-respawn. See [`SESSION_PROTOCOL_VERSION`]'s v18 note.
+pub const MIN_SUPPORTED_PROTOCOL_VERSION: u32 = 18;
 
 /// The first negotiated version at which the daemon answers
 /// `TerminalCommand::RequestScrollWindow` with a served window
@@ -774,6 +800,14 @@ pub trait SessionHub {
     /// belong to `horizon-terminald`, whose own
     /// [`TerminalHub::drain`] is the destructive counterpart.
     async fn drain(&self) -> Result<(), HubError>;
+
+    /// Re-reads `[provider]` from the config file and rebuilds the
+    /// provider registry in place -- the no-respawn counterpart to
+    /// `Reload Agent Runtime` for a config-only model/base-URL change
+    /// (see `docs/terminald-split-design.md`'s config-only reload). A
+    /// running session keeps its spawn-time config for its whole
+    /// lifetime, so the new provider takes effect for the *next* session.
+    async fn reload_provider_config(&self) -> Result<(), HubError>;
 }
 
 #[cfg(test)]
@@ -834,7 +868,7 @@ mod tests {
         assert_eq!(
             variants,
             "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `NewAgent`, \
-             `AttachAgent`, `Drain` at line 1 column 10",
+             `AttachAgent`, `Drain`, `ReloadProviderConfig` at line 1 column 10",
         );
 
         // Argument names per method, from serde's missing-field errors.

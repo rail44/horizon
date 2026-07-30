@@ -2490,6 +2490,14 @@
       "request": {
         "$ref": "#/$defs/SessionNew"
       }
+    },
+    "reload_provider_config": {
+      "reply": {
+        "type": "null"
+      },
+      "request": {
+        "type": "null"
+      }
     }
   },
   "terminal_hub": {
@@ -2548,5 +2556,5 @@
     }
   },
   "title": "horizon-session-wire",
-  "x-session-protocol-version": 17
+  "x-session-protocol-version": 18
 }

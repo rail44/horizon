@@ -34,7 +34,7 @@ use super::setup::{
     configured_filesystem_grants, resolve_and_create_isolated_worktree, skill_discovery_root,
     tool_session_state_for,
 };
-use super::state::SessiondState;
+use super::state::{lock_unpoisoned, SessiondState};
 use crate::worktree::WorktreeInfo;
 
 /// The session's whole lifetime, from `Initialize` through to the
@@ -93,12 +93,16 @@ pub(super) fn run_session(
         (workspace_root, false)
     };
 
-    let Some(handle) = state.providers.start_session(
-        &provider_id,
-        session_id,
-        role_id.clone(),
-        workspace_root.clone(),
-    ) else {
+    let handle = {
+        let providers = lock_unpoisoned(&state.providers);
+        providers.start_session(
+            &provider_id,
+            session_id,
+            role_id.clone(),
+            workspace_root.clone(),
+        )
+    };
+    let Some(handle) = handle else {
         // `ProviderRegistry::start_session` returns `None` for either an
         // unknown `provider_id` or an unresolvable `role_id` (see its own
         // doc comment on why role validation is centralized there) -- this
@@ -166,7 +170,10 @@ pub(super) fn run_session(
     // the process's own event-log writer for the verdict record. `None`
     // preserves human approval whenever `OPENAI_API_KEY` isn't set or no
     // writer is configured -- see `JudgeHandle::new`.
-    let judge = JudgeHandle::new(state.agent_config.rig.base_url.clone(), state.writer());
+    let judge = JudgeHandle::new(
+        lock_unpoisoned(&state.agent_config).rig.base_url.clone(),
+        state.writer(),
+    );
 
     // `task`'s daemon capability (`docs/agent-explore-design.md`).
     // Withheld from an exploration session itself: its role allowlist
@@ -194,15 +201,19 @@ pub(super) fn run_session(
     // Runtime` picks changes up for new ones, same lifecycle as
     // `[provider]`.
     let filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
-    let tool_state = tool_session_state_for(workspace_root, state.agent_config.tools, recall)
-        .with_isolated_worktree(isolated)
-        .with_filesystem_grants(filesystem_grants.clone())
-        .with_skills(SkillRegistry::discover(&skill_root))
-        .with_config_path(state.config_path.clone())
-        .with_domain_policy(domains)
-        .with_network_proxy(network)
-        .with_judge(judge)
-        .with_exploration_host(exploration);
+    let tool_state = tool_session_state_for(
+        workspace_root,
+        lock_unpoisoned(&state.agent_config).tools,
+        recall,
+    )
+    .with_isolated_worktree(isolated)
+    .with_filesystem_grants(filesystem_grants.clone())
+    .with_skills(SkillRegistry::discover(&skill_root))
+    .with_config_path(state.config_path.clone())
+    .with_domain_policy(domains)
+    .with_network_proxy(network)
+    .with_judge(judge)
+    .with_exploration_host(exploration);
     let persisted_context = PersistedSessionContext {
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,
