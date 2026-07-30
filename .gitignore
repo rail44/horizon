@@ -5,3 +5,6 @@
 /.horizon
 /.envrc
 /.envrc.local
+
+# Playwright MCP page-snapshot debris (session tooling output, never project content)
+.playwright-mcp/
