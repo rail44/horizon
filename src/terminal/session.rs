@@ -2096,6 +2096,54 @@ mod tests {
         }
     }
 
+    /// Issue 008: scrolling up in a window the daemon serves for a tall pane
+    /// (viewport + OVERSCAN_ROWS, the viewport centered) is a local move — not
+    /// the edge-fetch snap that zero-overscan windows caused. The downward
+    /// direction already moved locally; this pins the upward symmetry the
+    /// overscan fix (007) restores. (A prefetch may fire from the near-edge
+    /// check; that is a non-jumping background replacement, not the 008 jump.)
+    #[test]
+    fn upward_scroll_in_a_tall_panes_overscanned_window_is_local() {
+        // What the daemon serves for a 200-row viewport after the 007 fix:
+        // 264 rows (200 + 64 overscan), viewport at offset 32.
+        let mut state = Scrollback::Windowed {
+            window: window(264, 32, 1000, 1000).into(),
+            offset: 32,
+            fractional_row: 0.0,
+            viewport_rows: 200,
+            fetch: None,
+        };
+
+        // Scroll up one row: stays inside the block — no edge fetch, no
+        // snap to offset 0.
+        let decision = state.on_wheel(1.0, 200);
+        assert!(decision.repaint);
+        match &state {
+            Scrollback::Windowed { offset, fetch, .. } => {
+                assert_eq!(*offset, 31, "the viewport moves locally by one row");
+                assert!(
+                    !matches!(fetch, Some(WindowFetch::Edge { .. })),
+                    "no edge fetch — the overscan absorbs the gesture"
+                );
+            }
+            other => panic!("expected windowed, got {other:?}"),
+        }
+
+        // The symmetric downward check: scrolling back down is also local.
+        let decision = state.on_wheel(-1.0, 200);
+        assert!(decision.repaint);
+        match &state {
+            Scrollback::Windowed { offset, fetch, .. } => {
+                assert_eq!(*offset, 32, "the viewport moves back down locally");
+                assert!(
+                    !matches!(fetch, Some(WindowFetch::Edge { .. })),
+                    "no edge fetch on the way back either"
+                );
+            }
+            other => panic!("expected windowed, got {other:?}"),
+        }
+    }
+
     /// `visible_lines` slices the held window at the local offset, and returns
     /// `None` while following the live tail (the paint then uses the frame).
     #[test]

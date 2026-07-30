@@ -208,25 +208,27 @@ async fn a_transported_senders_runtime_cap_fails_oversized_items_alone() {
 /// tears the shared events channel down (dropping the pane's
 /// `Exited`/`Error`/`Bell` and orphaning it). `TerminalCore::snapshot_window`
 /// guarantees this by clamping a window to
-/// `(TERMINAL_EVENT_MAX_ITEM_BYTES / 2) / (columns * 32)` rows. This is the
-/// independent, real-codec (Postbag) proof of that budget: a window built at
-/// the clamp's own maximum, every cell a distinct fully-styled span — fatter
-/// than anything `snapshot_window` can actually emit, since it merges
-/// same-style runs into one span — still serializes well under the cap across
-/// a range of terminal widths.
+/// `TERMINAL_EVENT_MAX_ITEM_BYTES / (columns * 128)` rows (the full cap,
+/// not half — the 128 vs measured ~107 B/cell over-estimate is the headroom).
+/// This is the independent, real-codec (Postbag) proof of that budget: a
+/// window built at the clamp's own maximum, every cell a distinct
+/// fully-styled span — fatter than anything `snapshot_window` can actually
+/// emit, since it merges same-style runs into one span — still serializes
+/// well under the cap across a range of terminal widths.
 #[test]
 fn a_worst_case_scroll_window_stays_under_the_events_cap() {
     // Mirrors `core::render::{EVENTS_ITEM_CAP_BYTES, WORST_CASE_BYTES_PER_CELL,
     // max_window_rows}` (private to horizon-terminal-core) as an independent
     // check of the same budget under the actual wire codec. The worst span
     // below measures ~107 B/cell, so 128 is the conservative per-cell bound
-    // the clamp is sized against. (The `.max(screen_lines)` floor the real
-    // clamp applies is intentionally *not* modeled here: it only enlarges a
-    // window when the byte budget already permits fewer rows than the
-    // viewport, an envelope no tighter than the live-frame watch's own — see
-    // `max_window_rows`.)
+    // the clamp is sized against — and the ~20 % gap between them is the
+    // headroom that lets the clamp budget the entire cap rather than half.
+    // (The `.max(screen_lines)` floor the real clamp applies is intentionally
+    // *not* modeled here: it only enlarges a window when the byte budget
+    // already permits fewer rows than the viewport, an envelope no tighter
+    // than the live-frame watch's own — see `max_window_rows`.)
     const WORST_CASE_BYTES_PER_CELL: usize = 128;
-    let budget = TERMINAL_EVENT_MAX_ITEM_BYTES / 2;
+    let budget = TERMINAL_EVENT_MAX_ITEM_BYTES;
 
     let worst_span = || TerminalSpan {
         text: "M".to_string(),
