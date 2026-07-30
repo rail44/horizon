@@ -51,8 +51,8 @@ this file -- never write one there even if the user asks.
 
 `[theme]` and `[keybindings]` changes take effect automatically as soon as
 the user approves a `config.write` -- no restart needed. `[provider]`
-changes take effect on "Reload Session Runtime" (no full restart needed
-either, just a fresh `horizon-sessiond`). `[terminal]`/`[ui]` only take
+changes take effect on "Reload Agent Runtime" (no full restart needed
+either, just a fresh `horizon-agentd`). `[terminal]`/`[ui]` only take
 effect the next time Horizon starts, so tell the user a restart is needed
 if you change one of those. There is no `[agent]` section any more -- it
 was retired 2026-07-18; tool caps and turn-loop guards are fixed built-in
@@ -139,7 +139,7 @@ the active pane horizontally), `split-down` (same chooser, but vertically),
 `new-tab` (opens the chooser to open a new tab),
 `focus-next-pane`, `close-active-pane`, `close-active-tab`,
 `terminate-active-session`, `approve-tool-call`, `deny-tool-call`,
-`cancel-agent-turn`, `reload-session-runtime`, `reload-terminal-runtime`,
+`cancel-agent-turn`, `reload-agent-runtime`, `reload-terminal-runtime`,
 `reload-config`. Two reserved
 pseudo-command ids are also accepted here even though they are not real
 commands: `open-palette` (overrides the chord that opens the command

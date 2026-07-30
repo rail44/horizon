@@ -744,10 +744,10 @@ pub(super) fn run_sandboxed(
             // `occurrence_id` is `None` here: this is the bash executor
             // constructing the `prior_result` of an
             // `ApprovalKind::FilesystemDenialRetry` approval, and the
-            // sessiond's `fold_filesystem_denied` already knows the request's
+            // agentd's `fold_filesystem_denied` already knows the request's
             // `occurrence_id` (it pulled `original_request` off the frame)
             // and stamps it onto the final `ToolCallResult` it forwards to
-            // the agent (see `crates/horizon-sessiond/src/session/
+            // the agent (see `crates/horizon-agentd/src/session/
             // completion.rs`'s `fold_filesystem_denied`). The transcript
             // matches results by `occurrence_id` first, so a `None` here
             // would re-collide on reused `call_id`s -- the fixup at fold
@@ -833,7 +833,7 @@ fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> B
     BashCompletion::DomainDenied {
         call_id: call_id.clone(),
         domains,
-        // `occurrence_id` is fixed up by `fold_domain_denied` at sessiond
+        // `occurrence_id` is fixed up by `fold_domain_denied` at agentd
         // fold time -- see the comment on the `FilesystemDenied` arm of
         // `run_sandboxed` above.
         result: ToolCallResult::new(call_id.clone(), None, output),

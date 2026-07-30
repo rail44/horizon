@@ -24,7 +24,7 @@ use crate::tools::{definitions, permission_for_tool};
 /// through to this crate's own auto-allow tools (`tools::fs`). See
 /// `docs/agent-runtime-split-design.md`'s "Tools execute in the child"
 /// guardrail — this is the seam that will grow into the host-tool channel
-/// once tool execution moves into `horizon-sessiond`.
+/// once tool execution moves into `horizon-agentd`.
 pub trait HostTools {
     /// Executes a host-owned auto-allow tool, returning `None` if `tool_id`
     /// isn't one this implementation handles.
@@ -343,7 +343,7 @@ pub fn tool_result_message(result: &ToolCallResult) -> Event {
 /// (non-error) outcome instead of hanging forever. `occurrence_id` is `None`
 /// because a cancellation is a session-wide event with no per-occurrence
 /// reference available at the call site -- and unlike the asynchronous
-/// executors' results, this one never passes through the sessiond's
+/// executors' results, this one never passes through the agentd's
 /// `fold_finished_bash_result` (the session loop synthesizes it directly),
 /// so nothing stamps it later either. Consumers fall back to call_id
 /// matching for `None`, the same legacy path replayed pre-feature logs

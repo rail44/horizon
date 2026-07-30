@@ -4,9 +4,9 @@
 //! the UI-thread bridge over it -- `ChannelExecutor` hands each
 //! `ControlRequest` to the GPUI event loop via a channel -- plus a
 //! dispatcher over the shell's `execute()`/model. The external vocabulary
-//! here mirrors every landed subsystem, including `reload-session-runtime`
-//! (the sessiond drain/respawn/resume sequence,
-//! `WorkspaceShell::reload_session_runtime`).
+//! here mirrors every landed subsystem, including `reload-agent-runtime`
+//! (the agentd drain/respawn/resume sequence,
+//! `WorkspaceShell::reload_agent_runtime`).
 
 use std::time::Duration;
 
@@ -245,8 +245,8 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
-        "reload-session-runtime" => {
-            shell.execute_external(CommandId::ReloadSessionRuntime, window, cx);
+        "reload-agent-runtime" | "reload-session-runtime" => {
+            shell.execute_external(CommandId::ReloadAgentRuntime, window, cx);
             ok_body()
         }
         "reload-terminal-runtime" => {

@@ -2,7 +2,7 @@
 
 > **Historical (annotated 2026-07-18):** this plan was executed in early
 > July 2026 and the module layout has since moved twice more (the agent
-> runtime split into `horizon-agentd`, later `horizon-sessiond`, and the
+> runtime split into `horizon-sessiond` (now `horizon-agentd`), and the
 > GPUI migration). Read the workspace layout itself, not this plan.
 
 Design date: 2026-07-01

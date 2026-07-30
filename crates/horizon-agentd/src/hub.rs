@@ -9,7 +9,7 @@
 //! Agent domain only since v17: terminal hosting moved to
 //! `horizon-terminald`'s own hub (`docs/terminald-split-design.md`), so
 //! nothing here spawns, owns, or kills a PTY -- which is exactly what makes
-//! [`SessionHub::drain`] (and therefore `Reload Session Runtime`) safe to
+//! [`SessionHub::drain`] (and therefore `Reload Agent Runtime`) safe to
 //! run as often as an agent-side rebuild demands.
 //!
 //! Bridging pattern, used by every attachment: the PTY/session side of the
@@ -89,7 +89,7 @@ impl Hub {
                 if let Err(err) = event_tx.send(event).await {
                     // See the terminal-update pump: send errors latch, so
                     // the attachment ends rather than skip-looping.
-                    eprintln!("horizon-sessiond: closing an agent event attachment: {err}");
+                    eprintln!("horizon-agentd: closing an agent event attachment: {err}");
                     break;
                 }
             }
@@ -100,7 +100,7 @@ impl Hub {
         command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
         tokio::spawn(async move {
-            let mut skips = DecodeSkipLog::new("horizon-sessiond agent commands");
+            let mut skips = DecodeSkipLog::new("horizon-agentd agent commands");
             loop {
                 match command_rx.recv().await {
                     Ok(Some(command)) => connection.route_command(session_id, command),
@@ -131,7 +131,7 @@ impl SessionHub for Hub {
                 daemon: ours,
             };
             eprintln!(
-                "horizon-sessiond: rejecting hello from {}: {reason}",
+                "horizon-agentd: rejecting hello from {}: {reason}",
                 client.binary_id
             );
             return Err(reason);
@@ -149,7 +149,7 @@ impl SessionHub for Hub {
                 if let Err(err) = request_tx.send(request).await {
                     // See the terminal-update pump: send errors latch, so
                     // the channel ends rather than skip-looping.
-                    eprintln!("horizon-sessiond: closing the host-tool request channel: {err}");
+                    eprintln!("horizon-agentd: closing the host-tool request channel: {err}");
                     break;
                 }
             }
@@ -162,7 +162,7 @@ impl SessionHub for Hub {
         response_tx.set_max_item_size(TOOL_IO_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
         tokio::spawn(async move {
-            let mut skips = DecodeSkipLog::new("horizon-sessiond host-tool responses");
+            let mut skips = DecodeSkipLog::new("horizon-agentd host-tool responses");
             loop {
                 match response_rx.recv().await {
                     Ok(Some(response)) => connection.handle_host_tool_response(response),
@@ -237,7 +237,7 @@ impl SessionHub for Hub {
         }
         if skipped_unknown > 0 {
             eprintln!(
-                "horizon-sessiond: withheld {skipped_unknown} unknown event(s) from \
+                "horizon-agentd: withheld {skipped_unknown} unknown event(s) from \
                  {session_id:?}'s replay (log lines written by a newer build; see \
                  `replayable`)"
             );
@@ -256,7 +256,7 @@ impl SessionHub for Hub {
     /// (`docs/terminald-split-design.md` decision 2).
     async fn drain(&self) -> Result<(), HubError> {
         flush_event_log_before_exit(self.connection.writer());
-        eprintln!("horizon-sessiond: drained, exiting");
+        eprintln!("horizon-agentd: drained, exiting");
         std::process::exit(0);
     }
 }
@@ -278,7 +278,7 @@ impl SessionHub for Hub {
 fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer {
         if let Err(error) = writer.flush() {
-            eprintln!("horizon-sessiond: failed to flush event log before draining: {error}");
+            eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
         }
     }
 }
@@ -325,7 +325,7 @@ mod tests {
         // calls `list_agents` after a successful hello hangs forever
         // instead of failing.
         state.mark_resume_ready();
-        Hub::new(Connection::new(state), "test-sessiond")
+        Hub::new(Connection::new(state), "test-agentd")
     }
 
     /// The hello gate (review item): a method called before `hello` — or

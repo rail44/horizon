@@ -22,7 +22,7 @@ use super::state::SessiondState;
 /// What the dedicated session thread was doing when an unwind crossed its
 /// runtime boundary. Provider events retain their exact contract kind so a
 /// persisted panic report can identify the event whose handling failed
-/// without relying on sessiond's transient stderr.
+/// without relying on agentd's transient stderr.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum SessionLoopPhase {
     Starting,
@@ -214,7 +214,7 @@ mod tests {
             .expect("the panic hook must retain the source location");
         assert!(location
             .file
-            .ends_with("crates/horizon-sessiond/src/session/panic.rs"));
+            .ends_with("crates/horizon-agentd/src/session/panic.rs"));
         assert!(location.line > 0);
         assert_eq!(
             failure.message(),
@@ -276,7 +276,7 @@ mod tests {
             phase: SessionLoopPhase::ProviderEvent("provider_request_finished"),
             payload: "test panic".to_string(),
             location: Some(PanicLocation {
-                file: "crates/horizon-sessiond/src/session.rs".to_string(),
+                file: "crates/horizon-agentd/src/session.rs".to_string(),
                 line: 1234,
                 column: 5,
             }),

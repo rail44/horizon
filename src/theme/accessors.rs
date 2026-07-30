@@ -93,7 +93,7 @@ pub(crate) fn surface_selected() -> Hsla {
 }
 
 /// The terminal pane's text-selection highlight. Until the v7 frame
-/// vocabulary, sessiond baked `[132, 220, 198]` -- the built-in accent,
+/// vocabulary, agentd baked `[132, 220, 198]` -- the built-in accent,
 /// `#84dcc6` -- into selected spans' `bg` as literal RGB; selection is now
 /// semantic frame metadata (`TerminalFrame::selection`) and the client
 /// resolves its color here instead (`docs/terminal-protocol-goals.md`

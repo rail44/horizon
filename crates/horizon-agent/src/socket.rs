@@ -1,15 +1,15 @@
-//! The default `horizon-sessiond` socket path -- shared between
-//! `horizon-sessiond` (which binds it) and Horizon's `agent::connection`
+//! The default `horizon-agentd` socket path -- shared between
+//! `horizon-agentd` (which binds it) and Horizon's `agent::connection`
 //! (which connects to it), so the two independently arrive at the same
 //! default without either depending on the other. Both sides also accept an
-//! explicit override: `horizon-sessiond --socket <path>` always wins on the
-//! bind side (see that binary's `main`), and `$HORIZON_SESSIOND_SOCKET` --
+//! explicit override: `horizon-agentd --socket <path>` always wins on the
+//! bind side (see that binary's `main`), and `$HORIZON_AGENTD_SOCKET` --
 //! resolved right here, so it's honored identically by both the bind-side
-//! fallback (`horizon-sessiond` only reaches [`default_socket_path`] when
+//! fallback (`horizon-agentd` only reaches [`default_socket_path`] when
 //! `--socket` was *not* given) and every client-side call
 //! (`agent::connection` never passes a CLI flag at
 //! all) -- overrides the plain XDG/`/tmp` fallback below. This is what lets
-//! a test harness point an isolated `horizon-sessiond` instance and Horizon's
+//! a test harness point an isolated `horizon-agentd` instance and Horizon's
 //! own connect attempt at the same scratch path with a single env var,
 //! without separately threading `--socket` through a spawn (see
 //! `docs/tasks/backlog.md` item 14).
@@ -21,12 +21,16 @@
 
 use std::path::PathBuf;
 
-/// `$HORIZON_SESSIOND_SOCKET` if set to a non-empty value, otherwise
-/// `$XDG_RUNTIME_DIR/horizon/sessiond.sock`, falling back to
-/// `/tmp/horizon-sessiond-$UID.sock` when `XDG_RUNTIME_DIR` is also unset or
-/// empty.
+/// `$HORIZON_AGENTD_SOCKET` (or its legacy alias `$HORIZON_SESSIOND_SOCKET`)
+/// if set to a non-empty value, otherwise `$XDG_RUNTIME_DIR/horizon/agentd.sock`,
+/// falling back to `/tmp/horizon-agentd-$UID.sock` when `XDG_RUNTIME_DIR` is also
+/// unset or empty.
 pub fn default_socket_path() -> PathBuf {
-    let override_path = std::env::var("HORIZON_SESSIOND_SOCKET").ok();
+    // Legacy fallback: `HORIZON_SESSIOND_SOCKET` (the pre-rename env var) is
+    // still honored so existing test scripts and environments don't break.
+    let override_path = std::env::var("HORIZON_AGENTD_SOCKET")
+        .ok()
+        .or_else(|| std::env::var("HORIZON_SESSIOND_SOCKET").ok());
     let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
     // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
     let uid = unsafe { libc::getuid() };
@@ -35,11 +39,11 @@ pub fn default_socket_path() -> PathBuf {
 
 /// [`default_socket_path`]'s sibling for `horizon-terminald`
 /// (`docs/terminald-split-design.md` decision 1): the terminal daemon binds
-/// its own socket next to sessiond's, so draining one never disturbs the
+/// its own socket next to agentd's, so draining one never disturbs the
 /// other. Same resolution rules, one directory level and one file name
 /// apart -- `$HORIZON_TERMINALD_SOCKET`, else
 /// `$XDG_RUNTIME_DIR/horizon/terminald.sock`, else
-/// `/tmp/horizon-terminald-$UID.sock`. Kept here, beside sessiond's, so the
+/// `/tmp/horizon-terminald-$UID.sock`. Kept here, beside agentd's, so the
 /// two conventions cannot drift apart unnoticed.
 pub fn default_terminald_socket_path() -> PathBuf {
     let override_path = std::env::var("HORIZON_TERMINALD_SOCKET").ok();
@@ -69,8 +73,8 @@ fn default_socket_path_from(
         override_path,
         xdg_runtime_dir,
         uid,
-        "sessiond.sock",
-        "horizon-sessiond",
+        "agentd.sock",
+        "horizon-agentd",
     )
 }
 
@@ -101,7 +105,7 @@ mod tests {
     fn prefers_xdg_runtime_dir_when_set() {
         assert_eq!(
             default_socket_path_from(None, Some("/run/user/1000".to_string()), 1000),
-            PathBuf::from("/run/user/1000/horizon/sessiond.sock")
+            PathBuf::from("/run/user/1000/horizon/agentd.sock")
         );
     }
 
@@ -109,11 +113,11 @@ mod tests {
     fn falls_back_to_tmp_with_uid_when_xdg_runtime_dir_is_unset_or_empty() {
         assert_eq!(
             default_socket_path_from(None, None, 1000),
-            PathBuf::from("/tmp/horizon-sessiond-1000.sock")
+            PathBuf::from("/tmp/horizon-agentd-1000.sock")
         );
         assert_eq!(
             default_socket_path_from(None, Some(String::new()), 1000),
-            PathBuf::from("/tmp/horizon-sessiond-1000.sock")
+            PathBuf::from("/tmp/horizon-agentd-1000.sock")
         );
     }
 
@@ -121,24 +125,24 @@ mod tests {
     fn override_wins_over_xdg_runtime_dir() {
         assert_eq!(
             default_socket_path_from(
-                Some("/tmp/scratch/sessiond.sock".to_string()),
+                Some("/tmp/scratch/agentd.sock".to_string()),
                 Some("/run/user/1000".to_string()),
                 1000
             ),
-            PathBuf::from("/tmp/scratch/sessiond.sock")
+            PathBuf::from("/tmp/scratch/agentd.sock")
         );
     }
 
     #[test]
     fn override_wins_when_xdg_runtime_dir_is_unset() {
         assert_eq!(
-            default_socket_path_from(Some("/tmp/scratch/sessiond.sock".to_string()), None, 1000),
-            PathBuf::from("/tmp/scratch/sessiond.sock")
+            default_socket_path_from(Some("/tmp/scratch/agentd.sock".to_string()), None, 1000),
+            PathBuf::from("/tmp/scratch/agentd.sock")
         );
     }
 
     #[test]
-    fn the_terminald_default_is_a_sibling_of_sessionds() {
+    fn the_terminald_default_is_a_sibling_of_agentds() {
         // Decision 1's "sibling socket": same directory, different file --
         // so a drain aimed at one daemon can never reach the other.
         assert_eq!(
@@ -175,7 +179,7 @@ mod tests {
                 Some("/run/user/1000".to_string()),
                 1000
             ),
-            PathBuf::from("/run/user/1000/horizon/sessiond.sock")
+            PathBuf::from("/run/user/1000/horizon/agentd.sock")
         );
     }
 }

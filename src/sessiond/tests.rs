@@ -6,7 +6,7 @@
 //! envelope scripting.
 //!
 //! Since the terminald split there are two of everything: a
-//! [`FakeSessionHub`] standing in for `horizon-sessiond` and a
+//! [`FakeSessionHub`] standing in for `horizon-agentd` and a
 //! [`FakeTerminalHub`] for `horizon-terminald`, driven through
 //! [`SessiondHandle`] and [`TerminaldHandle`] respectively. The tests that
 //! matter most for the split are the ones that run *both* at once and prove
@@ -316,7 +316,7 @@ impl SessionHub for FakeSessionHub {
             skipped_rx.set_max_item_size::<{ horizon_session_protocol::CONTROL_MAX_ITEM_BYTES }>();
         Ok(HubHello {
             negotiated: SESSION_PROTOCOL_VERSION,
-            binary_id: "fake-sessiond".to_string(),
+            binary_id: "fake-agentd".to_string(),
             host_tools: request_rx,
             host_tool_responses: response_tx,
             skipped_lines: skipped_rx,
@@ -413,7 +413,7 @@ where
             write_half,
         )
         .await
-        .expect("fake sessiond remoc connect");
+        .expect("fake agentd remoc connect");
     let conn_task = tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -449,7 +449,7 @@ async fn next_agent_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<AgentC
     tokio::time::timeout(Duration::from_secs(5), calls.recv())
         .await
         .expect("timed out waiting for an agent hub call")
-        .expect("fake sessiond stopped recording calls")
+        .expect("fake agentd stopped recording calls")
 }
 
 /// The runtime probes `list_terminals` right after `hello`
@@ -519,7 +519,7 @@ fn local_terminal_frame_route_collapses_a_burst_to_its_latest_snapshot() {
 /// separate route tables, so an agent-runtime failure never reaches a
 /// terminal pane. Before the split one `Routes` served both, and
 /// `connection_failed` fanned a `TerminalUpdate::Error` out to every
-/// terminal — exactly the coupling `Reload Session Runtime` made visible.
+/// terminal — exactly the coupling `Reload Agent Runtime` made visible.
 #[test]
 fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (host_tools, _host_tools_rx) = unbounded();
@@ -549,7 +549,7 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
         terminal_event_rx
             .recv_timeout(Duration::from_millis(100))
             .is_err(),
-        "a sessiond failure must not reach terminal panes"
+        "a agentd failure must not reach terminal panes"
     );
 
     // And a terminal registered *after* the agent failure is still clean --
@@ -601,13 +601,12 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_sessiond() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (sessiond, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
+    let (agentd, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
 
     let terminal_id = Uuid::new_v4();
     let terminal = terminald.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
-    let agent =
-        sessiond.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
+    let agent = agentd.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
     let (mut terminal_calls, _tconn, _tserve) =
         serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
@@ -629,7 +628,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_sessiond() {
         AgentCall::Hello
     ));
     let AgentCall::NewAgent { new, peer } = next_agent_call(&mut agent_calls).await else {
-        panic!("the agent spawn must land on sessiond");
+        panic!("the agent spawn must land on agentd");
     };
     assert_eq!(new.session_id, agent_id);
     let agent_peer = peer;
@@ -669,8 +668,8 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_sessiond() {
     assert!(agent_calls.try_recv().is_err());
 }
 
-/// `Reload Session Runtime`'s client-runtime core (design decision 2): the
-/// agent runtime's drain reaches *only* sessiond, and the terminal session
+/// `Reload Agent Runtime`'s client-runtime core (design decision 2): the
+/// agent runtime's drain reaches *only* agentd, and the terminal session
 /// keeps streaming frames right through it. This is the acceptance property
 /// the daemon-level e2e (`horizon-terminald::e2e`'s
 /// `a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`)
@@ -681,7 +680,7 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (sessiond, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
+    let (agentd, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
 
     let terminal = terminald.start_terminal(Uuid::new_v4(), spec());
     let (mut terminal_calls, _tconn, _tserve) =
@@ -698,7 +697,7 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
         AgentCall::Hello
     ));
 
-    assert!(sessiond.begin_reload(), "the agent runtime was established");
+    assert!(agentd.begin_reload(), "the agent runtime was established");
     assert!(matches!(
         next_agent_call(&mut agent_calls).await,
         AgentCall::Drain
@@ -711,7 +710,7 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     assert_eq!(recv_frame(terminal.frames(), "still alive").await, frame);
     assert!(
         terminal_calls.try_recv().is_err(),
-        "draining sessiond must not send anything to terminald"
+        "draining agentd must not send anything to terminald"
     );
 }
 
@@ -1152,7 +1151,7 @@ async fn a_terminald_that_fails_the_call_after_hello_is_refused_by_name() {
 }
 
 fn stub_socket_paths(tag: &str) -> (std::path::PathBuf, std::path::PathBuf) {
-    // Keep well under SUN_LEN, same as the sessiond e2e tests.
+    // Keep well under SUN_LEN, same as the agentd e2e tests.
     let short_id = &Uuid::new_v4().simple().to_string()[..8];
     (
         std::env::temp_dir().join(format!("hzn-{tag}-{short_id}.sock")),
@@ -1266,7 +1265,7 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
 }
 
 /// Recovery is attempted exactly once per runtime: if the replacement
-/// daemon still can't speak remoc (a stale horizon-sessiond binary that a
+/// daemon still can't speak remoc (a stale horizon-agentd binary that a
 /// rebuild never touched), the runtime must fail loudly instead of
 /// drain-and-restarting forever, with the rebuild hint in the error.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -1382,7 +1381,7 @@ async fn a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopt
 
 /// The terminal runtime's own recovery: a terminald whose hub rejects the
 /// range is drained over the version-stable rtc surface and the respawn is
-/// adopted. Unlike sessiond there is no JSONL generation to probe downward
+/// adopted. Unlike agentd there is no JSONL generation to probe downward
 /// through — this one path covers every stale terminald.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted() {

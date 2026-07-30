@@ -15,7 +15,7 @@
 //! capability probe matching the pattern real ink/Claude-Code-style apps
 //! use to detect synchronized-output support before ever opening a window.
 //!
-//! Moved from `horizon-sessiond`'s test directory to this crate's by the
+//! Moved from `horizon-agentd`'s test directory to this crate's by the
 //! v17 terminald split (`docs/terminald-split-design.md`) -- the daemon it
 //! probes is `horizon-terminald` now.
 //!
@@ -77,7 +77,7 @@ struct TerminaldProcess {
 
 impl TerminaldProcess {
     /// Throwaway socket path per run. Unlike the pre-v17 version of this
-    /// probe (which spawned `horizon-sessiond` and had to point its event
+    /// probe (which spawned `horizon-agentd` and had to point its event
     /// log and DuckDB projection at scratch files), `horizon-terminald` owns
     /// no persistence at all, so there is nothing to isolate but the socket.
     fn spawn() -> Self {
@@ -297,8 +297,8 @@ async fn wait_for_marker(
 #[tokio::test]
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_baseline_shell_echo() {
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -432,8 +432,8 @@ while True:
 
 async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: Duration) {
     let script = write_fixture(&format!("hzn-latprobe-sync-tui-{mode}.py"), SYNC_TUI_SCRIPT);
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -518,8 +518,8 @@ async fn probe_synthetic_sync_output_multi_chunk() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_delayed_esu() {
     let script = write_fixture("hzn-latprobe-sync-tui-delayed-esu.py", SYNC_TUI_SCRIPT);
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -567,8 +567,8 @@ async fn probe_synthetic_sync_output_delayed_esu() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_malformed() {
     let script = write_fixture("hzn-latprobe-sync-tui-malformed.py", SYNC_TUI_SCRIPT);
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -661,8 +661,8 @@ while True:
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_decrqm_negotiation_bare_query() {
     let script = write_fixture("hzn-latprobe-decrqm-probe.py", DECRQM_PROBE_SCRIPT);
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -730,8 +730,8 @@ async fn probe_real_claude_composer_typing() {
         return;
     };
 
-    let sessiond = TerminaldProcess::spawn();
-    let client = connect_hub(&sessiond.socket_path).await;
+    let agentd = TerminaldProcess::spawn();
+    let client = connect_hub(&agentd.socket_path).await;
 
     let TerminalAttachment {
         mut frames,

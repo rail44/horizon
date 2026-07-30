@@ -1,4 +1,4 @@
-//! Panic capture shared by provider runtimes and their sessiond host.
+//! Panic capture shared by provider runtimes and their agentd host.
 //!
 //! `catch_unwind` retains the panic payload but not its source location. Rust
 //! exposes that location only to the process-wide panic hook, so Horizon

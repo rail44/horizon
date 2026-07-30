@@ -30,7 +30,7 @@
 #
 # Applied at startup only, with two exceptions: [theme]/[theme.ansi] and
 # [keybindings] apply live via the "Reload Config" command; [provider]
-# applies via "Reload Session Runtime" (a fresh horizon-sessiond process,
+# applies via "Reload Agent Runtime" (a fresh horizon-agentd process,
 # no full UI restart). [terminal]/[ui] need a full UI restart.
 #
 # Secrets never go here. OPENAI_API_KEY and the web-search adapter's
@@ -102,7 +102,7 @@ font_size = 13.0
 # split-down (same chooser, but vertically), new-tab (opens the chooser to
 # open a new tab), focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, approve-tool-call,
-# deny-tool-call, cancel-agent-turn, reload-session-runtime,
+# deny-tool-call, cancel-agent-turn, reload-agent-runtime,
 # reload-terminal-runtime (restarts horizon-terminald -- destructive: every
 # terminal session ends), reload-config,
 # manage-sessions (opens the session manager modal). The reserved pseudo-command
@@ -238,7 +238,7 @@ cyan = "#56b6c2"
 # inside it, which can influence later runs of that tool.
 #
 # Applied at session spawn only. Existing sessions keep the grants they
-# started with; "Reload Session Runtime" picks changes up for new ones —
+# started with; "Reload Agent Runtime" picks changes up for new ones —
 # same lifecycle as [provider].
 #
 # Commented out: there is no built-in default, and an active entry here

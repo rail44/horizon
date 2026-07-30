@@ -11,7 +11,7 @@
 //! Split in two by the terminald split (`docs/terminald-split-design.md`):
 //! one table per daemon connection, each with its *own* sticky failure. That
 //! separation is load-bearing, not cosmetic — before it, one `Routes` served
-//! both domains, so a sessiond failure fanned `TerminalUpdate::Error` out to
+//! both domains, so a agentd failure fanned `TerminalUpdate::Error` out to
 //! every terminal pane and poisoned later terminal registrations. Now an
 //! agent-runtime failure is visible only to agent sessions, which is the
 //! client-side half of "terminals do not care what the agent daemon is
@@ -26,7 +26,7 @@ use horizon_agent::wire::{self, AgentWireEvent, HostToolRequest};
 use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
 use uuid::Uuid;
 
-/// The `horizon-sessiond` connection's routes: per-agent-session event
+/// The `horizon-agentd` connection's routes: per-agent-session event
 /// senders plus the two process-wide channels its connection-global
 /// exchanges feed.
 pub(super) struct AgentRoutes {

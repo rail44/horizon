@@ -149,7 +149,7 @@ const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assist
 /// [`EXPLORE_ROLE`]'s id, named as a constant because two things outside
 /// this module have to recognize it without constructing a
 /// [`RoleDefinition`]: `tools::explore` (which asks the daemon to spawn a
-/// session with it) and `horizon-sessiond` (which refuses to resume one at
+/// session with it) and `horizon-agentd` (which refuses to resume one at
 /// startup and keeps it out of the client-visible session list -- see
 /// [`is_exploration`]).
 ///
@@ -217,7 +217,7 @@ const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: anoth
      continuing to look.";
 
 /// Whether `role_id` names [`EXPLORE_ROLE`] -- the one predicate
-/// `horizon-sessiond` needs to tell an exploration session apart from every
+/// `horizon-agentd` needs to tell an exploration session apart from every
 /// other session it hosts, without a wire field of its own
 /// (`docs/agent-explore-design.md` decision 8: the role id alone identifies
 /// them, so nothing additive had to be added to the session wire).

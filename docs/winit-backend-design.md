@@ -427,7 +427,7 @@ incidents"). Windows remains in the never-compiled position.
 Ran headless (`HORIZON_GPUI_DUMP`/`HORIZON_GPUI_DRIVE` taps, see the
 `gui-verify` skill) with `HORIZON_WINDOWING=winit` (historical — this env
 var no longer exists; see "Resolved incidents" / the top of this doc for
-the unification), isolated `HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/
+the unification), isolated `HORIZON_AGENTD_SOCKET`/`HORIZON_WORKSPACE_STATE`/
 `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`: a real decorated
 winit-backed window opened, a terminal session spawned and rendered,
 raw-PTY-injected marker text plus a 256-color (`Indexed(208)`) and
@@ -561,7 +561,7 @@ live: with temporary `eprintln!` instrumentation at each hop (raw winit
 `KeyEvent`, the mapped `Keystroke`, `dispatch_input`'s callback result, and
 `TerminalView::handle_key`'s entry), a real end-to-end keypress — injected
 via `xdotool key --window <XID>` against an isolated build (own
-`HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/etc., never touching the
+`HORIZON_AGENTD_SOCKET`/`HORIZON_WORKSPACE_STATE`/etc., never touching the
 owner's live instance) under a throwaway `Xvfb :77` display — flows
 correctly through every hop with the current, *unmodified* code:
 `WindowEvent::KeyboardInput` → `Keystroke` → `PlatformInput::KeyDown` →
@@ -1396,7 +1396,7 @@ followed by its one trailing empty probe, asserting the chain's last
 decision is `false`).
 
 **Live verification.** Built `cargo build --workspace`, then ran an
-isolated instance (own `HORIZON_SESSIOND_SOCKET`/`HORIZON_WORKSPACE_STATE`/
+isolated instance (own `HORIZON_AGENTD_SOCKET`/`HORIZON_WORKSPACE_STATE`/
 `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`, `HORIZON_INPUT_TRACE`
 to a file) against a private `Xvfb` display (X11-forced, per this doc's
 established safe-injection technique — never the owner's real desktop),
@@ -1415,7 +1415,7 @@ actually driven continuously across multiple frames, not just the single
 pre-fix frame — which then stopped cleanly and stayed flat for 3+ more
 seconds with no further growth. No runaway observed in any of the three
 phases. Cleaned up: killed only the isolated instance's own PIDs (app,
-its isolated `horizon-sessiond` matched by its unique socket path, and
+its isolated `horizon-agentd` matched by its unique socket path, and
 the private `Xvfb`); the owner's already-running `horizon` instance on
 this shared desktop was left untouched throughout (`scripts/check-gpui-terminal.sh`
 itself was not run, since it refuses to run alongside another `horizon`

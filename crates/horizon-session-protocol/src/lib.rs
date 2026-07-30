@@ -11,7 +11,7 @@
 //!
 //! Since v17 there are **two** hubs, one per daemon
 //! (`docs/terminald-split-design.md`): [`SessionHub`], served by
-//! `horizon-sessiond` on its socket, carries the agent domain only, and
+//! `horizon-agentd` on its socket, carries the agent domain only, and
 //! [`TerminalHub`], served by `horizon-terminald` on its own sibling
 //! socket, carries the terminal domain. Both share this crate's
 //! negotiation vocabulary ([`ClientHello`], [`VersionRange`],
@@ -20,7 +20,7 @@
 //!
 //! **The terminal slice is append-only from v17 on** (design decision 5):
 //! `horizon-terminald` is deliberately rarely restarted — a running one
-//! keeps its PTYs across every `Reload Session Runtime` — so a reshape of
+//! keeps its PTYs across every `Reload Agent Runtime` — so a reshape of
 //! [`TerminalHub`], [`TerminalAttachment`], or the `horizon-terminal-core`
 //! vocabularies is a *heavy* change that forces every terminal session to
 //! die on the next `Reload Terminal Runtime`. Evolve it by appending (new
@@ -526,7 +526,7 @@ impl ClientHello {
     }
 }
 
-/// `horizon-sessiond`'s `hello` reply: the negotiated version plus the
+/// `horizon-agentd`'s `hello` reply: the negotiated version plus the
 /// connection-global channels (`docs/remoc-adoption-design.md` §2 — what
 /// used to be connection-global envelope kinds now rides channels handed
 /// over here; everything session-scoped rides the per-attachment channels
@@ -584,7 +584,7 @@ pub struct TerminalHubHello {
 /// port reference, not data, so the artifact documents it as an opaque
 /// marker. What flows *through* each channel is documented separately by
 /// the artifact's `channels` section (see
-/// `crates/horizon-sessiond/tests/wire_schema.rs`).
+/// `crates/horizon-agentd/tests/wire_schema.rs`).
 fn channel_schema<T: JsonSchema>(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
     let payload = generator.subschema_for::<T>();
     schemars::json_schema!({
@@ -687,7 +687,7 @@ impl From<rtc::CallError> for HubError {
 /// The terminal hub — `horizon-terminald`'s whole rtc surface
 /// (`docs/terminald-split-design.md` decision 1). Carved off [`SessionHub`]
 /// in v17 so terminal hosting lives in its own rarely-restarted process:
-/// `Reload Session Runtime` drains the *agent* daemon and never touches a
+/// `Reload Agent Runtime` drains the *agent* daemon and never touches a
 /// PTY, while `Reload Terminal Runtime` is the explicit, destructive
 /// counterpart for this one.
 ///
@@ -733,7 +733,7 @@ pub trait TerminalHub {
     async fn drain(&self) -> Result<(), HubError>;
 }
 
-/// The agent session hub — `horizon-sessiond`'s rtc surface
+/// The agent session hub — `horizon-agentd`'s rtc surface
 /// (`docs/remoc-adoption-design.md` §2). The daemon serves it over its unix
 /// socket; [`hello`](Self::hello) must be the first call on every
 /// connection. `hello` and [`drain`](Self::drain) are the version-stable

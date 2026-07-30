@@ -32,7 +32,7 @@ impl Store {
     /// present", so a stale-behind mark next to an already-inserted row
     /// makes the next catch-up try to insert that same `event_id` again and
     /// fail on `agent_events`'s primary key -- reproduced by
-    /// `horizon-sessiond`'s own e2e suite (`stale_log_triggers_duckdb_
+    /// `horizon-agentd`'s own e2e suite (`stale_log_triggers_duckdb_
     /// rebuild_on_respawn`) once a resumed session's own live thread
     /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
     /// this one record's several statements in a transaction makes them

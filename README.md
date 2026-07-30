@@ -30,12 +30,12 @@ cargo run
 ```
 
 `cargo run` alone only rebuilds the root `horizon` binary; terminal and agent
-sessions run in `horizon-sessiond` (`crates/horizon-sessiond`), a separate
+sessions run in `horizon-agentd` (`crates/horizon-agentd`), a separate
 workspace member Horizon spawns on demand. Run `cargo build --workspace` at least once (and
 again after touching the runtime crates) or panes will fail to find a runtime
 to spawn. `just dev` builds the whole
 workspace and launches the freshly built binary directly (bypassing `cargo
-run`'s environment leakage into Horizon and sessiond); pass CLI subcommand
+run`'s environment leakage into Horizon and agentd); pass CLI subcommand
 arguments after it, e.g. `just dev sessions`.
 
 Agent provider access reads `OPENAI_API_KEY` from the environment. The
@@ -66,7 +66,7 @@ manual smoke checks:
 - `tab 1`, `tab 2`, ...: switches to the matching tab.
 - `terminate active session`: terminates the active session.
 - `manage sessions`: opens the session manager modal (see below).
-- `reload session runtime`: restarts `horizon-sessiond`, closes terminal
+- `reload session runtime`: restarts `horizon-agentd`, closes terminal
   sessions, and reconnects persisted agent sessions — use after rebuilding
   the session runtime crates, or to recover from a lost connection.
 
@@ -93,7 +93,7 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
-`reload-session-runtime`, `reload-terminal-runtime`, `reload-config`,
+`reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
 `sessions`, `state` (each takes
 `--split`/`--active` where placement/focus applies). See
 `docs/cli-control-plane-design.md` for the full contract.

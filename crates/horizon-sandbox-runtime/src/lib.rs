@@ -4,7 +4,7 @@
 //! recording-deny supervisor without nono-cli's terminal, session, rollback,
 //! trust, live-grant, and profile layers. Process supervision runs only through
 //! a dedicated helper process; it never forks inside the multi-threaded
-//! `horizon-sessiond` host.
+//! `horizon-agentd` host.
 //!
 //! The derived source revision and local deviations are recorded in
 //! `UPSTREAM.md` next to this crate.

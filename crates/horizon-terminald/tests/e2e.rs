@@ -4,11 +4,11 @@
 //! channel-bearing attachments, real PTYs backed by a real `/bin/sh`, and
 //! `drain`.
 //!
-//! Moved here (with the daemon) from `horizon-sessiond`'s e2e suite by the
+//! Moved here (with the daemon) from `horizon-agentd`'s e2e suite by the
 //! v17 terminald split (`docs/terminald-split-design.md`), plus the split's
 //! **acceptance test**:
 //! [`a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`]
-//! spawns *both* daemons and proves that the whole `Reload Session Runtime`
+//! spawns *both* daemons and proves that the whole `Reload Agent Runtime`
 //! sequence — graceful drain, process exit, respawn — leaves a terminald
 //! session attachable with its retained frame and a live shell. That is the
 //! property the split exists for, and the one thing no unit test can show.
@@ -35,7 +35,7 @@ use horizon_terminal_core::{
 use remoc::rch;
 use tokio::net::UnixStream;
 
-/// See `horizon-sessiond`'s e2e suite for the full write-up of why the
+/// See `horizon-agentd`'s e2e suite for the full write-up of why the
 /// *runtime* env var is preferred over the same-named compile-time `env!()`
 /// bake (`docs/tasks/backlog.md` #40): under this repo's shared build-dir a
 /// cached test binary's baked path can point into a deleted worktree, while
@@ -70,7 +70,7 @@ fn resolve_terminald_binary() -> PathBuf {
     );
 }
 
-/// `horizon-sessiond` for the cross-daemon acceptance test, resolved as a
+/// `horizon-agentd` for the cross-daemon acceptance test, resolved as a
 /// *sibling* of the terminald binary: `CARGO_BIN_EXE_<name>` is only
 /// injected for binaries of the package a test belongs to, and every
 /// workspace binary is uplifted into the same target directory, so the
@@ -81,10 +81,10 @@ fn resolve_sessiond_binary() -> PathBuf {
     let candidate = terminald
         .parent()
         .expect("the terminald binary must live in a directory")
-        .join("horizon-sessiond");
+        .join("horizon-agentd");
     assert!(
         candidate.is_file(),
-        "expected horizon-sessiond next to horizon-terminald at {} -- run \
+        "expected horizon-agentd next to horizon-terminald at {} -- run \
          `cargo build --workspace` (the quality gate does)",
         candidate.display()
     );
@@ -144,7 +144,7 @@ impl Drop for TerminaldProcess {
     }
 }
 
-/// The acceptance test's `horizon-sessiond`, spawned hermetically: its own
+/// The acceptance test's `horizon-agentd`, spawned hermetically: its own
 /// throwaway event log and DuckDB projection plus a nonexistent config
 /// file, so it never reads or rebuilds a real developer's agent state.
 struct SessiondProcess {
@@ -623,8 +623,8 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
     std::fs::remove_dir_all(root).unwrap();
 }
 
-/// Drains a `horizon-sessiond` over its own hub — exactly what
-/// `Reload Session Runtime` sends (`SessiondHandle::begin_reload` →
+/// Drains a `horizon-agentd` over its own hub — exactly what
+/// `Reload Agent Runtime` sends (`SessiondHandle::begin_reload` →
 /// `SessionHub::drain`). The reply never travels (the daemon exits inside
 /// the call), so the transport error is expected; the caller confirms the
 /// exit with [`wait_for_exit`].
@@ -638,7 +638,7 @@ async fn drain_sessiond(socket_path: &Path) {
             write_half,
         )
         .await
-        .expect("remoc connect to sessiond");
+        .expect("remoc connect to agentd");
     let conn_task = tokio::spawn(async move {
         let _ = conn.await;
     });
@@ -646,7 +646,7 @@ async fn drain_sessiond(socket_path: &Path) {
         .recv()
         .await
         .expect("base channel recv")
-        .expect("sessiond should hand over its hub client");
+        .expect("agentd should hand over its hub client");
     hub.hello(ClientHello::new("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
@@ -656,7 +656,7 @@ async fn drain_sessiond(socket_path: &Path) {
 
 /// **The terminald split's acceptance property**
 /// (`docs/terminald-split-design.md` decisions 1-2): the exact sequence
-/// `Reload Session Runtime` performs against the *agent* daemon — graceful
+/// `Reload Agent Runtime` performs against the *agent* daemon — graceful
 /// rtc `drain`, wait for the process to exit, spawn a fresh one on the same
 /// socket — leaves a `horizon-terminald` session fully usable: still listed,
 /// still attachable, its retained frame intact, and its shell still alive
@@ -667,12 +667,12 @@ async fn drain_sessiond(socket_path: &Path) {
 /// `TerminalHost::shutdown_all`). The test is deliberately end-to-end over
 /// two real daemons on two real sockets, because that separation is the
 /// whole deliverable — the client-side half is pinned separately in
-/// `src/sessiond/tests.rs`
+/// `src/agentd/tests.rs`
 /// (`draining_the_agent_runtime_leaves_the_terminal_runtime_untouched`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable() {
     let terminald = TerminaldProcess::spawn();
-    let mut sessiond = SessiondProcess::spawn();
+    let mut agentd = SessiondProcess::spawn();
 
     // A live terminal session with recognizable output.
     let session_id = uuid::Uuid::new_v4();
@@ -689,20 +689,20 @@ async fn a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable
     .await;
     let _ = collect_terminal_frame_until(&mut attachment.frames, "BEFORE_AGENT_RELOAD").await;
 
-    // `Reload Session Runtime`, faithfully: drain the agent daemon over its
+    // `Reload Agent Runtime`, faithfully: drain the agent daemon over its
     // own hub, confirm the process is gone, then bring a fresh one up on the
     // same socket and event log.
-    drain_sessiond(&sessiond.socket_path).await;
-    let status = wait_for_exit(&mut sessiond.child).await;
+    drain_sessiond(&agentd.socket_path).await;
+    let status = wait_for_exit(&mut agentd.child).await;
     assert_eq!(
         status.code(),
         Some(0),
-        "horizon-sessiond should exit 0 after a drain, got {status:?}"
+        "horizon-agentd should exit 0 after a drain, got {status:?}"
     );
-    let sessiond = sessiond.respawn_at_same_paths();
+    let agentd = agentd.respawn_at_same_paths();
     // The replacement really is up (its bind-first startup makes this
     // immediate), so the reload sequence is complete, not merely started.
-    drop(connect_with_retry(&sessiond.socket_path).await);
+    drop(connect_with_retry(&agentd.socket_path).await);
 
     // The terminal daemon never noticed. Its session is still listed...
     assert_eq!(

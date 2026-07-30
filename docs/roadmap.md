@@ -23,7 +23,7 @@ in `backlog-resolved.md`).
 
 The shell is GPUI-based with Horizon's own winit platform layer on
 every OS (native decorations, IME). Terminals and agent sessions are
-hosted by `horizon-sessiond` and survive UI restarts; the workspace
+hosted by `horizon-agentd` and survive UI restarts; the workspace
 (tabs, weighted splits, focus, attachments) persists and restores.
 Terminal input implements Kitty's common disambiguation/event paths with a
 code-resident compliance matrix; its known higher-level gaps are explicit.
@@ -62,7 +62,7 @@ archive), `Hello.capabilities` removed (protocol v6), and the
 `created_terminal` seam dissolved by the empty-workspace correction —
 zero tabs is a valid, persistable state, auto-reseed removed from
 every termination path per the owner's original intent (superseding
-`704657b`; `Reload Session Runtime` deliberately keeps its reseed,
+`704657b`; `Reload Agent Runtime` deliberately keeps its reseed,
 backlog 50). The roles-registry decision moved into the
 agent-improvement consultation below. The mechanical remainder — the
 `workspace.rs` and `agent/view.rs` splits, the dead-code/doc-rot
@@ -564,7 +564,7 @@ lands:
 - 2026-07-12 winit windowing backend on every OS: native decorations,
   IME, hand-rolled macOS menu (retired 2026-07-22;
   `docs/winit-backend-design.md`)
-- 2026-07-12 Session daemon steps 1–2B: `horizon-sessiond` hosts
+- 2026-07-12 Session daemon steps 1–2B: `horizon-agentd` hosts
   terminal PTYs and retained frames, correlated discovery/adoption,
   workspace persistence with restore
   (`docs/session-daemon-design.md`,

@@ -93,7 +93,7 @@ the fragments stay behind and are discarded.
    terminated rather than re-adopted. If the explore role id alone can
    identify them, no wire change is needed; if a wire field is added it
    must be additive (regenerate the schema artifact —
-   `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-sessiond
+   `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agentd
    wire_schema` — the checker gates non-additive changes).
 
 ## Catalog description (draft, adjust wording freely)
@@ -339,7 +339,7 @@ lever, kept because it costs nothing.
 
 The internal role id stays `"explore"` (`roles::EXPLORE_ROLE_ID`). It is a
 persistence and cleanup identity: it is written into the event log, it is
-what makes `horizon-sessiond` refuse to resume an orphaned exploration at
+what makes `horizon-agentd` refuse to resume an orphaned exploration at
 startup, and it is what filters exploration sessions out of the
 client-visible session list. Renaming it would touch resume paths and
 already-persisted records for no model-visible benefit.
@@ -492,7 +492,7 @@ above.
   state; what changed is where the result goes (a per-requester queue plus
   a wake, instead of the requester's `async_results` channel). The
   daemon-side plumbing moved into
-  `crates/horizon-sessiond/src/session/subscription.rs`, documented as the
+  `crates/horizon-agentd/src/session/subscription.rs`, documented as the
   general "subscribe to another session's stop/blocking events" seam that
   approval forwarding for future write-capable children extends with one
   more event kind.

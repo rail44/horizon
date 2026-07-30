@@ -1,11 +1,11 @@
 //! The daemon's [`TerminalHub`] implementation — the terminal half of what
-//! `horizon-sessiond`'s hub used to serve, moved here verbatim by the v17
+//! `horizon-agentd`'s hub used to serve, moved here verbatim by the v17
 //! split (`docs/terminald-split-design.md`). One [`Hub`] is built per
 //! accepted connection and served via `TerminalHubServerShared` with
 //! per-call task spawning, so a slow call (a PTY spawn) never blocks the
 //! others; the process-lifetime state stays in [`TerminalHost`].
 //!
-//! Bridging pattern, unchanged from the sessiond era: the PTY side of the
+//! Bridging pattern, unchanged from the agentd era: the PTY side of the
 //! daemon is synchronous (std threads, crossbeam channels), so each remote
 //! channel gets a local unbounded tokio channel as its sync-sendable half,
 //! and a small async pump task that drains it into the remote `rch` sender.
@@ -149,7 +149,7 @@ impl Hub {
 }
 
 impl TerminalHub for Hub {
-    /// The §3 range negotiation. Channel-free, unlike sessiond's `hello`:
+    /// The §3 range negotiation. Channel-free, unlike agentd's `hello`:
     /// every connection-global channel belongs to the agent domain, so this
     /// reply is just the negotiated version plus this binary's id (the skew
     /// insurance the client records — see [`TerminalHubHello`]).

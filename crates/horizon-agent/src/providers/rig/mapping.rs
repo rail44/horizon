@@ -179,7 +179,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
 ///    completed request ever consumed is the honest repair.
 /// 3. **An announced call nothing ever answers gets a cancelled result**,
 ///    the same synthesis `session::append_cancelled_tool_results_to_history`
-///    and `horizon-sessiond`'s startup fixup already use, inserted where the
+///    and `horizon-agentd`'s startup fixup already use, inserted where the
 ///    real result would have gone. The rebuild needs its own copy because
 ///    the two run against different stores: the startup fixup appends to the
 ///    event log, while the rebuild reads the DuckDB projection, which the
@@ -262,7 +262,7 @@ pub(super) fn repair_replayed_message_pairing(messages: Vec<Message>) -> Vec<Mes
     }
     close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
 
-    // Diagnosable on sessiond's stderr, the channel `horizon-sessiond`'s own
+    // Diagnosable on agentd's stderr, the channel `horizon-agentd`'s own
     // resume fixups already report through: a repair that fired silently
     // would leave the next incident with nothing to read.
     if !dropped.is_empty() {

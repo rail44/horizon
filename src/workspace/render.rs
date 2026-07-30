@@ -967,7 +967,7 @@ impl WorkspaceShell {
 impl Render for WorkspaceShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Suppressed outright while a restore is in progress (unless it
-        // failed, which still allows reaching `Reload Session Runtime` --
+        // failed, which still allows reaching `Reload Agent Runtime` --
         // same predicate `toggle_mode`/`mode_move`/`mode_commit`/
         // `mode_cancel` already gate on): a workspace persisted with zero
         // tabs would otherwise have `is_workspace_mode_active()`'s

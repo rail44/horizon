@@ -1,6 +1,6 @@
 //! Horizon's eager client runtimes for the session daemons — since v10
 //! remoc hub clients (`docs/remoc-adoption-design.md` §2), and since v17
-//! **two of them**: [`SessiondHandle`] speaks to `horizon-sessiond` (the
+//! **two of them**: [`SessiondHandle`] speaks to `horizon-agentd` (the
 //! agent runtime) and [`TerminaldHandle`] to `horizon-terminald` (the
 //! terminal runtime), each over its own socket, connection, op queue, and
 //! `RuntimeControl` (`docs/terminald-split-design.md`).
@@ -44,7 +44,7 @@ use common::RuntimeControl;
 /// of a UI hang.
 const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// The client runtime for `horizon-sessiond`: agent sessions and the
+/// The client runtime for `horizon-agentd`: agent sessions and the
 /// connection-global host-tool exchange.
 #[derive(Clone)]
 pub(crate) struct SessiondHandle {
@@ -269,7 +269,7 @@ impl SessiondHandle {
     /// `isolate` are `docs/session-relationship-design.md` decision 3's
     /// per-spawn knobs: the pane this spawn was invoked "from"
     /// (kind-agnostic -- may be a terminal or an agent session id) and
-    /// whether `horizon-sessiond` should give this session its own git
+    /// whether `horizon-agentd` should give this session its own git
     /// worktree derived from it. Both are resolved by the caller
     /// (origin-based default plus any explicit override -- see
     /// `workspace::session_lifecycle::PendingAgentSpawn`); this method just

@@ -27,7 +27,7 @@
 /// look the same: silence).
 pub const NEWEST_JSONL_VERSION: u32 = 9;
 
-/// The earliest protocol version whose `horizon-sessiond` honors a
+/// The earliest protocol version whose `horizon-agentd` honors a
 /// pre-hello `SessionControl::Drain` (that handling landed together with
 /// terminal hosting, in the v3 vocabulary). Daemons older than that
 /// predate the `Drain` control entirely, so probing below it is

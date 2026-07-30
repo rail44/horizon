@@ -20,7 +20,7 @@
 //!
 //! Split (2026-07-18) into responsibility-focused submodules -- a pure
 //! move, no behavior change: [`bindings`] (keybinding derivation/apply),
-//! [`session_lifecycle`] (session creation, sessiond resume/reload,
+//! [`session_lifecycle`] (session creation, agentd resume/reload,
 //! `reconcile`), [`commands`] (`execute`/`execute_external` and the
 //! session-targeted `external_*` family), [`modals`] (the palette/
 //! session-manager/view-chooser lifecycles), and [`render`]
@@ -300,8 +300,8 @@ pub(crate) struct WorkspaceShell {
     // agent requests while connect/hello proceeds in the background.
     sessiond: Option<SessiondHandle>,
     // The terminal daemon's own client runtime, started alongside
-    // `sessiond` and reloaded independently
-    // (`docs/terminald-split-design.md`): `Reload Session Runtime` replaces
+    // `agentd` and reloaded independently
+    // (`docs/terminald-split-design.md`): `Reload Agent Runtime` replaces
     // only the field above, so every PTY -- and whatever interactive CLI is
     // running in it -- survives an agent-runtime restart.
     terminald: Option<TerminaldHandle>,
@@ -317,7 +317,7 @@ pub(crate) struct WorkspaceShell {
     // daemon it targets.
     reload_in_progress: bool,
     panes: HashMap<PaneId, PaneView>,
-    // This window — needed by `Reload Session Runtime`'s post-resume step,
+    // This window — needed by `Reload Agent Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
     // continuation (no `&mut Window` of its own to reuse).
     window: AnyWindowHandle,

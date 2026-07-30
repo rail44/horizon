@@ -23,7 +23,7 @@
 //! copy (deduplicated 2026-07-18); the one deliberate duplication that
 //! remains is the `horizon_agent::socket` relationship described above.
 //! `HORIZON_SOCKET` remains the
-//! override on both sides and is still injected into panes/sessiond, which
+//! override on both sides and is still injected into panes/agentd, which
 //! is what keeps a nested dev instance addressable (see the design doc).
 use std::path::PathBuf;
 
@@ -31,7 +31,7 @@ use std::path::PathBuf;
 /// `/tmp/horizon-control-<uid>.sock` when `XDG_RUNTIME_DIR` is unset or
 /// empty. Pure and deterministic within one process run (only reads the env
 /// var and this process's own uid), so every call site -- the listener's
-/// bind, and every terminal/sessiond spawn site that injects `HORIZON_SOCKET`
+/// bind, and every terminal/agentd spawn site that injects `HORIZON_SOCKET`
 /// -- can call this independently and always agree, with no shared mutable
 /// state required.
 pub fn default_socket_path() -> PathBuf {

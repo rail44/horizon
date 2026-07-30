@@ -96,7 +96,7 @@ pub fn process_agent_provider_event(
                 // execution: no `Command::ToolCallResult` exists yet. The
                 // eventual result or structured narrow-grant request arrives
                 // over the session's async completion channel and is folded
-                // by `fold_tool_completion` in sessiond.
+                // by `fold_tool_completion` in agentd.
                 horizon_events.extend(events.into_iter().map(ProviderEvent::from));
             }
             Execution::RequiresApproval => {}

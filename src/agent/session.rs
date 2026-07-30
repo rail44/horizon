@@ -18,7 +18,7 @@ use horizon_agent::live::LiveState;
 
 use crate::sessiond::AgentSessionHandle;
 
-/// Whether the `commands` channel to `horizon-sessiond` is known dead
+/// Whether the `commands` channel to `horizon-agentd` is known dead
 /// (backlog #35: a failed send used to be a silent `let _ = ...` no-op).
 /// Kept as a free-standing, `Cell`-free state machine so its transitions
 /// are unit-testable without a GPUI `Context` -- `AgentSession` wraps one
@@ -239,7 +239,7 @@ impl AgentSession {
         }
     }
 
-    /// Whether the sessiond command channel is known dead (backlog #35).
+    /// Whether the agentd command channel is known dead (backlog #35).
     /// The view's status line consults this to surface the state instead
     /// of leaving a failed send as a silent no-op.
     pub(crate) fn runtime_unreachable(&self) -> bool {

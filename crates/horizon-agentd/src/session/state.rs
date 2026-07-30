@@ -38,7 +38,7 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
 pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<AgentWireEvent>>>;
 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
-/// every connection `horizon-sessiond` ever serves, and by every session
+/// every connection `horizon-agentd` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
 pub(crate) struct SessiondState {
     pub(crate) providers: ProviderRegistry,
@@ -301,7 +301,7 @@ mod tests {
     use crossbeam_channel::unbounded;
     use horizon_agent::contract::Event;
 
-    /// An id sessiond has never hosted (or has already ended) reports no
+    /// An id agentd has never hosted (or has already ended) reports no
     /// directory -- the "no source" case [`crate::worktree::resolve_isolation_source`]
     /// treats as a lineage root, falling back to the spawn's own
     /// `workspace_root`.

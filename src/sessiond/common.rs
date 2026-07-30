@@ -9,7 +9,7 @@
 //! agent-specific and terminal-specific halves live in [`super::connection`]
 //! and [`super::terminald`] respectively, because their op vocabularies,
 //! their `hello` replies, and their recovery paths genuinely differ (only
-//! sessiond has a JSONL generation to recover from; only terminald carries
+//! agentd has a JSONL generation to recover from; only terminald carries
 //! the below-schema skew insurance).
 
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};

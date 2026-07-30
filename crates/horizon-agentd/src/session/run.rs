@@ -151,7 +151,7 @@ pub(super) fn run_session(
             Ok(proxy) => Some(Arc::new(proxy)),
             Err(error) => {
                 eprintln!(
-                    "horizon-sessiond: failed to start session {session_id:?}'s network-proxy \
+                    "horizon-agentd: failed to start session {session_id:?}'s network-proxy \
                      bridge ({error}); tier-1 sandboxed bash will run with network disabled"
                 );
                 None
@@ -303,7 +303,7 @@ pub(super) fn run_session(
 
     if let Err(failure) = loop_outcome {
         eprintln!(
-            "horizon-sessiond: panic in session {session_id:?}: {}",
+            "horizon-agentd: panic in session {session_id:?}: {}",
             failure.message()
         );
         phase.set(SessionLoopPhase::RecordingPanic);
@@ -325,7 +325,7 @@ pub(super) fn run_session(
 /// history or the persisted log; see `ToolCallProgress`'s own doc comment),
 /// so wrapping it in `Envelope::event` isn't an option. This restores the
 /// streaming-tool-call-argument-preview feature the module's step 3 notes in
-/// `docs/agent-runtime-split-design.md` recorded as trimmed for sessiond mode.
+/// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
 /// `process_agent_provider_event` never mixes progress and real events in
 /// one `Processing` (a progress tick always comes back alone), so splitting
 /// `horizon_events` into the two forwarding shapes below is exhaustive in

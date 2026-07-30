@@ -67,7 +67,7 @@ pub struct TurnEnd {
 /// segment never requires a user `Message` specifically -- any item can
 /// open one, as long as none is currently open.** A resumed session, or
 /// a provider continuation that follows a daemon-synthesized `TurnEnded`
-/// (`resume_persisted_sessions` on a `horizon-sessiond` respawn mid-turn,
+/// (`resume_persisted_sessions` on a `horizon-agentd` respawn mid-turn,
 /// see `docs/agent-output-ui-amendment.md`'s round-4 finding) can produce
 /// tool activity or assistant text with no user `Message` immediately
 /// preceding it in the frame's own item window. Requiring a `Message` to
@@ -380,7 +380,7 @@ mod tests {
     fn a_turn_opening_item_that_is_not_a_user_message_still_opens_a_span() {
         // Invariant 2 (broadened 2026-07-13): a structural gap -- e.g. a
         // provider continuation following a daemon-synthesized
-        // `TurnEnded` on a `horizon-sessiond` respawn mid-turn
+        // `TurnEnded` on a `horizon-agentd` respawn mid-turn
         // (`docs/agent-output-ui-amendment.md`'s round-4 finding) -- can
         // leave tool activity or assistant text with no user `Message`
         // immediately preceding it in the frame's own item window.

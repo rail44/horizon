@@ -94,7 +94,7 @@ impl Store {
     /// each of those auto-commits -- and fsyncs -- on its own. Measured
     /// against a real ~16k-record archived event log, that made a full
     /// rebuild take minutes rather than seconds, which in practice meant
-    /// `horizon-sessiond` was routinely restarted before a rebuild ever
+    /// `horizon-agentd` was routinely restarted before a rebuild ever
     /// reached a durable, checkpointed state -- so the next boot's
     /// freshness check (`event_log::writer::duckdb_projection_currency`)
     /// never found a matching mark and rebuilt again, every single time.

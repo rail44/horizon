@@ -1,5 +1,5 @@
 [package]
-name = "horizon-sessiond"
+name = "horizon-agentd"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,7 +21,7 @@ uuid = { version = "1.18", features = ["v4"] }
 # It documents *both* daemons' hubs in one artifact, so it still needs the
 # terminal vocabulary even though this crate stopped hosting terminals in
 # v17 (`docs/terminald-split-design.md`) -- a dev-dependency, so the shipped
-# `horizon-sessiond` binary links none of it.
+# `horizon-agentd` binary links none of it.
 horizon-terminal-core = { path = "../horizon-terminal-core" }
 schemars = { version = "1", features = ["uuid1"] }
 tempfile = "3"

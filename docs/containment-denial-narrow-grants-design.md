@@ -167,7 +167,7 @@ recording-deny event loop exercised by Horizon. It deliberately omits live fd
 injection: the blocked syscall is denied and any approval applies to a fresh
 sandboxed retry.
 
-`horizon-sessiond` is multi-threaded, whereas nono-cli validates a
+`horizon-agentd` is multi-threaded, whereas nono-cli validates a
 single-threaded process before its supervised `fork()`. The extracted runner
 must consequently execute in a dedicated helper process, on Linux as well as
 the existing helper boundary on macOS. The helper and command form one process
@@ -248,7 +248,7 @@ When a request does reach the proxy, its denial log is authoritative and
 exit-code independent: `run_sandboxed` drains it after the child exits and
 returns `DomainDenied` (`exec.rs:612-659`). Sessiond then emits
 `ApprovalKind::DomainDenialRetry`
-(`crates/horizon-sessiond/src/session.rs:1346-1397`); approval grows only that
+(`crates/horizon-agentd/src/session.rs:1346-1397`); approval grows only that
 session's allowlist and invokes
 `bash::spawn_sandboxed` (`crates/horizon-agent/src/tools/approval.rs:224-295`).
 This is the correct retry shape and should become the generic model.
@@ -674,7 +674,7 @@ trees = ["~/.cargo"]
   warning channel): a tree at `$HOME` itself, `/`, or a system root is
   refused; `~` expands against `$HOME` like the persistence paths do.
 - Applied at session spawn only. Live sessions are unaffected by config
-  edits; `Reload Session Runtime` picks changes up for new sessions —
+  edits; `Reload Agent Runtime` picks changes up for new sessions —
   same lifecycle as `[provider]`.
 
 **Suggestion shaping, generic (interactive path, for trees not yet in

@@ -3,8 +3,8 @@
 //! `external_new_session`), pending-spawn staging consumed by
 //! `reconcile`, the startup/reload resume sweeps
 //! (`spawn_terminal_resume`/`spawn_agent_resume`/`spawn_workspace_restore`),
-//! the two independent reload paths (`reload_session_runtime` for
-//! `horizon-sessiond`, `reload_terminal_runtime` for `horizon-terminald` --
+//! the two independent reload paths (`reload_agent_runtime` for
+//! `horizon-agentd`, `reload_terminal_runtime` for `horizon-terminald` --
 //! see `docs/terminald-split-design.md` for why they must not be one), and
 //! the terminal-exit-to-terminate wiring
 //! (`wire_terminal_exit`/`handle_terminal_exited`). `reconcile` itself --
@@ -42,7 +42,7 @@ pub(super) struct PendingTerminalSpawn {
 /// Staged the same way as [`PendingTerminalSpawn`] (before a
 /// session-creating workspace mutation, consumed by `reconcile`), but for
 /// agent spawns' own two knobs (`docs/session-relationship-design.md`
-/// decision 3): the pane this spawn derives from, and whether sessiond
+/// decision 3): the pane this spawn derives from, and whether agentd
 /// should give it an isolated worktree. `Default` is "no source, not
 /// isolated" -- `reconcile`'s fallback when nothing staged anything (e.g. a
 /// resumed/attached session, never a fresh spawn).
@@ -180,7 +180,7 @@ impl WorkspaceShell {
                     // `SessiondHandle::start_session` itself (see
                     // `wire::SessionNew::workspace_root`'s doc comment).
                     // For an isolated spawn this is only the *pre-isolation*
-                    // value -- sessiond overrides it with the worktree path
+                    // value -- agentd overrides it with the worktree path
                     // it creates and reports the authoritative root back via
                     // `wire::SessionSummary::workspace_root`, which the
                     // resume/restore sweeps below re-apply with
@@ -392,8 +392,8 @@ impl WorkspaceShell {
     /// and attached over the wire (so its replayed transcript is ready
     /// when a pane picks it up). Shared by two callers: startup
     /// (`WorkspaceShell::new`, against a freshly opened window with no agent
-    /// panes yet) and `Reload Session Runtime`
-    /// (`Self::reload_session_runtime`, after the old connection has
+    /// panes yet) and `Reload Agent Runtime`
+    /// (`Self::reload_agent_runtime`, after the old connection has
     /// drained — see that function's doc comment for why its
     /// `agent_sessions`/agent-pane views are already cleared by the time
     /// this runs). Either way, the post-adopt `reconcile`/`focus_active`
@@ -447,7 +447,7 @@ impl WorkspaceShell {
                             .register_detached_session(PaneKind::Agent, session_id);
                         // The daemon's own `SessionEntry` is authoritative
                         // for `workspace_root` -- for an isolated session
-                        // this is the worktree path sessiond actually
+                        // this is the worktree path agentd actually
                         // created, which nothing on the shell side could
                         // have known at spawn time (worktree creation
                         // finishes asynchronously, after `start_session`
@@ -848,11 +848,7 @@ impl WorkspaceShell {
     /// their pane views all stay live across the whole sequence, so no
     /// terminal resume sweep is needed either (there is nothing to
     /// re-adopt — the attachments were never severed).
-    pub(super) fn reload_session_runtime(
-        &self,
-        old: Option<SessiondHandle>,
-        cx: &mut Context<Self>,
-    ) {
+    pub(super) fn reload_agent_runtime(&self, old: Option<SessiondHandle>, cx: &mut Context<Self>) {
         let socket_path = horizon_agent::socket::default_socket_path();
         let restart_socket = socket_path.clone();
         let control_socket = self.socket_path.clone();
@@ -861,7 +857,7 @@ impl WorkspaceShell {
             if let Some(handle) = old {
                 if handle.begin_reload() {
                     if let Err(error) = wait_for_drain(&socket_path) {
-                        eprintln!("horizon-sessiond did not drain cleanly: {error}");
+                        eprintln!("horizon-agentd did not drain cleanly: {error}");
                     }
                 }
                 handle.stop_and_wait();
@@ -886,7 +882,7 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// [`Self::reload_session_runtime`]'s terminal-daemon counterpart
+    /// [`Self::reload_agent_runtime`]'s terminal-daemon counterpart
     /// (`docs/terminald-split-design.md` decision 3): drains the old
     /// `horizon-terminald`, which kills every PTY it hosts, then starts a
     /// fresh one and reseeds a pane so the workspace is not left empty by an

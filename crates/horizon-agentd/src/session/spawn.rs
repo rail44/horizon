@@ -119,7 +119,7 @@ pub(super) fn spawn_session_thread(
         });
         if let Err(failure) = outcome {
             eprintln!(
-                "horizon-sessiond: uncaught panic in session {session_id:?}: {}",
+                "horizon-agentd: uncaught panic in session {session_id:?}: {}",
                 failure.message()
             );
             phase.set(SessionLoopPhase::RecordingPanic);
@@ -135,7 +135,7 @@ pub(super) fn spawn_session_thread(
             if let Err(report) = report_outcome {
                 let reporting_failure = SessionPanic::from_report(phase.get(), report);
                 eprintln!(
-                    "horizon-sessiond: could not record panic for session {session_id:?}: {}",
+                    "horizon-agentd: could not record panic for session {session_id:?}: {}",
                     reporting_failure.message()
                 );
             }
@@ -151,7 +151,7 @@ pub(super) fn spawn_session_thread(
         }) {
             let cleanup_failure = SessionPanic::from_report(phase.get(), report);
             eprintln!(
-                "horizon-sessiond: cleanup panic in session {session_id:?}: {}",
+                "horizon-agentd: cleanup panic in session {session_id:?}: {}",
                 cleanup_failure.message()
             );
         }
@@ -165,7 +165,7 @@ pub(super) fn spawn_session_thread(
         if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
             if !worktree::remove_worktree_if_clean(&worktree) {
                 eprintln!(
-                    "horizon-sessiond: kept worktree {} for {session_id:?} (not clean)",
+                    "horizon-agentd: kept worktree {} for {session_id:?} (not clean)",
                     worktree.path.display()
                 );
             }

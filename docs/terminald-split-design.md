@@ -5,9 +5,9 @@ Status: **implemented 2026-07-30**（wire v17）。決定 1–7 すべて実装�
 
 ## 動機（実測）
 
-`Reload Session Runtime` は毎回全ターミナル PTY を殺す（UI 側の明示
+`Reload Agent Runtime` は毎回全ターミナル PTY を殺す（UI 側の明示
 terminate + daemon 側の SIGHUP + master close の二重殺し —
-`src/workspace/commands.rs:17,151` / `crates/horizon-sessiond/src/
+`src/workspace/commands.rs:17,151` / `crates/horizon-agentd/src/
 hub.rs:389-393` / `terminal.rs:186`）。中で走る対話 CLI（オーナーの
 Claude Code）が道連れになるのが現在最大の運用痛。
 
@@ -35,7 +35,7 @@ Claude Code）が道連れになるのが現在最大の運用痛。
    ~900 LOC = 非共有コードの 13%。agent 状態との共有はゼロ —
    lineage 木もターミナルを除外済み）。自分の socket を持ち、
    sessiond と同様に on-demand spawn。
-2. **`Reload Session Runtime` は sessiond（agent runtime）だけを
+2. **`Reload Agent Runtime` は sessiond（agent runtime）だけを
    drain・respawn** する。ターミナルは無傷。
 3. terminal-core の変更を反映する **`Reload Terminal Runtime`** を
    別コマンドとして新設（明示的・破壊的 — close/terminate 分離の
@@ -90,7 +90,7 @@ needs that the decisions above do not already say.
 **Shape.** `horizon-terminald` is a new workspace crate
 (`crates/horizon-terminald`) with `TerminalHost` moved into it verbatim and
 its own `main` (bind-first accept loop, no persistence to resume, no
-readiness gate). `horizon-sessiond` dropped `terminal.rs`, its
+readiness gate). `horizon-agentd` dropped `terminal.rs`, its
 `portable-pty`/`sysinfo`/`horizon-terminal-core` dependencies, and the three
 terminal hub methods; its `drain` no longer touches a PTY.
 
@@ -128,7 +128,7 @@ not kill every running shell, which is the outcome this split exists to
 prevent. What the probe does *not* catch is written down at
 `terminald::establish`.
 
-**UI.** `Reload Session Runtime` now drops only agent sessions, agent
+**UI.** `Reload Agent Runtime` now drops only agent sessions, agent
 entities, and agent pane views; terminal panes keep their views (and thus
 their scroll/selection state) because their sessions never died.
 `Reload Terminal Runtime` (palette, `reload-terminal-runtime` keybinding id,
@@ -141,7 +141,7 @@ now compares reports from two processes.
 
 **Acceptance.** `horizon-terminald::e2e`'s
 `a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`
-spawns both daemons, performs the real `Reload Session Runtime` sequence
+spawns both daemons, performs the real `Reload Agent Runtime` sequence
 against sessiond (rtc drain → exit 0 → respawn on the same socket), and then
 proves the terminal session is still listed, still attachable, still carrying
 its retained frame, and still running a shell that answers new input. The

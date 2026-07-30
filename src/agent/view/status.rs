@@ -22,12 +22,12 @@ struct StatusProjection {
 }
 
 fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> StatusProjection {
-    // A dead sessiond channel wins over the folded session state: all pane
+    // A dead agentd channel wins over the folded session state: all pane
     // interactions are otherwise heading nowhere. The independent in-flight
     // bit keeps Stop reachable even while that error is shown.
     if runtime_unreachable {
         return StatusProjection {
-            text: "session runtime unreachable — try Reload Session Runtime",
+            text: "session runtime unreachable — try Reload Agent Runtime",
             tone: StatusTone::Danger,
             turn_in_flight: state_indicates_turn_in_flight(state),
         };
@@ -120,7 +120,7 @@ mod tests {
         assert_eq!(projection.tone, StatusTone::Danger);
         assert_eq!(
             projection.text,
-            "session runtime unreachable — try Reload Session Runtime"
+            "session runtime unreachable — try Reload Agent Runtime"
         );
         assert!(projection.turn_in_flight);
 

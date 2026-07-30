@@ -80,7 +80,7 @@ Horizon exports its control socket path into every pane's environment
 enclosing instance by default — tmux/zellij/i3's convergent answer —
 which makes the stable/dev nested-instance workflow resolve itself:
 the inner instance shadows the variable for its own panes. An explicit
-flag/env override always wins (same shape as `horizon-sessiond
+flag/env override always wins (same shape as `horizon-agentd
 --socket`).
 
 ### Targets are explicit in v1

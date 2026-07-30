@@ -19,7 +19,7 @@ use super::spawn::spawn_session_thread;
 use super::state::SessiondState;
 use crate::worktree;
 
-/// `docs/agent-runtime-split-design.md` step 4, "sessiond start": reads the
+/// `docs/agent-runtime-split-design.md` step 4, "agentd start": reads the
 /// startup read's records and, for each session found (grouped here by
 /// `session_id`), resumes it live: any turn still open at that session's
 /// tail (`AgentFrame::is_turn_in_flight`, the same "is a turn in flight"
@@ -88,7 +88,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
                 Some(context) if context.isolated_worktree => {
                     let Some(root) = context.workspace_root.as_deref() else {
                         eprintln!(
-                            "horizon-sessiond: refusing to resume isolated session {session_id:?}: \
+                            "horizon-agentd: refusing to resume isolated session {session_id:?}: \
                              persisted context has no workspace root"
                         );
                         continue;
@@ -101,7 +101,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
                         ),
                         Err(error) => {
                             eprintln!(
-                                "horizon-sessiond: refusing to resume isolated session \
+                                "horizon-agentd: refusing to resume isolated session \
                                  {session_id:?}: {error}"
                             );
                             continue;
@@ -170,14 +170,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
             {
                 Ok(()) => events.extend(closing),
                 Err(error) => eprintln!(
-                    "horizon-sessiond: failed to commit interrupted turn as cancelled for \
+                    "horizon-agentd: failed to commit interrupted turn as cancelled for \
                      {session_id:?}: {error}"
                 ),
             }
         }
 
         eprintln!(
-            "horizon-sessiond: resumed session {session_id:?} ({} event(s))",
+            "horizon-agentd: resumed session {session_id:?} ({} event(s))",
             events.len()
         );
         spawn_session_thread(
@@ -195,14 +195,14 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec
 
     if skipped_terminated > 0 {
         eprintln!(
-            "horizon-sessiond: skipped resume of {skipped_terminated} already-terminated \
+            "horizon-agentd: skipped resume of {skipped_terminated} already-terminated \
              session(s)"
         );
     }
 
     if terminated_explorations > 0 {
         eprintln!(
-            "horizon-sessiond: terminated {terminated_explorations} orphaned exploration \
+            "horizon-agentd: terminated {terminated_explorations} orphaned exploration \
              session(s) instead of resuming them"
         );
     }
@@ -261,7 +261,7 @@ fn terminate_orphaned_exploration(
         appender.append_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
     {
         eprintln!(
-            "horizon-sessiond: failed to record termination of orphaned exploration session \
+            "horizon-agentd: failed to record termination of orphaned exploration session \
              {session_id:?}: {error}"
         );
     }

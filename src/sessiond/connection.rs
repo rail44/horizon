@@ -1,4 +1,4 @@
-//! The `horizon-sessiond` (agent runtime) client connection: connect,
+//! The `horizon-agentd` (agent runtime) client connection: connect,
 //! negotiate, dispatch agent ops, recover from a stale daemon generation.
 //!
 //! Terminal traffic left this module in v17 — it has its own connection to
@@ -32,7 +32,7 @@ use super::common::{
 use super::routing::AgentRoutes;
 
 /// The daemon this module talks to, named in every classified error.
-const DAEMON: &str = "horizon-sessiond";
+const DAEMON: &str = "horizon-agentd";
 
 /// One typed request from the sync world to the runtime — the v10
 /// replacement for the raw-envelope FIFO. Requests that used to need a
@@ -69,7 +69,7 @@ pub(super) fn spawn(
             Ok(runtime) => runtime,
             Err(error) => {
                 routes.connection_failed(format!(
-                    "could not start the horizon-sessiond client runtime: {error}"
+                    "could not start the horizon-agentd client runtime: {error}"
                 ));
                 control.mark_stopped();
                 return;
@@ -90,7 +90,7 @@ pub(super) fn spawn(
                     ) => match result {
                         Ok(stream) => stream,
                         Err(error) => {
-                            eprintln!("horizon-sessiond initial connection failed: {error}");
+                            eprintln!("horizon-agentd initial connection failed: {error}");
                             tokio::time::sleep(Duration::from_secs(1)).await;
                             continue;
                         }
@@ -104,11 +104,11 @@ pub(super) fn spawn(
                         // recovery budget. A differently-shaped failure also
                         // breaks any "persistent silence" pattern.
                         consecutive_silences = 0;
-                        eprintln!("horizon-sessiond hello transport failed, retrying: {message}");
+                        eprintln!("horizon-agentd hello transport failed, retrying: {message}");
                         tokio::select! {
                             _ = tokio::time::sleep(retry_delay) => {}
                             _ = control.cancelled() => {
-                                routes.connection_failed("sessiond runtime stopped".to_string());
+                                routes.connection_failed("agentd runtime stopped".to_string());
                                 break;
                             }
                         }
@@ -121,7 +121,7 @@ pub(super) fn spawn(
                             // One silent deadline is not generation
                             // evidence (a busy daemon/host) -- retry.
                             eprintln!(
-                                "horizon-sessiond did not answer within the establish deadline \
+                                "horizon-agentd did not answer within the establish deadline \
                                  ({consecutive_silences}/{SILENCE_MISMATCH_THRESHOLD} before \
                                  mismatch recovery): {message}"
                             );
@@ -129,7 +129,7 @@ pub(super) fn spawn(
                                 _ = tokio::time::sleep(retry_delay) => {}
                                 _ = control.cancelled() => {
                                     routes.connection_failed(
-                                        "sessiond runtime stopped".to_string(),
+                                        "agentd runtime stopped".to_string(),
                                     );
                                     break;
                                 }
@@ -180,10 +180,10 @@ pub(super) fn spawn(
                         if mismatch_recovery_attempted {
                             let error = format!(
                                 "{message} -- automatic drain-and-restart was already attempted \
-                                 once; rebuild horizon-sessiond (`cargo build --workspace`) and \
-                                 run `Reload Session Runtime`"
+                                 once; rebuild horizon-agentd (`cargo build --workspace`) and \
+                                 run `Reload Agent Runtime`"
                             );
-                            eprintln!("horizon-sessiond connection stopped: {error}");
+                            eprintln!("horizon-agentd connection stopped: {error}");
                             routes.connection_failed(error);
                             break;
                         }
@@ -192,25 +192,25 @@ pub(super) fn spawn(
                         let drained = tokio::select! {
                             drained = drain_incompatible_remoc_sessiond(&socket_path) => drained,
                             _ = control.cancelled() => {
-                                routes.connection_failed("sessiond runtime stopped".to_string());
+                                routes.connection_failed("agentd runtime stopped".to_string());
                                 break;
                             }
                         };
                         if let Err(error) = drained {
                             let error =
                                 format!("{message} -- and the automatic drain failed: {error}");
-                            eprintln!("horizon-sessiond connection stopped: {error}");
+                            eprintln!("horizon-agentd connection stopped: {error}");
                             routes.connection_failed(error);
                             break;
                         }
                     }
                     StreamEnd::Fatal(error) | StreamEnd::EstablishedFailure(error) => {
-                        eprintln!("horizon-sessiond connection stopped: {error}");
+                        eprintln!("horizon-agentd connection stopped: {error}");
                         routes.connection_failed(error);
                         break;
                     }
                     StreamEnd::Cancelled => {
-                        routes.connection_failed("sessiond runtime stopped".to_string());
+                        routes.connection_failed("agentd runtime stopped".to_string());
                         break;
                     }
                     StreamEnd::Dropped => break,
@@ -238,33 +238,33 @@ async fn recover_generation_mismatch(
 ) -> ControlFlow<()> {
     if *mismatch_recovery_attempted {
         // If the respawned daemon still can't speak remoc (a stale
-        // horizon-sessiond binary -- `cargo run` rebuilds only the horizon
+        // horizon-agentd binary -- `cargo run` rebuilds only the horizon
         // binary), restarting it again would loop forever, so give up
         // loudly instead.
         let error = format!(
             "{message} -- automatic drain-and-restart was already attempted \
-             once; rebuild horizon-sessiond (`cargo build --workspace`) and \
-             run `Reload Session Runtime`"
+             once; rebuild horizon-agentd (`cargo build --workspace`) and \
+             run `Reload Agent Runtime`"
         );
-        eprintln!("horizon-sessiond connection stopped: {error}");
+        eprintln!("horizon-agentd connection stopped: {error}");
         routes.connection_failed(error);
         return ControlFlow::Break(());
     }
     *mismatch_recovery_attempted = true;
     eprintln!(
-        "a horizon-sessiond that does not speak the v{SESSION_PROTOCOL_VERSION} \
+        "a horizon-agentd that does not speak the v{SESSION_PROTOCOL_VERSION} \
          remoc wire detected ({message}); draining and restarting it"
     );
     let drained = tokio::select! {
         drained = drain_stale_sessiond(socket_path) => drained,
         _ = control.cancelled() => {
-            routes.connection_failed("sessiond runtime stopped".to_string());
+            routes.connection_failed("agentd runtime stopped".to_string());
             return ControlFlow::Break(());
         }
     };
     if let Err(error) = drained {
         let error = format!("{message} -- and the automatic drain failed: {error}");
-        eprintln!("horizon-sessiond connection stopped: {error}");
+        eprintln!("horizon-agentd connection stopped: {error}");
         routes.connection_failed(error);
         return ControlFlow::Break(());
     }
@@ -370,7 +370,7 @@ where
             _ = control.cancelled() => break StreamEnd::Cancelled,
             _ = &mut closed => {
                 break StreamEnd::EstablishedFailure(
-                    "established sessiond disconnected".to_string(),
+                    "established agentd disconnected".to_string(),
                 );
             }
             op = ops.recv() => {
@@ -415,7 +415,7 @@ where
         Ok(Err(error)) => return Err(classify_connect_error(DAEMON, &error)),
         Err(_elapsed) => {
             return Err(EstablishError::Silence(format!(
-                "sessiond sent no remoc handshake within {timeout:?}"
+                "agentd sent no remoc handshake within {timeout:?}"
             )))
         }
     };
@@ -429,13 +429,13 @@ where
         Ok(Ok(None)) | Ok(Err(_)) => {
             conn_task.abort();
             return Err(EstablishError::Transient(
-                "sessiond closed the connection before handing over its hub client".to_string(),
+                "agentd closed the connection before handing over its hub client".to_string(),
             ));
         }
         Err(_elapsed) => {
             conn_task.abort();
             return Err(EstablishError::Silence(format!(
-                "sessiond handed over no hub client within {timeout:?}"
+                "agentd handed over no hub client within {timeout:?}"
             )));
         }
     };
@@ -456,7 +456,7 @@ where
         Ok(Err(error @ HubError::IncompatibleVersion { .. })) => {
             conn_task.abort();
             Err(EstablishError::Rejected(format!(
-                "sessiond rejected the handshake: {error}"
+                "agentd rejected the handshake: {error}"
             )))
         }
         // The hello call's own transport failure — a connection drop
@@ -471,13 +471,13 @@ where
         Ok(Err(error)) => {
             conn_task.abort();
             Err(EstablishError::Fatal(format!(
-                "sessiond answered hello with an unexpected error: {error}"
+                "agentd answered hello with an unexpected error: {error}"
             )))
         }
         Err(_elapsed) => {
             conn_task.abort();
             Err(EstablishError::Silence(format!(
-                "sessiond did not answer hello within {timeout:?}"
+                "agentd did not answer hello within {timeout:?}"
             )))
         }
     }
@@ -508,7 +508,7 @@ fn spawn_skipped_lines_pump(mut skipped_lines: CappedReceiver<String, CONTROL_MA
             // No pane consumes this today (parity with the JSONL wire,
             // where the control was routed and then dropped); surfacing it
             // in the log keeps the diagnostic visible.
-            eprintln!("horizon-sessiond event log: {summary}");
+            eprintln!("horizon-agentd event log: {summary}");
         }
     });
 }
@@ -655,7 +655,7 @@ async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
         }
     }
     Err(
-        "horizon-sessiond kept accepting connections after every drain probe; \
+        "horizon-agentd kept accepting connections after every drain probe; \
          stop it manually"
             .to_string(),
     )
@@ -685,14 +685,14 @@ async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), Str
             conn_task.abort();
         }
         Err(error) => {
-            eprintln!("drain connection to the incompatible sessiond failed: {error}");
+            eprintln!("drain connection to the incompatible agentd failed: {error}");
         }
     }
     if wait_until_refusing(socket_path).await {
         Ok(())
     } else {
         Err(
-            "horizon-sessiond kept accepting connections after the drain call; \
+            "horizon-agentd kept accepting connections after the drain call; \
              stop it manually"
                 .to_string(),
         )

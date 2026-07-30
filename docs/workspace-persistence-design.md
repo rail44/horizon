@@ -3,7 +3,7 @@
 Status: shipped 2026-07-12.
 
 This design completes session recovery after a Horizon UI-process restart.
-`horizon-sessiond` already retains live terminal processes and persisted agent
+`horizon-agentd` already retains live terminal processes and persisted agent
 sessions, and Step 2A makes retained terminals discoverable as detached
 sessions. Step 2B persists the UI-owned workspace presentation so a new UI can
 restore tabs, splits, focus, and session attachments rather than starting with
@@ -76,7 +76,7 @@ and a valid restored model has been constructed. In particular, an inventory
 transport failure must preserve the previous file for a later launch.
 The UI enters an explicit failed-restoration state rather than silently
 normalizing an empty inventory. Layout mutations remain blocked, but the
-existing destructive `Reload Session Runtime` command is available as an
+existing destructive `Reload Agent Runtime` command is available as an
 explicit escape that discards the failed restore and starts a fresh workspace.
 Workspace mode remains available in this state so the command can be selected
 from the standard command palette.
@@ -137,7 +137,8 @@ summary.
 Only one Horizon UI may own and write a workspace-state file at a time. Step 2B
 does not add file locking, merge concurrent writers, sessiond multi-client
 fan-out, or stale-client takeover. Established-connection auto-reconnect and
-the explicitly terminal-destructive `Reload Session Runtime` behavior also
+the explicitly terminal-destructive `Reload Session Runtime` (now `Reload
+Agent Runtime`) behavior also
 remain outside this design.
 
 ## Verification

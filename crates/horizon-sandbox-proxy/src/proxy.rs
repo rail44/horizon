@@ -20,7 +20,7 @@ use crate::handler::{AllowlistHandler, NeverInterceptCa};
 /// releases the listener. As of leg 4b (`docs/agent-approval-design.md`),
 /// ownership is per-session (`horizon-agent`'s `tools::network::
 /// SessionNetworkProxy` holds one) rather than
-/// one long-lived instance per `horizon-sessiond` process -- but nothing
+/// one long-lived instance per `horizon-agentd` process -- but nothing
 /// here assumes a particular owner or lifetime; this crate's own tests
 /// still create and drop one per test.
 pub struct AllowlistProxy {

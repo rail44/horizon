@@ -223,8 +223,8 @@ outright whenever any control-surface modal is open, independent of
 what the getter itself reports. The render additionally suppresses the
 mode context while a workspace restore is in flight (unless it failed,
 mirroring `workspace_mode_blocked_by_restore`'s existing exception for
-reaching `Reload Session Runtime`) — a persisted zero-tab workspace
-still runs a real background round trip to `horizon-sessiond` before the
+reaching `Reload Agent Runtime`) — a persisted zero-tab workspace
+still runs a real background round trip to `horizon-agentd` before the
 restore barrier lifts, so without this the bypass could let `:` open the
 palette mid-restore.
 

@@ -28,7 +28,7 @@ pub(crate) struct WorktreeInfo {
 /// Resolves where a new isolated worktree should be created *from*: the one
 /// pure function the design's implementation notes ask for. `source` is
 /// `Some((dir, _))` when the spawn's source session is still live in
-/// `sessiond` (see `SessiondState::session_directory`): `dir` is that
+/// `agentd` (see `SessiondState::session_directory`): `dir` is that
 /// session's own worktree path if it owns one, else its plain
 /// `workspace_root`. `source` is `None` for an unknown/foreign source id (a
 /// terminal isn't tracked here yet -- deferred, see the design doc's
@@ -148,7 +148,7 @@ fn repo_root_from_common_dir(common_dir: &Path) -> Result<PathBuf, String> {
 /// Best-effort: makes sure `.horizon` won't show up as untracked clutter in
 /// the target repository's own `git status`, mirroring this repo's own
 /// `/.horizon` `.gitignore` entry -- but via `.git/info/exclude` rather than
-/// editing the target repo's tracked `.gitignore`, since sessiond has no
+/// editing the target repo's tracked `.gitignore`, since agentd has no
 /// business committing a change to a file the repo's own history owns.
 /// Also excludes `horizon_sandbox::SCRATCH_DIR_NAME` (the TMPDIR-parity
 /// scratch directory a sandboxed bash tool provisions under its first

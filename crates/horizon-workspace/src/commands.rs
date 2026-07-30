@@ -12,10 +12,10 @@ pub enum CommandId {
     DenyToolCall,
     CancelAgentTurn,
     ContinueAgentTurn,
-    ReloadSessionRuntime,
+    ReloadAgentRuntime,
     /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
     /// decision 3). Deliberately separate from
-    /// [`CommandId::ReloadSessionRuntime`] and deliberately destructive:
+    /// [`CommandId::ReloadAgentRuntime`] and deliberately destructive:
     /// picking up a `horizon-terminal-core` change means replacing the
     /// process that owns every PTY, so every terminal session -- and
     /// whatever is running inside it -- ends. The close-vs-terminate
@@ -170,10 +170,10 @@ pub fn core_commands() -> Vec<CommandSpec> {
             destructive: false,
         },
         CommandSpec {
-            id: CommandId::ReloadSessionRuntime,
-            title: "Reload Session Runtime",
+            id: CommandId::ReloadAgentRuntime,
+            title: "Reload Agent Runtime",
             category: CommandCategory::Agent,
-            description: "Restart horizon-sessiond and reconnect every agent session. \
+            description: "Restart horizon-agentd and reconnect every agent session. \
                           Terminals are unaffected.",
             destructive: false,
         },
@@ -221,7 +221,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::SplitRight | CommandId::SplitDown => state.tab_count > 0,
         CommandId::NewTab
         | CommandId::FocusNextPane
-        | CommandId::ReloadSessionRuntime
+        | CommandId::ReloadAgentRuntime
         | CommandId::ReloadTerminalRuntime
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig => true,
@@ -336,7 +336,7 @@ mod tests {
         // terminates: restarting `horizon-terminald` ends every terminal
         // session and the processes inside them
         // (`docs/terminald-split-design.md` decision 3). Its sibling
-        // `ReloadSessionRuntime` does not -- since the split it restarts
+        // `ReloadAgentRuntime` does not -- since the split it restarts
         // only the agent daemon, whose sessions are resumed from the event
         // log rather than killed.
         for command in core_commands() {

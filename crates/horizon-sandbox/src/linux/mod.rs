@@ -9,7 +9,7 @@
 //! Production uses a dedicated single-threaded helper process. It forks the
 //! target, applies nono Landlock in that child, and retains an unsandboxed
 //! parent to answer seccomp notifications and publish an authenticated report.
-//! `horizon-sessiond` therefore never forks or self-applies containment. The
+//! `horizon-agentd` therefore never forks or self-applies containment. The
 //! direct dedicated-thread path remains only for this crate's legacy backend
 //! unit tests, where no structured supervisor report is required.
 //!
@@ -27,7 +27,7 @@ use std::ffi::OsString;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
-/// Runs inside the dedicated Linux helper binary, never in sessiond.
+/// Runs inside the dedicated Linux helper binary, never in agentd.
 ///
 /// Public only because Cargo's bin target is a separate crate from this
 /// package's library target.
@@ -197,7 +197,7 @@ pub(crate) fn spawn_with_grants(
 }
 
 /// Production Linux path: spawn a single-threaded trusted helper which owns
-/// the only fork and the seccomp notification listener. `horizon-sessiond`
+/// the only fork and the seccomp notification listener. `horizon-agentd`
 /// never calls `fork()` itself.
 #[cfg(not(test))]
 pub(crate) fn spawn_with_grants(
@@ -252,7 +252,7 @@ pub(crate) fn spawn_with_grants(
     let expected_parent = std::process::id() as libc::pid_t;
     // SAFETY: only async-signal-safe scalar syscalls run between fork and
     // helper exec. CLOEXEC is cleared in the child copy only, avoiding an
-    // inheritable-fd window in multi-threaded sessiond.
+    // inheritable-fd window in multi-threaded agentd.
     unsafe {
         wrapped.pre_exec(move || {
             let flags = libc::fcntl(report_fd, libc::F_GETFD);

@@ -99,7 +99,7 @@ hosted by a daemon, with the UI as a reconnecting client.
    is not the live-PTY hand-off this decision ruled out (still ruled out —
    no precedent, total loss on failure) but a *second daemon*:
    `horizon-terminald` owns the PTYs and is rarely restarted, so
-   `Reload Session Runtime` no longer touches them and a new, explicitly
+   `Reload Agent Runtime` no longer touches them and a new, explicitly
    destructive `Reload Terminal Runtime` is the only command that does.
    The half of this decision that stands is the reasoning about terminal
    state being unreplayable — which is exactly why the backstop is still
@@ -236,7 +236,7 @@ foreseen at the design-decision stage:
   sessions.** `Reload Config` and the theme settings view's live apply
   both call `SessiondHandle::broadcast_terminal_color_scheme`, which sends
   a fresh `TerminalCommand::SetColorScheme` to every attached terminal
-  session; `crates/horizon-sessiond` demuxes it onto the session loop's own
+  session; `crates/horizon-agentd` demuxes it onto the session loop's own
   channel, which calls `TerminalCore::set_color_scheme` again. Only OSC
   4/10/11/12 *query-reply* defaults needed this — painted cell colors
   already pick up a live theme change on the next PTY-driven snapshot via
@@ -295,7 +295,7 @@ became Horizon's sole frontend:
   The development environment is checked once for a surviving old daemon at
   integration time instead of carrying permanent migration code.
 - **Daemon identity includes its name.** Handshake diagnostics use a
-  `horizon-sessiond/<version>` binary id rather than the former ambiguous
+  `horizon-agentd/<version>` binary id rather than the former ambiguous
   version-only value.
 
 ## Step 1 implementation notes (2026-07-12)
@@ -336,7 +336,7 @@ one raw FIFO, retries the initial connection indefinitely with capped backoff,
 and never starts a competing lazy connection. After one connection has been
 established, an unexpected disconnect reports errors to every registered
 route and stops; Step 1 does not reconnect or replay automatically. Dropping
-the runtime is non-destructive, while `Reload Session Runtime` is the explicit
+the runtime is non-destructive, while `Reload Agent Runtime` is the explicit
 Drain path.
 
 Terminal GPUI entities now contain only the daemon command/update handle and
@@ -373,7 +373,8 @@ The owner approved the first UI-restart recovery slice with these boundaries:
   established sessiond connection fails, stale-client takeover, and
   multi-client fan-out remain deferred.
 - **Reload keeps its explicit destructive meaning.** `Reload Session Runtime`
-  still drains sessiond and terminates live terminals; Step 2A does not attempt
+  (now `Reload Agent Runtime`) still drains sessiond and terminates live
+  terminals; Step 2A does not attempt
   live-PTY transfer across daemon replacement or reinterpret reload as UI
   restart recovery.
 
@@ -417,7 +418,7 @@ with this daemon, per the roadmap's shared-foundations item.
 
 ## Contract-mismatch auto-recovery decisions (2026-07-20)
 
-Rebuilding Horizon while an older `horizon-sessiond` keeps running used to
+Rebuilding Horizon while an older `horizon-agentd` keeps running used to
 strand the UI: a pre-v9 daemon rejects any foreign-versioned envelope
 before even reading its kind, so the new UI's hello got a silent close (an
 endless hello retry loop), and skews where a reply did arrive stopped at a
@@ -453,6 +454,6 @@ step to be automated. Decisions:
   The UI's own version is never probed, so a healthy same-version daemon
   is unreachable from this path.
 - **Recovery runs once per runtime.** If the respawned daemon still
-  mismatches -- the classic cause being a stale `horizon-sessiond` binary
+  mismatches -- the classic cause being a stale `horizon-agentd` binary
   that `cargo run` never rebuilt -- the second mismatch goes fatal with a
   rebuild hint instead of drain-restarting forever.

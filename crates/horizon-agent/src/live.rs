@@ -141,7 +141,7 @@ impl LiveState {
 
     /// Test-only: production always seeds `history` explicitly (even if
     /// empty, from a fresh session) via [`Self::with_event_log_and_history`]
-    /// -- `horizon-sessiond`'s `run_session` is the one real caller. Kept as
+    /// -- `horizon-agentd`'s `run_session` is the one real caller. Kept as
     /// a shorthand for tests that don't care about history.
     #[cfg(test)]
     pub fn with_event_log(
@@ -155,9 +155,9 @@ impl LiveState {
 
     /// Same as [`Self::with_event_log`], seeded with `history` (already-
     /// committed events, e.g. read back from the JSONL log at
-    /// `horizon-sessiond` startup) so a resumed session's very first fold
+    /// `horizon-agentd` startup) so a resumed session's very first fold
     /// reflects the whole transcript, not just what arrives from here on —
-    /// `docs/agent-runtime-split-design.md` step 4's "sessiond restart ...
+    /// `docs/agent-runtime-split-design.md` step 4's "agentd restart ...
     /// sessions are live again". `history` itself is never re-appended (it's
     /// already durable); only events folded in *after* this call go through
     /// `writer`.
@@ -219,8 +219,8 @@ impl LiveState {
     }
 
     /// The session's current accumulated frame. Used outside tests too:
-    /// `horizon-sessiond`'s `fold_bash_completion`
-    /// (`crates/horizon-sessiond/src/session.rs`) reads this to check
+    /// `horizon-agentd`'s `fold_bash_completion`
+    /// (`crates/horizon-agentd/src/session.rs`) reads this to check
     /// whether a call already has a `ToolCallFinished` before folding a late
     /// result — the async-execution analogue of `agent::tools::approval`'s
     /// `ApprovalOutcome::AlreadyResolved` guard.
@@ -237,9 +237,9 @@ impl LiveState {
 
     /// Every fold-relevant event this session has accumulated so far
     /// (already-committed history plus everything folded in since) — the
-    /// source `horizon-sessiond`'s `session_load` handling re-emits to a
+    /// source `horizon-agentd`'s `session_load` handling re-emits to a
     /// (re)connecting client (`docs/agent-runtime-split-design.md` step 4's
-    /// "sessiond re-emits the fold-relevant committed events for that
+    /// "agentd re-emits the fold-relevant committed events for that
     /// session"). Deliberately the same list a fresh `agent_frame_from_events`
     /// call over would rebuild the identical frame from, so a client's own
     /// fold of the replayed events reproduces this session's frame exactly.

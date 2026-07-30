@@ -12,7 +12,7 @@
 //! (`sandbox::macos::apply`, verified in nono 0.68.0 source) self-applies
 //! Seatbelt to the *whole calling process*, irreversibly -- there is no
 //! thread-scoped variant, because Seatbelt itself has no such concept.
-//! Applying it in Horizon's own process (or `horizon-sessiond`'s) would
+//! Applying it in Horizon's own process (or `horizon-agentd`'s) would
 //! therefore sandbox the entire host, not just the one command being run.
 //! Instead, `spawn` execs a tiny helper binary that applies the sandbox to
 //! *itself* and then `exec()`s the real command -- the same
@@ -67,7 +67,7 @@ pub(crate) fn is_available() -> bool {
 
 /// Resolves the `horizon-sandbox-helper` binary: next to the running
 /// executable first (the normal deployed shape, mirroring how Horizon
-/// ships `horizon-sessiond` alongside the main binary), then falls back to
+/// ships `horizon-agentd` alongside the main binary), then falls back to
 /// a `PATH` lookup (e.g. a `cargo install`'d or dev-build layout where the
 /// two binaries don't share a directory) -- the same two-tier precedent
 /// the old Linux backend's `resolve_bwrap` used for a hardcoded system

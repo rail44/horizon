@@ -26,9 +26,9 @@ use super::{read, ReadReport, Record};
 /// deltas and tool payloads routinely exceed that) landed as two interleaved
 /// halves instead of one atomic line.
 ///
-/// The fix enforced at the call site (`horizon-sessiond`'s `open_persistence`,
+/// The fix enforced at the call site (`horizon-agentd`'s `open_persistence`,
 /// the only place that constructs a production `WriterHandle`) is a
-/// process-global cache: every agent session hosted by that sessiond
+/// process-global cache: every agent session hosted by that agentd
 /// process shares one `WriterHandle` (held on `SessiondState` and cloned
 /// out per session), i.e. one thread and one open file, and appends are
 /// serialized through that thread's channel. Within a process this makes
@@ -115,10 +115,10 @@ impl WriterHandle {
 
     /// Same as [`Self::open`], but suppresses this module's own
     /// skipped-lines summary line to stderr (see [`start_up`]) -- for
-    /// `horizon-sessiond`'s startup only, which already prints its own
+    /// `horizon-agentd`'s startup only, which already prints its own
     /// differently-prefixed summary right after this call's `init_rx`
-    /// resolves (`horizon-sessiond::main::open_persistence`). Without this,
-    /// sessiond's stderr got the same summary twice per startup, once from
+    /// resolves (`horizon-agentd::main::open_persistence`). Without this,
+    /// agentd's stderr got the same summary twice per startup, once from
     /// each of the two call sites. Every other caller (Horizon's own tests,
     /// and any future direct caller) keeps getting the line via
     /// [`Self::open`]/[`Self::open_with_reader`].
@@ -140,7 +140,7 @@ impl WriterHandle {
     /// provider's history replay) should drain it into a shared,
     /// multi-reader cell (`persistence::projection::duckdb::
     /// SharedDuckdbStore`) rather than relying on this channel's
-    /// single-delivery semantics directly. This is `horizon-sessiond`'s only
+    /// single-delivery semantics directly. This is `horizon-agentd`'s only
     /// real caller of `duckdb_path`; every other caller of this module
     /// (Horizon's own tests, [`Self::open`]/[`Self::open_with_reader`])
     /// passes `None` and gets the exact pre-recall behavior (JSONL only,
@@ -240,7 +240,7 @@ impl WriterHandle {
     /// own page cache — this is not an `fsync`).
     ///
     /// Used by tests to assert durability deterministically, and by
-    /// `horizon-sessiond`'s `flush_event_log_before_exit` (called right
+    /// `horizon-agentd`'s `flush_event_log_before_exit` (called right
     /// before `std::process::exit(0)` on a `SessionControl::Drain`) so a
     /// graceful drain doesn't lose whatever is still sitting in the
     /// writer's buffer. A hard kill bypasses this and can still leave a
@@ -320,7 +320,7 @@ fn start_up(
 
 /// Opens (creating parent directories as needed) and reconciles the DuckDB
 /// projection at `duckdb_path` against `records` -- this is where
-/// `horizon-sessiond`'s old `main::rebuild_duckdb_projection` (a separate,
+/// `horizon-agentd`'s old `main::rebuild_duckdb_projection` (a separate,
 /// short-lived `Store::open` spawned only after readiness) now lives,
 /// folded into the event-log writer's own startup so the `Store` returned
 /// here can be *kept* by [`run_writer`] afterward instead of being dropped
@@ -343,7 +343,7 @@ fn start_up(
 ///   non-empty) or a freshness-check error: a full rebuild
 ///   ([`Store::replace_from_event_log_records`]); prints
 ///   "rebuilt (N record(s))" -- the original, pre-incremental-catch-up
-///   line, kept unchanged so operators (and `horizon-sessiond`'s own e2e
+///   line, kept unchanged so operators (and `horizon-agentd`'s own e2e
 ///   tests, which poll for these exact strings) see the same signal for
 ///   this case.
 ///
@@ -386,7 +386,7 @@ fn rebuild_and_open_duckdb_projection(
         if !parent.as_os_str().is_empty() {
             if let Err(error) = std::fs::create_dir_all(parent) {
                 eprintln!(
-                    "horizon-sessiond: failed to create DuckDB projection directory {} ({error}); \
+                    "horizon-agentd: failed to create DuckDB projection directory {} ({error}); \
                      live projection disabled for this run",
                     parent.display()
                 );
@@ -399,7 +399,7 @@ fn rebuild_and_open_duckdb_projection(
         Ok(store) => store,
         Err(error) => {
             eprintln!(
-                "horizon-sessiond: DuckDB projection unavailable ({error}); live projection \
+                "horizon-agentd: DuckDB projection unavailable ({error}); live projection \
                  disabled for this run"
             );
             return None;
@@ -409,7 +409,7 @@ fn rebuild_and_open_duckdb_projection(
     if !store.migrated_legacy_schema() {
         match duckdb_projection_currency(&store, records) {
             Ok(ProjectionCurrency::Current) => {
-                eprintln!("horizon-sessiond: DuckDB projection already current, skipping rebuild");
+                eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
                 return Some(DuckdbStoreHandle::new(store));
             }
             Ok(ProjectionCurrency::Behind(mark)) => {
@@ -422,21 +422,21 @@ fn rebuild_and_open_duckdb_projection(
                         log_turn_id_missing_summary(report.turn_id_missing);
                         log_skipped_record_summary(&report);
                         eprintln!(
-                            "horizon-sessiond: DuckDB projection caught up incrementally \
+                            "horizon-agentd: DuckDB projection caught up incrementally \
                              ({} record(s))",
                             report.applied
                         );
                         return Some(DuckdbStoreHandle::new(store));
                     }
                     Err(error) => eprintln!(
-                        "horizon-sessiond: DuckDB incremental catch-up failed ({error}), \
+                        "horizon-agentd: DuckDB incremental catch-up failed ({error}), \
                          falling back to a full rebuild"
                     ),
                 }
             }
             Ok(ProjectionCurrency::RebuildNeeded) => {}
             Err(error) => eprintln!(
-                "horizon-sessiond: DuckDB projection freshness check failed ({error}), rebuilding"
+                "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
             ),
         }
     }
@@ -446,14 +446,14 @@ fn rebuild_and_open_duckdb_projection(
             log_turn_id_missing_summary(report.turn_id_missing);
             log_skipped_record_summary(&report);
             eprintln!(
-                "horizon-sessiond: DuckDB projection rebuilt ({} record(s))",
+                "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
                 report.applied
             );
             Some(DuckdbStoreHandle::new(store))
         }
         Err(error) => {
             eprintln!(
-                "horizon-sessiond: DuckDB projection rebuild failed ({error}); live projection \
+                "horizon-agentd: DuckDB projection rebuild failed ({error}); live projection \
                  disabled for this run"
             );
             None
@@ -533,13 +533,13 @@ fn duckdb_projection_currency(store: &Store, records: &[Record]) -> Result<Proje
     })
 }
 
-/// Test-only hook, mirroring `horizon-sessiond::main`'s own resume-delay hook
+/// Test-only hook, mirroring `horizon-agentd::main`'s own resume-delay hook
 /// (`TEST_RESUME_DELAY_MS_VAR`): when set, artificially delays this thread's
 /// DuckDB rebuild (which runs *after* [`WriterInit::Ready`] has already been
 /// sent -- see [`WriterHandle::open_inner`]) so a test can prove the
 /// rebuild never sits on the readiness path `session_list`/`session_new`
-/// block on. Never set outside `horizon-sessiond`'s own e2e tests.
-const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_SESSIOND_TEST_DUCKDB_REBUILD_DELAY_MS";
+/// block on. Never set outside `horizon-agentd`'s own e2e tests.
+const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUILD_DELAY_MS";
 
 fn test_duckdb_rebuild_delay() -> Option<Duration> {
     std::env::var(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
@@ -554,7 +554,7 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
 /// section on [`WriterHandle::open`] for why this single-threaded loop is
 /// the only place that assignment ever happens.
 ///
-/// `duckdb_store`, when `Some` (only for a `horizon-sessiond` writer opened
+/// `duckdb_store`, when `Some` (only for a `horizon-agentd` writer opened
 /// via [`WriterHandle::open_silently`] with a DuckDB path -- see
 /// [`WriterHandle::open_inner`]), is locked and projected into right after
 /// each record's own JSONL line is durably written, keeping the projection
@@ -587,11 +587,11 @@ fn run_writer(
                     let _ = writer.write_all(b"\n");
                     // Flushed immediately (not just batched in `BufWriter`'s
                     // in-memory buffer) so a hard kill (SIGKILL, crash --
-                    // `horizon-sessiond` has no signal handler for it and runs
+                    // `horizon-agentd` has no signal handler for it and runs
                     // no destructors) can only ever lose events that hadn't
                     // arrived on this channel yet, never ones already
                     // appended. This is what makes `docs/agent-runtime-
-                    // split-design.md` step 4's "sessiond restart: read own
+                    // split-design.md` step 4's "agentd restart: read own
                     // log, mark turns that died mid-flight as cancelled"
                     // meaningful against a real `kill -9` — without this, a
                     // session parked indefinitely in `WaitingForApproval`
@@ -626,7 +626,7 @@ fn run_writer(
                             Err(error) => {
                                 if !warned_duckdb_append_failure {
                                     eprintln!(
-                                        "horizon-sessiond: DuckDB projection append failed \
+                                        "horizon-agentd: DuckDB projection append failed \
                                          ({error}); further append failures in this run won't \
                                          be logged individually -- the next restart's rebuild \
                                          reconciles"

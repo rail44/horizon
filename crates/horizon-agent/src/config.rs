@@ -15,7 +15,7 @@
 //! values this crate's config still varies on are `[provider]`
 //! `model`/`base_url` -- [`AgentConfig::from_env_and_provider`] takes
 //! those two as plain `Option<String>` arguments; the caller
-//! (`horizon-sessiond`'s `main`, which owns the real `horizon_config::
+//! (`horizon-agentd`'s `main`, which owns the real `horizon_config::
 //! load()` call) resolves them from the file first. Every other former
 //! `[agent]`/`[provider]` file knob (tool caps, turn-loop guard
 //! thresholds, stream-flush cadence, history/instructions budgets,
@@ -556,7 +556,7 @@ pub(crate) fn default_state_db_path_from(
 /// always resolves to `Some` in practice) rather than switching to a bare
 /// `PathBuf`, so [`AgentPersistenceConfig::duckdb_path`]'s existing
 /// `Option<PathBuf>` shape -- and every `if let Some(duckdb_path) = ...`
-/// built on it (e.g. `horizon-sessiond`'s startup rebuild) -- doesn't need
+/// built on it (e.g. `horizon-agentd`'s startup rebuild) -- doesn't need
 /// to change shape along with this default.
 pub(crate) fn resolve_state_db_path(
     env_value: Option<String>,

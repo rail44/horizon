@@ -11,7 +11,7 @@ Implementation record (what shipped, where):
   `explore/notify.rs`) — non-blocking `start`, `task_output`, the
   per-requester child registry with the cap, the completion queue, and the
   wake channel.
-- `crates/horizon-sessiond/src/session/subscription.rs` — the named
+- `crates/horizon-agentd/src/session/subscription.rs` — the named
   "subscribe to another session's stop/blocking events" seam (decision 6),
   generalizing the old ad-hoc event tap.
 - `crates/horizon-agent/src/providers/rig/session.rs` — the drain before

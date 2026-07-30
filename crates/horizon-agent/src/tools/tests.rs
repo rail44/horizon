@@ -104,8 +104,8 @@ fn dummy_tool_state() -> ToolSessionState {
 
 /// A throwaway sender for tests that register a session runtime but never
 /// exercise the `bash` tool (which is what actually reads from the paired
-/// receiver — see `horizon-sessiond`'s session loop,
-/// `crates/horizon-sessiond/src/session.rs`).
+/// receiver — see `horizon-agentd`'s session loop,
+/// `crates/horizon-agentd/src/session.rs`).
 fn dummy_bash_results() -> crossbeam_channel::Sender<BashCompletion> {
     crossbeam_channel::unbounded().0
 }
@@ -2185,7 +2185,7 @@ fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
 
     // The reissue: a fresh `ToolCallRequested` for the same call_id, then
     // the normal approval-request events -- exactly what
-    // `fold_bash_retry_without_sandbox` folds in `horizon-sessiond`.
+    // `fold_bash_retry_without_sandbox` folds in `horizon-agentd`.
     let after_retry_request = live_state.extend_events([
         Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
@@ -3059,7 +3059,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         panic!("first approve should start bash");
     };
     // The frame the second approve would actually see (production folds
-    // this exact frame, e.g. `horizon-sessiond`'s `resolve_and_forward` reads
+    // this exact frame, e.g. `horizon-agentd`'s `resolve_and_forward` reads
     // `live_state.frame()` fresh for every inbound command) already shows
     // `ToolCallStarted` but not yet `ToolCallFinished` -- the vulnerable
     // window.
