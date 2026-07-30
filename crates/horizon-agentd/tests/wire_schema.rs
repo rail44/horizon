@@ -143,6 +143,10 @@ fn generate_wire_schema() -> Value {
             "request": unit,
             "reply": unit,
         },
+        "reload_provider_config": {
+            "request": unit,
+            "reply": unit,
+        },
     });
 
     let channels = json!({

@@ -344,6 +344,10 @@ impl SessionHub for FakeSessionHub {
         let _ = self.calls.send(AgentCall::Drain);
         Ok(())
     }
+
+    async fn reload_provider_config(&self) -> Result<(), HubError> {
+        Ok(())
+    }
 }
 
 /// Serves a [`FakeTerminalHub`] over `stream`. Returns the recorded-call

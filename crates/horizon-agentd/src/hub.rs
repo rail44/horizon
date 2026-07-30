@@ -259,6 +259,23 @@ impl SessionHub for Hub {
         eprintln!("horizon-agentd: drained, exiting");
         std::process::exit(0);
     }
+
+    /// Re-reads `[provider]` and rebuilds the registry in place -- see
+    /// [`crate::session::SessiondState::reload_provider_config`]. A config
+    /// parse error leaves the previous registry in place and is logged
+    /// daemon-side (the call still succeeds from the client's view: the
+    /// outcome it cares about -- "no respawn needed" -- holds either way,
+    /// and a failure here is a race the UI's own `horizon_config::reload`
+    /// already ruled out for the same file).
+    async fn reload_provider_config(&self) -> Result<(), HubError> {
+        self.require_hello()?;
+        if let Err(error) = self.connection.reload_provider_config() {
+            eprintln!(
+                "horizon-agentd: provider config reload failed, keeping the previous config: {error}"
+            );
+        }
+        Ok(())
+    }
 }
 
 /// Blocks until every event-log record enqueued so far has actually been
@@ -371,5 +388,68 @@ mod tests {
             .await
             .expect("a matching range must negotiate");
         assert_eq!(hub.list_agents().await.unwrap(), Vec::new());
+    }
+
+    /// `reload_provider_config` re-reads the config file at the state's
+    /// `config_path` and rebuilds the registry in place, so the *next* session
+    /// sees the new model. Proven on both halves of the swap: the registry's
+    /// `resolved_model` (which reads the rig provider's rebuilt config) and
+    /// `agent_config.rig.model` (the judge's base-URL source). `OPENAI_API_KEY`
+    /// is set only to flip `openai_enabled` on so `resolved_model` reports the
+    /// model instead of `None` -- `resolved_model` makes no network call, and
+    /// nextest's per-test process isolation means this `set_var` cannot race
+    /// another test (the `config` module's own env-mutation warning is about
+    /// `cargo test`'s in-process parallelism, which the gate does not use).
+    #[tokio::test]
+    async fn reload_provider_config_rebuilds_the_registry_from_the_config_file() {
+        std::env::set_var("OPENAI_API_KEY", "test-only");
+        std::env::remove_var("HORIZON_RIG_MODEL");
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let config = dir.path().join("config.toml");
+        std::fs::write(&config, "[provider]\nmodel = \"before-model\"\n").unwrap();
+
+        let agent_config =
+            AgentConfig::from_env_and_provider(Some("before-model".to_string()), None);
+        let providers = ProviderRegistry::builtin_with_config(
+            agent_config.clone(),
+            SharedDuckdbStore::unavailable(),
+        );
+        let state = Arc::new(SessiondState::new(
+            providers,
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            Some(config.clone()),
+            Vec::new(),
+        ));
+        state.mark_resume_ready();
+        let hub = Hub::new(Connection::new(state.clone()), "test-agentd");
+        hub.hello(ClientHello::new("test-client"))
+            .await
+            .expect("hello");
+
+        let provider_id = state.providers.lock().unwrap().default_provider_id();
+        assert_eq!(
+            state
+                .providers
+                .lock()
+                .unwrap()
+                .resolved_model(&provider_id, None),
+            Some("before-model".to_string()),
+        );
+
+        std::fs::write(&config, "[provider]\nmodel = \"after-model\"\n").unwrap();
+        hub.reload_provider_config().await.expect("reload");
+
+        assert_eq!(
+            state
+                .providers
+                .lock()
+                .unwrap()
+                .resolved_model(&provider_id, None),
+            Some("after-model".to_string()),
+        );
+        assert_eq!(state.agent_config.lock().unwrap().rig.model, "after-model");
     }
 }

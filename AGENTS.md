@@ -174,11 +174,16 @@ percentage, clamped 1..=100 — a measurement switch, see
 Config is applied at startup only, with these exceptions: `Reload Config`
 (palette / `reload-config` keybinding id / CLI `horizon reload-config`)
 re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
-derived terminal colors) and `[keybindings]` (built-in defaults plus every
+derived terminal colors), `[keybindings]` (built-in defaults plus every
 chord/command override, unbinding whatever the previous apply's chords
-were first — see `workspace::apply_bindings`) live; `[provider]` picks up
-on `Reload Agent Runtime` (a fresh `horizon-agentd` process re-reads
-the file, no full UI restart needed). `[terminal]`/`[ui]` are read once at
+were first — see `workspace::apply_bindings`), and `[provider]` all live;
+`[provider]` is pushed to the running `horizon-agentd` over the session
+hub's `reload_provider_config` rtc call (no respawn), so a model/base-URL
+change takes effect for the next session — a running session keeps its
+spawn-time provider for its whole lifetime. `Reload Agent Runtime` is
+now scoped to agent-code reloads (a fresh `horizon-agentd` process
+re-reads the file; no full UI restart needed) and no longer the way to
+pick up a `[provider]` edit. `[terminal]`/`[ui]` are read once at
 UI startup and need a full restart. See `config.example.toml` at the repo
 root for every knob, and `crates/horizon-config` for the loader (the
 single file-schema/parse/path-resolution owner; `horizon-agentd` depends

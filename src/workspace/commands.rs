@@ -144,6 +144,14 @@ impl WorkspaceShell {
                     super::bindings::apply_bindings(cx, &raw);
                     window.refresh();
                     self.broadcast_terminal_color_scheme();
+                    // `[provider]` is the daemon-owned half of the config:
+                    // push it live without a `Reload Agent Runtime` (which
+                    // is now scoped to agent-code reloads -- see
+                    // `docs/terminald-split-design.md` decision 2). Fire-and-
+                    // forget so the UI thread never blocks on the daemon.
+                    if let Some(sessiond) = self.sessiond.as_ref() {
+                        sessiond.reload_provider_config();
+                    }
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
             },
