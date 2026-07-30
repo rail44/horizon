@@ -76,30 +76,53 @@ const EVENTS_ITEM_CAP_BYTES: usize = 4 * 1024 * 1024;
 /// (rainbow truecolor text, which `styled_rows` cannot merge): the sibling
 /// test `a_worst_case_scroll_window_stays_under_the_events_cap`
 /// (`horizon-session-protocol/tests/limits.rs`) measures that at ~107 B/cell.
-/// 128 rounds it up with headroom. (Combining-char pathology — an app packing
-/// unbounded zero-width chars into one cell — is deliberately *not* bounded
-/// here: it inflates a single span without limit and afflicts the live-frame
-/// watch identically, so it is the frame path's own out-of-scope envelope,
-/// not a windowing regression.)
+/// 128 rounds it up with headroom — and that headroom (128 vs the measured
+/// 107, ~20 %) is what lets [`max_window_rows`] budget the *entire* events
+/// cap rather than half of it: the over-estimate absorbs the enum/struct
+/// framing and per-row span vectors that the raw cell count does not account
+/// for, with the sibling test as the real-codec proof. (Combining-char
+/// pathology — an app packing unbounded zero-width chars into one cell — is
+/// deliberately *not* bounded here: it inflates a single span without limit
+/// and afflicts the live-frame watch identically, so it is the frame path's
+/// own out-of-scope envelope, not a windowing regression.)
 const WORST_CASE_BYTES_PER_CELL: usize = 128;
 
+/// How many rows of overscan [`max_window_rows`] guarantees above and below
+/// the viewport, independent of pane height. Smooth scrolling needs a few
+/// rows of look-ahead on each side so a wheel tick moves locally instead of
+/// re-fetching a fresh window every tick (issue 007: the old
+/// `.max(screen_lines)` floor collapsed this margin to zero for tall panes,
+/// regressing smooth scroll to line steps; issue 008: the resulting
+/// zero-overscan window snapped to the top of each re-fetched block on
+/// upward scroll). The daemon centers the viewport in the block, so each
+/// side gets `OVERSCAN_ROWS / 2` rows of margin.
+const OVERSCAN_ROWS: usize = 64;
+
 /// The largest window, in rows, [`snapshot_window`] will serve, sized so even
-/// worst-case per-cell decoration keeps the serialized window under **half**
-/// the events cap (the other half is headroom for the enum/struct framing and
-/// the per-row span vectors). Byte-budget-derived rather than a fixed row
-/// multiple precisely because it must also bound *wide* terminals, where one
-/// row is many more cells. For realistic widths it stays well above the
-/// ~3-viewport window phase-3 prefetch will request
-/// (`docs/terminal-scrollback-design.md` §3.4) — e.g. ~204 rows at 80 cols —
-/// so the clamp never bites a legitimate request; only adversarial decoration
-/// on very wide terminals sees a shorter (but always deliverable) window,
-/// which phase-3 prefetch tolerates. Floored at `screen_lines` so the visible
-/// viewport always fits: a single screen already rides the live-frame watch
-/// at the same worst case, so that floor is no less safe than the live frame.
+/// worst-case per-cell decoration keeps the serialized window under the
+/// events cap. Byte-budget-derived rather than a fixed row multiple precisely
+/// because it must also bound *wide* terminals, where one row is many more
+/// cells. The formula guarantees the viewport plus [`OVERSCAN_ROWS`] rows of
+/// overscan when the byte budget allows it, clips the overscan to whatever the
+/// budget permits when the viewport is tall, and collapses to the viewport
+/// alone (zero overscan — the same envelope the live-frame watch runs under)
+/// only when a single screen already strains the cap. That extreme is the
+/// documented fallback where scrolling regresses to line steps (issue 007);
+/// for realistic pane heights the overscan is always present.
 fn max_window_rows(columns: usize, screen_lines: usize) -> usize {
-    let budget = EVENTS_ITEM_CAP_BYTES / 2;
     let bytes_per_row = columns.max(1) * WORST_CASE_BYTES_PER_CELL;
-    (budget / bytes_per_row).max(screen_lines)
+    let budget_rows = EVENTS_ITEM_CAP_BYTES / bytes_per_row;
+    // Viewport + fixed overscan, clipped to the byte-budget ceiling, then
+    // floored at the viewport so the visible screen always fits. When
+    // `screen_lines + OVERSCAN_ROWS` fits the budget the first term wins
+    // (full overscan); when it doesn't but the viewport alone fits, the
+    // `min` clips to `budget_rows` (partial overscan); when the viewport
+    // alone exceeds the budget the `max` lifts to `screen_lines` (zero
+    // overscan, the extreme-pane fallback — no less safe than the live
+    // frame, which carries one screen at the same cap).
+    (screen_lines + OVERSCAN_ROWS)
+        .min(budget_rows)
+        .max(screen_lines)
 }
 
 /// Read a `height`-row scrollback window positioned `anchor` rows above the

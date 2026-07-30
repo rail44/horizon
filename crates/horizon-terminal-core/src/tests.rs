@@ -841,14 +841,14 @@ fn snapshot_window_smaller_than_height_returns_the_whole_buffer() {
 fn snapshot_window_clamps_an_oversized_height() {
     // 2000 lines through an 80x5 viewport: 1995 history rows, so a window
     // requested mid-history is bounded by the height clamp, not the grid
-    // edges. max_window_rows(80, 5) = (4 MiB / 2 / (80 * 128)).max(5) = 204.
+    // edges. max_window_rows(80, 5) = (5 + 64).min(409).max(5) = 69.
     let core = numbered_history_core_sized(80, 5, 2000);
 
     let window = core.snapshot_window(1000, usize::MAX);
 
     assert_eq!(
         window.lines.len(),
-        204,
+        69,
         "an oversized height must clamp to the safe row cap, not the buffer"
     );
     assert!(
@@ -881,6 +881,59 @@ fn snapshot_window_metadata_identity_holds_under_clamp() {
     assert!(
         window.above > 0 && window.below > 0,
         "an interior clamped window has real history on both sides"
+    );
+}
+
+/// Issue 007: a tall single-pane viewport (screen_lines at or above the
+/// byte-budget threshold where the old `.max(screen_lines)` floor collapsed
+/// the overscan to zero) still gets a fixed overscan margin, so smooth
+/// scrolling doesn't regress to line steps. The window is `screen_lines +
+/// OVERSCAN_ROWS` rows tall (when the byte budget allows), with the viewport
+/// centered by `viewport_offset = OVERSCAN_ROWS / 2`.
+#[test]
+fn snapshot_window_serves_overscan_for_a_tall_single_pane() {
+    // 120 cols × 200 rows, with enough history that neither edge clamps.
+    // max_window_rows(120, 200) = (200 + 64).min(273).max(200) = 264.
+    let core = numbered_history_core_sized(120, 200, 2000);
+
+    let window = core.snapshot_window(500, usize::MAX);
+
+    assert_eq!(
+        window.lines.len(),
+        264,
+        "a tall viewport gets viewport + OVERSCAN_ROWS, not the viewport alone"
+    );
+    assert_eq!(
+        window.viewport_offset, 32,
+        "the viewport is centered in the overscan (half above, half below)"
+    );
+    assert!(
+        window.lines.len() > 200,
+        "the window is taller than the viewport — overscan exists"
+    );
+}
+
+/// Issue 007 fallback: in the extreme case where a single viewport alone
+/// consumes the byte budget (screen_lines >= budget_rows), the overscan
+/// collapses to zero and the window is exactly the viewport — the same
+/// envelope the live-frame watch runs under. Scrolling then falls back to
+/// line-step edge fetches, the documented fallback for extreme pane heights.
+#[test]
+fn snapshot_window_drops_overscan_when_the_viewport_fills_the_byte_budget() {
+    // 120 cols: budget_rows = 4 MiB / (120 * 128) = 273. A 280-row viewport
+    // exceeds it, so the floor collapses to screen_lines (280, no overscan).
+    let core = numbered_history_core_sized(120, 280, 2000);
+
+    let window = core.snapshot_window(500, usize::MAX);
+
+    assert_eq!(
+        window.lines.len(),
+        280,
+        "when the viewport alone fills the budget, the window is exactly the viewport"
+    );
+    assert_eq!(
+        window.viewport_offset, 0,
+        "no overscan margin — the viewport is pinned to the block top"
     );
 }
 
