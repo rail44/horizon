@@ -63,9 +63,20 @@ const PROVIDER_RETRY_BASE_BACKOFF: Duration = Duration::from_secs(1);
 pub(super) const PROVIDER_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Statuses with which a provider says "not now" rather than "not ever":
-/// rate limiting plus the three gateway-level failures. Every other 4xx
-/// describes the request itself and would fail identically on a retry.
-const RETRYABLE_STATUSES: [u16; 4] = [429, 502, 503, 504];
+/// rate limiting, the three gateway-level failures, and a bare 500. Every
+/// other 4xx describes the request itself and would fail identically on a
+/// retry.
+///
+/// 500 earns its place empirically: synthetic.new fronts its models with a
+/// gateway that reports an upstream hiccup as `500 Internal Server Error`
+/// with an `{"error":"Error from inference backend: ..."}` body, and on
+/// 2026-07-30 one such incident killed two sessions within a minute of each
+/// other. Including it is safe for the same reason the rest of this list is:
+/// [`retryable_rejection`] only ever fires before any durable output, so the
+/// request provably never reached generation and a repeat cannot duplicate
+/// one. A 500 that is genuinely deterministic still terminates the turn --
+/// it just costs [`PROVIDER_REQUEST_MAX_ATTEMPTS`] attempts first.
+const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ProviderWait<T> {

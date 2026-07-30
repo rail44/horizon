@@ -120,7 +120,12 @@ fn rejections_before_generation_are_classified_as_retryable() {
     assert_eq!(rate_limited.status, Some(429));
     assert_eq!(rate_limited.retry_after, None);
 
+    // 500 rides with the gateway failures: synthetic.new reports an
+    // upstream hiccup that way (an incident on 2026-07-30 killed two
+    // sessions with `{"error":"Error from inference backend: ..."}`), and
+    // before any durable output a repeat cannot duplicate a generation.
     for status in [
+        "500 Internal Server Error",
         "502 Bad Gateway",
         "503 Service Unavailable",
         "504 Gateway Timeout",
