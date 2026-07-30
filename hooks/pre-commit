@@ -5,32 +5,23 @@ set -e
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 
-# Discard this workspace's own build artifacts before the gate builds
-# anything (backlog 43). The tracked `.cargo/config.toml` shares one
-# `build.build-dir` across every worktree, which is a large win for
-# dependencies but does NOT key this workspace's crates per worktree:
-# two checkouts produce the same artifact filename for every test/bin
-# unit, so whichever built last owns the file and every other worktree
-# silently runs it — a sibling's code, or a deleted worktree's baked-in
-# CARGO_MANIFEST_DIR. Rebuilding our own crates makes the gate measure
-# this checkout. Dependencies stay cached, so this costs ~nothing.
-# Touching the sources rather than `cargo clean -p`: both force the
-# rebuild, but clean also deletes this worktree's finished binaries from
-# `target/`, which breaks `cargo run` and leaves Horizon with no
-# `horizon-agentd` to respawn.
-echo "pre-commit: touch workspace sources (force rebuild from this checkout)"
-git ls-files -z '*.rs' | while IFS= read -r -d '' f; do
-  # A tracked file deleted in the working tree (mid-refactor, before the
-  # deletion is staged) must not be resurrected as an empty file — that
-  # produced E0761 (module found at both session.rs and session/mod.rs)
-  # during the session-module split.
-  if [ -e "$f" ]; then
-    touch "$f"
-  fi
-done
+# The touch-all-sources defense that used to live here (backlog 43) is
+# gone: `.cargo/config.toml`'s `rustc-workspace-wrapper` now keys every
+# workspace member's artifacts per worktree, so a sibling checkout can no
+# longer overwrite this one's build/test artifacts inside the shared
+# build-dir. Dependencies stay shared; nothing needs discarding.
 
+# `cargo clippy` overrides the workspace wrapper via env
+# (RUSTC_WORKSPACE_WRAPPER=clippy-driver, the same sysroot path in every
+# worktree), which would collapse the per-worktree isolation for the lint
+# step and let a sibling's clean check artifacts satisfy this checkout's
+# lint — measured 2026-07-30: a real -D warnings violation passed green.
+# The --config flag gives the lint step its own per-worktree build-dir
+# instead ({workspace-path-hash} resolves per checkout). Costs one cold
+# dependency check per worktree the first time; correctness over warmth.
 echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"
-cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo clippy --config 'build.build-dir="{cargo-cache-home}/horizon-clippy-bd/{workspace-path-hash}"' \
+  --workspace --all-targets --locked -- -D warnings
 
 # Inside a Horizon sandboxed agent session the default nextest profile
 # cannot pass (AGENTS.md): tests that probe the host boundary are skipped

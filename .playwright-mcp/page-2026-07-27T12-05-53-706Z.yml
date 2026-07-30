@@ -1,0 +1,341 @@
+- generic [active] [ref=f27e1]:
+  - banner [ref=f27e2]:
+    - generic [ref=f27e3]:
+      - link "コンテンツにスキップ" [ref=f27e4] [cursor=pointer]:
+        - /url: "#main"
+      - link "Homepage" [ref=f27e6] [cursor=pointer]:
+        - /url: /ja/home
+        - generic [ref=f27e16]: Cursor
+      - navigation [ref=f27e17]:
+        - list [ref=f27e18]:
+          - listitem [ref=f27e19]:
+            - link "プロダクト" [ref=f27e20] [cursor=pointer]:
+              - /url: /product
+            - button "メニューを展開" [ref=f27e21]:
+              - generic [ref=f27e22]: ↓
+          - listitem [ref=f27e23]:
+            - link "企業" [ref=f27e24] [cursor=pointer]:
+              - /url: /ja/enterprise
+          - listitem [ref=f27e25]:
+            - link "料金プラン" [ref=f27e26] [cursor=pointer]:
+              - /url: /ja/pricing
+          - listitem [ref=f27e27]:
+            - link "リソース" [ref=f27e28] [cursor=pointer]:
+              - /url: /changelog
+            - button "メニューを展開" [ref=f27e29]:
+              - generic [ref=f27e30]: ↓
+      - generic [ref=f27e31]:
+        - link "サインイン" [ref=f27e32] [cursor=pointer]:
+          - /url: /dashboard
+        - link "営業担当に問い合わせる" [ref=f27e33] [cursor=pointer]:
+          - /url: /contact-sales?source=navbar
+        - link "ダウンロード" [ref=f27e35] [cursor=pointer]:
+          - /url: /ja/download
+  - main [ref=f27e36]:
+    - generic [ref=f27e37]:
+      - article [ref=f27e38]:
+        - generic [ref=f27e41]:
+          - link "ブログ" [ref=f27e42] [cursor=pointer]:
+            - /url: /ja/blog
+          - text: /
+          - link "研究" [ref=f27e43] [cursor=pointer]:
+            - /url: /ja/blog/topic/research
+        - generic [ref=f27e46]:
+          - time [ref=f27e48]: 2026年3月17日
+          - heading "より長いホライズンに向けた Composer の学習" [level=1] [ref=f27e49]
+          - generic [ref=f27e58]:
+            - text: Federico Cassano & Sasha Rush
+            - generic [ref=f27e59]: · 読了時間 2分
+        - generic [ref=f27e65]:
+          - navigation [ref=f27e66]:
+            - button [expanded] [ref=f27e67]:
+              - heading "目次" [level=3] [ref=f27e68]
+              - generic [ref=f27e69]: ↑
+            - list [ref=f27e71]:
+              - listitem [ref=f27e72]:
+                - link "コンパクション手法の限界" [ref=f27e73] [cursor=pointer]:
+                  - /url: "#"
+              - listitem [ref=f27e74]:
+                - link "学習された挙動としての自己要約" [ref=f27e75] [cursor=pointer]:
+                  - /url: "#"
+              - listitem [ref=f27e76]:
+                - link "トークン効率の高い圧縮" [ref=f27e77] [cursor=pointer]:
+                  - /url: "#"
+              - listitem [ref=f27e78]:
+                - link "難しい問題を解く" [ref=f27e79] [cursor=pointer]:
+                  - /url: "#"
+              - listitem [ref=f27e80]:
+                - link "長いホライズンの未来に向けて" [ref=f27e81] [cursor=pointer]:
+                  - /url: "#"
+          - generic [ref=f27e82]:
+            - paragraph [ref=f27e83]: 私たちは、自己要約と呼ばれる強化学習プロセスを通じて、長いホライズンのタスクに対応できるよう Composer を学習させています。自己要約を Composer の学習に組み込むことで、モデルの最大コンテキストウィンドウを大幅に超える軌跡から学習シグナルを得られます。これにより、Composer は数百回のアクションを要する困難なコーディングタスクにも取り組めるようになります。
+            - heading [level=2] [ref=f27e84]:
+              - link "Link to this section" [ref=f27e85] [cursor=pointer]:
+                - /url: "#"
+                - text: "#"
+              - text: コンパクション手法の限界
+            - paragraph [ref=f27e86]:
+              - text: 社内ベンチマークスイートである
+              - link "CursorBench" [ref=f27e87] [cursor=pointer]:
+                - /url: https://cursor.com/blog/cursorbench
+              - text: において、私たちは、難易度の高い実世界のタスクでのより高い性能が、より多くの思考とコードベースの探索に直接相関していることを確認しています。ユーザーがエージェントと協力して、より難しく、より意欲的なタスクに取り組むようになるほど、思考と探索の効果はさらに高まると考えられます。
+            - paragraph [ref=f27e88]: ただし、主な課題は、エージェントの軌跡がモデルのコンテキスト長よりも速いペースで拡大していることです。多くのエージェントハーネスは、エージェントのワークフローにおける中間ステップとしてコンパクションを使うことで、これに対処しようとしています。エージェントがコンテキスト制限に達すると、ハーネスはコンテキストをより短く変換し、中断した地点からエージェントの生成を続けます。
+            - paragraph [ref=f27e89]:
+              - text: 実際には、コンパクションは通常、ハーネスによって次の2つの方法のいずれかで処理されます。1つは、プロンプトで要約を行うモデルを使ってテキスト空間で処理する方法、もう1つは、モデルが古いコンテキストを削除するスライディングコンテキストウィンドウによる方法です。研究者たちは、
+              - link "潜在" [ref=f27e90] [cursor=pointer]:
+                - /url: https://arxiv.org/abs/2602.16284
+              - link "空間" [ref=f27e91] [cursor=pointer]:
+                - /url: https://arxiv.org/abs/2506.06266
+              - text: におけるコンパクション手法の探究も始めています。これは、モデルがコンテキストをテキストではなくベクトルとして記憶する方法ですが、現時点ではこうしたアプローチはテキストベースの手法よりも大幅に低速です。
+            - paragraph [ref=f27e92]: こうしたコンパクション手法に共通する欠点は、コンテキスト内の重要な情報をモデルが忘れてしまう可能性があり、その結果、長時間にわたるタスクを進めるにつれて有効性が低下することです。
+            - heading [level=2] [ref=f27e93]:
+              - link "Link to this section" [ref=f27e94] [cursor=pointer]:
+                - /url: "#-1"
+                - text: "#"
+              - text: 学習された挙動としての自己要約
+            - figure [ref=f27e95]:
+              - img "compaction-in-the-loop の学習プロセスを示す自己要約の図" [ref=f27e97]
+            - paragraph [ref=f27e98]: Composer は、エージェント型コーディング向けに設計された特化型のモデルで、Cursor のエージェントハーネス内で強化学習によって学習されています。これにより、compaction-in-the-loop を組み込んだ形で学習でき、要約して保持すべき最も重要な情報を見極める能力が向上します。
+            - paragraph [ref=f27e99]: Composer はタスクを進める中で、固定のコンテキスト長のしきい値に近づくと、一度処理を止めて自身のコンテキストを要約してから続行します。より正確には、自己要約のプロセスは次のように機能します。
+            - list [ref=f27e100]:
+              - listitem [ref=f27e101]:
+                - paragraph [ref=f27e102]: Composer は、固定のトークン長のしきい値に達するまで、プロンプトから生成を行います。
+              - listitem [ref=f27e103]:
+                - paragraph [ref=f27e104]: モデルに現在のコンテキストを要約するよう求める合成クエリを挿入します。
+              - listitem [ref=f27e105]:
+                - paragraph [ref=f27e106]: モデルには最適な要約を考えるための思考用スペースが与えられ、その後、要約されたコンテキストを生成します。
+              - listitem [ref=f27e107]:
+                - paragraph [ref=f27e108]: Composer は、要約に加えて会話の状態 (プランの状態、残りのタスク、これまでの要約回数など) を含む要約済みコンテキストを使って、手順 1 に戻ります。
+            - paragraph [ref=f27e109]: Composer が推論時にもこれをうまく実行できるようにするため、学習にも同じ要約手順を組み込んでいます。各学習ロールアウトには、単一のプロンプトと応答のペアではなく、要約でつながれた複数の生成が含まれることがあります。つまり、自己要約そのものも報酬の対象になります。
+            - paragraph [ref=f27e110]: 技術的な観点では、これにあたって学習に大きな変更は必要ありません。連鎖内でモデルが生成したすべてのトークンに対して、最終報酬を適用します。これにより、良い軌跡におけるエージェントの応答だけでなく、それを成立させた自己要約にもより大きな重みが与えられます。同時に、重要な情報を落としてしまった不十分な要約の重みは下げられます。Composer は学習が進むにつれて、この自己要約プロセスを使ってより長いコンテキストを構築することを学びます。難しい例では、複数回にわたって自己要約することもよくあります。
+            - heading [level=2] [ref=f27e111]:
+              - link "Link to this section" [ref=f27e112] [cursor=pointer]:
+                - /url: "#-2"
+                - text: "#"
+              - text: トークン効率の高い圧縮
+            - paragraph [ref=f27e113]: 自己要約を検証するために、これを高度に調整されたプロンプトベースの圧縮ベースラインと比較します。圧縮のトリガーを変化させながら、難易度の高いソフトウェアエンジニアリングのタスク群でこの問題を検証します。
+            - paragraph [ref=f27e114]: ベースラインの圧縮手法では、要約用プロンプトは数千トークンに及び、要約に保持すべき内容を説明する、慎重に設計された10近いセクションが含まれています。出力される圧縮済みコンテキストも平均で5,000トークンを超え、コンテキスト内の重要な情報を説明する構造化されたセクションを多数含みます。
+            - paragraph [ref=f27e115]: 一方、Composer は自己要約するように訓練されているため、必要なのは「会話を要約してください」という内容を少し超える程度の、ごく短いプロンプトだけです。出力される要約は平均で約1,000トークンにとどまります。これは、残すべき価値の高い情報を文脈に応じて判断することを学習しているためです。
+            - paragraph [ref=f27e116]: 自己要約の影響を測定するために、Composer をコンテキスト制約のある2つのテスト環境で検証しました。1つは80kトークンでトリガーされる環境、もう1つは40kトークンでトリガーされる環境です (こちらは要約がより頻繁に行われることを意味します) 。どちらのシナリオでも、自己要約は、はるかにトークン効率の高い圧縮によって、CursorBench において大幅に優れた結果を生み出します。対象を絞ったベースライン手法と比べても、圧縮による誤差を一貫して50%削減しながら、トークン使用量は5分の1で済み、KVキャッシュ (以前のトークンから保存された中間計算結果) も再利用できます。
+            - figure [ref=f27e117]:
+              - img "CursorBench のパフォーマンスを示す自己要約のグラフ" [ref=f27e119]
+            - heading [level=2] [ref=f27e120]:
+              - link "Link to this section" [ref=f27e121] [cursor=pointer]:
+                - /url: "#-3"
+                - text: "#"
+              - text: 難しい問題を解く
+            - paragraph [ref=f27e122]:
+              - text: コンパクションのより大きな可能性は、長い推論チェーンを必要とする難問をモデルが一発で解けるようにすることです。現在の Composer 2 の学習では、それがしばしば起きるのを確認しています。ケーススタディとして、Terminal-Bench 2.0 の
+              - link [ref=f27e123] [cursor=pointer]:
+                - /url: https://www.tbench.ai/benchmarks/terminal-bench-2/make-doom-for-mips
+                - strong [ref=f27e124]: make-doom-for-mips
+              - text: として知られる問題を取り上げます。この問題は簡潔でありながら、非常に難しいものです。
+            - blockquote [ref=f27e125]:
+              - paragraph [ref=f27e126]: /app/doomgeneric/ に doom のソースコードを用意してあります。さらに、描画された各フレームを /tmp/frame.bmp に書き出す、使ってほしい特別な doomgeneric_img.c も作成してあります。最後に、doomgeneric_mips という名前のファイルを想定して実行する vm.js も用意しました。あとは残りを何とかしてください……
+            - paragraph [ref=f27e127]: 説明するのは簡単ですが、この問題は非常に難しく、強力なモデルのいくつかでも、公式に報告されている結果では正しく解けていません。
+            - paragraph [ref=f27e128]: Composer の初期研究チェックポイントをテストしたところ、この問題を正しく解けることがわかりました。その解法には、かなりの量のコードを実装してテストすることに加え、いくつかの代替実装を試すことも必要でした。以下は、この問題を解く過程でレンダリングされた画像です。
+            - figure [ref=f27e129]:
+              - img "Terminal Bench V2 make-doom-for-mips problem" [ref=f27e131]
+            - paragraph [ref=f27e132]: 最終的に、Composer は正確な解法を見つけるまでに 170 ターン費やし、その過程で簡潔で、人間が読める構造化された形式の自己要約を作成しました。10 万を超えるトークンを、問題解決に最も役立つと判断した 1,000 トークンまで自己要約しました。
+            - heading [level=3] [ref=f27e135]:
+              - button [ref=f27e136] [cursor=pointer]:
+                - text: Composerによる自己概要
+                - generic [ref=f27e137]: ↓
+            - heading [level=2] [ref=f27e139]:
+              - link "Link to this section" [ref=f27e140] [cursor=pointer]:
+                - /url: "#-4"
+                - text: "#"
+              - text: 長いホライズンの未来に向けて
+            - paragraph [ref=f27e141]: コンパクションを学習ループに組み込むことで、Composerは重要な情報を効率的に先へ引き継ぐための明示的な仕組みを学習し、困難なタスクに対してより高い能力を発揮できるようになります。自己要約に関する私たちの取り組みは、マルチエージェント連携のような、さらに長く複雑なプロセスでもComposerを学習させるという、より大きな目標に向けた一歩です。より優れたモデルの学習は、これらのエージェント型システムの適用範囲と知能を向上させるものだと、私たちは引き続き考えています。
+            - paragraph [ref=f27e142]: Composerの次のバージョンについても、まもなくさらに詳しくお伝えします。 ■
+          - generic [ref=f27e143]:
+            - paragraph [ref=f27e144]:
+              - generic [ref=f27e145]: "カテゴリー:"
+              - link "研究" [ref=f27e146] [cursor=pointer]:
+                - /url: /ja/blog/topic/research
+            - paragraph [ref=f27e147]: "著者s: Federico Cassano & Sasha Rush"
+      - generic [ref=f27e151]:
+        - heading "関連記事" [level=2] [ref=f27e153]
+        - generic [ref=f27e155]:
+          - article [ref=f27e157]:
+            - link "2026年3月26日 リサーチ リアルタイムRLでComposerを改善する Jacob, Ben, Nathan & Wanqi読了時間 1分" [ref=f27e158] [cursor=pointer]:
+              - /url: /ja/blog/real-time-rl-for-composer
+              - generic [ref=f27e159]:
+                - generic [ref=f27e160]:
+                  - time [ref=f27e161]: 2026年3月26日
+                  - generic [ref=f27e162]: ·
+                  - generic [ref=f27e163]: リサーチ
+                - paragraph [ref=f27e165]: リアルタイムRLでComposerを改善する
+                - generic [ref=f27e180]:
+                  - text: Jacob, Ben, Nathan & Wanqi
+                  - generic [ref=f27e181]: · 読了時間 1分
+          - article [ref=f27e183]:
+            - link "2026年3月19日 リサーチ Composer 2 のご紹介 Cursor Team読了時間 2分" [ref=f27e184] [cursor=pointer]:
+              - /url: /ja/blog/composer-2
+              - generic [ref=f27e185]:
+                - generic [ref=f27e186]:
+                  - time [ref=f27e187]: 2026年3月19日
+                  - generic [ref=f27e188]: ·
+                  - generic [ref=f27e189]: リサーチ
+                - paragraph [ref=f27e191]: Composer 2 のご紹介
+                - generic [ref=f27e197]:
+                  - text: Cursor Team
+                  - generic [ref=f27e198]: · 読了時間 2分
+          - article [ref=f27e200]:
+            - link "2026年2月9日 リサーチ Composer 1.5 のご紹介 Cursor Team読了時間 1分" [ref=f27e201] [cursor=pointer]:
+              - /url: /ja/blog/composer-1-5
+              - generic [ref=f27e202]:
+                - generic [ref=f27e203]:
+                  - time [ref=f27e204]: 2026年2月9日
+                  - generic [ref=f27e205]: ·
+                  - generic [ref=f27e206]: リサーチ
+                - paragraph [ref=f27e208]: Composer 1.5 のご紹介
+                - generic [ref=f27e214]:
+                  - text: Cursor Team
+                  - generic [ref=f27e215]: · 読了時間 1分
+          - link "投稿をさらに表示 →" [ref=f27e216] [cursor=pointer]:
+            - /url: /ja/blog
+  - contentinfo [ref=f27e217]:
+    - navigation [ref=f27e219]:
+      - generic [ref=f27e220]:
+        - generic [ref=f27e221]:
+          - heading "プロダクト" [level=3] [ref=f27e222]
+          - list [ref=f27e223]:
+            - listitem [ref=f27e224]:
+              - link "エージェント" [ref=f27e225] [cursor=pointer]:
+                - /url: /ja/product
+            - listitem [ref=f27e226]:
+              - link "Teams" [ref=f27e227] [cursor=pointer]:
+                - /url: /ja/business/teams
+            - listitem [ref=f27e228]:
+              - link "企業" [ref=f27e229] [cursor=pointer]:
+                - /url: /ja/enterprise
+            - listitem [ref=f27e230]:
+              - link "料金" [ref=f27e231] [cursor=pointer]:
+                - /url: /ja/pricing
+            - listitem [ref=f27e232]:
+              - link "コードレビュー" [ref=f27e233] [cursor=pointer]:
+                - /url: /ja/bugbot
+            - listitem [ref=f27e234]:
+              - link "CLI" [ref=f27e235] [cursor=pointer]:
+                - /url: /ja/cli
+            - listitem [ref=f27e236]:
+              - link "クラウドエージェント" [ref=f27e237] [cursor=pointer]:
+                - /url: /agents
+            - listitem [ref=f27e238]:
+              - link "Composer" [ref=f27e239] [cursor=pointer]:
+                - /url: /ja/composer
+            - listitem [ref=f27e240]:
+              - link "Marketplace ↗" [ref=f27e241] [cursor=pointer]:
+                - /url: https://cursor.com/marketplace
+                - text: Marketplace
+                - generic [ref=f27e242]: ↗
+        - generic [ref=f27e243]:
+          - heading "リソース" [level=3] [ref=f27e244]
+          - list [ref=f27e245]:
+            - listitem [ref=f27e246]:
+              - link "ダウンロード" [ref=f27e247] [cursor=pointer]:
+                - /url: /ja/download
+            - listitem [ref=f27e248]:
+              - link "Changelog" [ref=f27e249] [cursor=pointer]:
+                - /url: /ja/changelog
+            - listitem [ref=f27e250]:
+              - link "ドキュメント" [ref=f27e251] [cursor=pointer]:
+                - /url: /docs
+            - listitem [ref=f27e252]:
+              - link "学ぶ ↗" [ref=f27e253] [cursor=pointer]:
+                - /url: https://cursor.com/learn
+                - text: 学ぶ
+                - generic [ref=f27e254]: ↗
+            - listitem [ref=f27e255]:
+              - link "フォーラム ↗" [ref=f27e256] [cursor=pointer]:
+                - /url: https://forum.cursor.com/
+                - text: フォーラム
+                - generic [ref=f27e257]: ↗
+            - listitem [ref=f27e258]:
+              - link "ヘルプ ↗" [ref=f27e259] [cursor=pointer]:
+                - /url: https://cursor.com/help
+                - text: ヘルプ
+                - generic [ref=f27e260]: ↗
+            - listitem [ref=f27e261]:
+              - link "ワークショップ" [ref=f27e262] [cursor=pointer]:
+                - /url: /ja/workshops
+            - listitem [ref=f27e263]:
+              - link "ステータス ↗" [ref=f27e264] [cursor=pointer]:
+                - /url: https://status.cursor.com/
+                - text: ステータス
+                - generic [ref=f27e265]: ↗
+        - generic [ref=f27e266]:
+          - heading "会社情報" [level=3] [ref=f27e267]
+          - list [ref=f27e268]:
+            - listitem [ref=f27e269]:
+              - link "採用情報" [ref=f27e270] [cursor=pointer]:
+                - /url: /ja/careers
+            - listitem [ref=f27e271]:
+              - link "ブログ" [ref=f27e272] [cursor=pointer]:
+                - /url: /ja/blog
+            - listitem [ref=f27e273]:
+              - link "コミュニティ" [ref=f27e274] [cursor=pointer]:
+                - /url: /ja/community
+            - listitem [ref=f27e275]:
+              - link "学生" [ref=f27e276] [cursor=pointer]:
+                - /url: /ja/students
+            - listitem [ref=f27e277]:
+              - link "ブランド" [ref=f27e278] [cursor=pointer]:
+                - /url: /ja/brand
+            - listitem [ref=f27e279]:
+              - link "未来" [ref=f27e280] [cursor=pointer]:
+                - /url: /ja/future
+            - listitem [ref=f27e281]:
+              - link "Anysphere ↗" [ref=f27e282] [cursor=pointer]:
+                - /url: https://anysphere.inc/
+                - text: Anysphere
+                - generic [ref=f27e283]: ↗
+        - generic [ref=f27e284]:
+          - heading "法務" [level=3] [ref=f27e285]
+          - list [ref=f27e286]:
+            - listitem [ref=f27e287]:
+              - link "利用規約" [ref=f27e288] [cursor=pointer]:
+                - /url: /ja/terms-of-service
+            - listitem [ref=f27e289]:
+              - link "プライバシーポリシー" [ref=f27e290] [cursor=pointer]:
+                - /url: /ja/privacy
+            - listitem [ref=f27e291]:
+              - link "データ利用" [ref=f27e292] [cursor=pointer]:
+                - /url: /ja/data-use
+            - listitem [ref=f27e293]:
+              - link "セキュリティ" [ref=f27e294] [cursor=pointer]:
+                - /url: /ja/security
+        - generic [ref=f27e295]:
+          - heading "つながる" [level=3] [ref=f27e296]
+          - list [ref=f27e297]:
+            - listitem [ref=f27e298]:
+              - link "X ↗" [ref=f27e299] [cursor=pointer]:
+                - /url: https://x.com/cursor_ai
+                - text: X
+                - generic [ref=f27e300]: ↗
+            - listitem [ref=f27e301]:
+              - link "LinkedIn ↗" [ref=f27e302] [cursor=pointer]:
+                - /url: https://www.linkedin.com/company/cursorai
+                - text: LinkedIn
+                - generic [ref=f27e303]: ↗
+            - listitem [ref=f27e304]:
+              - link "YouTube ↗" [ref=f27e305] [cursor=pointer]:
+                - /url: https://www.youtube.com/@cursor_ai
+                - text: YouTube
+                - generic [ref=f27e306]: ↗
+    - generic [ref=f27e307]:
+      - generic [ref=f27e308]:
+        - generic [ref=f27e309]:
+          - text: © 2026
+          - link "Anysphere, Inc." [ref=f27e310] [cursor=pointer]:
+            - /url: https://anysphere.inc
+        - generic [ref=f27e311]:
+          - text: 🛡
+          - link "SOC 2認証取得済み" [ref=f27e312] [cursor=pointer]:
+            - /url: /ja/security
+      - button "🌐 日本語 ↓" [ref=f27e316] [cursor=pointer]:
+        - generic [ref=f27e317]: 🌐
+        - text: 日本語
+        - generic [ref=f27e318]: ↓
+  - alert [ref=f27e319]

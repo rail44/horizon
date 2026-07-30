@@ -626,6 +626,22 @@ entries live in `backlog-resolved.md` keeping their original numbers
     than the newest marker-bearing file; or set the env var in a
     `build.rs`/nextest profile. Until then the gate is only reliable
     when no sibling worktree is building.
+    **Resolved 2026-07-30** (with backlog 43's residue): the tracked
+    `.cargo/config.toml` now sets `build.rustc-workspace-wrapper =
+    ".cargo/rustc-shim"`, whose config-relative (therefore per-worktree)
+    path is hashed into every workspace member's artifact metadata —
+    cargo's only member-gated hash input — so member build/test artifacts
+    no longer collide across checkouts while dependencies stay shared.
+    The gate's clippy step carries a per-worktree build-dir via
+    `--config` because `cargo clippy` overrides the wrapper through env
+    (measured: a real `-D warnings` violation passed green under
+    sharing). The touch-all-sources hook defense and the "no concurrent
+    gates" rule are retired. Root cause, experiments, and the mechanism
+    table live in the 2026-07-30 cargo-isolation investigation (session
+    records); the `helper::resolve` deps-scan heuristic noted above is
+    narrowed by the isolation (distinct hashes) but its newest-file scan
+    remains a horizon-side sharp edge if two variants of one worktree
+    coexist.
 
 67. Running background `task` children are invisible to the user
     (owner observation, 2026-07-28, during the first async-task

@@ -1,0 +1,366 @@
+- generic [active] [ref=e1]:
+  - alert [ref=e2]
+  - generic [ref=e3]:
+    - link "Skip to main content" [ref=e4] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=e5]:
+      - banner [ref=e6]:
+        - generic [ref=e7]:
+          - generic [ref=e8]:
+            - link "Cursor Home" [ref=e9] [cursor=pointer]:
+              - /url: /docs
+              - img "Cursor Logo" [ref=e10]
+            - navigation [ref=e13]:
+              - link "ドキュメント" [ref=e14] [cursor=pointer]:
+                - /url: /docs
+              - link "API" [ref=e16] [cursor=pointer]:
+                - /url: /docs/api
+              - link "学習" [ref=e17] [cursor=pointer]:
+                - /url: /learn
+              - link "ヘルプ" [ref=e18] [cursor=pointer]:
+                - /url: /help
+          - generic [ref=e20]:
+            - button "ドキュメントを検索... ⌘K" [ref=e22] [cursor=pointer]:
+              - generic [ref=e26]: ドキュメントを検索...
+              - generic [ref=e27]: ⌘K
+            - button "AI に質問 ⌘I" [ref=e28] [cursor=pointer]:
+              - text: AI に質問
+              - generic [ref=e29]: ⌘I
+          - generic [ref=e31]:
+            - link "サインイン" [ref=e32] [cursor=pointer]:
+              - /url: https://cursor.com/dashboard
+            - link "ダウンロード" [ref=e33] [cursor=pointer]:
+              - /url: https://cursor.com/downloads
+      - generic [ref=e34]:
+        - heading "Command Palette" [level=2] [ref=e35]
+        - paragraph [ref=e36]: Search for a command to run...
+    - generic [ref=e37]:
+      - generic [ref=e39]:
+        - button [ref=e40]:
+          - button "Toggle Docs Sidebar" [ref=e42] [cursor=pointer]
+        - generic [ref=e46]:
+          - generic [ref=e47]:
+            - heading "はじめに" [level=2] [ref=e48]
+            - generic [ref=e49]:
+              - link "ようこそ" [ref=e50] [cursor=pointer]:
+                - /url: /ja/docs
+              - link "クイックスタート" [ref=e53] [cursor=pointer]:
+                - /url: /ja/docs/get-started/quickstart
+              - button "モデルと料金" [ref=e56] [cursor=pointer]
+              - link "変更履歴" [ref=e62] [cursor=pointer]:
+                - /url: https://cursor.com/changelog
+          - generic [ref=e65]:
+            - heading "Agent" [level=2] [ref=e66]
+            - generic [ref=e67]:
+              - link "概要" [ref=e68] [cursor=pointer]:
+                - /url: /ja/docs/agent/overview
+              - link "Agents Window" [ref=e71] [cursor=pointer]:
+                - /url: /ja/docs/agent/agents-window
+              - link "エージェントのレビュー" [ref=e74] [cursor=pointer]:
+                - /url: /ja/docs/agent/agent-review
+              - link "プラン" [ref=e77] [cursor=pointer]:
+                - /url: /ja/docs/agent/plan-mode
+              - link "プロンプト" [ref=e80] [cursor=pointer]:
+                - /url: /ja/docs/agent/prompting
+              - link "デバッグ" [ref=e83] [cursor=pointer]:
+                - /url: /ja/docs/agent/debug-mode
+              - link "デザインモード" [ref=e86] [cursor=pointer]:
+                - /url: /ja/docs/agent/design-mode
+              - button "ツール" [ref=e89] [cursor=pointer]
+              - button "セキュリティ" [ref=e95] [cursor=pointer]
+          - generic [ref=e101]:
+            - heading "カスタマイズ" [level=2] [ref=e102]
+            - generic [ref=e103]:
+              - link "概要" [ref=e104] [cursor=pointer]:
+                - /url: /ja/docs/customize-cursor
+              - link "プラグイン" [ref=e107] [cursor=pointer]:
+                - /url: /ja/docs/plugins
+              - link "ルール" [ref=e110] [cursor=pointer]:
+                - /url: /ja/docs/rules
+              - link "スキル" [ref=e113] [cursor=pointer]:
+                - /url: /ja/docs/skills
+              - link "サブエージェント" [ref=e116] [cursor=pointer]:
+                - /url: /ja/docs/subagents
+              - link "フック" [ref=e119] [cursor=pointer]:
+                - /url: /ja/docs/hooks
+              - link "MCP" [ref=e122] [cursor=pointer]:
+                - /url: /ja/docs/mcp
+          - generic [ref=e125]:
+            - heading "Cloud Agents" [level=2] [ref=e126]
+            - generic [ref=e127]:
+              - link "概要" [ref=e128] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent
+              - link "セットアップ" [ref=e131] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/setup
+              - link "機能" [ref=e134] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/capabilities
+              - link "ベストプラクティス" [ref=e137] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/best-practices
+              - link "自動化" [ref=e140] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/automations
+              - link "モバイル" [ref=e143] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/mobile
+              - link "Bugbot" [ref=e146] [cursor=pointer]:
+                - /url: /ja/docs/bugbot
+              - link "セキュリティエージェント" [ref=e149] [cursor=pointer]:
+                - /url: /ja/docs/security-agents
+              - link "承認エージェント" [ref=e152] [cursor=pointer]:
+                - /url: /ja/docs/approval-agents
+              - button "セキュリティ" [ref=e155] [cursor=pointer]
+              - link "設定" [ref=e161] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/settings
+              - link "API" [ref=e164] [cursor=pointer]:
+                - /url: /ja/docs/cloud-agent/api/endpoints
+          - generic [ref=e167]:
+            - heading "連携機能" [level=2] [ref=e168]
+            - generic [ref=e169]:
+              - link "Slack" [ref=e170] [cursor=pointer]:
+                - /url: /ja/docs/integrations/slack
+              - link "Microsoft Teams" [ref=e173] [cursor=pointer]:
+                - /url: /ja/docs/integrations/microsoft-teams
+              - link "Jira" [ref=e176] [cursor=pointer]:
+                - /url: /ja/docs/integrations/jira
+              - link "Linear" [ref=e179] [cursor=pointer]:
+                - /url: /ja/docs/integrations/linear
+              - link "Notion" [ref=e182] [cursor=pointer]:
+                - /url: /ja/docs/integrations/notion
+              - link "GitHub" [ref=e185] [cursor=pointer]:
+                - /url: /ja/docs/integrations/github
+              - link "GitLab" [ref=e188] [cursor=pointer]:
+                - /url: /ja/docs/integrations/gitlab
+              - link "Azure DevOps" [ref=e191] [cursor=pointer]:
+                - /url: /ja/docs/integrations/azure-devops
+              - link "Bitbucket" [ref=e194] [cursor=pointer]:
+                - /url: /ja/docs/integrations/bitbucket
+              - link "JetBrains" [ref=e197] [cursor=pointer]:
+                - /url: /ja/docs/integrations/jetbrains
+              - link "Xcode" [ref=e200] [cursor=pointer]:
+                - /url: /ja/docs/integrations/xcode
+              - link "ディープリンク" [ref=e203] [cursor=pointer]:
+                - /url: /ja/docs/reference/deeplinks
+          - generic [ref=e206]:
+            - heading "SDK" [level=2] [ref=e207]
+            - generic [ref=e208]:
+              - link "TypeScript" [ref=e209] [cursor=pointer]:
+                - /url: /ja/docs/sdk/typescript
+              - link "Python" [ref=e212] [cursor=pointer]:
+                - /url: /ja/docs/sdk/python
+              - link "変更履歴" [ref=e215] [cursor=pointer]:
+                - /url: /ja/docs/sdk/changelog
+          - generic [ref=e218]:
+            - heading "CLI" [level=2] [ref=e219]
+            - generic [ref=e220]:
+              - link "概要" [ref=e221] [cursor=pointer]:
+                - /url: /ja/docs/cli/overview
+              - link "インストール" [ref=e224] [cursor=pointer]:
+                - /url: /ja/docs/cli/installation
+              - link "機能" [ref=e227] [cursor=pointer]:
+                - /url: /ja/docs/cli/using
+              - link "変更履歴" [ref=e230] [cursor=pointer]:
+                - /url: /ja/docs/cli/changelog
+              - link "シェルモード" [ref=e233] [cursor=pointer]:
+                - /url: /ja/docs/cli/shell-mode
+              - link "ACP" [ref=e236] [cursor=pointer]:
+                - /url: /ja/docs/cli/acp
+              - link "ヘッドレス / CI" [ref=e239] [cursor=pointer]:
+                - /url: /ja/docs/cli/headless
+              - button "リファレンス" [ref=e242] [cursor=pointer]
+          - generic [ref=e248]:
+            - heading "チームとEnterprise" [level=2] [ref=e249]
+            - generic [ref=e250]:
+              - button "チーム" [ref=e251] [cursor=pointer]
+              - button "Enterprise" [ref=e257] [cursor=pointer]
+      - main [ref=e263]:
+        - generic [ref=e266]:
+          - generic [ref=e267]:
+            - generic [ref=e268]: Agent
+            - generic [ref=e270]:
+              - heading "Cursor Agent" [level=1] [ref=e271]
+              - paragraph [ref=e272]:
+                - text: Agent は Cursor のアシスタントで、複雑なコーディングタスクを自律的にこなし、ターミナルコマンドの実行やコード編集を行えます。サイドペインで
+                - generic [ref=e273]: Ctrl+I
+                - text: からアクセスできます。
+              - paragraph [ref=e275]:
+                - link "Agent の仕組み" [ref=e276] [cursor=pointer]:
+                  - /url: /learn/agents
+                - text: を詳しく知り、より速く開発しましょう。
+              - region "video player" [ref=e281]:
+                - button "play" [ref=e285] [cursor=pointer]
+              - heading [level=2] [ref=e288]:
+                - link "Copy link to agent" [ref=e289] [cursor=pointer]:
+                  - /url: "#agent"
+                  - generic [ref=e290]: Agent の仕組み
+              - paragraph [ref=e298]: "Agent は次の 3 つのコンポーネントで構成されています:"
+              - list [ref=e299]:
+                - listitem [ref=e300]:
+                  - strong [ref=e301]: Instructions
+                  - text: ": Agent の挙動を制御する system prompt と"
+                  - link "rules" [ref=e302] [cursor=pointer]:
+                    - /url: /docs/rules
+                - listitem [ref=e303]:
+                  - strong [ref=e304]: Tools
+                  - text: ": ファイル編集、コードベースの検索、ターミナル実行など"
+                - listitem [ref=e305]:
+                  - strong [ref=e306]: Model
+                  - text: ": タスクに合わせて選ぶ agent モデル"
+              - paragraph [ref=e307]: Cursor の agent は、サポートしている各モデルごとにこれらのコンポーネントを組み合わせて動かし、あらゆる最先端モデル向けに Instructions と Tools を個別にチューニングします。新しいモデルが登場しても、Cursor がモデル固有の最適化を処理するため、あなたはソフトウェア開発に集中できます。
+              - heading [level=2] [ref=e308]:
+                - link "Copy link to" [ref=e309] [cursor=pointer]:
+                  - /url: "#"
+                  - generic [ref=e310]: ツール
+              - paragraph [ref=e318]: ツール は Agent の基本的な構成要素です。コードベースや Web を検索して関連情報を見つけたり、ファイルを編集したり、ターミナルコマンドを実行したりするために使われます。
+              - paragraph [ref=e319]:
+                - text: ツール呼び出しが内部でどのように動作しているかについては、
+                - link "ツール呼び出しの基本" [ref=e320] [cursor=pointer]:
+                  - /url: /learn/tool-calling
+                - text: を参照してください。
+              - paragraph [ref=e321]: 1 つのタスク中に Agent が実行できるツール呼び出しの回数に制限はありません。
+              - generic [ref=e322]:
+                - generic [ref=e323]:
+                  - heading [level=3] [ref=e324]:
+                    - button "Search files and folders" [ref=e325] [cursor=pointer]
+                  - region "Search files and folders"
+                - generic [ref=e332]:
+                  - heading [level=3] [ref=e333]:
+                    - button "Web" [ref=e334] [cursor=pointer]
+                  - region "Web"
+                - generic [ref=e340]:
+                  - heading [level=3] [ref=e341]:
+                    - button "Fetch Rules" [ref=e342] [cursor=pointer]
+                  - region "Fetch Rules"
+                - generic [ref=e351]:
+                  - heading [level=3] [ref=e352]:
+                    - button "Read files" [ref=e353] [cursor=pointer]
+                  - region "Read files"
+                - generic [ref=e359]:
+                  - heading [level=3] [ref=e360]:
+                    - button "Edit files" [ref=e361] [cursor=pointer]
+                  - region "Edit files"
+                - generic [ref=e367]:
+                  - heading [level=3] [ref=e368]:
+                    - button "Run shell commands" [ref=e369] [cursor=pointer]
+                  - region "Run shell commands"
+                - generic [ref=e374]:
+                  - heading [level=3] [ref=e375]:
+                    - button "ブラウザ" [ref=e376] [cursor=pointer]
+                  - region "ブラウザ"
+                - generic [ref=e382]:
+                  - heading [level=3] [ref=e383]:
+                    - button "Image generation" [ref=e384] [cursor=pointer]
+                  - region "Image generation"
+                - generic [ref=e391]:
+                  - heading [level=3] [ref=e392]:
+                    - button "message-circle-question Ask questions" [ref=e393] [cursor=pointer]:
+                      - generic [ref=e394]:
+                        - generic [ref=e395]: message-circle-question
+                        - generic [ref=e396]: Ask questions
+                  - region "message-circle-question Ask questions"
+              - heading [level=2] [ref=e397]:
+                - link "Copy link to -1" [ref=e398] [cursor=pointer]:
+                  - /url: "#-1"
+                  - generic [ref=e399]: チェックポイント
+              - paragraph [ref=e407]: チェックポイントは、Agent セッション中にコードベースのスナップショットを保存します。Agent は大きな変更を加える前に自動的にチェックポイントを作成し、変更されたすべてのファイルの状態をキャプチャします。
+              - paragraph [ref=e408]:
+                - text: Agent が誤った方向に進んだ場合は、チャットタイムライン内の任意のチェックポイントをクリックして、その時点でのファイルをプレビューし、その後復元してすべてのファイルをその状態に戻せます。過去のリクエスト上の
+                - code [ref=e409]: Restore Checkpoint
+                - text: ボタン、またはメッセージにカーソルを重ねたときに表示される + ボタンから復元することもできます。
+              - paragraph [ref=e410]: チェックポイントは、探索的な作業、複雑なリファクタリング、安全にロールバックできるポイントが欲しい反復的な開発に役立ちます。
+              - alert [ref=e411]:
+                - paragraph [ref=e415]: チェックポイントはローカルに保存され、Git とは分離されています。Agent の変更を元に戻す目的だけに使用し、永続的なバージョン管理には Git を使用してください。
+              - heading [level=2] [ref=e416]:
+                - link "Copy link to -2" [ref=e417] [cursor=pointer]:
+                  - /url: "#-2"
+                  - generic [ref=e418]: キューされたメッセージ
+              - paragraph [ref=e426]: Agent が現在のタスクに取り組んでいるあいだも、フォローアップメッセージをキューに追加できます。指示は順番に待機し、準備ができ次第自動的に実行されます。
+              - heading [level=3] [ref=e428]:
+                - link "Copy link to -3" [ref=e429] [cursor=pointer]:
+                  - /url: "#-3"
+                  - generic [ref=e430]: キューの使い方
+              - list [ref=e438]:
+                - listitem [ref=e439]: Agent が実行中の間に、次の指示を入力します
+                - listitem [ref=e440]:
+                  - generic [ref=e441]: Enter
+                  - text: を押してキューに追加します
+                - listitem [ref=e443]: メッセージはアクティブなタスクの下に順番に表示されます
+                - listitem [ref=e444]: 必要に応じてドラッグして、キュー内のメッセージの順序を変更します
+                - listitem [ref=e445]: Agent は処理が完了すると、キュー内のメッセージを順番に処理します
+              - heading [level=3] [ref=e446]:
+                - link "Copy link to -4" [ref=e447] [cursor=pointer]:
+                  - /url: "#-4"
+                  - generic [ref=e448]: キーボードショートカット
+              - paragraph [ref=e456]: Agent が実行中のとき：
+              - list [ref=e457]:
+                - listitem [ref=e458]:
+                  - generic [ref=e459]: Enter
+                  - text: を押すとメッセージがキューに追加されます（Agent が現在のタスクを完了するまで待機します）
+                - listitem [ref=e461]:
+                  - generic [ref=e462]: Ctrl+Enter
+                  - text: を押すと、キューをスキップしてすぐに送信します
+              - heading [level=3] [ref=e464]:
+                - link "Copy link to -5" [ref=e465] [cursor=pointer]:
+                  - /url: "#-5"
+                  - generic [ref=e466]: 即時メッセージ送信
+              - paragraph [ref=e474]:
+                - generic [ref=e475]: Ctrl+Enter
+                - text: を使って即時送信すると、メッセージはチャット内の最新のユーザーメッセージに追加され、キューで待たずにすぐ処理されます。
+              - list [ref=e477]:
+                - listitem [ref=e478]: メッセージはツールの結果に紐づき、そのまま即時に送信されます
+                - listitem [ref=e479]: 緊急のフォローアップに対して、より即応性の高い操作が行えます
+                - listitem [ref=e480]: Agent が現在行っている作業を中断したり、方向転換させたりしたいときに使用してください
+            - generic [ref=e481]:
+              - generic [ref=e482]:
+                - button "System theme" [ref=e484] [cursor=pointer]
+                - button "Light theme" [ref=e487] [cursor=pointer]
+                - button "Dark theme" [ref=e494] [cursor=pointer]
+              - button "日本語" [ref=e498] [cursor=pointer]
+          - navigation [ref=e505]:
+            - generic [ref=e506]:
+              - list [ref=e507]:
+                - listitem [ref=e508]:
+                  - link "Agent の仕組み" [ref=e509] [cursor=pointer]:
+                    - /url: "#agent"
+                - listitem [ref=e510]:
+                  - link "ツール" [ref=e511] [cursor=pointer]:
+                    - /url: "#"
+                - listitem [ref=e512]:
+                  - link "チェックポイント" [ref=e513] [cursor=pointer]:
+                    - /url: "#-1"
+                - listitem [ref=e514]:
+                  - link "キューされたメッセージ" [ref=e515] [cursor=pointer]:
+                    - /url: "#-2"
+                - listitem [ref=e516]:
+                  - link "キューの使い方" [ref=e517] [cursor=pointer]:
+                    - /url: "#-3"
+                - listitem [ref=e518]:
+                  - link "キーボードショートカット" [ref=e519] [cursor=pointer]:
+                    - /url: "#-4"
+                - listitem [ref=e520]:
+                  - link "即時メッセージ送信" [ref=e521] [cursor=pointer]:
+                    - /url: "#-5"
+              - generic [ref=e523]:
+                - button "ページをコピー" [ref=e525] [cursor=pointer]
+                - button "フィードバックを送信" [ref=e529] [cursor=pointer]
+                - button "詳しく説明する" [ref=e532] [cursor=pointer]
+      - generic [ref=e535]:
+        - button "Expand Chat Sidebar" [ref=e537] [cursor=pointer]
+        - generic:
+          - generic:
+            - generic:
+              - separator
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic:
+                          - textbox "Chat message":
+                            - /placeholder: ドキュメントについて質問する
+                        - generic:
+                          - generic:
+                            - generic: Agent
+                            - generic:
+                              - button [disabled]
+                - generic:
+                  - generic:
+                    - button "Tokenizer Off"
+                    - generic: "コンテキスト: 0/200k (0%)"

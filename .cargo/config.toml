@@ -16,17 +16,46 @@
 # directory, which differs per worktree, so a relative path here would
 # defeat sharing rather than enable it).
 #
-# Path deps (this workspace's own crates) still get their own cache
-# entries per worktree (their Cargo SourceId is the absolute manifest
-# path, so it differs by worktree) — cheap, since they're small. The
-# expensive part (duckdb, arrow, tokio, gpui and its dependency tree, ...)
-# comes from crates.io/git sources whose SourceId doesn't depend on the
-# worktree path, so it's shared for real.
+# Workspace members do NOT get per-worktree entries by SourceId — the
+# opposite of what an earlier revision of this comment claimed. Cargo
+# deliberately strips the workspace prefix from a path source's
+# `stable_hash` ("the same source will give the same hash in different
+# locations", cargo's source_id.rs), so every worktree computes identical
+# artifact filenames for all ~20 member units, the last writer wins, and
+# freshness is mtime-based — a sibling's just-written artifact reads as
+# fresh against a worktree's older checkout mtimes. That was backlog 43/66:
+# phantom E0599/E0432 on symbols that exist, flapping test counts, tests
+# silently running a sibling's binary, and clippy passing on code that
+# violates -D warnings (all four reproduced deterministically, 2026-07-30).
 #
-# Concurrent builds across worktrees are safe: cargo takes its usual
-# advisory lock on the build-dir, so overlapping builds serialize rather
-# than corrupt anything (a warm shared cache makes the wait short in
-# practice). See AGENTS.md "Build setup".
+# `rustc-workspace-wrapper` below is the isolation mechanism: cargo hashes
+# the wrapper's path into artifact metadata for WORKSPACE MEMBERS ONLY
+# (`compute_metadata`'s `ws.is_member` gate — the only member-gated hash
+# input cargo has). The value is config-relative, so each worktree's
+# checkout of this file resolves it to a distinct absolute path, giving
+# members per-worktree artifacts while crates.io/git dependencies (duckdb,
+# arrow, tokio, gpui, ...) keep identical hashes and stay genuinely shared.
+#
+# The shim itself (`.cargo/rustc-shim`) is a tracked SYMLINK to
+# `/usr/bin/env`, which execs rustc with the environment untouched. It
+# must NOT be a shell script: POSIX shells (dash, the /bin/sh on Void)
+# scrub environment entries whose names are not valid shell identifiers
+# when spawning children, and cargo's `CARGO_BIN_EXE_<bin>` vars keep the
+# bin name's dashes (`CARGO_BIN_EXE_horizon-sandbox-network-probe`) — a
+# `#!/bin/sh` shim silently ate them and every integration test using
+# `env!("CARGO_BIN_EXE_...")` failed to compile (reproduced 2026-07-30).
+# The symlink's *path* is what cargo hashes, so isolation is unaffected;
+# its *target* being machine-shared is irrelevant.
+#
+# Known hole: `cargo clippy` overrides the wrapper via env
+# (RUSTC_WORKSPACE_WRAPPER=clippy-driver, same sysroot path everywhere),
+# which would collapse members back to shared hashes for the lint step —
+# so the gate's clippy invocation carries its own per-worktree build-dir
+# via --config (see hooks/pre-commit and AGENTS.md "Build setup").
+#
+# Cargo's advisory lock on the build-dir means concurrent builds
+# serialize rather than corrupt; with the wrapper isolation above they
+# are also *correct* across worktrees, not merely non-corrupting.
 #
 # One caveat this sharing does NOT change: cargo's own final-artifact
 # uplift (`cargo-util`'s `paths::link_or_copy`, called by every unit's
@@ -38,3 +67,4 @@
 # repro, and the mitigation in `crates/horizon-agentd/tests/e2e.rs`.
 [build]
 build-dir = "{cargo-cache-home}/horizon-build-dir"
+rustc-workspace-wrapper = ".cargo/rustc-shim"

@@ -1,0 +1,17 @@
+[     998ms] [VERBOSE] [DOM] Input elements should have autocomplete attributes (suggested: "current-password"): (More info: https://goo.gl/9p2vKq) %o @ https://forum.cursor.com/t/context-keeps-summarizing-at-10-20-of-total-context-window/163850:0
+[    1004ms] [ERROR] Failed to load theme 157 from https://sea3.discourse-cdn.com/cursor1/theme-javascripts/c579bf3b5de42eab6ddeb88be30e9a9ee86bd2d0.js?__ws=forum.cursor.com Error: Could not find module `discourse/admin/components/chart` imported from `(require)`
+    at gae (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:4493)
+    at cm (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:4660)
+    at window.requirejs.window.require.window.requireModule (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:1812)
+    at https://us1.discourse-cdn.com/cursor1/assets/br/chunk-ln9q81id.digested.js:1:999
+    at Object.lookup (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:228:328)
+    at https://sea3.discourse-cdn.com/cursor1/theme-javascripts/c579bf3b5de42eab6ddeb88be30e9a9ee86bd2d0.js?__ws=forum.cursor.com:1:709 @ https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:227
+[    1037ms] [LOG] ℹ️ Discourse v2026.7.0-latest — https://github.com/discourse/discourse/commits/ba63d427fd — Ember v6.10.1 @ https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:227
+[    1092ms] [ERROR] [THEME 157 'Forum Success Stats'] Error: Could not find module `discourse/admin/components/chart` imported from `(require)`
+    at gae (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:4493)
+    at cm (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:4660)
+    at window.requirejs.window.require.window.requireModule (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:9:1812)
+    at https://us1.discourse-cdn.com/cursor1/assets/br/chunk-ln9q81id.digested.js:1:999
+    at Object.lookup (https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:228:328)
+    at https://sea3.discourse-cdn.com/cursor1/theme-javascripts/c579bf3b5de42eab6ddeb88be30e9a9ee86bd2d0.js?__ws=forum.cursor.com:1:709 @ https://us1.discourse-cdn.com/cursor1/assets/br/discourse-e0107frj.digested.js:146
+[    1111ms] [WARNING] [THEME 190 '<Cursor>Alternative Voting Category Style 2'] api.registerValueTransformer: transformer "navigation-bar-items" is unknown and will be ignored. Is the name correct? Are you using the correct API for the transformer type? @ https://us1.discourse-cdn.com/cursor1/assets/br/chunk-c9o9v9mv.digested.js:18

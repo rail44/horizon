@@ -126,15 +126,21 @@ the bulk of a from-scratch build — are built once and reused everywhere.
 No manual setup; the config is checked in. Concurrent builds serialize on
 cargo's build-dir lock rather than corrupting each other.
 
-Cargo does **not** key this workspace's own crates per worktree, though:
-two checkouts produce the same artifact filename for all 20 test/bin
-units, so the last writer wins and every other worktree silently runs its
-binary (backlog 43 — that is where the "phantom E0432 on an export that
-exists" and flapping test counts came from). The gate therefore rebuilds
-the workspace's own crates before running; `hooks/pre-commit` does this
-for you, and it is free in practice because the expensive half is the
-dependencies. Run the gate through the hook, or `cargo clean -p` the
-workspace crates first if you invoke it by hand.
+The workspace's own crates are keyed per worktree by
+`build.rustc-workspace-wrapper` (`.cargo/rustc-shim`, tracked): cargo
+hashes that config-relative wrapper path into every workspace member's
+artifact metadata — the only member-gated hash input cargo has — so each
+checkout owns its member artifacts while dependencies stay shared. This
+replaced the old touch-all-sources hook defense and the "no concurrent
+gates" rule (backlog 43/66, resolved 2026-07-30): before it, two
+checkouts produced identical member artifact filenames, the last writer
+won, and mtime-based freshness handed a worktree its sibling's build,
+test binaries, and even clippy results (a real `-D warnings` violation
+measured green). One residue: `cargo clippy` overrides the wrapper via
+env, so the gate's clippy step carries a `--config` flag giving the lint
+step a per-worktree build-dir — copy the exact invocation from
+`hooks/pre-commit` if you run it by hand; a bare `cargo clippy` against
+the shared dir can still reuse a sibling's lint artifacts.
 
 ## Configuration
 

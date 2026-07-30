@@ -1,0 +1,367 @@
+- generic [ref=f13e3]:
+  - generic [ref=f13e7]:
+    - generic [ref=f13e10]:
+      - generic [ref=f13e11]:
+        - link "Cursor home page light logo" [ref=f13e12] [cursor=pointer]:
+          - /url: /web/20250912151500/https://docs.cursor.com/
+          - generic [ref=f13e13]: Cursor home page
+          - img "light logo" [ref=f13e14]
+        - button [ref=f13e16] [cursor=pointer]:
+          - img "US" [ref=f13e18]
+          - paragraph [ref=f13e20]: English
+      - button "Search... ⌘K" [ref=f13e24] [cursor=pointer]:
+        - generic [ref=f13e25]: Search...
+        - generic [ref=f13e30]: ⌘K
+      - generic [ref=f13e31]:
+        - navigation [ref=f13e32]:
+          - list [ref=f13e33]:
+            - listitem [ref=f13e34]:
+              - link "Sign in" [ref=f13e35] [cursor=pointer]:
+                - /url: https://web.archive.org/web/20250912151500/https://cursor.com/dashboard
+            - listitem [ref=f13e36]:
+              - link "Download" [ref=f13e37] [cursor=pointer]:
+                - /url: https://web.archive.org/web/20250912151500/https://cursor.com/
+        - button "Toggle dark mode" [ref=f13e44] [cursor=pointer]
+    - generic [ref=f13e53]:
+      - link "Documentation" [ref=f13e54] [cursor=pointer]:
+        - /url: /web/20250912151500/https://docs.cursor.com/en/welcome
+      - link "CLI" [ref=f13e56] [cursor=pointer]:
+        - /url: /web/20250912151500/https://docs.cursor.com/en/cli/overview
+      - link "Guides" [ref=f13e58] [cursor=pointer]:
+        - /url: /web/20250912151500/https://docs.cursor.com/en/guides/working-with-context
+      - link "Tools" [ref=f13e60] [cursor=pointer]:
+        - /url: /web/20250912151500/https://docs.cursor.com/en/tools/mcp
+  - generic [ref=f13e62]:
+    - generic [ref=f13e67]:
+      - listitem [ref=f13e68]:
+        - link [ref=f13e69] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/https://cursor.com/
+      - listitem [ref=f13e72]:
+        - link [ref=f13e73] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/https://forum.cursor.com/
+      - listitem [ref=f13e76]:
+        - link [ref=f13e77] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/mailto:hi@cursor.com
+      - generic [ref=f13e80]:
+        - heading "Get Started" [level=5] [ref=f13e82]
+        - list [ref=f13e83]:
+          - listitem [ref=f13e84]:
+            - link "Welcome" [ref=f13e85] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/welcome
+          - listitem [ref=f13e88]:
+            - link "Installation" [ref=f13e89] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/get-started/installation
+          - listitem [ref=f13e92]:
+            - link "Quickstart" [ref=f13e93] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/get-started/quickstart
+          - listitem [ref=f13e96]:
+            - link "Concepts" [ref=f13e97] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/get-started/concepts
+      - generic [ref=f13e100]:
+        - heading "Core" [level=5] [ref=f13e102]
+        - list [ref=f13e103]:
+          - listitem [ref=f13e104]:
+            - link "Tab" [ref=f13e105] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/tab/overview
+          - listitem [ref=f13e108]:
+            - generic [ref=f13e109] [cursor=pointer]: Agent
+            - list [ref=f13e113]:
+              - listitem [ref=f13e114]:
+                - link "Overview" [ref=f13e115] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/overview
+              - listitem [ref=f13e118]:
+                - generic [ref=f13e119] [cursor=pointer]: Chat
+                - list [ref=f13e123]:
+                  - listitem [ref=f13e124]:
+                    - link "Tabs" [ref=f13e125] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/tabs
+                  - listitem [ref=f13e128]:
+                    - link "Checkpoints" [ref=f13e129] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/checkpoints
+                  - listitem [ref=f13e132]:
+                    - link "Export" [ref=f13e133] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/export
+                  - listitem [ref=f13e136]:
+                    - link "Duplicate" [ref=f13e137] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/duplicate
+                  - listitem [ref=f13e140]:
+                    - link "History" [ref=f13e141] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/history
+                  - listitem [ref=f13e144]:
+                    - link "Summarization" [ref=f13e145] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/summarization
+                  - listitem [ref=f13e148]:
+                    - link "Compact" [ref=f13e149] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/compact
+                  - listitem [ref=f13e152]:
+                    - link "Commands" [ref=f13e153] [cursor=pointer]:
+                      - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/commands
+              - listitem [ref=f13e156]:
+                - link "Planning" [ref=f13e157] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/planning
+              - listitem [ref=f13e160]:
+                - link "Modes" [ref=f13e161] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/modes
+              - listitem [ref=f13e164]:
+                - link "Tools" [ref=f13e165] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/tools
+              - listitem [ref=f13e168]:
+                - link "Apply" [ref=f13e169] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/apply
+              - listitem [ref=f13e172]:
+                - link "Diffs & Review" [ref=f13e173] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/review
+              - listitem [ref=f13e176]:
+                - link "Terminal" [ref=f13e177] [cursor=pointer]:
+                  - /url: /web/20250912151500/https://docs.cursor.com/en/agent/terminal
+          - listitem [ref=f13e180]:
+            - link "Background Agents" [ref=f13e181] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/background-agent
+          - listitem [ref=f13e184]:
+            - generic [ref=f13e185] [cursor=pointer]: Background Agents API
+          - listitem [ref=f13e189]:
+            - link "Web & Mobile" [ref=f13e190] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/background-agent/web-and-mobile
+          - listitem [ref=f13e193]:
+            - generic [ref=f13e194] [cursor=pointer]: Inline Edit
+          - listitem [ref=f13e198]:
+            - link "Rules" [ref=f13e199] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/context/rules
+          - listitem [ref=f13e202]:
+            - link "Memories" [ref=f13e203] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/context/memories
+      - generic [ref=f13e206]:
+        - heading "Context" [level=5] [ref=f13e208]
+        - list [ref=f13e209]:
+          - listitem [ref=f13e210]:
+            - link "Codebase Indexing" [ref=f13e211] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/context/codebase-indexing
+          - listitem [ref=f13e214]:
+            - link "Ignore files" [ref=f13e215] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/context/ignore-files
+          - listitem [ref=f13e218]:
+            - link "Model Context Protocol (MCP)" [ref=f13e219] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/context/mcp
+          - listitem [ref=f13e222]:
+            - generic [ref=f13e223] [cursor=pointer]: "@ Symbols"
+      - generic [ref=f13e227]:
+        - heading "Integrations" [level=5] [ref=f13e229]
+        - list [ref=f13e230]:
+          - listitem [ref=f13e231]:
+            - link "Bugbot (Code Review)" [ref=f13e232] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/bugbot
+          - listitem [ref=f13e235]:
+            - link "Slack" [ref=f13e236] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/integrations/slack
+          - listitem [ref=f13e239]:
+            - link "Linear" [ref=f13e240] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/integrations/linear
+          - listitem [ref=f13e243]:
+            - link "GitHub" [ref=f13e244] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/integrations/github
+          - listitem [ref=f13e247]:
+            - link "Git" [ref=f13e248] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/integrations/git
+      - generic [ref=f13e251]:
+        - heading "Models" [level=5] [ref=f13e253]
+        - list [ref=f13e254]:
+          - listitem [ref=f13e255]:
+            - link "Models" [ref=f13e256] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/models
+          - listitem [ref=f13e259]:
+            - link "API Keys" [ref=f13e260] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/settings/api-keys
+      - generic [ref=f13e263]:
+        - heading "Configuration" [level=5] [ref=f13e265]
+        - list [ref=f13e266]:
+          - listitem [ref=f13e267]:
+            - link "Keyboard Shortcuts" [ref=f13e268] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/configuration/kbd
+          - listitem [ref=f13e271]:
+            - link "Themes" [ref=f13e272] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/configuration/themes
+          - listitem [ref=f13e275]:
+            - link "Shell Commands" [ref=f13e276] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/configuration/shell
+      - generic [ref=f13e279]:
+        - heading "Security" [level=5] [ref=f13e281]
+        - list [ref=f13e282]:
+          - listitem [ref=f13e283]:
+            - link "Agent Security" [ref=f13e284] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/account/agent-security
+      - generic [ref=f13e287]:
+        - heading "Account" [level=5] [ref=f13e289]
+        - list [ref=f13e290]:
+          - listitem [ref=f13e291]:
+            - link "Pricing" [ref=f13e292] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/account/pricing
+          - listitem [ref=f13e295]:
+            - link "Billing" [ref=f13e296] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/account/billing
+          - listitem [ref=f13e299]:
+            - link "Update Access" [ref=f13e300] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/account/update-access
+          - listitem [ref=f13e303]:
+            - generic [ref=f13e304] [cursor=pointer]: Teams
+      - generic [ref=f13e308]:
+        - heading "Troubleshooting" [level=5] [ref=f13e310]
+        - list [ref=f13e311]:
+          - listitem [ref=f13e312]:
+            - link "Common Issues" [ref=f13e313] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/troubleshooting/common-issues
+          - listitem [ref=f13e316]:
+            - link "Getting a Request ID" [ref=f13e317] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/troubleshooting/request-reporting
+          - listitem [ref=f13e320]:
+            - link "Troubleshooting Guide" [ref=f13e321] [cursor=pointer]:
+              - /url: /web/20250912151500/https://docs.cursor.com/en/troubleshooting/troubleshooting-guide
+    - generic [ref=f13e325]:
+      - generic [ref=f13e328]:
+        - generic [ref=f13e329]: On this page
+        - list [ref=f13e332]:
+          - listitem [ref=f13e333]:
+            - link "Message summarization" [ref=f13e334] [cursor=pointer]:
+              - /url: "#message-summarization"
+          - listitem [ref=f13e335]:
+            - link "How summarization works" [ref=f13e336] [cursor=pointer]:
+              - /url: "#how-summarization-works"
+          - listitem [ref=f13e337]:
+            - link "File & folder condensation" [ref=f13e338] [cursor=pointer]:
+              - /url: "#file-%26-folder-condensation"
+          - listitem [ref=f13e339]:
+            - link "Condensed" [ref=f13e340] [cursor=pointer]:
+              - /url: "#condensed"
+          - listitem [ref=f13e341]:
+            - link "Significantly condensed" [ref=f13e342] [cursor=pointer]:
+              - /url: "#significantly-condensed"
+          - listitem [ref=f13e343]:
+            - link "Not included" [ref=f13e344] [cursor=pointer]:
+              - /url: "#not-included"
+      - generic [ref=f13e345]:
+        - banner [ref=f13e346]:
+          - generic [ref=f13e347]:
+            - generic [ref=f13e348]:
+              - link "Core" [ref=f13e350] [cursor=pointer]:
+                - /url: /web/20250912151500/https://docs.cursor.com/en/tab/overview
+              - link "Agent" [ref=f13e354] [cursor=pointer]:
+                - /url: /web/20250912151500/https://docs.cursor.com/en/agent/overview
+              - link "Chat" [ref=f13e358] [cursor=pointer]:
+                - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/tabs
+            - heading "Summarization" [level=1] [ref=f13e360]
+          - paragraph [ref=f13e362]: Context management for long conversations in chat
+        - generic [ref=f13e363]:
+          - heading "Navigate to header Message summarization" [level=2] [ref=f13e364]:
+            - link "Navigate to header" [ref=f13e365] [cursor=pointer]:
+              - /url: "#message-summarization"
+            - generic [ref=f13e369] [cursor=pointer]: Message summarization
+          - generic [ref=f13e370]: As conversations grow longer, Cursor automatically summarizes and manages context to keep your chats efficient. Learn how to use the context menu and understand how files are condensed to fit within model context windows.
+          - generic [ref=f13e371]:
+            - img "Info" [ref=f13e373]
+            - generic [ref=f13e376]:
+              - text: For a deeper dive into how context works in Cursor, check our
+              - link "Working with Context" [ref=f13e377] [cursor=pointer]:
+                - /url: /web/20250912151500/https://docs.cursor.com/en/guides/working-with-context
+              - text: guide.
+          - heading "Navigate to header How summarization works" [level=3] [ref=f13e378]:
+            - link "Navigate to header" [ref=f13e379] [cursor=pointer]:
+              - /url: "#how-summarization-works"
+            - generic [ref=f13e383] [cursor=pointer]: How summarization works
+          - generic [ref=f13e384]: "When conversations grow longer, they exceed the model’s context window limit:"
+          - generic [ref=f13e390]:
+            - generic [ref=f13e391]: User
+            - generic [ref=f13e393]: Cursor
+            - generic [ref=f13e395]: User
+            - generic [ref=f13e397]: Context window limit
+            - generic [ref=f13e400]: Cursor
+            - generic [ref=f13e402]: User
+            - generic [ref=f13e404]: Cursor
+          - generic [ref=f13e406]: To solve this, Cursor summarizes older messages to make room for new conversations.
+          - generic [ref=f13e412]:
+            - generic [ref=f13e413]: Context window limit
+            - generic [ref=f13e416]: Summarized Messages
+            - generic [ref=f13e418]: Cursor
+            - generic [ref=f13e420]: User
+            - generic [ref=f13e422]: Cursor
+          - heading "Navigate to header File & folder condensation" [level=2] [ref=f13e424]:
+            - link "Navigate to header" [ref=f13e425] [cursor=pointer]:
+              - /url: "#file-%26-folder-condensation"
+            - generic [ref=f13e429] [cursor=pointer]: File & folder condensation
+          - generic [ref=f13e430]:
+            - text: "While chat summarization handles long conversations, Cursor uses a different strategy for managing large files and folders:"
+            - strong [ref=f13e431]: smart condensation
+            - text: . When you include files in your conversation, Cursor determines the best way to present them based on their size and available context space.
+          - generic [ref=f13e432]: "Here are the different states a file/folder can be in:"
+          - heading "Navigate to header Condensed" [level=3] [ref=f13e433]:
+            - link "Navigate to header" [ref=f13e434] [cursor=pointer]:
+              - /url: "#condensed"
+            - generic [ref=f13e438] [cursor=pointer]: Condensed
+          - generic [ref=f13e439]: When files or folders are too large to fit within the context window, Cursor automatically condenses them. Condensing shows the model key structural elements like function signatures, classes, and methods. From this condensed view, the model can choose to expand specific files if needed. This approach maximizes effective use of the available context window.
+          - img "Context menu" [ref=f13e447]
+          - heading "Navigate to header Significantly condensed" [level=3] [ref=f13e448]:
+            - link "Navigate to header" [ref=f13e449] [cursor=pointer]:
+              - /url: "#significantly-condensed"
+            - generic [ref=f13e453] [cursor=pointer]: Significantly condensed
+          - generic [ref=f13e454]: When a file name appears with a “Significantly Condensed” label, the file was too large to include in full, even in condensed form. Only the file name will be shown to the model.
+          - heading "Navigate to header Not included" [level=3] [ref=f13e455]:
+            - link "Navigate to header" [ref=f13e456] [cursor=pointer]:
+              - /url: "#not-included"
+            - generic [ref=f13e460] [cursor=pointer]: Not included
+          - generic [ref=f13e461]: When a warning icon appears next to a file or folder, the item is too large to be included in the context window, even in condensed form. This helps you understand which parts of your codebase are accessible to the model.
+          - img "Context menu" [ref=f13e469]
+        - generic [ref=f13e473]:
+          - paragraph [ref=f13e474]: Was this page helpful?
+          - generic [ref=f13e475]:
+            - button "Yes" [ref=f13e476] [cursor=pointer]
+            - button "No" [ref=f13e480] [cursor=pointer]
+        - generic [ref=f13e484]:
+          - link "History" [ref=f13e485] [cursor=pointer]:
+            - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/history
+          - link "Compact" [ref=f13e489] [cursor=pointer]:
+            - /url: /web/20250912151500/https://docs.cursor.com/en/agent/chat/compact
+        - generic [ref=f13e495]:
+          - textbox "Ask a question..." [ref=f13e496]
+          - button "Send message" [disabled] [ref=f13e497]
+  - contentinfo [ref=f13e500]:
+    - generic [ref=f13e502]:
+      - link "Cursor home page light logo" [ref=f13e504] [cursor=pointer]:
+        - /url: /web/20250912151500/https://docs.cursor.com/
+        - generic [ref=f13e505]: Cursor home page
+        - img "light logo" [ref=f13e506]
+      - generic [ref=f13e507]:
+        - generic [ref=f13e509]:
+          - paragraph [ref=f13e510]: Product
+          - link "Pricing" [ref=f13e511] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://www.cursor.com/pricing
+          - link "Downloads" [ref=f13e512] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://www.cursor.com/downloads
+          - link "Docs" [ref=f13e513] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://docs.cursor.com/
+          - link "Forum" [ref=f13e514] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://forum.cursor.com/
+        - generic [ref=f13e516]:
+          - paragraph [ref=f13e517]: Company
+          - link "Careers" [ref=f13e518] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://anysphere.inc/
+          - link "About" [ref=f13e519] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://anysphere.inc/
+          - link "Security" [ref=f13e520] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://cursor.com/security
+          - link "Privacy" [ref=f13e521] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://cursor.com/privacy
+        - generic [ref=f13e523]:
+          - paragraph [ref=f13e524]: Resources
+          - link "Terms" [ref=f13e525] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://cursor.com/terms-of-service
+          - link "Changelog" [ref=f13e526] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://cursor.com/changelog
+          - link "Twitter" [ref=f13e527] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://x.com/cursor_ai
+          - link "GitHub" [ref=f13e528] [cursor=pointer]:
+            - /url: https://web.archive.org/web/20250912151500/https://github.com/getcursor/cursor
+      - generic [ref=f13e529]:
+        - link "x" [ref=f13e530] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/https://x.com/cursor_ai
+        - link "github" [ref=f13e533] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/https://github.com/getcursor/cursor/
+        - link "website" [ref=f13e536] [cursor=pointer]:
+          - /url: https://web.archive.org/web/20250912151500/https://cursor.com/

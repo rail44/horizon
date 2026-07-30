@@ -1,0 +1,15 @@
+[    1591ms] [LOG] donation-banner loaded {version: 1.1.1} @ https://archive.org/includes/build/js/archive.min.js?v=a6262f4b:400
+[   11595ms] [LOG] screenshot delta: 5795858s @ https://web-static.archive.org/_static/js/bundle-playback.js?v=2N_sDSC0:1
+[   14787ms] Error: Minified React error #418; visit https://web.archive.org/web/20260509142207/https://react.dev/errors/418?args[]=HTML&args[]= for the full message or use the non-minified dev environment for full errors and additional helpful warnings.
+    at rX (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:52681)
+    at iu (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:103722)
+    at sd (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:144412)
+    at https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:139298
+    at se (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:139399)
+    at s$ (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:165963)
+    at MessagePort.O (https://web.archive.org/web/20260509142115js_/https://cursor.com/docs-static/_next/static/chunks/0ig3nn.6~1g5n.js?dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:10:14079)
+[   15713ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://web.archive.org/web/20260509142115mp_/https://cursor.com/docs-static/_next/image?url=%2Fdocs-static%2Fimages%2Fagent%2Freview.jpg&w=640&q=75&dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:0
+[   15714ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://web.archive.org/web/20260509142115im_/https://cursor.com/docs-static/_next/image?url=%2Fdocs-static%2Fimages%2Fagent%2Freview.jpg&w=640&q=75&dpl=dpl_hC8NuWAd9Rpz5Js6smLNskvcyXxH:0
+[   16076ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://web.archive.org/web/20260509142115/https://cursor.com/api/auth/check:0
+[   16131ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://web.archive.org/web/20260509142115/https://cursor.com/api/help/status:0
+[   16252ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://web.archive.org/web/20260509142115/https://cursor.com/api/auth/me:0

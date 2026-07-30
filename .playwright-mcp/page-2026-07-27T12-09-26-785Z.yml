@@ -1,0 +1,514 @@
+- generic [active] [ref=f38e1]:
+  - alert [ref=f38e2]
+  - region "Notifications alt+T"
+  - banner [ref=f38e3]:
+    - generic [ref=f38e4]:
+      - link "Skip to content" [ref=f38e5] [cursor=pointer]:
+        - /url: "#main"
+      - link "Homepage" [ref=f38e7] [cursor=pointer]:
+        - /url: /home
+        - generic [ref=f38e8]:
+          - generic:
+            - generic "Cursor logo animation"
+        - generic [ref=f38e18]: Cursor
+      - navigation [ref=f38e19]:
+        - list [ref=f38e20]:
+          - listitem [ref=f38e21]:
+            - link "Product" [ref=f38e22] [cursor=pointer]:
+              - /url: /product
+            - button "Expand Menu" [ref=f38e23]:
+              - generic [ref=f38e24]: ↓
+          - listitem [ref=f38e25]:
+            - link "Enterprise" [ref=f38e26] [cursor=pointer]:
+              - /url: /enterprise
+          - listitem [ref=f38e27]:
+            - link "Pricing" [ref=f38e28] [cursor=pointer]:
+              - /url: /pricing
+          - listitem [ref=f38e29]:
+            - link "Resources" [ref=f38e30] [cursor=pointer]:
+              - /url: /changelog
+            - button "Expand Menu" [ref=f38e31]:
+              - generic [ref=f38e32]: ↓
+      - generic [ref=f38e33]:
+        - link "Sign in" [ref=f38e34] [cursor=pointer]:
+          - /url: /dashboard
+        - link "Contact sales" [ref=f38e35] [cursor=pointer]:
+          - /url: /contact-sales?source=navbar
+        - link "Download" [ref=f38e37] [cursor=pointer]:
+          - /url: /download
+  - main [ref=f38e38]:
+    - generic [ref=f38e39]:
+      - paragraph [ref=f38e43]: Changelog
+      - article [ref=f38e44]:
+        - generic [ref=f38e45]:
+          - paragraph [ref=f38e47]:
+            - link [ref=f38e48] [cursor=pointer]:
+              - /url: /changelog/router
+              - time [ref=f38e49]: Jul 22, 2026
+          - generic [ref=f38e51]:
+            - heading [level=1] [ref=f38e53]:
+              - link "Cursor Router" [ref=f38e54] [cursor=pointer]:
+                - /url: /changelog/router
+            - generic [ref=f38e55]:
+              - paragraph [ref=f38e56]: Auto mode is now powered by Cursor Router.
+              - paragraph [ref=f38e57]:
+                - link "Cursor Router" [ref=f38e58] [cursor=pointer]:
+                  - /url: https://cursor.com/blog/router
+                - text: is our intelligent model router. It analyzes each request and sends it to the right model for the job. Frontier models handle work that demands them. Price-efficient models handle the rest.
+              - heading [level=2] [ref=f38e59]:
+                - link "Link to this section" [ref=f38e60] [cursor=pointer]:
+                  - /url: "#optimization-modes"
+                  - text: "#"
+                - text: Optimization modes
+              - figure [ref=f38e61]:
+                - region "video player" [ref=f38e63]:
+                  - generic [ref=f38e65]:
+                    - generic:
+                      - button "playback time" [ref=f38e66]: 0:00
+                      - generic [ref=f38e68] [cursor=pointer]:
+                        - slider "seek" [ref=f38e72]: "0"
+                        - generic: en 0:00
+                      - button "pause" [ref=f38e73] [cursor=pointer]
+                      - button "unmute" [ref=f38e78] [cursor=pointer]
+                      - button "enter fullscreen mode" [ref=f38e84] [cursor=pointer]
+              - paragraph [ref=f38e91]: "Select Auto, then choose how the router optimizes:"
+              - list [ref=f38e92]:
+                - listitem [ref=f38e93]:
+                  - strong [ref=f38e94]: "Intelligence:"
+                  - text: Frontier quality, matching the most expensive and powerful models that might be out of reach for daily use.
+                - listitem [ref=f38e95]:
+                  - strong [ref=f38e96]: "Balance:"
+                  - text: Strong quality, matching the frontier models that most people like to daily drive.
+                - listitem [ref=f38e97]:
+                  - strong [ref=f38e98]: "Cost:"
+                  - text: Good quality, reaching the highest available intelligence while optimizing token spend.
+              - paragraph [ref=f38e99]: Balance and Intelligence bill at the routed model’s rate. Each mode moves you along the cost-intelligence pareto frontier.
+              - heading [level=2] [ref=f38e100]:
+                - link "Link to this section" [ref=f38e101] [cursor=pointer]:
+                  - /url: "#admin-controls"
+                  - text: "#"
+                - text: Admin controls
+              - figure [ref=f38e102]:
+                - region "video player" [ref=f38e104]:
+                  - generic [ref=f38e106]:
+                    - generic:
+                      - button "playback time" [ref=f38e107]: 0:00
+                      - generic [ref=f38e109] [cursor=pointer]:
+                        - slider "seek" [ref=f38e113]: "0"
+                        - generic: en 0:00
+                      - button "pause" [ref=f38e114] [cursor=pointer]
+                      - button "unmute" [ref=f38e119] [cursor=pointer]
+                      - button "enter fullscreen mode" [ref=f38e125] [cursor=pointer]
+              - paragraph [ref=f38e132]: Admins can enable the router per team or group, restrict which optimization modes members can use, set the default mode, and allow or block underlying models.
+              - paragraph [ref=f38e133]: Cursor Router is available across desktop, web, iOS, CLI, and our SDK. It is on by default for Teams plans. Enterprise admins can enable it from the dashboard.
+              - paragraph [ref=f38e134]:
+                - text: Learn more in our
+                - link "announcement" [ref=f38e135] [cursor=pointer]:
+                  - /url: https://cursor.com/blog/router
+                - text: and
+                - link "docs" [ref=f38e136] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/cursor-router
+                - text: .
+              - generic [ref=f38e138]:
+                - heading [level=3] [ref=f38e139]:
+                  - button [ref=f38e140] [cursor=pointer]:
+                    - text: Improvements
+                    - generic [ref=f38e141]: ↓
+                - region "Improvements"
+      - article [ref=f38e143]:
+        - generic [ref=f38e144]:
+          - paragraph [ref=f38e146]:
+            - link [ref=f38e147] [cursor=pointer]:
+              - /url: /changelog/slack-improvements
+              - time [ref=f38e148]: Jul 17, 2026
+          - generic [ref=f38e150]:
+            - heading [level=1] [ref=f38e152]:
+              - link "Improvements to Cursor in Slack" [ref=f38e153] [cursor=pointer]:
+                - /url: /changelog/slack-improvements
+            - generic [ref=f38e154]:
+              - paragraph [ref=f38e155]: Cursor in Slack now shares a plan before it starts, runs in multi-repo environments, and can work across channels and threads.
+              - heading [level=2] [ref=f38e156]:
+                - link "Link to this section" [ref=f38e157] [cursor=pointer]:
+                  - /url: "#interaction-improvements"
+                  - text: "#"
+                - text: Interaction improvements
+              - paragraph [ref=f38e158]: Cursor now responds with a plan before it begins, so you can jump in and redirect early. As it works, it updates its status so you can follow each step.
+              - figure
+              - paragraph [ref=f38e159]: We also refined how Cursor's responses look in Slack. In-message buttons are gone, replaced by compact footer links. Tables, PRs, and artifacts now render more cleanly.
+              - heading [level=2] [ref=f38e160]:
+                - link "Link to this section" [ref=f38e161] [cursor=pointer]:
+                  - /url: "#multi-repo-environment-support"
+                  - text: "#"
+                - text: Multi-repo environment support
+              - paragraph [ref=f38e162]: From Slack, Cursor can now start in a named multi-repo environment instead of a single default repository. If your frontend, backend, and shared code live in separate repos, Cursor reads your request and targets the environment that gives it access to all of them.
+              - paragraph [ref=f38e163]:
+                - text: Mid-task, when Cursor needs a repo outside the current environment, it prompts you with a
+                - strong [ref=f38e164]: Switch repository
+                - text: button. Click it, choose the repo or environment, and Cursor picks up right where it left off.
+              - heading [level=2] [ref=f38e165]:
+                - link "Link to this section" [ref=f38e166] [cursor=pointer]:
+                  - /url: "#cross-channel-workflows"
+                  - text: "#"
+                - text: Cross-channel workflows
+              - paragraph [ref=f38e167]: Cursor can now read from and send messages to other Slack channels and threads. During a task, it can pull context from elsewhere in the workspace and post updates back in the original thread or the relevant channel.
+              - paragraph [ref=f38e168]:
+                - text: Learn more in our
+                - link "Slack docs" [ref=f38e169] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/integrations/slack
+                - text: .
+      - article [ref=f38e170]:
+        - generic [ref=f38e171]:
+          - paragraph [ref=f38e173]:
+            - link "3.11 Jul 10, 2026" [ref=f38e174] [cursor=pointer]:
+              - /url: /changelog/side-chat
+              - generic [ref=f38e175]: "3.11"
+              - time [ref=f38e177]: Jul 10, 2026
+          - generic [ref=f38e179]:
+            - heading [level=1] [ref=f38e181]:
+              - link "Side Chats and Conversation Search" [ref=f38e182] [cursor=pointer]:
+                - /url: /changelog/side-chat
+            - generic [ref=f38e183]:
+              - paragraph [ref=f38e184]: This release makes it easier to stay in flow with side chats that run alongside your main chat, the ability to search agent transcripts, and simplified project and repo pickers.
+              - heading [level=2] [ref=f38e185]:
+                - link "Link to this section" [ref=f38e186] [cursor=pointer]:
+                  - /url: "#side-chats"
+                  - text: "#"
+                - text: Side chats
+              - paragraph [ref=f38e187]:
+                - text: Open a side chat to ask questions, explore ideas, and investigate tangents without interrupting your main agent conversation. Use
+                - code [ref=f38e188]: /side
+                - text: ","
+                - code [ref=f38e189]: /btw
+                - text: ", or the plus button at the top of the chat panel to create a new side chat that has context from the main chat."
+              - figure
+              - paragraph [ref=f38e190]: Each side chat is a durable, full agent conversation that you can follow up on, revisit later, and at-mention to pull context back into the main thread.
+              - paragraph [ref=f38e191]: By default, side chats focus on reading, searching, and answering. Use them to ask clarification questions, research alternatives without committing to a pivot, and sanity-check a decision while the main agent continues running.
+              - heading [level=2] [ref=f38e192]:
+                - link "Link to this section" [ref=f38e193] [cursor=pointer]:
+                  - /url: "#conversation-search"
+                  - text: "#"
+                - text: Conversation search
+              - paragraph [ref=f38e194]:
+                - text: Find past agent chats faster with search results that go beyond names and PR numbers. In the
+                - link "Agents Window" [ref=f38e195] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/agent/agents-window
+                - text: ", you can search agent transcripts from the command palette (Cmd+K). Cursor builds a local search index that scales search to thousands of conversations with snappy performance."
+              - figure
+              - paragraph [ref=f38e196]: You can also search within an existing conversation using Cmd+F. Jump between matches, see a match counter, and keep searching as you scroll through long transcripts.
+              - heading [level=2] [ref=f38e197]:
+                - link "Link to this section" [ref=f38e198] [cursor=pointer]:
+                  - /url: "#redesigned-project-and-repo-pickers"
+                  - text: "#"
+                - text: Redesigned project and repo pickers
+              - paragraph [ref=f38e199]: We've simplified the project and repo pickers and made them more powerful. You can now stay in the picker for workflows that used to send you elsewhere. For example, you can create a project and connect GitHub, GitLab, or Azure DevOps without leaving the picker.
+              - figure [ref=f38e200]:
+                - img "Redesigned project and repo pickers" [ref=f38e202]
+              - paragraph [ref=f38e203]: Search is now scoped to where you're working—This Computer, Cloud, or a specific remote machine—instead of one global search box. You can also remove projects from Recents with one click.
+              - heading [level=2] [ref=f38e204]:
+                - link "Link to this section" [ref=f38e205] [cursor=pointer]:
+                  - /url: "#new-cloud-agent-hooks"
+                  - text: "#"
+                - text: New cloud agent hooks
+              - paragraph [ref=f38e206]:
+                - text: "Cloud agents already support team hooks around tool execution and file/shell work. We've added new hooks that let you observe and control the agent conversation itself: prompts, responses, thinking, subagents, compaction, and turn completion. See all the supported hooks in our"
+                - link "docs" [ref=f38e207] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/hooks#cloud-agent-support
+                - text: .
+              - paragraph [ref=f38e208]:
+                - text: New hooks like
+                - code [ref=f38e209]: beforeSubmitPrompt
+                - text: ","
+                - code [ref=f38e210]: afterAgentResponse
+                - text: ","
+                - code [ref=f38e211]: afterAgentThought
+                - text: ","
+                - code [ref=f38e212]: stop
+                - text: ","
+                - code [ref=f38e213]: subagentStart
+                - text: ", and more allow you to better observe output and reasoning, control subagents, and build self-correcting loops with cloud agents."
+              - generic [ref=f38e215]:
+                - heading [level=3] [ref=f38e216]:
+                  - button [ref=f38e217] [cursor=pointer]:
+                    - text: Picker Improvements
+                    - generic [ref=f38e218]: ↓
+                - region "Picker Improvements"
+      - article [ref=f38e220]:
+        - generic [ref=f38e221]:
+          - paragraph [ref=f38e223]:
+            - link "3.10 Jun 30, 2026" [ref=f38e224] [cursor=pointer]:
+              - /url: /changelog/team-marketplace-updates
+              - generic [ref=f38e225]: "3.10"
+              - time [ref=f38e227]: Jun 30, 2026
+          - generic [ref=f38e229]:
+            - heading [level=1] [ref=f38e231]:
+              - link "MCPs and Organizations in Team Marketplaces" [ref=f38e232] [cursor=pointer]:
+                - /url: /changelog/team-marketplace-updates
+            - generic [ref=f38e233]:
+              - paragraph [ref=f38e234]:
+                - text: We've expanded
+                - link "team marketplaces" [ref=f38e235] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/plugins#team-marketplaces
+                - text: to support Team MCPs and organization groups.
+              - heading [level=2] [ref=f38e236]:
+                - link "Link to this section" [ref=f38e237] [cursor=pointer]:
+                  - /url: "#team-mcps-in-team-marketplaces"
+                  - text: "#"
+                - text: Team MCPs in team marketplaces
+              - paragraph [ref=f38e238]: Admins can now configure Team MCP servers once and distribute them across cloud agents, the agents window, IDE, and CLI.
+              - paragraph [ref=f38e239]:
+                - text: When an admin sets up Team MCP servers for cloud agents, they can make those same servers available in a team marketplace from
+                - strong [ref=f38e240]: Dashboard -> Integrations & MCP
+                - text: . This allows members of the team to install approved integrations locally without configuring servers themselves.
+              - paragraph [ref=f38e241]:
+                - text: Learn more in the docs on
+                - link "migrating existing Team MCPs" [ref=f38e242] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/plugins#migrate-existing-team-mcps
+                - text: .
+              - figure [ref=f38e243]:
+                - img "Team MCP servers" [ref=f38e245]
+              - heading [level=2] [ref=f38e246]:
+                - link "Link to this section" [ref=f38e247] [cursor=pointer]:
+                  - /url: "#marketplace-access-by-organization-group"
+                  - text: "#"
+                - text: Marketplace access by organization group
+              - paragraph [ref=f38e248]:
+                - text: Team marketplaces now support
+                - link "organization groups" [ref=f38e249] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/enterprise/organization-groups
+                - text: ", in addition to team-level SCIM directory groups."
+              - figure [ref=f38e250]:
+                - img "Marketplace organization groups" [ref=f38e252]
+              - paragraph [ref=f38e253]:
+                - text: Under
+                - strong [ref=f38e254]: Dashboard -> Plugins -> Team Marketplaces
+                - text: ", restrict marketplace access to specific organization groups. Marketplaces that already use SCIM directory groups keep that configuration."
+              - paragraph [ref=f38e255]:
+                - text: Get started in the
+                - link "Cursor dashboard" [ref=f38e256] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/plugins#team-marketplaces
+                - text: .
+      - article [ref=f38e257]:
+        - generic [ref=f38e258]:
+          - paragraph [ref=f38e260]:
+            - link "3.9 Jun 29, 2026" [ref=f38e261] [cursor=pointer]:
+              - /url: /changelog/ios-mobile-app
+              - generic [ref=f38e262]: "3.9"
+              - time [ref=f38e264]: Jun 29, 2026
+          - generic [ref=f38e266]:
+            - heading [level=1] [ref=f38e268]:
+              - link "Cursor Mobile App for iOS" [ref=f38e269] [cursor=pointer]:
+                - /url: /changelog/ios-mobile-app
+            - generic [ref=f38e270]:
+              - paragraph [ref=f38e271]:
+                - link "Cursor for iOS" [ref=f38e272] [cursor=pointer]:
+                  - /url: https://cursor.com/blog/ios-mobile-app
+                - text: is now available in public beta on all paid plans. Launch and manage always-on agents from anywhere.
+              - heading [level=2] [ref=f38e273]:
+                - link "Link to this section" [ref=f38e274] [cursor=pointer]:
+                  - /url: "#cloud-agents-on-mobile"
+                  - text: "#"
+                - text: Cloud agents on mobile
+              - paragraph [ref=f38e275]: Open the Cursor mobile app, choose a repo, and launch an agent the same way you would on the desktop app. Pick any frontier model, describe ideas out loud with voice input, and use slash commands to guide Cursor in the right direction.
+              - figure [ref=f38e276]
+              - paragraph [ref=f38e279]: Cloud agents run in isolated virtual machines with full development environments to test, verify, and demo work. Move sessions from local to cloud to keep them running with your laptop closed.
+              - heading [level=2] [ref=f38e280]:
+                - link "Link to this section" [ref=f38e281] [cursor=pointer]:
+                  - /url: "#remote-control"
+                  - text: "#"
+                - text: Remote Control
+              - paragraph [ref=f38e282]:
+                - text: Use
+                - link "Remote Control" [ref=f38e283] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/cloud-agent/mobile#remote-control
+                - text: in the
+                - link "Agents Window" [ref=f38e284] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/agent/agents-window
+                - text: to take an agent you're running on your computer and keep directing it from your phone.
+              - figure [ref=f38e285]:
+                - img "Remote Control" [ref=f38e287]
+              - paragraph [ref=f38e288]: You can also turn on a setting to keep your computer awake, so your machine stays reachable while you're away from your desk.
+              - paragraph [ref=f38e289]:
+                - text: On Teams and Enterprise plans, admins must enable Remote Control from the
+                - link "Cursor Dashboard" [ref=f38e290] [cursor=pointer]:
+                  - /url: https://cursor.com/dashboard/cloud-agents#self-hosted
+                - text: .
+              - heading [level=2] [ref=f38e291]:
+                - link "Link to this section" [ref=f38e292] [cursor=pointer]:
+                  - /url: "#live-activities-and-push-notifications"
+                  - text: "#"
+                - text: Live Activities and push notifications
+              - paragraph [ref=f38e293]: Track the status of your agents with Live Activities on your lock screen. Get push notifications when an agent finishes, needs input, or is ready for review.
+              - figure [ref=f38e294]
+              - heading [level=2] [ref=f38e297]:
+                - link "Link to this section" [ref=f38e298] [cursor=pointer]:
+                  - /url: "#artifacts-and-scm"
+                  - text: "#"
+                - text: Artifacts and SCM
+              - paragraph [ref=f38e299]: Review demos, screenshots, logs, and diffs from your phone. Leave follow-up instructions, or merge the PR directly from the app.
+              - figure [ref=f38e300]
+              - paragraph [ref=f38e303]:
+                - link "Download Cursor for iOS" [ref=f38e304] [cursor=pointer]:
+                  - /url: https://apps.apple.com/app/cursor/id6767085653
+                - text: to start building from your phone. Read our
+                - link "announcement" [ref=f38e305] [cursor=pointer]:
+                  - /url: https://cursor.com/blog/ios-mobile-app
+                - text: or the
+                - link "docs" [ref=f38e306] [cursor=pointer]:
+                  - /url: https://cursor.com/docs/cloud-agent/mobile
+                - text: to learn more.
+      - navigation [ref=f38e310]:
+        - link "Next → Older posts" [ref=f38e311] [cursor=pointer]:
+          - /url: /changelog/page/2
+          - generic [ref=f38e312]: Next →
+          - generic [ref=f38e313]: Older posts
+  - contentinfo [ref=f38e314]:
+    - navigation [ref=f38e316]:
+      - generic [ref=f38e317]:
+        - generic [ref=f38e318]:
+          - heading "Product" [level=3] [ref=f38e319]
+          - list [ref=f38e320]:
+            - listitem [ref=f38e321]:
+              - link "Agents" [ref=f38e322] [cursor=pointer]:
+                - /url: /en-US/product
+            - listitem [ref=f38e323]:
+              - link "Teams" [ref=f38e324] [cursor=pointer]:
+                - /url: /en-US/business/teams
+            - listitem [ref=f38e325]:
+              - link "Enterprise" [ref=f38e326] [cursor=pointer]:
+                - /url: /en-US/enterprise
+            - listitem [ref=f38e327]:
+              - link "Pricing" [ref=f38e328] [cursor=pointer]:
+                - /url: /en-US/pricing
+            - listitem [ref=f38e329]:
+              - link "Code Review" [ref=f38e330] [cursor=pointer]:
+                - /url: /en-US/bugbot
+            - listitem [ref=f38e331]:
+              - link "CLI" [ref=f38e332] [cursor=pointer]:
+                - /url: /en-US/cli
+            - listitem [ref=f38e333]:
+              - link "Cloud Agents" [ref=f38e334] [cursor=pointer]:
+                - /url: /agents
+            - listitem [ref=f38e335]:
+              - link "Composer" [ref=f38e336] [cursor=pointer]:
+                - /url: /en-US/composer
+            - listitem [ref=f38e337]:
+              - link "Marketplace ↗" [ref=f38e338] [cursor=pointer]:
+                - /url: https://cursor.com/marketplace
+                - text: Marketplace
+                - generic [ref=f38e339]: ↗
+        - generic [ref=f38e340]:
+          - heading "Resources" [level=3] [ref=f38e341]
+          - list [ref=f38e342]:
+            - listitem [ref=f38e343]:
+              - link "Download" [ref=f38e344] [cursor=pointer]:
+                - /url: /en-US/download
+            - listitem [ref=f38e345]:
+              - link "Changelog" [ref=f38e346] [cursor=pointer]:
+                - /url: /en-US/changelog
+            - listitem [ref=f38e347]:
+              - link "Docs" [ref=f38e348] [cursor=pointer]:
+                - /url: /docs
+            - listitem [ref=f38e349]:
+              - link "Learn ↗" [ref=f38e350] [cursor=pointer]:
+                - /url: https://cursor.com/learn
+                - text: Learn
+                - generic [ref=f38e351]: ↗
+            - listitem [ref=f38e352]:
+              - link "Forum ↗" [ref=f38e353] [cursor=pointer]:
+                - /url: https://forum.cursor.com/
+                - text: Forum
+                - generic [ref=f38e354]: ↗
+            - listitem [ref=f38e355]:
+              - link "Help ↗" [ref=f38e356] [cursor=pointer]:
+                - /url: https://cursor.com/help
+                - text: Help
+                - generic [ref=f38e357]: ↗
+            - listitem [ref=f38e358]:
+              - link "Workshops" [ref=f38e359] [cursor=pointer]:
+                - /url: /en-US/workshops
+            - listitem [ref=f38e360]:
+              - link "Status ↗" [ref=f38e361] [cursor=pointer]:
+                - /url: https://status.cursor.com/
+                - text: Status
+                - generic [ref=f38e362]: ↗
+        - generic [ref=f38e363]:
+          - heading "Company" [level=3] [ref=f38e364]
+          - list [ref=f38e365]:
+            - listitem [ref=f38e366]:
+              - link "Careers" [ref=f38e367] [cursor=pointer]:
+                - /url: /en-US/careers
+            - listitem [ref=f38e368]:
+              - link "Blog" [ref=f38e369] [cursor=pointer]:
+                - /url: /en-US/blog
+            - listitem [ref=f38e370]:
+              - link "Community" [ref=f38e371] [cursor=pointer]:
+                - /url: /en-US/community
+            - listitem [ref=f38e372]:
+              - link "Students" [ref=f38e373] [cursor=pointer]:
+                - /url: /en-US/students
+            - listitem [ref=f38e374]:
+              - link "Brand" [ref=f38e375] [cursor=pointer]:
+                - /url: /en-US/brand
+            - listitem [ref=f38e376]:
+              - link "Future" [ref=f38e377] [cursor=pointer]:
+                - /url: /en-US/future
+            - listitem [ref=f38e378]:
+              - link "Anysphere ↗" [ref=f38e379] [cursor=pointer]:
+                - /url: https://anysphere.inc/
+                - text: Anysphere
+                - generic [ref=f38e380]: ↗
+        - generic [ref=f38e381]:
+          - heading "Legal" [level=3] [ref=f38e382]
+          - list [ref=f38e383]:
+            - listitem [ref=f38e384]:
+              - link "Terms of Service" [ref=f38e385] [cursor=pointer]:
+                - /url: /en-US/terms-of-service
+            - listitem [ref=f38e386]:
+              - link "Privacy Policy" [ref=f38e387] [cursor=pointer]:
+                - /url: /en-US/privacy
+            - listitem [ref=f38e388]:
+              - link "Data Use" [ref=f38e389] [cursor=pointer]:
+                - /url: /en-US/data-use
+            - listitem [ref=f38e390]:
+              - link "Security" [ref=f38e391] [cursor=pointer]:
+                - /url: /en-US/security
+        - generic [ref=f38e392]:
+          - heading "Connect" [level=3] [ref=f38e393]
+          - list [ref=f38e394]:
+            - listitem [ref=f38e395]:
+              - link "X ↗" [ref=f38e396] [cursor=pointer]:
+                - /url: https://x.com/cursor_ai
+                - text: X
+                - generic [ref=f38e397]: ↗
+            - listitem [ref=f38e398]:
+              - link "LinkedIn ↗" [ref=f38e399] [cursor=pointer]:
+                - /url: https://www.linkedin.com/company/cursorai
+                - text: LinkedIn
+                - generic [ref=f38e400]: ↗
+            - listitem [ref=f38e401]:
+              - link "YouTube ↗" [ref=f38e402] [cursor=pointer]:
+                - /url: https://www.youtube.com/@cursor_ai
+                - text: YouTube
+                - generic [ref=f38e403]: ↗
+    - generic [ref=f38e404]:
+      - generic [ref=f38e405]:
+        - generic [ref=f38e406]:
+          - text: © 2026
+          - link "Anysphere, Inc." [ref=f38e407] [cursor=pointer]:
+            - /url: https://anysphere.inc
+        - generic [ref=f38e408]:
+          - text: 🛡
+          - link "SOC 2 Certified" [ref=f38e409] [cursor=pointer]:
+            - /url: /en-US/security
+      - generic [ref=f38e410]:
+        - generic [ref=f38e411]:
+          - button "System theme" [ref=f38e413] [cursor=pointer]:
+            - generic [ref=f38e414]: 🖥
+          - button "Light theme" [ref=f38e415] [cursor=pointer]:
+            - generic [ref=f38e416]: ☉
+          - button "Dark theme" [ref=f38e417] [cursor=pointer]:
+            - generic [ref=f38e418]: ☾
+        - button "🌐 English ↓" [ref=f38e421] [cursor=pointer]:
+          - generic [ref=f38e422]: 🌐
+          - text: English
+          - generic [ref=f38e423]: ↓
