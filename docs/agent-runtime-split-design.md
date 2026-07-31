@@ -217,6 +217,10 @@ step calls for; nothing routes a real session through it yet.
   (connect default) specifically so the two independently agree on the same
   path without either depending on the other. Kept out of `wire` (which
   must stay transport-agnostic per guardrail 2) as its own tiny module.
+  (Since `docs/runtime-crate-alignment-design.md` phase 1 this module is
+  `horizon_wire::socket`, and the function is
+  `default_agentd_socket_path`, beside terminald's — same convention, a
+  crate further down.)
 - **`horizon-agentd`** (`crates/horizon-agentd`, bin-only crate, package
   name doubles as the binary name so `env!("CARGO_BIN_EXE_horizon-agentd")`
   works from its own integration test). `--socket <path>` overrides the

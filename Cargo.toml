@@ -8,6 +8,7 @@ members = [
     "crates/horizon-cli",
     "crates/horizon-session-protocol",
     "crates/horizon-terminal-core",
+    "crates/horizon-wire",
     "crates/horizon-config",
     "crates/horizon-workspace",
     "crates/horizon-sandbox",
@@ -22,7 +23,7 @@ members = [
 # `codec::Default` then fails to compile, which is the adoption decision's
 # countermeasure to the 0.18.0 silent default-codec change (JSON ->
 # Postbag). Every use names `codec::Postbag` explicitly (via
-# `horizon_session_protocol::WireCodec`). `rtc` pulls in `rch` + the
+# `horizon_wire::WireCodec`). `rtc` pulls in `rch` + the
 # derive macro; `codec-postbag` is the only codec compiled in. (The
 # vocabularies' JSON payloads travel as `contract::JsonValue` -- JSON text
 # on this binary wire -- precisely so no second, self-describing codec is
@@ -75,6 +76,7 @@ horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-session-protocol = { path = "crates/horizon-session-protocol" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
+horizon-wire = { path = "crates/horizon-wire" }
 horizon-workspace = { path = "crates/horizon-workspace" }
 remoc = { workspace = true }
 serde_json = "1.0"

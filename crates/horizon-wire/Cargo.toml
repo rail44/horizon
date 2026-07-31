@@ -1,0 +1,20 @@
+[package]
+name = "horizon-wire"
+version = "0.1.0"
+edition = "2021"
+
+# The domain-free foundation every runtime's wire is built on
+# (docs/runtime-crate-alignment-design.md judgment 2). It deliberately
+# depends on nothing of Horizon's: no agent crate, no terminal crate, no
+# config -- which is what lets each daemon link it without dragging the
+# other view kind's graph (and its libduckdb) along.
+[dependencies]
+libc = "0.2"
+remoc = { workspace = true }
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.18", features = ["v4", "serde"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -27,15 +27,13 @@
 //! backstop for losing this process is the workspace snapshot restore,
 //! exactly as before.
 //!
-//! **Dependency-graph note.** This crate depends on
-//! `horizon-session-protocol`, which names the agent vocabulary too, so
-//! `horizon-agent` (and thus DuckDB) is in this binary's link graph even
-//! though not one symbol of it is used here. That is a build-time artifact
-//! only — the runtime independence this split exists for is process,
-//! socket, and hub-trait separation, all of which hold. Splitting the
-//! protocol crate's domain-free foundation into its own crate would remove
-//! it; that is tracked as follow-up rather than done here, so the wire
-//! itself moves exactly once (`docs/tasks/backlog.md`).
+//! **Dependency-graph note.** This crate no longer names `horizon-agent` in
+//! its manifest: the socket-path convention it used to reach for lives in
+//! `horizon-wire`, the domain-free foundation both daemons share
+//! (`docs/runtime-crate-alignment-design.md` phase 1). `horizon-agent` is
+//! still pulled in transitively while the two hub traits share
+//! `horizon-session-protocol`; phase 2 of that doc moves [`TerminalHub`]
+//! into `horizon-terminal-core` and closes the gap.
 
 mod hub;
 mod terminal;
@@ -44,11 +42,9 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use horizon_agent::socket::default_terminald_socket_path;
-use horizon_session_protocol::{
-    TerminalHubClient, TerminalHubServerShared, WireCodec, RTC_MAX_REPLY_BYTES,
-    RTC_MAX_REQUEST_BYTES,
-};
+use horizon_session_protocol::{TerminalHubClient, TerminalHubServerShared};
+use horizon_wire::socket::default_terminald_socket_path;
+use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
 use hub::Hub;
 use remoc::rtc::{Client as _, ServerShared as _};
 use terminal::TerminalHost;

@@ -59,10 +59,14 @@ pub(super) fn snapshot_frame(term: &Term<EventSink>, size: TerminalSize) -> Term
 }
 
 /// The session-daemon events-channel item cap a served scroll window must
-/// stay under — a mirror of `horizon_session_protocol::
-/// TERMINAL_EVENT_MAX_ITEM_BYTES` (4 MiB), duplicated as a local constant
-/// because this crate sits *below* `horizon-session-protocol` in the
-/// dependency graph and cannot name it. A window rides that mpsc as one
+/// stay under — a mirror of
+/// `horizon_wire::TERMINAL_EVENT_MAX_ITEM_BYTES` (4 MiB), duplicated as a
+/// local constant because this crate does not depend on the wire crates.
+/// (Naming it directly became *possible* when
+/// `docs/runtime-crate-alignment-design.md` phase 1 moved the caps into the
+/// domain-free `horizon-wire`; the edge is deliberately not added here
+/// ahead of phase 2, which brings `TerminalHub` into this crate.) A window
+/// rides that mpsc as one
 /// `TerminalUpdate::ScrollWindow`; exceeding the cap trips remoc's over-cap
 /// latch and tears the shared events channel down (pinned by that crate's
 /// `tests/limits.rs`), dropping the pane's `Exited`/`Error`/`Bell` on the

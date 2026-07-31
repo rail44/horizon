@@ -29,8 +29,11 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    AgentAttachment, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub, VersionRange,
-    WireCodec, COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    our_version_range, AgentAttachment, HubError, HubHello, SessionHub,
+};
+use horizon_wire::{
+    ClientHello, DecodeSkipLog, WireCodec, COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES,
+    TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -124,7 +127,7 @@ impl SessionHub for Hub {
     /// ordering in `main` relies on it answering immediately, before the
     /// event-log resume finishes).
     async fn hello(&self, client: ClientHello) -> Result<HubHello, HubError> {
-        let ours = VersionRange::ours();
+        let ours = our_version_range();
         let Some(negotiated) = ours.negotiate(client.supported) else {
             let reason = HubError::IncompatibleVersion {
                 client: client.supported,
@@ -320,7 +323,8 @@ mod tests {
     use horizon_agent::config::AgentConfig;
     use horizon_agent::contract::ProviderRegistry;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
-    use horizon_session_protocol::VersionRange;
+    use horizon_session_protocol::our_client_hello;
+    use horizon_wire::VersionRange;
     use std::sync::Arc;
 
     fn test_hub() -> Hub {
@@ -384,7 +388,7 @@ mod tests {
         ));
 
         // A successful negotiation opens it.
-        hub.hello(ClientHello::new("test-client"))
+        hub.hello(our_client_hello("test-client"))
             .await
             .expect("a matching range must negotiate");
         assert_eq!(hub.list_agents().await.unwrap(), Vec::new());
@@ -425,7 +429,7 @@ mod tests {
         ));
         state.mark_resume_ready();
         let hub = Hub::new(Connection::new(state.clone()), "test-agentd");
-        hub.hello(ClientHello::new("test-client"))
+        hub.hello(our_client_hello("test-client"))
             .await
             .expect("hello");
 

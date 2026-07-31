@@ -11,7 +11,8 @@
 //!   artifact (`crates/horizon-session-protocol/schema/session-wire.json`),
 //!   so every wire change is visible, reviewable text in its PR diff.
 //! - `scripts/check-wire-schema.sh` (run by `hooks/pre-commit`) feeds this
-//!   module the merge-base's copy of the artifact next to the current one;
+//!   module (through this crate's `check_wire_schema` example) the
+//!   merge-base's copy of the artifact next to the current one;
 //!   [`classify_schema_change`] then classifies every difference as
 //!   *additive* (pass) or *reshape* (fail).
 //!
@@ -33,12 +34,17 @@
 //! embeds it as `x-session-protocol-version`; a differing value is the §4
 //! "explicit version-bump marker" that waves the whole diff through, to be
 //! judged by the owner in review instead of by this classifier).
+//!
+//! The classifier itself knows nothing about which wire it is classifying —
+//! it takes two JSON documents — which is why it lives here rather than
+//! with any one hub's vocabulary.
 
 use serde_json::{Map, Value};
 
-/// The artifact key carrying [`crate::SESSION_PROTOCOL_VERSION`]. A change
-/// to this value between the two compared schemas is the explicit
-/// version-bump marker that legitimizes an otherwise-forbidden reshape.
+/// The artifact key carrying `horizon_session_protocol::
+/// SESSION_PROTOCOL_VERSION`. A change to this value between the two
+/// compared schemas is the explicit version-bump marker that legitimizes an
+/// otherwise-forbidden reshape.
 pub const PROTOCOL_VERSION_KEY: &str = "x-session-protocol-version";
 
 /// Annotation keys whose changes never affect what decodes on the wire.

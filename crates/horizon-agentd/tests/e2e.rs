@@ -44,8 +44,11 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    CappedReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient, VersionRange,
-    WireCodec, CONTROL_MAX_ITEM_BYTES, MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
+    our_version_range, HubError, SessionHub as _, SessionHubClient, MIN_SUPPORTED_PROTOCOL_VERSION,
+    SESSION_PROTOCOL_VERSION,
+};
+use horizon_wire::{
+    CappedReceiver, ClientHello, VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES,
     TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -547,7 +550,7 @@ async fn establish_hub(
 /// advertised range -- every session-hosting test's entry point.
 async fn connect_hub(socket_path: &Path) -> HubTestClient {
     let stream = connect_with_retry(socket_path).await;
-    establish_hub(stream, VersionRange::ours())
+    establish_hub(stream, our_version_range())
         .await
         .expect("hello should succeed at a matching version range")
 }

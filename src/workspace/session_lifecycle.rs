@@ -849,7 +849,7 @@ impl WorkspaceShell {
     /// terminal resume sweep is needed either (there is nothing to
     /// re-adopt — the attachments were never severed).
     pub(super) fn reload_agent_runtime(&self, old: Option<SessiondHandle>, cx: &mut Context<Self>) {
-        let socket_path = horizon_agent::socket::default_socket_path();
+        let socket_path = horizon_wire::socket::default_agentd_socket_path();
         let restart_socket = socket_path.clone();
         let control_socket = self.socket_path.clone();
         let (drained_tx, mut drained_rx) = futures::channel::mpsc::unbounded();
@@ -899,7 +899,7 @@ impl WorkspaceShell {
         old: Option<TerminaldHandle>,
         cx: &mut Context<Self>,
     ) {
-        let socket_path = horizon_agent::socket::default_terminald_socket_path();
+        let socket_path = horizon_wire::socket::default_terminald_socket_path();
         let restart_socket = socket_path.clone();
         let control_socket = self.socket_path.clone();
         let window_handle = self.window;

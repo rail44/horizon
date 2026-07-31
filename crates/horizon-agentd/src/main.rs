@@ -68,10 +68,9 @@ use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
-use horizon_agent::socket::default_socket_path;
-use horizon_session_protocol::{
-    SessionHubClient, SessionHubServerShared, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
-};
+use horizon_session_protocol::{SessionHubClient, SessionHubServerShared};
+use horizon_wire::socket::default_agentd_socket_path;
+use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
 use hub::Hub;
 use remoc::rtc::{Client as _, ServerShared as _};
 use session::{Connection, SessiondState};
@@ -99,7 +98,7 @@ const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let socket_path =
-        socket_path_from_args(std::env::args().skip(1)).unwrap_or_else(default_socket_path);
+        socket_path_from_args(std::env::args().skip(1)).unwrap_or_else(default_agentd_socket_path);
 
     // `horizon-agentd` is now the one process that reads Horizon's config
     // file directly (see `docs/agent-runtime-split-design.md`'s "the child

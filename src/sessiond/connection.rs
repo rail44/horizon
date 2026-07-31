@@ -15,9 +15,12 @@ use std::time::Duration;
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolResponse};
 use horizon_session_protocol::{
-    legacy, CappedReceiver, ClientHello, DecodeSkipLog, HubError, HubHello, SessionHub as _,
-    SessionHubClient, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
-    RTC_MAX_REQUEST_BYTES, SESSION_PROTOCOL_VERSION, TOOL_IO_MAX_ITEM_BYTES,
+    legacy, our_client_hello, HubError, HubHello, SessionHub as _, SessionHubClient,
+    SESSION_PROTOCOL_VERSION,
+};
+use horizon_wire::{
+    CappedReceiver, DecodeSkipLog, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
+    RTC_MAX_REQUEST_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use remoc::rtc::Client as _;
@@ -453,7 +456,7 @@ where
     hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
     hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
 
-    let client_hello = ClientHello::new(concat!("horizon/", env!("CARGO_PKG_VERSION")));
+    let client_hello = our_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
         Ok(Ok(hello)) => Ok((hub, hello, conn_task)),
         Ok(Err(error @ HubError::IncompatibleVersion { .. })) => {

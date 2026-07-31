@@ -358,10 +358,12 @@ impl WorkspaceShell {
         let mut workspace_state = WorkspaceStateStore::from_environment();
         let (workspace, restoring_workspace, persistence_ready) =
             load_workspace_state(&mut workspace_state);
-        let (sessiond, host_tool_rx, workspace_root_rx) =
-            SessiondHandle::start(&horizon_agent::socket::default_socket_path(), &socket_path);
+        let (sessiond, host_tool_rx, workspace_root_rx) = SessiondHandle::start(
+            &horizon_wire::socket::default_agentd_socket_path(),
+            &socket_path,
+        );
         let terminald = TerminaldHandle::start(
-            &horizon_agent::socket::default_terminald_socket_path(),
+            &horizon_wire::socket::default_terminald_socket_path(),
             &socket_path,
         );
         let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();

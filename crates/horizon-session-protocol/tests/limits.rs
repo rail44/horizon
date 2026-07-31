@@ -12,10 +12,10 @@
 //! is what lets the receive loops treat it as a skip (adoption condition
 //! 2's size-cap sibling).
 
-use horizon_session_protocol::{WireCodec, TERMINAL_EVENT_MAX_ITEM_BYTES};
 use horizon_terminal_core::{
     TerminalColor, TerminalLine, TerminalScrollWindow, TerminalSpan, TerminalUnderline,
 };
+use horizon_wire::{WireCodec, TERMINAL_EVENT_MAX_ITEM_BYTES};
 use remoc::codec::Codec;
 use remoc::prelude::*;
 use tokio::net::UnixStream;
