@@ -1,7 +1,7 @@
 ---
 id: 012
 title: Resume silently rebuilds an empty provider history when the DuckDB store cannot be opened
-status: open
+status: resolved
 severity: high
 area: agent, agentd, persistence
 ---
@@ -44,3 +44,19 @@ full JSONL event vec for the UI frame, so an honest fallback could even
 rebuild provider history from those records instead of the store.
 Filed from the project session after diagnosing the live incident
 (owner-approved, 2026-07-30).
+
+## Resolution
+
+Fixed in `d015da6` (merged as `076c787`). `StartSession` gained a
+`history: Vec<Event>` field carrying the JSONL events the resume path
+already holds for the UI frame; `load_rig_session_history` takes them as
+`fallback_events` and, when the store handle is `None`, rebuilds history
+through the same `rig_messages_from_horizon_events` /
+`cleared_call_ids_from_events` reconstruction the store path uses. The
+store-available path is unchanged. A resume that can reconstruct nothing
+(store down *and* events yielding no messages) now emits an
+`Event::Error` into the frame instead of proceeding silently.
+
+Tests: `load_rig_session_history_falls_back_to_event_log_when_store_is_unavailable`
+and `load_rig_session_history_returns_empty_when_store_and_events_are_both_empty`
+(`crates/horizon-agent/src/providers/rig/tests.rs`).
