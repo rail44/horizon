@@ -100,6 +100,7 @@ pub(super) fn run_session(
             session_id,
             role_id.clone(),
             workspace_root.clone(),
+            history.clone(),
         )
     };
     let Some(handle) = handle else {
