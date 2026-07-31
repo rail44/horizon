@@ -3,7 +3,7 @@
 //! One [`Hub`] is built per accepted connection and served via
 //! `SessionHubServerShared` with per-call task spawning, so a slow call
 //! (a replay) never blocks the others; the process-lifetime state stays
-//! where it always was ([`SessiondState`]), reached through the same
+//! where it always was ([`AgentdState`]), reached through the same
 //! `Connection` seam.
 //!
 //! Agent domain only since v17: terminal hosting moved to
@@ -262,7 +262,7 @@ impl SessionHub for Hub {
     }
 
     /// Re-reads `[provider]` and rebuilds the registry in place -- see
-    /// [`crate::session::SessiondState::reload_provider_config`]. A config
+    /// [`crate::session::AgentdState::reload_provider_config`]. A config
     /// parse error leaves the previous registry in place and is logged
     /// daemon-side (the call still succeeds from the client's view: the
     /// outcome it cares about -- "no respawn needed" -- holds either way,
@@ -317,7 +317,7 @@ fn replayable(event: &Event) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::SessiondState;
+    use crate::session::AgentdState;
     use horizon_agent::config::AgentConfig;
     use horizon_agent::contract::ProviderRegistry;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
@@ -327,7 +327,7 @@ mod tests {
 
     fn test_hub() -> Hub {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -417,7 +417,7 @@ mod tests {
             agent_config.clone(),
             SharedDuckdbStore::unavailable(),
         );
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             providers,
             agent_config,
             None,

@@ -16,13 +16,13 @@
 //! `DenyToolCall` envelope) happen on the same thread, so the thread-local
 //! registry works correctly without making any of this `Send`. Blocking is
 //! also what makes the host-tool round trip simple (see
-//! `host_tools::SessiondHostTools::execute_auto`): the session thread genuinely blocks
+//! `host_tools::AgentdHostTools::execute_auto`): the session thread genuinely blocks
 //! on a channel recv while Horizon answers over the wire, which would
 //! deadlock a single-threaded async runtime but is harmless on its own
 //! dedicated thread.
 //!
 //! **Sessions are scoped to the process, not the connection (step 4).**
-//! `SessiondState::sessions`/`pending_host_tool_requests`/`outgoing` are
+//! `AgentdState::sessions`/`pending_host_tool_requests`/`outgoing` are
 //! process-lifetime (built once in `main`, shared via `Arc`) rather than
 //! recreated per accepted connection: a session's thread outlives any one
 //! connection, and a fresh connection re-targets the *same* running
@@ -65,4 +65,4 @@ mod test_support;
 
 pub(crate) use self::connection::Connection;
 pub(crate) use self::resume::resume_persisted_sessions;
-pub(crate) use self::state::SessiondState;
+pub(crate) use self::state::AgentdState;

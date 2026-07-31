@@ -8,7 +8,7 @@
 //! Since the terminald split there are two of everything: a
 //! [`FakeSessionHub`] standing in for `horizon-agentd` and a
 //! [`FakeTerminalHub`] for `horizon-terminald`, driven through
-//! [`SessiondHandle`] and [`TerminaldHandle`] respectively. The tests that
+//! [`AgentdHandle`] and [`TerminaldHandle`] respectively. The tests that
 //! matter most for the split are the ones that run *both* at once and prove
 //! they are independent — routing per call site, and a drain of one leaving
 //! the other's sessions live.
@@ -457,7 +457,7 @@ async fn next_agent_call(calls: &mut tokio::sync::mpsc::UnboundedReceiver<AgentC
 }
 
 /// The runtime probes `list_terminals` right after `hello`
-/// (`terminald::establish`'s skew insurance), so every terminald test sees
+/// (`terminal::establish`'s skew insurance), so every terminald test sees
 /// those two calls before its own.
 async fn expect_terminald_handshake(
     calls: &mut tokio::sync::mpsc::UnboundedReceiver<TerminalCall>,
@@ -601,11 +601,11 @@ async fn start_returns_before_the_connection_and_a_queued_create_arrives_after()
 /// reach the terminal daemon and agent ops the agent daemon, with neither
 /// hub ever seeing the other's traffic.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_sessiond() {
+async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
+    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
 
     let terminal_id = Uuid::new_v4();
     let terminal = terminald.start_terminal(terminal_id, spec());
@@ -676,7 +676,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_sessiond() {
 /// agent runtime's drain reaches *only* agentd, and the terminal session
 /// keeps streaming frames right through it. This is the acceptance property
 /// the daemon-level e2e (`horizon-terminald::e2e`'s
-/// `a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`)
+/// `an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`)
 /// proves against real processes; here it is proven at the seam that decides
 /// *which* daemon a drain is sent to.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -684,7 +684,7 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
     let (terminal_client, terminal_server) = tokio::io::duplex(64 * 1024);
     let (agent_client, agent_server) = tokio::io::duplex(64 * 1024);
     let terminald = TerminaldHandle::start_on_stream(terminal_client);
-    let (agentd, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(agent_client);
+    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(agent_client);
 
     let terminal = terminald.start_terminal(Uuid::new_v4(), spec());
     let (mut terminal_calls, _tconn, _tserve) =
@@ -726,7 +726,7 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn incoming_workspace_root_resolved_reaches_its_own_channel() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools, workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, workspace_roots) = AgentdHandle::start_on_stream(client);
     let session_id = SessionId::new();
     let _agent = handle.attach_session(session_id);
 
@@ -961,7 +961,7 @@ async fn a_large_clipboard_event_reaches_the_pane() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dropping_the_runtime_does_not_send_drain() {
     let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let responder = handle.responder();
     let (mut calls, _conn, serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
     assert!(matches!(
@@ -1016,7 +1016,7 @@ async fn dropping_the_terminal_runtime_does_not_send_drain() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
     let (client, _server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     // Nothing serves the daemon side, so the runtime is still trying to
     // establish; stop_and_wait must cancel that and return promptly.
     let stopped = std::thread::spawn(move || handle.stop_and_wait());
@@ -1028,7 +1028,7 @@ async fn stopping_before_the_daemon_answers_cancels_the_runtime() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = tokio::io::duplex(64 * 1024);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let agent_id = SessionId::new();
     let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
@@ -1090,7 +1090,7 @@ async fn an_established_terminald_disconnect_reports_errors_without_reconnecting
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
     let (client, server) = tokio::io::duplex(4096);
-    let (handle, _host_tools, _workspace_roots) = SessiondHandle::start_on_stream(client);
+    let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let behavior = FakeBehavior {
         reject_hello: true,
         ..FakeBehavior::default()
@@ -1220,7 +1220,7 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
     let (socket_path, control_socket) = stub_socket_paths("probe");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start(&socket_path, &control_socket);
 
     // Connections 1..3: the silent JSONL daemon, once per establish
     // attempt (the runtime redials between timeouts).
@@ -1278,7 +1278,7 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
     let (socket_path, control_socket) = stub_socket_paths("fatal");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start(&socket_path, &control_socket);
     let agent = handle.start_session(
         SessionId::new(),
         ProviderId("mock".into()),
@@ -1343,7 +1343,7 @@ async fn a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopt
     let (socket_path, control_socket) = stub_socket_paths("rej");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start(&socket_path, &control_socket);
 
     // Connection 1: hub answers hello with a range rejection.
     let (stream, _) = listener.accept().await.unwrap();
@@ -1506,7 +1506,7 @@ async fn two_transient_failures_do_not_consume_the_recovery_budget() {
     let (socket_path, control_socket) = stub_socket_paths("transient");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start(&socket_path, &control_socket);
 
     // Connections 1 and 2: accepted and immediately dropped (a crashing
     // daemon; `ChMux(StreamClosed)` on the runtime's side).
@@ -1540,7 +1540,7 @@ async fn a_connection_drop_during_hello_is_retried_not_fatal() {
     let (socket_path, control_socket) = stub_socket_paths("hellodrop");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
-        SessiondHandle::start(&socket_path, &control_socket);
+        AgentdHandle::start(&socket_path, &control_socket);
 
     // Connection 1: a daemon that completes the handshake and hands over
     // its hub, then dies while hello is pending.

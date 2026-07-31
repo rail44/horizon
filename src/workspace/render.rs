@@ -972,7 +972,7 @@ impl Render for WorkspaceShell {
         // `mode_cancel` already gate on): a workspace persisted with zero
         // tabs would otherwise have `is_workspace_mode_active()`'s
         // zero-tab bypass firing immediately on load, before the restore
-        // sweep (which still runs a background round trip to sessiond
+        // sweep (which still runs a background round trip to agentd
         // even when there's nothing to resume) has actually finished.
         let restore_blocked = workspace_mode_blocked_by_restore(
             self.restoring_workspace,

@@ -19,7 +19,7 @@ use horizon_agent::wire::AgentWireEvent;
 
 use super::approval::{begin_reissued_approval, emit_human_approval, forward_approval_outcome};
 use super::events::send_session_event;
-use super::state::SessiondState;
+use super::state::AgentdState;
 
 /// The async-execution analogue of `run::handle_provider_event`'s fold, for a
 /// bash or host-side web call whose result has now arrived on its own
@@ -35,7 +35,7 @@ use super::state::SessiondState;
 /// this is the one place a completion can land after *other* tool-call
 /// approvals from the same turn are still outstanding.
 pub(super) fn fold_tool_completion(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -65,7 +65,7 @@ pub(super) fn fold_tool_completion(
 }
 
 fn fold_approval_judgment(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -99,7 +99,7 @@ fn fold_approval_judgment(
 
 #[cfg(test)]
 fn fold_bash_completion(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -111,7 +111,7 @@ fn fold_bash_completion(
 /// The ordinary case: a bash call actually finished (successfully or not).
 /// Unchanged behavior from before [`BashCompletion`] grew a second variant.
 fn fold_finished_bash_result(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -203,7 +203,7 @@ fn fold_finished_bash_result(
 /// later deny can forward it as-is (`tools::approval::
 /// resolve_domain_denial_retry`).
 fn fold_domain_denied(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     call_id: ToolCallId,
@@ -260,7 +260,7 @@ fn fold_domain_denied(
 }
 
 fn fold_domain_grant_required(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     call_id: ToolCallId,
@@ -299,7 +299,7 @@ fn fold_domain_grant_required(
 }
 
 fn fold_filesystem_denied(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     call_id: ToolCallId,
@@ -319,7 +319,7 @@ fn fold_filesystem_denied(
         .collect::<Vec<_>>()
         .join(", ");
     // The shaping is generic over path structure only -- see
-    // `horizon_sandbox::suggest_grants`. Sessiond supplies the two facts it
+    // `horizon_sandbox::suggest_grants`. Agentd supplies the two facts it
     // owns (this session's workspace root, this account's `$HOME`) and
     // nothing about what command was run.
     let grants = horizon_sandbox::suggest_grants(
@@ -383,7 +383,7 @@ fn fold_filesystem_denied(
 /// workspace half of the suggestion shaping's input. `None` for a session
 /// with no root (or one agentd no longer tracks), in which case every
 /// attempt is treated as outside, which is the conservative reading.
-fn session_workspace_root(state: &Arc<SessiondState>, session_id: SessionId) -> Option<PathBuf> {
+fn session_workspace_root(state: &Arc<AgentdState>, session_id: SessionId) -> Option<PathBuf> {
     let root = state
         .sessions
         .lock()
@@ -426,7 +426,7 @@ mod tests {
         use horizon_agent::contract::{ApprovalRequest, ToolCallResult};
 
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -534,7 +534,7 @@ mod tests {
         use horizon_agent::contract::ToolCallResult;
 
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -600,7 +600,7 @@ mod tests {
         use horizon_agent::contract::{OccurrenceId, ToolCallResult};
 
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -672,7 +672,7 @@ mod tests {
         use horizon_agent::contract::{OccurrenceId, ToolCallResult};
 
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -743,7 +743,7 @@ mod tests {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
     ) -> horizon_agent::contract::ApprovalRequest {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -972,7 +972,7 @@ mod tests {
     #[test]
     fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),
@@ -1026,7 +1026,7 @@ mod tests {
     #[test]
     fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider() {
         let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(SessiondState::new(
+        let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),
                 SharedDuckdbStore::unavailable(),

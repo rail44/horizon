@@ -88,10 +88,19 @@ shared session abstraction left to host.
    Acceptance: `horizon-agentd`'s dev-dependency on
    `horizon-terminal-core` is gone; both artifacts' content matches the
    old union artifact section-for-section.
-3. **Rename the shell/daemon residue**: `src/sessiond/` → per-runtime
-   clients + shared machinery under a runtime-named module,
-   `SessiondState` renamed, "sessiond" vocabulary swept from code,
-   comments, and docs. Pure rename; no wire, no behavior.
+3. *(Landed 2026-07-31.)* **Rename the shell/daemon residue**:
+   `src/sessiond/` → `src/runtime/` (`agent.rs` + `terminal.rs`, the two
+   per-runtime clients, over `common.rs`/`routing.rs`), `SessiondHandle`
+   → `AgentdHandle`, `SessiondState` → `AgentdState`, "sessiond" swept
+   from code, comments, and docs except where it names history. Pure
+   rename; no wire, no behavior — with one behavior change the owner
+   decided the same day and folded in here: the structured-input check
+   phase 2 preserved as `negotiated.is_some()`
+   (`docs/runtime-granularity-design.md` Q4) is deleted, so a keystroke
+   typed before the terminal runtime's first `hello` now goes out as
+   `TerminalCommand::KeyInput`/`TextInput` with its associated text
+   rather than the legacy `Key`/`Input`. The negotiated version number
+   had no other client-side reader and its plumbing went with it.
 
 ## Explicitly out of scope (recorded so they are not lost)
 

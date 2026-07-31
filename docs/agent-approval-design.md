@@ -360,7 +360,7 @@ product-owned API. Decisions:
   rides the gated call's own record.
 - **Seam**: every candidate that would otherwise emit
   `ApprovalRequested`. Policy-generated Standard/Git candidates and
-  sessiond-generated filesystem/domain retry candidates enter the same
+  agentd-generated filesystem/domain retry candidates enter the same
   gate only after their typed `ApprovalKind` is fully derived.
   Auto-approve follows the existing approved execute/retry path without
   persisting a fake prompt; escalate preserves today's human flow.
@@ -493,7 +493,7 @@ content inward, and mutate nothing.
   Pre-contact fetch approval is the additive
   `ApprovalKind::DomainGrant`, distinct from bash's post-attempt
   `DomainDenialRetry`. An unseen redirect host produces a structured async
-  `DomainGrantRequired`; sessiond reissues the original call, approval adds
+  `DomainGrantRequired`; agentd reissues the original call, approval adds
   only that host, and execution restarts from the original URL. Bash and web
   tasks share the generalized per-session `ToolCompletion` channel.
 - **Implementation shape** (landed 2026-07-21):
@@ -536,7 +536,7 @@ refactoring wave folds into this item.
    the session-manager lineage view is the in-flight remainder.*
 2. **Sandbox spike**: thin unified API + Linux (bwrap/seccompiler/
    landlock) + macOS (sandbox-exec/SBPL) per-command composition in
-   sessiond, with denial detection. Prototype + tests. *Landed
+   agentd, with denial detection. Prototype + tests. *Landed
    2026-07-19 (`e4c3ad4`, `crates/horizon-sandbox`): Linux containment
    proven by real-process tests; macOS runtime-gated on the owner's
    next build; Landlock-as-diagnostic per the spike finding above.*
@@ -547,8 +547,8 @@ refactoring wave folds into this item.
    2026-07-19 (`crates/horizon-sandbox-proxy`): the proxy, the
    UNIX-socket bridge, and `NetworkPolicy::Proxied` all real (not the
    documented fallback) — see the "Network is its own layer" bullet
-   above for the shape and what's left for sessiond-wiring/config/judge.*
-   *Leg 4a (sessiond wiring) landed 2026-07-19: one long-lived proxy per
+   above for the shape and what's left for agentd-wiring/config/judge.*
+   *Leg 4a (agentd wiring) landed 2026-07-19: one long-lived proxy per
    `horizon-agentd` process, tier-1 sandboxed `bash` picks `Proxied`
    over `Disabled` when the bridge is up — see the "Network is its own
    layer" bullet's "Leg 4a" note for the shape, the nested-runtime

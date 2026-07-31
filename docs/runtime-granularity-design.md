@@ -18,7 +18,7 @@ for when that view kind arrives.
   2026-07-30): `MIN_SUPPORTED_PROTOCOL_VERSION` rises with
   `SESSION_PROTOCOL_VERSION`; a mismatched hello is rejected and
   recovered by the client's auto-drain-and-respawn
-  (`src/sessiond/connection.rs`). Per-feature gate constants
+  (`src/runtime/agent.rs`). Per-feature gate constants
   (`SCROLLBACK_WINDOW_MIN_VERSION`-style) were rejected as
   unscalable; same-machine self-spawned daemons don't need
   cross-version interop, they need honest restart. v18 (config-only
@@ -68,8 +68,9 @@ exact pain the terminald split removed. Flagged at the v18 decision
    with different change cadences (terminal wire: append-only
    discipline, tmux precedent; agent wire: still evolving fast).
 3. **Decided 2026-07-31**: sessions are attachment records; the
-   "sessiond" vocabulary (`src/sessiond/`, `SessiondState`) is swept in
-   phase 3. `horizon-control`'s versioning story explicitly stays as-is
+   "sessiond" vocabulary is swept in phase 3 (`src/sessiond/` →
+   `src/runtime/`, `SessiondState` → `AgentdState`).
+   `horizon-control`'s versioning story explicitly stays as-is
    (a shell-local socket, not a runtime hub). Process composition is
    unchanged.
    Original question: **Crate/process map coherence.** With the principle ratified, audit
@@ -81,7 +82,16 @@ exact pain the terminald split removed. Flagged at the v18 decision
    explicitly stays, recorded with reasons.
 4. **Decided 2026-07-31**: delete, with their fallback paths, in phase
    2 when the terminal wire moves — dead code under MIN>=17 lockstep,
-   so the deletion is wire- and behavior-neutral.
+   so the deletion is wire- and behavior-neutral. *Amended the same
+   day*: phase 2 kept one residue — the structured-input check
+   survived as `negotiated.is_some()`, since a keystroke typed before
+   the terminal runtime's first `hello` really does reach it. The
+   owner ruled that not worth keeping: a negotiated version carries no
+   information for a feature decision under lockstep, and the
+   pre-`hello` window is better served by the structured encoding
+   anyway (it carries the platform's associated text, which is what an
+   IME commit needs). Deleted in phase 3, along with the negotiated
+   version's whole client-side plumbing, which had no other reader.
    Original question: **Vestigial gate constants.** `SCROLLBACK_WINDOW_MIN_VERSION` (12)
    and `TERMINAL_STRUCTURED_INPUT_VERSION` (13) and their fallback
    code paths are dead under MIN=17+ lockstep. Delete with their

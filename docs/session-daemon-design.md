@@ -8,6 +8,18 @@ the decisions and is the scope reference for the migration. Steps 0 and 1
 are implemented end to end; the Step 2A recovery boundary was approved on
 2026-07-12.
 
+**Amendment 2026-07-31 (naming).** Every `sessiond` below is the
+historical name of the daemon this document decided to build, and is
+kept as written. Two later moves renamed the ground under it: the
+terminald split (2026-07-30, `docs/terminald-split-design.md`) moved
+terminal hosting out into its own `horizon-terminald` process, and the
+crate rename that followed made the agent host `horizon-agentd`. So
+where this document says "sessiond hosts the terminal", today's tree
+means `horizon-terminald`; where it says "sessiond" about agent
+sessions, persistence, or worktrees, it means `horizon-agentd`. The
+word itself is gone from the tree
+(`docs/runtime-crate-alignment-design.md` phase 3).
+
 **Amendment 2026-07-21 (remoc wire migration, protocol v11).** The
 UI ⇄ `sessiond` transport this document describes as a JSONL envelope with
 row-diff frame push has been replaced by remoc rtc
@@ -236,7 +248,7 @@ foreseen at the design-decision stage:
   read of the same `Term::colors()` state.
 - **A live theme apply re-pushes the color scheme to already-spawned
   sessions.** `Reload Config` and the theme settings view's live apply
-  both call `SessiondHandle::broadcast_terminal_color_scheme`, which sends
+  both call `TerminaldHandle::broadcast_terminal_color_scheme`, which sends
   a fresh `TerminalCommand::SetColorScheme` to every attached terminal
   session; `crates/horizon-agentd` demuxes it onto the session loop's own
   channel, which calls `TerminalCore::set_color_scheme` again. Only OSC

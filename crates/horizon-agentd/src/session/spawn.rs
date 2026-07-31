@@ -19,7 +19,7 @@ use super::panic::{
     catch_session_panic, record_uncaught_session_panic, SessionLoopPhase, SessionPanic,
 };
 use super::run::run_session;
-use super::state::{lock_unpoisoned, SessionEntry, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState, SessionEntry};
 use crate::worktree::{self, WorktreeInfo};
 
 /// Resolves this session's model (pure and synchronous -- see
@@ -30,7 +30,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// whole session thread -- same reason [`super::setup::tool_session_state_for`] was.
 ///
 /// A fresh `Control::SessionNew` caller is already listening
-/// (`SessiondHandle::start_session` registers the session's route before
+/// (`AgentdHandle::start_session` registers the session's route before
 /// sending `SessionNew`), so it sees this immediately; a resumed session
 /// spawned at daemon startup usually has no connection yet
 /// ([`send_session_event`] silently drops it then) -- [`super::connection::Connection::session_model`]
@@ -38,7 +38,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
 /// addendum.
 fn resolve_and_announce_session_model(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     session_id: SessionId,
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,
@@ -64,7 +64,7 @@ fn resolve_and_announce_session_model(
 /// fresh-spawn `isolate` path to create a second worktree.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn spawn_session_thread(
-    state: Arc<SessiondState>,
+    state: Arc<AgentdState>,
     session_id: SessionId,
     provider_id: ProviderId,
     role_id: Option<RoleId>,

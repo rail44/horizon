@@ -8,7 +8,7 @@ use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::roles::RoleId;
 
 use super::spawn::spawn_session_thread;
-use super::state::SessiondState;
+use super::state::AgentdState;
 
 /// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
 /// implemented against this daemon's own session hosting: spawn a peer
@@ -24,8 +24,8 @@ use super::state::SessiondState;
 /// and records no derivation edge. The derivation tree stays pure code
 /// genealogy (`docs/session-relationship-design.md`: only isolation creates
 /// an edge).
-pub(super) struct SessiondExplorationHost {
-    pub(super) state: Arc<SessiondState>,
+pub(super) struct AgentdExplorationHost {
+    pub(super) state: Arc<AgentdState>,
     /// The requesting session's provider, so an exploration is answered by
     /// the same model family the requester is talking to.
     pub(super) provider_id: ProviderId,
@@ -35,7 +35,7 @@ pub(super) struct SessiondExplorationHost {
     pub(super) workspace_root: Option<PathBuf>,
 }
 
-impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
+impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
     fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
         let session_id = SessionId::new();
         // Subscribe first, spawn second -- the ordering requirement
@@ -75,7 +75,7 @@ impl horizon_agent::tools::ExplorationHost for SessiondExplorationHost {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::host_tools::SessiondHostTools;
+    use crate::session::host_tools::AgentdHostTools;
     use crate::session::test_support::judge_test_state;
     use crossbeam_channel::unbounded;
     use horizon_agent::config::AgentToolsConfig;
@@ -88,7 +88,7 @@ mod tests {
     use std::time::Duration;
 
     fn call(
-        state: &Arc<crate::session::SessiondState>,
+        state: &Arc<crate::session::AgentdState>,
         tool_state: &ToolSessionState,
         requester_id: SessionId,
         call_id: &str,
@@ -96,7 +96,7 @@ mod tests {
         input: serde_json::Value,
     ) -> serde_json::Value {
         let execution = execute_agent_tool(
-            &SessiondHostTools {
+            &AgentdHostTools {
                 state: state.clone(),
             },
             tool_state,
@@ -138,7 +138,7 @@ mod tests {
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
         let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
-            Arc::new(SessiondExplorationHost {
+            Arc::new(AgentdExplorationHost {
                 state: state.clone(),
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
                 workspace_root: None,

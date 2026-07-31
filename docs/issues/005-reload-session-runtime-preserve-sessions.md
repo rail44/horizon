@@ -3,7 +3,7 @@ id: 005
 title: Reload Session Runtime discards every existing agent session
 status: open
 severity: high
-area: agent, sessiond
+area: agent, agentd
 ---
 
 ## Repro

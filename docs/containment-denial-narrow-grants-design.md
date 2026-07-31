@@ -68,7 +68,7 @@ The execution contract is now:
 
 1. Start every eligible call sandboxed.
 2. If authenticated filesystem mediation reports a boundary crossing, keep
-   the failed result inside sessiond and create one typed approval candidate.
+   the failed result inside agentd and create one typed approval candidate.
 3. Judge or human approval reruns the same tool id/input once through the
    ordinary host bash path. The result records `sandboxed=false`,
    `host_execution_approved=true`, `approval_scope=host_execution_once`,
@@ -175,11 +175,11 @@ group so timeout/cancellation can terminate the entire tree. The initial
 approval backend records the trusted request and immediately denies the
 blocked syscall; Horizon then presents its normal asynchronous approval,
 adds a session-scoped static grant, and starts a fresh sandboxed retry. This
-preserves Horizon's existing event model without blocking sessiond on a live
+preserves Horizon's existing event model without blocking agentd on a live
 UI decision.
 
 The Linux helper cutover now runs the real command under a single-threaded
-supervisor child of `horizon-sandbox-helper`; sessiond itself never forks.
+supervisor child of `horizon-sandbox-helper`; agentd itself never forks.
 Helper and target share a process group, parent death is armed on both hops,
 and the target closes the report endpoint before exec. The helper returns one
 bounded, versioned `SOCK_SEQPACKET` report whose `SCM_CREDENTIALS` PID must
@@ -246,7 +246,7 @@ proxy never has a domain to deny.
 
 When a request does reach the proxy, its denial log is authoritative and
 exit-code independent: `run_sandboxed` drains it after the child exits and
-returns `DomainDenied` (`exec.rs:612-659`). Sessiond then emits
+returns `DomainDenied` (`exec.rs:612-659`). Agentd then emits
 `ApprovalKind::DomainDenialRetry`
 (`crates/horizon-agentd/src/session.rs:1346-1397`); approval grows only that
 session's allowlist and invokes
@@ -539,7 +539,7 @@ The storage/retry half is implemented:
 - remove `RetryWithoutSandbox` (done; legacy serialized approval kind fails closed).
 
 The selected Linux discovery slice belongs in the reduced helper rather than
-in `horizon-agent` or sessiond:
+in `horizon-agent` or agentd:
 
 - **Linux incident-complete slice:** supervise `openat`/`openat2` using nono's
   public notification primitives through the current open listener, compare
@@ -619,7 +619,7 @@ Accepted on 2026-07-21:
   rollback, trust, profile, and session machinery.
 - Keep the first extraction scaffold behavior-neutral. Connect it later via a
   dedicated helper process; never call the upstream supervised `fork()` path
-  directly inside multi-threaded sessiond.
+  directly inside multi-threaded agentd.
 
 The filesystem delivery decision was resolved in favor of the Linux
 `openat`/`openat2` incident-complete slice first, with explicit residual

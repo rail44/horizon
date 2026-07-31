@@ -7,7 +7,7 @@
 //! Moved here (with the daemon) from `horizon-agentd`'s e2e suite by the
 //! v17 terminald split (`docs/terminald-split-design.md`), plus the split's
 //! **acceptance test**:
-//! [`a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`]
+//! [`an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`]
 //! spawns *both* daemons and proves that the whole `Reload Agent Runtime`
 //! sequence — graceful drain, process exit, respawn — leaves a terminald
 //! session attachable with its retained frame and a live shell. That is the
@@ -80,7 +80,7 @@ fn resolve_terminald_binary() -> PathBuf {
 /// workspace binary is uplifted into the same target directory, so the
 /// sibling lookup is the one honest way to reach it from here (the same rule
 /// `horizon_agent::client::resolve_daemon_binary` uses in production).
-fn resolve_sessiond_binary() -> PathBuf {
+fn resolve_agentd_binary() -> PathBuf {
     let terminald = resolve_terminald_binary();
     let candidate = terminald
         .parent()
@@ -151,14 +151,14 @@ impl Drop for TerminaldProcess {
 /// The acceptance test's `horizon-agentd`, spawned hermetically: its own
 /// throwaway event log and DuckDB projection plus a nonexistent config
 /// file, so it never reads or rebuilds a real developer's agent state.
-struct SessiondProcess {
+struct AgentdProcess {
     child: Child,
     socket_path: PathBuf,
     event_log_path: PathBuf,
     state_db_path: PathBuf,
 }
 
-impl SessiondProcess {
+impl AgentdProcess {
     fn spawn() -> Self {
         let socket_path = scratch_socket("sd-for-td-e2e");
         let unique = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
@@ -175,7 +175,7 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(resolve_sessiond_binary());
+        let mut command = Command::new(resolve_agentd_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -205,7 +205,7 @@ impl SessiondProcess {
     }
 }
 
-impl Drop for SessiondProcess {
+impl Drop for AgentdProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -631,11 +631,11 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
 }
 
 /// Drains a `horizon-agentd` over its own hub — exactly what
-/// `Reload Agent Runtime` sends (`SessiondHandle::begin_reload` →
+/// `Reload Agent Runtime` sends (`AgentdHandle::begin_reload` →
 /// `SessionHub::drain`). The reply never travels (the daemon exits inside
 /// the call), so the transport error is expected; the caller confirms the
 /// exit with [`wait_for_exit`].
-async fn drain_sessiond(socket_path: &Path) {
+async fn drain_agentd(socket_path: &Path) {
     let stream = connect_with_retry(socket_path).await;
     let (read_half, write_half) = stream.into_split();
     let (conn, _base_tx, mut base_rx) =
@@ -677,9 +677,9 @@ async fn drain_sessiond(socket_path: &Path) {
 /// `src/agentd/tests.rs`
 /// (`draining_the_agent_runtime_leaves_the_terminal_runtime_untouched`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable() {
+async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable() {
     let terminald = TerminaldProcess::spawn();
-    let mut agentd = SessiondProcess::spawn();
+    let mut agentd = AgentdProcess::spawn();
 
     // A live terminal session with recognizable output.
     let session_id = uuid::Uuid::new_v4();
@@ -699,7 +699,7 @@ async fn a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable
     // `Reload Agent Runtime`, faithfully: drain the agent daemon over its
     // own hub, confirm the process is gone, then bring a fresh one up on the
     // same socket and event log.
-    drain_sessiond(&agentd.socket_path).await;
+    drain_agentd(&agentd.socket_path).await;
     let status = wait_for_exit(&mut agentd.child).await;
     assert_eq!(
         status.code(),

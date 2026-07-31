@@ -13,14 +13,14 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
-use super::state::{lock_unpoisoned, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState};
 
 /// How long [`Connection::replay_events`] waits for a live session's own
 /// thread to answer a replay request. **Not** purely a local channel hop:
 /// a just-resumed session's thread does real work before it ever reaches
 /// the loop that drains the `replay` channel, including blocking on
-/// [`SessiondState::wait_for_duckdb_store`] -- which is deliberately *not*
-/// ordered against [`SessiondState::mark_resume_ready`] (`Control::
+/// [`AgentdState::wait_for_duckdb_store`] -- which is deliberately *not*
+/// ordered against [`AgentdState::mark_resume_ready`] (`Control::
 /// SessionList`/`SessionLoad`'s own readiness gate), so a client can see a
 /// resumed session as "listed" before its thread has gotten anywhere near
 /// this channel. Under real contention (many agentd processes competing
@@ -39,18 +39,18 @@ use super::state::{lock_unpoisoned, SessiondState};
 /// `tests/e2e.rs` -- so this is sized with the same margin.)
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
 
-/// One connection's view onto the process-lifetime [`SessiondState`] — thin by
-/// design (step 4): every map that used to live here moved to `SessiondState`
+/// One connection's view onto the process-lifetime [`AgentdState`] — thin by
+/// design (step 4): every map that used to live here moved to `AgentdState`
 /// so sessions survive a reconnect, leaving `Connection` as just the `Arc`
 /// handle plus the methods that make sense scoped to "the current
 /// connection" (installing/clearing `outgoing`).
 #[derive(Clone)]
 pub(crate) struct Connection {
-    state: Arc<SessiondState>,
+    state: Arc<AgentdState>,
 }
 
 impl Connection {
-    pub(crate) fn new(state: Arc<SessiondState>) -> Self {
+    pub(crate) fn new(state: Arc<AgentdState>) -> Self {
         Self { state }
     }
 
@@ -120,7 +120,7 @@ impl Connection {
     }
 
     /// Routes an incoming `Control::HostToolResponse` back to whichever
-    /// session thread's `host_tools::SessiondHostTools::execute_auto` call is blocked
+    /// session thread's `host_tools::AgentdHostTools::execute_auto` call is blocked
     /// waiting for this exact `request_id`.
     pub(crate) fn handle_host_tool_response(&self, response: HostToolResponse) {
         let sender = self
@@ -134,7 +134,7 @@ impl Connection {
         }
     }
 
-    /// Delegates to [`SessiondState::wait_until_resume_ready`] -- see `main`'s
+    /// Delegates to [`AgentdState::wait_until_resume_ready`] -- see `main`'s
     /// bind-first startup fix: `Control::SessionList`/`Control::SessionLoad`
     /// must block on this before answering, so a client that connects while
     /// `resume_persisted_sessions` is still running doesn't see an
@@ -143,14 +143,14 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
-    /// Delegates to [`SessiondState::skipped_lines_summary`] -- see `main::
+    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see `main::
     /// run_session_hosting_loop`, which waits for [`Self::wait_until_resume_ready`]
     /// first so this always reflects the finished startup read.
     pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
         self.state.skipped_lines_summary()
     }
 
-    /// Delegates to [`SessiondState::reload_provider_config`] -- the
+    /// Delegates to [`AgentdState::reload_provider_config`] -- the
     /// daemon-side half of a `Reload Config`: rebuild the provider
     /// registry/agent config from the config file without respawning the
     /// process. See that method's doc comment for the granularity.
@@ -201,7 +201,7 @@ impl Connection {
             .and_then(|entry| entry.model.clone())
     }
 
-    /// Delegates to [`SessiondState::writer`] -- `main`'s `Control::Drain`
+    /// Delegates to [`AgentdState::writer`] -- `main`'s `Control::Drain`
     /// handling uses this to flush the event log's writer channel to disk
     /// before the process exits. An `append` returning only means a record
     /// was *enqueued*; the writer's background thread is what actually

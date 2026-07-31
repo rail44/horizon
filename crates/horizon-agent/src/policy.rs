@@ -808,8 +808,9 @@ mod tests {
             .any(|event| matches!(event, Event::ApprovalRequested(_))));
     }
 
-    /// Both policy classes derive the same typed candidate shape. Sessiond
-    /// gates that candidate after this pure policy mapping returns.
+    /// Both policy classes derive the same typed candidate shape.
+    /// `horizon-agentd` gates that candidate after this pure policy mapping
+    /// returns.
     #[test]
     fn boundary_crossing_produces_the_same_events_as_always_ask() {
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);

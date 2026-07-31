@@ -72,7 +72,7 @@ wave's remaining items are decision-gated only. Also shipped 2026-07-18, later s
 constants 100/5, paused receipt row, one-action Continue with CLI
 parity); keybindings live reload; the config wave (surface narrowed
 to provider model/base_url + terminal font_size + ui font_family +
-keybindings + theme seed; sessiond consolidated onto horizon-config;
+keybindings + theme seed; agentd consolidated onto horizon-config;
 TERM fixed xterm-256color with COLORTERM injection; line_height ratio
 18/13; retired/typo warnings unified; example.toml default-locked by
 test); and the `turns/` structural relocation into
@@ -130,7 +130,7 @@ lands:
   `agent-client-protocol` crate; the contract was shaped for this
   (`docs/agent-runtime-split-design.md`, "ACP compatibility
   guardrails"). Key in-session decision: placement — a separate ACP
-  session path vs an ACP-proxy provider inside sessiond
+  session path vs an ACP-proxy provider inside agentd
   (detach/persistence semantics differ). v1 scope: spawn + prompt +
   `session/update` streaming + permission mapping.
 - **Model-routing OpenAI-compatible API.** Router over synthetic.new,
@@ -147,7 +147,7 @@ lands:
   (`docs/agent-approval-design.md`; prior-art record in
   `docs/research/agent-approval-prior-art-2026-07-19.md`). Three
   tiers: contained actions auto-approve by construction (worktree
-  isolation + a sessiond-side per-command OS sandbox — thin
+  isolation + an agentd-side per-command OS sandbox — thin
   Horizon-owned API over bwrap/seccompiler/landlock on Linux and
   sandbox-exec/SBPL on macOS — plus a hudsucker-based domain-allowlist
   proxy), boundary crossings triage through an inline two-stage model
@@ -363,7 +363,7 @@ lands:
   exploration sessions excluded from the client session list. The
   comparative measurement ran 2026-07-26: the fourth run of the brief was
   the first to complete (98 requests, peak 187,970 of 196,608) and located
-  the true mid-turn `WaitingForUser` emitter (sessiond's async-tool fold —
+  the true mid-turn `WaitingForUser` emitter (agentd's async-tool fold —
   backlog 47, fixed in `25544ad`). Delegation happened once, at the entry
   point, with an accurate report whose question omitted the requester's
   own measured evidence — so the requester re-explored by hand. Follow-up
@@ -441,7 +441,7 @@ lands:
 - **Agent #65/#66 provider-panic root fix — implemented 2026-07-25.**
   The host-panic capture added after #65 remains valid hardening, but #66
   disproved the original boundary inference: the attached UI session list was
-  not sessiond's runtime registry. Offline replay of #66's exact persisted
+  not agentd's runtime registry. Offline replay of #66's exact persisted
   history found the real panic in tool-result soft pruning:
   `then_some(old_cost - new_cost)` eagerly underflowed when a short result's
   placeholder was larger. Lazy evaluation plus a regression test fixes the

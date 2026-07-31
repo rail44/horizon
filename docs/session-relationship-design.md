@@ -196,8 +196,8 @@ convention. Not sent at all when isolation fails and degrades to a shared
 spawn -- nothing to correct then. Shell-side, this is a new process-wide
 channel alongside `host_tools` (not the per-session `agent`/`ProviderEvent`
 map `SessionModel` rides, since a workspace-root correction is a model
-fold, not a transcript event): `sessiond::routing::Routes` gained a
-`workspace_roots` sender, `SessiondHandle::start`/`start_on_stream` return
+fold, not a transcript event): `runtime::routing::AgentRoutes` gained a
+`workspace_roots` sender, `AgentdHandle::start`/`start_on_stream` return
 its receiver as a third tuple element, and `WorkspaceShell::
 wire_workspace_root_updates` (wired at both the same call sites as
 `wire_host_tools`: `WorkspaceShell::new` and `reload_session_runtime`)

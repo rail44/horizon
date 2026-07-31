@@ -8,7 +8,7 @@ use horizon_agent::contract;
 use horizon_agent::tools::HostTools;
 use horizon_agent::wire::HostToolRequest;
 
-use super::state::SessiondState;
+use super::state::AgentdState;
 
 /// How long a session thread waits for Horizon to answer a `host_tool_*`
 /// round trip before giving up. Generous but finite: a client that never
@@ -18,9 +18,9 @@ const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 /// Sends a host-tool request through the current connection's
 /// `HubHello::host_tools` bridge, if a connection is live. Returns whether
 /// the send was actually accepted, for the one caller
-/// ([`SessiondHostTools::execute_auto`]) that needs to fail fast rather
+/// ([`AgentdHostTools::execute_auto`]) that needs to fail fast rather
 /// than wait out its full timeout when nothing is listening.
-fn send_host_tool_request(state: &SessiondState, request: HostToolRequest) -> bool {
+fn send_host_tool_request(state: &AgentdState, request: HostToolRequest) -> bool {
     match state.host_tools_outgoing.lock().unwrap().as_ref() {
         Some(tx) => tx.send(request).is_ok(),
         None => false,
@@ -36,11 +36,11 @@ fn send_host_tool_request(state: &SessiondState, request: HostToolRequest) -> bo
 /// Horizon's own `agent::host_tools::WorkspaceHostTools` answers
 /// in-process) -- everything else falls through to `None`, letting
 /// `execute_agent_tool` try the crate's own `tools::fs` auto tools next.
-pub(super) struct SessiondHostTools {
-    pub(super) state: Arc<SessiondState>,
+pub(super) struct AgentdHostTools {
+    pub(super) state: Arc<AgentdState>,
 }
 
-impl HostTools for SessiondHostTools {
+impl HostTools for AgentdHostTools {
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value> {
         if tool_id != "workspace.snapshot" {
             return None;

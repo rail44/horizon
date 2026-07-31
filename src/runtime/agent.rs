@@ -2,7 +2,7 @@
 //! negotiate, dispatch agent ops, recover from a stale daemon generation.
 //!
 //! Terminal traffic left this module in v17 — it has its own connection to
-//! its own daemon in [`super::terminald`] (`docs/terminald-split-design.md`).
+//! its own daemon in [`super::terminal`] (`docs/terminald-split-design.md`).
 //! What is left here is exactly the agent domain plus the connection-global
 //! host-tool exchange, which means a `Drain` sent from here can no longer
 //! take a single PTY with it.
@@ -195,7 +195,7 @@ pub(super) fn spawn(
                         mismatch_recovery_attempted = true;
                         eprintln!("{message}; draining and restarting the daemon");
                         let drained = tokio::select! {
-                            drained = drain_incompatible_remoc_sessiond(&socket_path) => drained,
+                            drained = drain_incompatible_remoc_agentd(&socket_path) => drained,
                             _ = control.cancelled() => {
                                 routes.connection_failed("agentd runtime stopped".to_string());
                                 break;
@@ -261,7 +261,7 @@ async fn recover_generation_mismatch(
          remoc wire detected ({message}); draining and restarting it"
     );
     let drained = tokio::select! {
-        drained = drain_stale_sessiond(socket_path) => drained,
+        drained = drain_stale_agentd(socket_path) => drained,
         _ = control.cancelled() => {
             routes.connection_failed("agentd runtime stopped".to_string());
             return ControlFlow::Break(());
@@ -349,13 +349,12 @@ where
     control.mark_established();
 
     let HubHello {
-        negotiated,
+        negotiated: _,
         binary_id: _,
         host_tools,
         host_tool_responses,
         skipped_lines,
     } = hello;
-    control.set_negotiated(negotiated);
 
     // Connection-global inbound pumps.
     spawn_host_tool_pump(host_tools, routes.clone());
@@ -650,7 +649,7 @@ async fn run_agent_attachment(
 /// it. A wrong-generation probe against a healthy remoc daemon is equally
 /// harmless: the line is chmux garbage, the daemon's handshake timeout
 /// drops that one connection.
-async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
+async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
     for version in (legacy::OLDEST_DRAINABLE_VERSION..=legacy::NEWEST_JSONL_VERSION).rev() {
         let mut stream = match tokio::net::UnixStream::connect(socket_path).await {
             Ok(stream) => stream,
@@ -687,10 +686,11 @@ async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
 /// One documented exception, at the v16→v17 boundary only: the terminald
 /// split removed methods from the middle of `SessionHub`, which shifts
 /// every later method's index under the index-encoded request enum, so a
-/// *still-running v16 sessiond* decodes this drain as a different method
+/// *still-running v16 daemon* (the binary then named `horizon-sessiond`)
+/// decodes this drain as a different method
 /// and keeps accepting. The error below is then the honest outcome and
 /// names the manual fix (see `AGENT_PROTOCOL_VERSION`'s v17 note).
-async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), String> {
+async fn drain_incompatible_remoc_agentd(socket_path: &Path) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
         Err(_) => return Ok(()),

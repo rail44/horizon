@@ -195,7 +195,7 @@ Notes:
 Dropping the provider event channel is a runtime-lifecycle boundary, not an
 implicit successful turn. A normal provider shutdown must emit
 `StateChanged(Terminated)` (or `Exited`) before its last sender is dropped. If
-the channel disconnects from any live state, sessiond persists an error unless
+the channel disconnects from any live state, agentd persists an error unless
 the provider already supplied a more specific trailing one, closes an active
 turn with `TurnEnded(Failed)`, and finishes with
 `StateChanged(Terminated)`. The builtin Rig thread catches unwinds at its own

@@ -18,7 +18,7 @@ use horizon_terminal_core::{
 use horizon_workspace::SessionId;
 
 use crate::input_trace::{input_trace, sink as input_trace_sink};
-use crate::sessiond::TerminalSessionHandle;
+use crate::runtime::TerminalSessionHandle;
 
 /// Per-row content generations for the visible grid — the surviving form
 /// of the wire's row-level change information (goal 3 of
@@ -685,25 +685,6 @@ impl Scrollback {
     }
 }
 
-/// Whether structured terminal input (`TerminalCommand::KeyInput`/
-/// `TextInput`, carrying the platform's associated text) may be sent on a
-/// connection whose `hello` reported `negotiated`.
-///
-/// This used to be a *version* gate — `>= TERMINAL_STRUCTURED_INPUT_VERSION`
-/// (13), with legacy `Key`/`Input` below it. That comparison is dead under
-/// the v17/v18 lockstep floor (`docs/runtime-granularity-design.md` Q4): any
-/// peer this build negotiates with speaks structured input, so the constant
-/// and the comparison are gone. What survives is the `None` arm, and only
-/// that arm: `SessiondHandle::start_terminal` hands the pane its handle and
-/// *queues* the create op without waiting for the connection, so a keystroke
-/// typed before the terminal runtime's first `hello` completes really does
-/// see `None` here and really does take the legacy branch. That is a
-/// "no connection yet" case, not a version fallback, so it is preserved
-/// rather than deleted with the version gate it was entangled with.
-fn version_supports_structured_input(negotiated: Option<u32>) -> bool {
-    negotiated.is_some()
-}
-
 /// Whether the `TerminalCommand` channel to `horizon-terminald` is known dead.
 /// Mirrors `agent::session::RuntimeReachability` (backlog #35): a failed send
 /// used to be a silent `let _ = ...` no-op. Kept as a free-standing state
@@ -830,10 +811,11 @@ pub(crate) struct TerminalSession {
     /// shaping cache. It advances only when a requested window is actually
     /// installed; late replies do not invalidate a still-current cache.
     scrollback_generation: u64,
-    /// The daemon handle, kept for its Drop (unregister) and read for the
-    /// connection's negotiated protocol version, which gates the windowing
-    /// surface (`TerminalSessionHandle::negotiated_version`).
-    wire: TerminalSessionHandle,
+    /// The attachment handle, held purely for its `Drop`: releasing it
+    /// unregisters this session's routes in the terminal runtime. Its
+    /// channels were cloned out at construction (`tx`, plus the pumps), so
+    /// nothing reads the handle itself.
+    _attachment: TerminalSessionHandle,
 }
 
 impl TerminalSession {
@@ -951,7 +933,7 @@ impl TerminalSession {
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
             scrollback_generation: 0,
-            wire: handle,
+            _attachment: handle,
         }
     }
 
@@ -1074,9 +1056,12 @@ impl TerminalSession {
     }
 
     /// Structured key input carrying the platform-generated text, if any.
-    /// Sent only when the negotiated protocol version supports structured
-    /// terminal input; older runtimes continue to receive `TerminalCommand::
-    /// Key` via [`Self::send_key`].
+    /// Always sent as `TerminalCommand::KeyInput`: under lockstep versioning
+    /// whatever this build connects to speaks structured input, including a
+    /// keystroke typed before the terminal runtime's first `hello` lands —
+    /// that op is queued and dispatched once the connection is up, and the
+    /// associated text it carries is what an IME commit needs
+    /// (`docs/runtime-crate-alignment-design.md` phase 3).
     pub(crate) fn send_key_with_text(
         &self,
         key: termwiz::input::KeyCode,
@@ -1084,31 +1069,18 @@ impl TerminalSession {
         event: KeyEventKind,
         text: Option<String>,
     ) {
-        if self.structured_input_supported() {
-            self.dispatch(TerminalCommand::KeyInput(TerminalKeyInput {
-                key,
-                modifiers,
-                kind: event,
-                text,
-            }));
-        } else {
-            self.dispatch(TerminalCommand::Key {
-                key,
-                modifiers,
-                event,
-            });
-        }
+        self.dispatch(TerminalCommand::KeyInput(TerminalKeyInput {
+            key,
+            modifiers,
+            kind: event,
+            text,
+        }));
     }
 
     /// Committed text for which no key identity is available, most notably
-    /// an IME commit. Sent as `TerminalCommand::TextInput` when the negotiated
-    /// version supports it, otherwise as raw UTF-8 `Input`.
+    /// an IME commit.
     pub(crate) fn send_text_input(&self, text: String) {
-        if self.structured_input_supported() {
-            self.dispatch(TerminalCommand::TextInput(text));
-        } else {
-            self.dispatch(TerminalCommand::Input(text.into_bytes()));
-        }
+        self.dispatch(TerminalCommand::TextInput(text));
     }
 
     pub(crate) fn send_mouse(&self, report: TerminalMouseReport) {
@@ -1171,14 +1143,6 @@ impl TerminalSession {
 
     fn send_request_scroll_window(&self, anchor: usize, height: usize) {
         self.dispatch(TerminalCommand::RequestScrollWindow { anchor, height });
-    }
-
-    /// Whether this connection may send structured terminal input with
-    /// associated text. See [`version_supports_structured_input`] for why
-    /// this is no longer a version comparison and what the one surviving
-    /// `None` case is.
-    fn structured_input_supported(&self) -> bool {
-        version_supports_structured_input(self.wire.negotiated_version())
     }
 
     /// Whether the frontend owns this wheel gesture. False whenever an
@@ -1291,8 +1255,7 @@ fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        continuous_anchor, version_supports_structured_input, RowGenerations, RuntimeReachability,
-        ScrollIpc, Scrollback, WindowFetch,
+        continuous_anchor, RowGenerations, RuntimeReachability, ScrollIpc, Scrollback, WindowFetch,
     };
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
@@ -2280,31 +2243,5 @@ mod tests {
         let mut live = Scrollback::Live;
         assert!(!live.abandon());
         assert_eq!(live, Scrollback::Live);
-    }
-
-    /// What is left of the two per-feature version gates the lockstep
-    /// policy retired (`docs/runtime-granularity-design.md` Q4): structured
-    /// input is off only while this pane has no negotiated connection at
-    /// all, and on for every version a lockstep build can actually
-    /// negotiate. Kept as a test because the `None` arm is genuinely
-    /// reachable — `SessiondHandle::start_terminal` hands out the pane's
-    /// handle before the runtime's first `hello` lands — so a refactor that
-    /// dropped it would change what a very-early keystroke sends.
-    #[test]
-    fn structured_input_is_gated_only_on_having_a_connection() {
-        assert!(
-            !version_supports_structured_input(None),
-            "no connection yet: legacy Key/Input, as before the version gate went away"
-        );
-        assert!(
-            version_supports_structured_input(Some(
-                horizon_terminal_core::wire::MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION
-            )),
-            "the lockstep floor is in"
-        );
-        assert!(
-            version_supports_structured_input(Some(u32::MAX)),
-            "a newer peer stays in"
-        );
     }
 }

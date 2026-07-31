@@ -6,7 +6,7 @@
 use horizon_agent::contract::SessionId;
 use horizon_agent::wire::AgentWireEvent;
 
-use super::state::{lock_unpoisoned, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState};
 
 /// Sends a session-scoped wire event to whichever attachment is currently
 /// subscribed to `session_id`, silently dropping it if none is (no client
@@ -14,7 +14,7 @@ use super::state::{lock_unpoisoned, SessiondState};
 /// on the next attach anyway). A failed send means the subscriber's bridge
 /// is gone, so its entry is removed rather than kept as a dead letter box.
 pub(super) fn send_session_event(
-    state: &SessiondState,
+    state: &AgentdState,
     session_id: SessionId,
     event: AgentWireEvent,
 ) {

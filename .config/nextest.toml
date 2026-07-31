@@ -105,7 +105,7 @@ default-filter = '''
         binary_id(horizon-agent::tier1_network_containment)
         + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
-        + (binary_id(horizon::bin/horizon) & test(/^sessiond::tests::/))
+        + (binary_id(horizon::bin/horizon) & test(/^runtime::tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
         + test(/^tools::tests::tier1_sandboxed_bash/)

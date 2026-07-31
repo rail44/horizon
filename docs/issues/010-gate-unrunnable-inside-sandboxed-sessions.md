@@ -20,7 +20,7 @@ sandbox exists to contain (session aa95e066, 2026-07-28):
 
 - `tools::tests::a_configured_grant_makes_an_out_of_workspace_write_a_
   non_crossing` — needs a real out-of-workspace write.
-- `tools::network::tests::*` and the sessiond e2e suite — bind real
+- `tools::network::tests::*` and the agentd e2e suite — bind real
   sockets and spawn a real daemon.
 - `worktree::tests::project_root_of_a_directory_outside_any_repository_
   is_none` and friends — need directories outside any repository.

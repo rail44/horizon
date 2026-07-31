@@ -184,7 +184,7 @@ crates and never reference each other; the hub trait is the one place
 that names both — exactly the "thin shared layer" that decision already
 allowed.
 
-`src/sessiond/` keeps its public shape (`SessiondHandle`'s sync API,
+`src/runtime/` keeps its public shape (`AgentdHandle`'s sync API,
 eager non-blocking start, one dedicated runtime thread); internally the
 envelope FIFO and `Routes` registry become rtc calls and per-attachment
 channel bridges. The sync-world ⇄ tokio boundary does not move.
@@ -410,7 +410,7 @@ Staged PR sequence, each independently green — **all four landed 2026-07-21**:
    additive on v9; lands value even before remoc does.
 2. **The cutover (v10).** *(Landed — PR #23.)* The hub trait in `horizon-session-protocol`,
    remoc pinned (exact version, explicit Postbag codec, default features
-   off), daemon serves the hub, `src/sessiond/` client rebuilt on rtc
+   off), daemon serves the hub, `src/runtime/` client rebuilt on rtc
    calls + channel bridges, envelope/kind-dispatch/correlation code
    deleted, `hello` range negotiation, the legacy prober rewired behind
    the chmux-timeout detection. Frame delivery ships **unchanged in
@@ -500,7 +500,7 @@ Inherited unchanged:
   wire policy; one union crate until
   `docs/runtime-crate-alignment-design.md` phase 2),
   `crates/horizon-wire/` (the domain-free foundation),
-  `src/sessiond/` (remoc client runtime),
+  `src/runtime/` (remoc client runtime),
   `crates/horizon-agentd/src/terminal.rs` (full-frame watch publisher),
   `crates/horizon-terminal-core/src/types/frame.rs` (snapshot type),
   `crates/horizon-agent/src/wire.rs` (agent vocabulary).

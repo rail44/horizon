@@ -106,7 +106,7 @@ async fn a_slow_watch_reader_skips_intermediates_and_converges_on_the_final_fram
 // `recv_impl` surfaces that as a *non-final* `RecvError` (base
 // `Deserialize`/`MaxItemSizeExceeded` are `is_final() == false`), published
 // as the receiver's current value while the channel stays open. The client's
-// steady-state loop (`src/sessiond/connection.rs`) must therefore treat a
+// steady-state loop (`src/runtime/agent.rs`) must therefore treat a
 // non-final `borrow` error as "skip and wait for the next frame", not as a
 // close — exactly what the seed and events paths already do. This pins that
 // contract at the transport level with an asymmetric type pair (the §7

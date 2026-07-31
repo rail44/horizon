@@ -1,4 +1,4 @@
-//! Process-lifetime session state: the shared [`SessiondState`] every
+//! Process-lifetime session state: the shared [`AgentdState`] every
 //! connection and every session thread works through, and the per-session
 //! [`SessionEntry`] its registry holds.
 
@@ -40,7 +40,7 @@ pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<Agen
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-agentd` ever serves, and by every session
 /// thread regardless of which (if any) connection is currently live.
-pub(crate) struct SessiondState {
+pub(crate) struct AgentdState {
     /// The live provider registry, behind a `Mutex` so a `Reload Config`
     /// can rebuild it in place (see [`Self::reload_provider_config`])
     /// without a `Reload Agent Runtime`. Read at session-spawn time
@@ -122,7 +122,7 @@ pub(crate) struct SessiondState {
     pub(super) project_grants: Vec<horizon_config::ProjectGrant>,
 }
 
-impl SessiondState {
+impl AgentdState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         providers: ProviderRegistry,
@@ -272,7 +272,7 @@ impl SessiondState {
 
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. [`super::connection::Connection::route_command`]
-    /// turns a miss into a log line; [`super::exploration::SessiondExplorationHost::terminate`]
+    /// turns a miss into a log line; [`super::exploration::AgentdExplorationHost::terminate`]
     /// deliberately ignores one -- a task session that already
     /// ended on its own needs no shutdown.
     pub(super) fn send_command(&self, session_id: SessionId, command: Command) -> bool {
@@ -310,7 +310,7 @@ pub(super) struct SessionEntry {
     /// [`super::connection::Connection::replay_events`].
     pub(super) replay: Sender<Sender<Vec<Event>>>,
     /// The session this one derives from -- `Some` only when this session
-    /// was actually spawned isolated (see [`SessiondState::
+    /// was actually spawned isolated (see [`AgentdState::
     /// record_isolated_worktree`]); `docs/session-relationship-design.md`
     /// decision 2's "the edge exists only via isolation". Surfaced
     /// additively as `SessionSummary.parent_session_id` by
@@ -318,7 +318,7 @@ pub(super) struct SessionEntry {
     pub(super) parent_session_id: Option<SessionId>,
     /// The directory this session's file tools are actually confined to --
     /// its own worktree path if `worktree.is_some()`, else whatever
-    /// `SessionNew.workspace_root` carried. Read by [`SessiondState::
+    /// `SessionNew.workspace_root` carried. Read by [`AgentdState::
     /// session_directory`] so a *child* spawned from this session knows
     /// where to branch its own worktree from.
     pub(super) workspace_root: Option<PathBuf>,
@@ -373,8 +373,8 @@ mod tests {
         assert_eq!(state.session_directory(session_id), Some((root, false)));
     }
 
-    /// [`SessiondState::record_isolated_worktree`] updates the session's own
-    /// entry so a later [`SessiondState::session_directory`] lookup (from a
+    /// [`AgentdState::record_isolated_worktree`] updates the session's own
+    /// entry so a later [`AgentdState::session_directory`] lookup (from a
     /// grandchild spawn) reports the worktree path and `true` (owned) --
     /// the multi-level chaining decision 3 asks for.
     #[test]

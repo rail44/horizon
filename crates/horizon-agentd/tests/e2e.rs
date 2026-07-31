@@ -1,5 +1,5 @@
 //! End-to-end test against the real `horizon-agentd` binary (spawned via
-//! [`resolve_sessiond_binary`], which reads `CARGO_BIN_EXE_horizon-agentd`
+//! [`resolve_agentd_binary`], which reads `CARGO_BIN_EXE_horizon-agentd`
 //! as a runtime environment variable rather than the same-named compile-time
 //! `env!()` bake -- only available because this test lives in the same
 //! package as the `[[bin]]` target -- see `docs/tasks/backlog.md` #40) --
@@ -66,14 +66,14 @@ const TEST_DUCKDB_REBUILD_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_DUCKDB_REBUI
 
 /// How long to wait once before re-probing/re-spawning after finding the
 /// `horizon-agentd` binary transiently missing -- see
-/// [`resolve_sessiond_binary`] and [`spawn_sessiond`]. A single bounded
+/// [`resolve_agentd_binary`] and [`spawn_agentd`]. A single bounded
 /// wait, not a polling loop: the race this covers is cargo's own
 /// artifact-uplift `remove_file`-then-relink (a link syscall's worth of
 /// time), confirmed locally (backlog #36) to close well under this.
 const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
 
 /// Name of the runtime-set env var this resolver reads first -- same name
-/// as the compile-time `env!()` bake [`resolve_sessiond_binary`] falls back
+/// as the compile-time `env!()` bake [`resolve_agentd_binary`] falls back
 /// to, but a *different* mechanism: see that function's doc comment.
 const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-agentd";
 
@@ -119,8 +119,8 @@ const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-agentd";
 /// `cargo test`/`cargo nextest run`'s own env injection. Either path can
 /// still be transiently missing due to cargo's own non-atomic
 /// artifact-uplift step (`docs/tasks/backlog.md` #36); that race is
-/// handled at the `spawn()` call site by [`spawn_sessiond`], not here.
-fn resolve_sessiond_binary() -> PathBuf {
+/// handled at the `spawn()` call site by [`spawn_agentd`], not here.
+fn resolve_agentd_binary() -> PathBuf {
     if let Ok(runtime_var) = std::env::var(CARGO_BIN_EXE_VAR) {
         let path = PathBuf::from(runtime_var);
         if path.is_file() {
@@ -143,7 +143,7 @@ fn resolve_sessiond_binary() -> PathBuf {
     );
 }
 
-/// Proves the runtime resolution [`resolve_sessiond_binary`] prefers
+/// Proves the runtime resolution [`resolve_agentd_binary`] prefers
 /// actually finds an existing binary, and that it's the same binary the
 /// compile-time `env!()` bake would have named -- the mechanism backlog
 /// #40's fix relies on: both are cargo's own idea of "the `horizon-agentd`
@@ -151,7 +151,7 @@ fn resolve_sessiond_binary() -> PathBuf {
 /// computed (build time vs. this exact invocation), not *what* it points
 /// at, for a normal (non-stale-cache) run like this one.
 #[test]
-fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
+fn resolve_agentd_binary_finds_an_existing_binary_via_the_runtime_env_var() {
     let runtime_var = std::env::var(CARGO_BIN_EXE_VAR)
         .expect("cargo/cargo-nextest must set CARGO_BIN_EXE_horizon-agentd at test runtime");
     let runtime_path = PathBuf::from(&runtime_var);
@@ -160,10 +160,10 @@ fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
         "runtime env var {CARGO_BIN_EXE_VAR} = {runtime_var} does not point at an existing file"
     );
 
-    let resolved = resolve_sessiond_binary();
+    let resolved = resolve_agentd_binary();
     assert_eq!(
         resolved, runtime_path,
-        "resolve_sessiond_binary must prefer the runtime env var over the compile-time bake"
+        "resolve_agentd_binary must prefer the runtime env var over the compile-time bake"
     );
 
     // Deliberately NOT asserted: `resolved == env!("CARGO_BIN_EXE_...")`.
@@ -175,7 +175,7 @@ fn resolve_sessiond_binary_finds_an_existing_binary_via_the_runtime_env_var() {
     // `docs/tasks/backlog.md` #40.
 }
 
-fn spawn_sessiond(command: &mut Command) -> Child {
+fn spawn_agentd(command: &mut Command) -> Child {
     match command.spawn() {
         Ok(child) => child,
         Err(first_error) if first_error.kind() == ErrorKind::NotFound => {
@@ -198,7 +198,7 @@ fn spawn_sessiond(command: &mut Command) -> Child {
 /// Owns the spawned `horizon-agentd` child and its socket path; kills the
 /// child and removes the socket file on drop so a failing assertion doesn't
 /// leak either across test runs.
-struct SessiondProcess {
+struct AgentdProcess {
     child: Child,
     socket_path: PathBuf,
     event_log_path: PathBuf,
@@ -215,7 +215,7 @@ struct SessiondProcess {
     stderr_lines: Option<Arc<Mutex<Vec<String>>>>,
 }
 
-impl SessiondProcess {
+impl AgentdProcess {
     /// Spawns `horizon-agentd` pointed at a throwaway event log path and a
     /// nonexistent config file -- **hermetic on purpose**: without this,
     /// the binary's own config loader (`main`'s `horizon_config::load()`
@@ -279,7 +279,7 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(resolve_sessiond_binary());
+        let mut command = Command::new(resolve_agentd_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -296,7 +296,7 @@ impl SessiondProcess {
                 command.env_remove(TEST_RESUME_DELAY_MS_VAR);
             }
         }
-        let child = spawn_sessiond(&mut command);
+        let child = spawn_agentd(&mut command);
         Self {
             child,
             socket_path,
@@ -325,7 +325,7 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(resolve_sessiond_binary());
+        let mut command = Command::new(resolve_agentd_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -339,7 +339,7 @@ impl SessiondProcess {
                 TEST_DUCKDB_REBUILD_DELAY_MS_VAR,
                 rebuild_delay_ms.to_string(),
             );
-        let child = spawn_sessiond(&mut command);
+        let child = spawn_agentd(&mut command);
         Self {
             child,
             socket_path,
@@ -366,7 +366,7 @@ impl SessiondProcess {
             std::process::id(),
             uuid::Uuid::new_v4()
         ));
-        let mut command = Command::new(resolve_sessiond_binary());
+        let mut command = Command::new(resolve_agentd_binary());
         command
             .arg("--socket")
             .arg(&socket_path)
@@ -378,7 +378,7 @@ impl SessiondProcess {
             .env_remove(TEST_RESUME_DELAY_MS_VAR)
             .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
             .stderr(Stdio::piped());
-        let mut child = spawn_sessiond(&mut command);
+        let mut child = spawn_agentd(&mut command);
 
         let stderr_lines = Arc::new(Mutex::new(Vec::new()));
         let reader_lines = stderr_lines.clone();
@@ -439,7 +439,7 @@ impl SessiondProcess {
     }
 }
 
-impl Drop for SessiondProcess {
+impl Drop for AgentdProcess {
     fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
@@ -734,7 +734,7 @@ fn write_session_fixture(path: &std::path::Path, sessions: Vec<(SessionId, Vec<E
 
 /// Polls `path`'s on-disk event log until a record for `session_id`
 /// matching `predicate` appears, or panics after a generous timeout. See
-/// the JSONL-era note preserved on `killed_sessiond...`: a client can
+/// the JSONL-era note preserved on `killed_agentd...`: a client can
 /// observe an event over the wire before it is durable, so kill-based tests
 /// must wait for the disk write.
 async fn wait_for_persisted_event(
@@ -764,7 +764,7 @@ async fn wait_for_persisted_event(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
-    let mut agentd = SessiondProcess::spawn();
+    let mut agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     // hello's range negotiation settles on this build's version, and the
@@ -795,7 +795,7 @@ async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
 /// compatible version.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
-    let mut agentd = SessiondProcess::spawn();
+    let mut agentd = AgentdProcess::spawn();
 
     // A client that only speaks a future version the daemon doesn't.
     let future = AGENT_PROTOCOL_VERSION + 5;
@@ -848,7 +848,7 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
 /// them, forming a coherent transcript.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn new_agent_then_user_message_streams_events_in_order() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -900,7 +900,7 @@ async fn new_agent_then_user_message_streams_events_in_order() {
 /// connection.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn list_agents_reflects_live_sessions_after_new_agent() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -923,8 +923,8 @@ async fn list_agents_reflects_live_sessions_after_new_agent() {
 /// connection-global channel (guardrail 4) and folds the client's response
 /// into the same `ToolCallFinished` an ordinary auto tool would produce.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
-    let agentd = SessiondProcess::spawn();
+async fn auto_tool_executes_agentd_side_via_host_tool_round_trip() {
+    let agentd = AgentdProcess::spawn();
     let mut client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -967,7 +967,7 @@ async fn auto_tool_executes_sessiond_side_via_host_tool_round_trip() {
 /// reports the result as an ordinary event.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn approval_round_trip_request_out_approve_in_result_event_out() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -1017,8 +1017,8 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
 /// actual subprocess in agentd, and the eventual result arrives back over
 /// the attachment's event channel.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
-    let agentd = SessiondProcess::spawn();
+async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -1072,7 +1072,7 @@ async fn bash_runs_sessiond_side_and_reports_its_result_over_the_wire() {
 /// time on its own dedicated thread.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -1164,7 +1164,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 /// and must never appear in the durable on-disk event log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn streaming_tool_call_progress_reaches_the_client_but_never_the_event_log() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -1258,7 +1258,7 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
     ));
     std::fs::write(&event_log_path, "not valid json\n").expect("write corrupt fixture log");
 
-    let agentd = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
     let mut client = connect_hub(&agentd.socket_path).await;
 
     let summary = tokio::time::timeout(Duration::from_secs(30), client.skipped_lines.recv())
@@ -1274,8 +1274,8 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
 /// log, and confirm replay: transcript survives, the interrupted turn is
 /// committed as cancelled, the session is immediately usable again.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelled() {
-    let agentd = SessiondProcess::spawn();
+async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled() {
+    let agentd = AgentdProcess::spawn();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
     let client = connect_hub(&socket_path).await;
@@ -1303,7 +1303,7 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
     let client = connect_hub(&respawned.socket_path).await;
 
     assert_eq!(
@@ -1377,7 +1377,7 @@ async fn killed_sessiond_respawns_and_replays_transcript_with_open_turn_cancelle
 /// provider.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
     let client = connect_hub(&socket_path).await;
@@ -1406,7 +1406,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
     let client = connect_hub(&respawned.socket_path).await;
     assert_eq!(
         client.hub.list_agents().await.unwrap(),
@@ -1428,7 +1428,7 @@ async fn resume_restores_the_sessions_role_after_a_crash_and_respawn() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     let repo = isolated_session_fixture();
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
     let client = connect_hub(&socket_path).await;
@@ -1476,7 +1476,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
     let client = connect_hub(&respawned.socket_path).await;
     let summaries = client.hub.list_agents().await.unwrap();
     let resumed = summaries
@@ -1532,7 +1532,7 @@ async fn resume_re_adopts_an_isolated_worktree_and_keeps_bash_contained() {
 /// back identical to the one it had live.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn attach_agent_after_reconnect_rebuilds_an_equivalent_frame() {
-    let agentd = SessiondProcess::spawn();
+    let agentd = AgentdProcess::spawn();
     let client = connect_hub(&agentd.socket_path).await;
 
     let session_id = SessionId::new();
@@ -1578,8 +1578,8 @@ async fn attach_agent_after_reconnect_rebuilds_an_equivalent_frame() {
 /// session gracefully (not a crash), respawn against the same paths, and
 /// confirm the session survives with its transcript intact.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
-    let mut agentd = SessiondProcess::spawn();
+async fn drained_agentd_respawns_and_preserves_a_completed_session() {
+    let mut agentd = AgentdProcess::spawn();
     let socket_path = agentd.socket_path.clone();
     let event_log_path = agentd.event_log_path.clone();
     let client = connect_hub(&socket_path).await;
@@ -1608,7 +1608,7 @@ async fn drained_sessiond_respawns_and_preserves_a_completed_session() {
     let status = wait_for_exit(&mut agentd.child).await;
     assert!(status.success(), "drain should exit 0, got {status:?}");
 
-    let respawned = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let respawned = AgentdProcess::spawn_at(socket_path, event_log_path);
     let client = connect_hub(&respawned.socket_path).await;
     assert_eq!(
         client.hub.list_agents().await.unwrap(),
@@ -1690,7 +1690,7 @@ async fn resume_skips_sessions_whose_log_already_ended_in_a_terminal_state() {
         ],
     );
 
-    let agentd = SessiondProcess::spawn_at(socket_path, event_log_path);
+    let agentd = AgentdProcess::spawn_at(socket_path, event_log_path);
     let client = connect_hub(&agentd.socket_path).await;
     assert_eq!(
         client.hub.list_agents().await.unwrap(),
@@ -1732,7 +1732,7 @@ async fn hello_answers_immediately_while_list_agents_waits_for_a_slow_resume() {
     );
 
     const RESUME_DELAY_MS: u64 = 2000;
-    let agentd = SessiondProcess::spawn_at_with_resume_delay(
+    let agentd = AgentdProcess::spawn_at_with_resume_delay(
         socket_path,
         event_log_path,
         Some(RESUME_DELAY_MS),
@@ -1768,7 +1768,7 @@ async fn hello_answers_immediately_while_list_agents_waits_for_a_slow_resume() {
 /// Fix 1's other half: a second daemon against a live socket must bail
 /// before reading its own log.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log() {
+async fn second_agentd_against_a_live_socket_exits_before_reading_its_own_log() {
     let socket_path = std::env::temp_dir().join(format!(
         "hzn-e2e-{}.sock",
         &uuid::Uuid::new_v4().simple().to_string()[..8]
@@ -1791,7 +1791,7 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
         )],
     );
 
-    let first = SessiondProcess::spawn_at(socket_path.clone(), event_log_path.clone());
+    let first = AgentdProcess::spawn_at(socket_path.clone(), event_log_path.clone());
     // Wait for the first instance to be up and resumed (list_agents' own
     // readiness gate) before racing a second one against it.
     let client = connect_hub(&first.socket_path).await;
@@ -1808,7 +1808,7 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    let mut second_command = Command::new(resolve_sessiond_binary());
+    let mut second_command = Command::new(resolve_agentd_binary());
     second_command
         .arg("--socket")
         .arg(&socket_path)
@@ -1819,7 +1819,7 @@ async fn second_sessiond_against_a_live_socket_exits_before_reading_its_own_log(
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove(TEST_RESUME_DELAY_MS_VAR)
         .stderr(Stdio::piped());
-    let mut second = spawn_sessiond(&mut second_command);
+    let mut second = spawn_agentd(&mut second_command);
 
     let status = wait_for_exit(&mut second).await;
     assert!(
@@ -1873,7 +1873,7 @@ async fn duckdb_rebuild_delay_does_not_block_hello_or_list_agents() {
     );
 
     const REBUILD_DELAY_MS: u64 = 2000;
-    let agentd = SessiondProcess::spawn_at_with_duckdb_rebuild_delay(
+    let agentd = AgentdProcess::spawn_at_with_duckdb_rebuild_delay(
         socket_path,
         event_log_path,
         REBUILD_DELAY_MS,
@@ -1938,7 +1938,7 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
         )],
     );
 
-    let first = SessiondProcess::spawn_at_with_duckdb_options(
+    let first = AgentdProcess::spawn_at_with_duckdb_options(
         socket_path.clone(),
         event_log_path.clone(),
         state_db_path.clone(),
@@ -1950,7 +1950,7 @@ async fn unchanged_log_skips_duckdb_rebuild_on_respawn() {
     first.kill_and_wait();
 
     let second =
-        SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
     drop(connect_hub(&second.socket_path).await);
     second
         .wait_for_stderr_line("DuckDB projection already current, skipping rebuild")
@@ -1988,7 +1988,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         )],
     );
 
-    let first = SessiondProcess::spawn_at_with_duckdb_options(
+    let first = AgentdProcess::spawn_at_with_duckdb_options(
         socket_path.clone(),
         event_log_path.clone(),
         state_db_path.clone(),
@@ -2012,7 +2012,7 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
     );
 
     let second =
-        SessiondProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
+        AgentdProcess::spawn_at_with_duckdb_options(socket_path, event_log_path, state_db_path);
     drop(connect_hub(&second.socket_path).await);
     let catch_up_line = second
         .wait_for_stderr_line("DuckDB projection caught up incrementally (")

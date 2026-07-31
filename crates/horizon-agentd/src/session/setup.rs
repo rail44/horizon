@@ -11,7 +11,7 @@ use horizon_agent::tools::{RecallContext, ToolSessionState};
 use horizon_agent::wire::{AgentWireEvent, WorkspaceRootResolved};
 
 use super::events::send_session_event;
-use super::state::SessiondState;
+use super::state::AgentdState;
 use crate::worktree;
 
 /// Builds a session's file-tool confinement root (`tools::state::
@@ -49,7 +49,7 @@ pub(super) fn tool_session_state_for(
 /// directory that has since been deleted, replaced, or become over-broad
 /// never reaches a sandbox policy.
 pub(super) fn configured_filesystem_grants(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     workspace_root: Option<&Path>,
 ) -> Vec<horizon_sandbox::FilesystemGrant> {
     let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
@@ -123,7 +123,7 @@ pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
 /// root/parent immediately, not just via a later resume/reload sweep -- see
 /// that `Control` variant's own doc comment.
 pub(super) fn resolve_and_create_isolated_worktree(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     session_id: SessionId,
     spawn_source_session_id: Option<SessionId>,
     workspace_root: Option<PathBuf>,
@@ -467,7 +467,7 @@ mod tests {
         /// The regression guard this whole announcement exists for: a
         /// successful isolated-worktree resolution must push a session-scoped
         /// `Control::WorkspaceRootResolved` carrying the *same* root/parent
-        /// [`SessiondState::record_isolated_worktree`] just recorded on the
+        /// [`AgentdState::record_isolated_worktree`] just recorded on the
         /// entry -- so a UI connected for this session's whole lifetime sees
         /// the authoritative worktree path live, without waiting for a
         /// `session_list`/resume sweep.

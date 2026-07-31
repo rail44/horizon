@@ -149,8 +149,8 @@ impl WorkspaceShell {
                     // is now scoped to agent-code reloads -- see
                     // `docs/terminald-split-design.md` decision 2). Fire-and-
                     // forget so the UI thread never blocks on the daemon.
-                    if let Some(sessiond) = self.sessiond.as_ref() {
-                        sessiond.reload_provider_config();
+                    if let Some(agentd) = self.agentd.as_ref() {
+                        agentd.reload_provider_config();
                     }
                 }
                 Err(error) => eprintln!("reload-config failed: {error}"),
@@ -174,7 +174,7 @@ impl WorkspaceShell {
                     return;
                 }
                 self.reload_in_progress = true;
-                let old = self.sessiond.take();
+                let old = self.agentd.take();
                 if self.workspace_restore_failed {
                     self.workspace = Workspace::mvp();
                     self.restoring_workspace = false;
