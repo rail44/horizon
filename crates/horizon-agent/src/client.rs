@@ -28,9 +28,9 @@ const RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// The binary name `horizon-agentd` is spawned as/looked up as -- see
 /// [`resolve_daemon_binary`].
-const SESSIOND_BINARY_NAME: &str = "horizon-agentd";
+const AGENTD_BINARY_NAME: &str = "horizon-agentd";
 
-/// [`SESSIOND_BINARY_NAME`]'s terminal-daemon sibling
+/// [`AGENTD_BINARY_NAME`]'s terminal-daemon sibling
 /// (`docs/terminald-split-design.md` decision 1): same spawn-or-connect
 /// shape, same discovery rules, a different process on a different socket.
 const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
@@ -43,7 +43,7 @@ pub async fn connect_or_spawn_retrying(
     socket_path: &Path,
     control_socket: &Path,
 ) -> Result<UnixStream, String> {
-    connect_or_spawn_daemon(socket_path, control_socket, SESSIOND_BINARY_NAME).await
+    connect_or_spawn_daemon(socket_path, control_socket, AGENTD_BINARY_NAME).await
 }
 
 /// [`connect_or_spawn_retrying`]'s `horizon-terminald` twin. The terminal
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn both_daemon_binaries_resolve_by_name_through_the_same_rule() {
         assert_eq!(
-            resolve_daemon_binary(SESSIOND_BINARY_NAME)
+            resolve_daemon_binary(AGENTD_BINARY_NAME)
                 .file_name()
                 .unwrap(),
             std::ffi::OsStr::new("horizon-agentd")

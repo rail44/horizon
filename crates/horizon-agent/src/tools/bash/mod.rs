@@ -85,7 +85,7 @@ pub enum ToolCompletion {
     },
     /// A host-side web request discovered a valid next hop whose domain has
     /// not been granted to this session. No contact with that domain has
-    /// occurred. Sessiond turns this into `ApprovalKind::DomainGrant`, and
+    /// occurred. `horizon-agentd` turns this into `ApprovalKind::DomainGrant`, and
     /// an approval retries the same tool call from its original URL.
     DomainGrantRequired {
         call_id: ToolCallId,

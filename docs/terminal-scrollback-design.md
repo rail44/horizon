@@ -388,9 +388,9 @@ phase and the cache/eviction phase are gone entirely:
    edge (`below` exhausted) drops the window and resumes the watch. This is
    the PR that removes the round-trip from the gesture. Inbound plumbing
    mirrors the frame path: a receiver on `TerminalSessionHandle`
-   (`src/sessiond/mod.rs`), registered in `register_terminal`
-   (`src/sessiond/routing.rs`), drained in `run_terminal_attachment`'s
-   `select!` (`src/sessiond/connection.rs`), merged into the pump as a new
+   (`src/runtime/mod.rs`), registered in `register_terminal`
+   (`src/runtime/routing.rs`), drained in `run_terminal_attachment`'s
+   `select!` (`src/runtime/terminal.rs`), merged into the pump as a new
    `Incoming` variant (`src/terminal/session.rs`) — unless delivery rides the
    existing `events` channel (§9 option ii), which reuses that plumbing
    as-is.
@@ -473,7 +473,7 @@ phase and the cache/eviction phase are gone entirely:
   shape, version constants, the additive classifier, the committed artifact.
 - `src/terminal/mod.rs`, `session.rs`, `input.rs` — the client scroll path,
   the notify pump, and `ScrollAccumulator`.
-- `src/sessiond/mod.rs`, `connection.rs`, `routing.rs` — the client-side
+- `src/runtime/mod.rs`, `terminal.rs`, `routing.rs` — the client-side
   attachment runner and per-session channel routing.
 - `alacritty_terminal` 0.26 `src/grid/mod.rs`, `grid/resize.rs`,
   `term/mod.rs` — the coordinate system, `iter_from`, reflow, alt-screen

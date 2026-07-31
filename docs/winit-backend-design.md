@@ -1238,7 +1238,7 @@ never exercise, all fixed same-session:
    sequential, never simultaneous, which is the WebGPU-sanctioned shape
    (two live surfaces on one window are UB). Upstreaming a one-line
    backends fix to zed would let us delete the seed (backlog 37).
-3. **macOS-only test-harness physics.** The sessiond cwd-inheritance
+3. **macOS-only test-harness physics.** The agentd cwd-inheritance
    e2e test hung 120s on macOS for two stacked reasons: `temp_dir()`
    lives under `/var` (a symlink to `/private/var`) so the shell's
    `$PWD`/sysinfo's sampled cwd (both physical paths) never equal the

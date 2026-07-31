@@ -102,12 +102,12 @@ pub(crate) struct ThemeSettingsView {
     /// then), and a plain clone would freeze on that `None` forever, since
     /// `reconcile` never rebuilds a pane view that already exists. See
     /// `TerminaldSlot`'s doc comment.
-    terminald: crate::sessiond::TerminaldSlot,
+    terminald: crate::runtime::TerminaldSlot,
 }
 
 impl ThemeSettingsView {
     pub(crate) fn new(
-        terminald: crate::sessiond::TerminaldSlot,
+        terminald: crate::runtime::TerminaldSlot,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {

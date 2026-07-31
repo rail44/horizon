@@ -10,8 +10,9 @@ restore tabs, splits, focus, and session attachments rather than starting with
 an unrelated fresh pane.
 
 The workspace file is not a session checkpoint. Terminal frames and child
-processes remain owned by sessiond, and agent transcripts remain in the agent
-persistence store. This file records only the UI model needed to reconstruct a
+processes remain owned by `horizon-terminald`, and agent transcripts remain
+in the agent persistence store. This file records only the UI model needed
+to reconstruct a
 workspace around those independently recoverable sessions.
 
 ## Storage contract
@@ -114,7 +115,7 @@ a successful result and is distinct from inventory failure.
 
 Agent discovery keeps shared session protocol v4 unchanged. The GPUI-side agent
 list API becomes fallible so startup can distinguish an empty list from a failed
-request; no new agent wire message is required because a single sessiond client
+request; no new agent wire message is required because a single agentd client
 serializes list/load against the daemon-owned agent store.
 
 ## Split ratios
@@ -131,11 +132,11 @@ a complete restore.
 Session UUIDs remain daemon/persistence identities. Pane and tab ids are UI
 model identities. Display numbers and titles are presentation state, but are
 persisted so `Terminal #N` and `Agent #N` labels remain stable across UI
-restarts. Neither labels nor pane placement move into the sessiond terminal
+restarts. Neither labels nor pane placement move into the terminal runtime's
 summary.
 
 Only one Horizon UI may own and write a workspace-state file at a time. Step 2B
-does not add file locking, merge concurrent writers, sessiond multi-client
+does not add file locking, merge concurrent writers, agentd multi-client
 fan-out, or stale-client takeover. Established-connection auto-reconnect and
 the explicitly terminal-destructive `Reload Session Runtime` (now `Reload
 Agent Runtime`) behavior also
@@ -144,7 +145,7 @@ remain outside this design.
 ## Verification
 
 `scripts/check-workspace-restore.sh` exercises the complete UI-restart path
-with isolated control/sessiond sockets and state files. It creates a second
+with isolated control/agentd sockets and state files. It creates a second
 terminal tab and a split through the CLI, stops only the UI, starts a new UI
 against the same daemon, and asserts stable tab/pane counts, terminal session
 ids, and a restored terminal frame.

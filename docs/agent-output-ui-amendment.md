@@ -411,8 +411,8 @@ deviation rather than asking for a mock update):
     recovery, `crates/horizon-agentd/src/session.rs`) synthesizes
     exactly this — drains every outstanding tool call as cancelled, then
     a `TurnEnded(Cancelled)` — for any session found `is_turn_in_flight()`
-    (which includes `WaitingForApproval`) when sessiond starts back up.
-    This runs automatically on every sessiond respawn, including
+    (which includes `WaitingForApproval`) when agentd starts back up.
+    This runs automatically on every agentd respawn, including
     `Reload Agent Runtime` after a rebuild — exactly the iterate/
     rebuild/reload loop this very review cycle was running. No explicit
     cancel needed at all; it's correct, intentional cleanup on its own

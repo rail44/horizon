@@ -2,8 +2,9 @@
 
 Status: decided 2026-07-19 (project session with owner). Companion to
 `docs/session-daemon-design.md`, which records how the daemon split was
-made; this file records where the frame path (sessiond → GUI) is headed.
-It constrains direction; it schedules nothing. Self-contained by intent.
+made; this file records where the frame path (terminal runtime → GUI) is
+headed. It constrains direction; it schedules nothing. Self-contained by
+intent.
 
 **Amendment 2026-07-21 (remoc wire v11, `docs/remoc-adoption-design.md`
 §5 Option A).** The session wire's diff machinery this document names
@@ -32,7 +33,7 @@ where guesses had been:
   a scene layer per painted text run, and the terminal paints one run per
   span per row per frame. Text shaping itself (`shape_line`) was only
   **5.5%**; taffy whole-window relayout was **16.6%**.
-- Diff *production* cost is negligible: sessiond's per-session threads sat
+- Diff *production* cost is negligible: the daemon's per-session threads sat
   at ~1% while streaming. The wire is not the problem.
 - The wire already carries row-level change information
   (`TerminalFrameDiff.changed_rows`), but the GUI flattens it into a full
@@ -107,7 +108,8 @@ the wire so this swap is invisible to clients.
      an RPC or subscribe-once is naming, not semantics.
    - If subscription count × window diversity ever makes
      per-subscription snapshot comparison measurably expensive, damage
-     inside sessiond becomes per-line version stamps (query-model,
+     inside the terminal runtime becomes per-line version stamps
+     (query-model,
      wezterm-seqno-like, any number of consumers each reading from their
      own sync point) — not consume-model `TermDamage`, which resets on
      read and serves exactly one consumer.

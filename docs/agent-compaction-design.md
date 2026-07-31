@@ -39,7 +39,7 @@ T-callid 級のタスクは有効窓 229k を使い切って死ぬ（追補 4）
   実行（cache 全損を「まれに一度」に留める。OpenCode の
   PRUNE_MINIMUM と同思想）。
 - 有効窓 = `/models` 申告の context_length − 送信中の max_tokens。
-  sessiond がセッション開始時に取得・キャッシュし、取得不能なら
+  agentd がセッション開始時に取得・キャッシュし、取得不能なら
   **発火しない**（crush の cw==0 保護）+ 保守的既定 128k で警告。
 - 透明性: 何をどの範囲 clear したかを専用イベントとして event log に
   記録し、transcript に区切りを表示。

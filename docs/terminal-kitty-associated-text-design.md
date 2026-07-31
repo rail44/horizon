@@ -21,8 +21,9 @@ the text the accepted mode promises.
 
 The missing value already exists at the UI boundary as GPUI's
 `Keystroke::key_char`, but `TerminalCommand::Key` sends only termwiz's
-`KeyCode`, `Modifiers`, and Horizon's `KeyEventKind` to sessiond. IME commits
-take a separate raw-byte `TerminalCommand::Input` path. Formatting another CSI
+`KeyCode`, `Modifiers`, and Horizon's `KeyEventKind` to the terminal
+runtime. IME commits take a separate raw-byte `TerminalCommand::Input`
+path. Formatting another CSI
 sequence inside the UI would therefore duplicate terminal mode state and still
 miss keyless composed input; the daemon-owned terminal core remains the only
 encoder.
@@ -151,14 +152,14 @@ overlay do not change.
 GPUI KeyDown/KeyUp
   -> TerminalKeyInput { key, modifiers, kind, text: key_char }
   -> TerminalCommand::KeyInput (v13) / Key fallback (<v13)
-  -> sessiond terminal host
+  -> horizon-terminald terminal host
   -> horizon-terminal-core encoder reads live Kitty flags
   -> PTY bytes
 
 GPUI committed text / IME commit
   -> duplicate check
   -> TerminalCommand::TextInput (v13) / Input fallback (<v13)
-  -> sessiond terminal host
+  -> horizon-terminald terminal host
   -> CSI 0 ... u when flags 8+16, otherwise UTF-8
   -> PTY bytes
 ```

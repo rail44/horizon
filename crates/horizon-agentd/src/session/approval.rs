@@ -18,7 +18,7 @@ use horizon_agent::tools::{
 use horizon_agent::wire::AgentWireEvent;
 
 use super::events::send_session_event;
-use super::state::SessiondState;
+use super::state::AgentdState;
 
 /// Intercepts the policy-generated human prompt after its kind/reason are
 /// fully derived. The original tool request remains foldable immediately;
@@ -61,7 +61,7 @@ fn gate_processing_approval_with(
 }
 
 pub(super) fn emit_human_approval(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     approval: ApprovalRequest,
@@ -81,7 +81,7 @@ pub(super) fn emit_human_approval(
 }
 
 pub(super) fn begin_reissued_approval(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     request: horizon_agent::contract::ToolCallRequest,
@@ -133,7 +133,7 @@ pub(super) fn begin_reissued_approval(
 /// shared this helper from its own click handler; that path retired with
 /// the runtime split.)
 pub(super) fn dispatch_inbound_command(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -184,7 +184,7 @@ pub(super) fn dispatch_inbound_command(
 }
 
 fn resolve_and_forward(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
@@ -237,7 +237,7 @@ fn approval_decision_payload(decision: &ApprovalDecision) -> ApprovalDecisionPay
 }
 
 pub(super) fn forward_approval_outcome(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
     logged_call_id: ToolCallId,

@@ -33,7 +33,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     investigation. Landed fixes: (1) the timeout raise above, generous
     for the realistic case; (2) a nextest test-group
     (`.config/nextest.toml`) serializing every test in the `horizon-
-    sessiond::e2e` binary against each other (`max-threads = 1`), removing
+    agentd::e2e` binary against each other (`max-threads = 1`), removing
     self-contention as a variable; (3) a production fix in `crates/
     horizon-agentd/src/terminal.rs`'s `TerminalHost::create` --
     previously a stuck PTY spawn could wedge that connection's entire
@@ -60,7 +60,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     given how rare it now is).
     Observation 2026-07-19 (nono-merge gate): same signature (this test,
     exactly the 120s ceiling) at ~3/8 full-suite runs in the shared main
-    checkout while the owner's live GUI + several sessiond processes were
+    checkout while the owner's live GUI + several agentd processes were
     running -- and reproduced 1/6 on a pre-nono baseline worktree
     (0d00c5c) in the same conditions, confirming it tracks host load, not
     the sandbox-backend migration. The same baseline round also showed
@@ -109,10 +109,10 @@ entries live in `backlog-resolved.md` keeping their original numbers
     during initial load while the hello retry loops, so the palette —
     and with it Reload Agent Runtime, the in-app remedy — is
     unreachable; the only exit today is killing the daemon process
-    externally.** That contradicts `src/sessiond/`'s stated
+    externally.** That contradicts `src/runtime/`'s stated
     non-blocking connect/spawn intent: whatever the fix surfaces, the
     shell must stay operable while runtime connect fails at startup.
-    Start at `src/sessiond/` (connect/hello retry, the startup
+    Start at `src/runtime/` (connect/hello retry, the startup
     operability gap) and the hello error surface (`horizon_wire::HubError`
     plus each hub's `hello`). Recorded 2026-07-19.
     **Surface doubled 2026-07-30 (terminald split):** there are now two
@@ -121,10 +121,10 @@ entries live in `backlog-resolved.md` keeping their original numbers
     failures no longer bleed into each other (separate route tables), the
     remedy differs per daemon (`Reload Agent Runtime` vs. the
     destructive `Reload Terminal Runtime`), and a stale *terminald* is
-    much more likely than a stale sessiond because that daemon is
+    much more likely than a stale agentd because that daemon is
     deliberately long-lived — which is also why the terminald connection
     already refuses cleanly with a named remedy instead of retrying
-    forever (decision 6's post-hello probe). The sessiond side is still
+    forever (decision 6's post-hello probe). The agentd side is still
     as reported. Whoever takes this should read the terminald refusal
     path first: it is the shape this item asks for, on one of the two
     connections, and the honest question is whether the *presentation*
@@ -186,7 +186,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     not mechanical. Recorded 2026-07-18 from the fix's review.
     Partly addressed 2026-07-28: the identity primitive landed —
     `contract::OccurrenceId`, minted at `providers::rig::mapping::
-    rig_tool_call_request` and again at `sessiond::session::approval::
+    rig_tool_call_request` and again at `agentd::session::approval::
     begin_reissued_approval` for every reissue, carried on
     `ToolCallRequest`/`ToolCallResult`/`ApprovalRequest` (additive on the
     wire), matched occurrence-first in `transcript::tool_call::
@@ -470,7 +470,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     so a nono-sandboxed process still sees the full process list/mounts/
     hostname — a real capability regression vs our bwrap; (2) its
     apply-to-self-then-exec pattern needs async-signal-safe `pre_exec`
-    engineering from our multi-threaded sessiond that our
+    engineering from our multi-threaded agentd that our
     bwrap-as-separate-binary design currently avoids; (3) even
     `default-features=false` pulls sigstore/reqwest/tokio/hyper
     unconditionally — 278 crates for "just the mechanism". Churn is
@@ -490,7 +490,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     hardcoded-`/tmp` failures are visible and adaptable; owner: this
     provisioning is harness work, consistent with nono's policy-free
     stance. (b) same-uid `/proc/<pid>/environ` secret exposure (e.g.
-    `OPENAI_API_KEY` in sessiond's exec-time environ): owner accepts
+    `OPENAI_API_KEY` in agentd's exec-time environ): owner accepts
     the risk; independently shrinkable by not passing secrets via env
     (note `/proc` environ shows the exec-time block -- `remove_var`
     does not scrub it). (c) signal reach: the original claim was
@@ -503,7 +503,7 @@ entries live in `backlog-resolved.md` keeping their original numbers
     real Linux obstacles are therefore: the 278-crate dependency tax,
     and apply-to-self needing a helper-binary shape (a tiny
     self-applying exec helper -- the same separate-binary shape bwrap
-    already has) instead of `pre_exec` from multi-threaded sessiond.
+    already has) instead of `pre_exec` from multi-threaded agentd.
     Net: option C is more viable than first recorded; A/B/C remains
     owner-deferred.
     **DECIDED 2026-07-19: option C (full nono adoption, both OSes).**

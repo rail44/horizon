@@ -24,8 +24,8 @@ use horizon_agent::wire::AgentWireEvent;
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::events::send_session_event;
-use super::exploration::SessiondExplorationHost;
-use super::host_tools::SessiondHostTools;
+use super::exploration::AgentdExplorationHost;
+use super::host_tools::AgentdHostTools;
 use super::panic::{
     catch_session_panic, record_session_loop_panic, record_unexpected_provider_exit,
     SessionLoopPhase,
@@ -34,7 +34,7 @@ use super::setup::{
     configured_filesystem_grants, resolve_and_create_isolated_worktree, skill_discovery_root,
     tool_session_state_for,
 };
-use super::state::{lock_unpoisoned, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree::WorktreeInfo;
 
 /// The session's whole lifetime, from `Initialize` through to the
@@ -56,7 +56,7 @@ pub(super) fn run_session(
     spawn_source_session_id: Option<SessionId>,
     isolate: bool,
     restored_worktree: Option<WorktreeInfo>,
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     inbound_rx: Receiver<Command>,
     replay_rx: Receiver<Sender<Vec<Event>>>,
     history: Vec<Event>,
@@ -128,7 +128,7 @@ pub(super) fn run_session(
     // Blocks this session's own dedicated thread (never `main`'s accept
     // loop, and never the readiness gate `session_list`/`session_new`
     // block on) until the event-log writer thread's own DuckDB
-    // rebuild-or-open decision has landed -- see `SessiondState::
+    // rebuild-or-open decision has landed -- see `AgentdState::
     // wait_for_duckdb_store`'s doc comment.
     let recall = RecallContext {
         session_id: Some(session_id),
@@ -186,7 +186,7 @@ pub(super) fn run_session(
     {
         None
     } else {
-        Some(Arc::new(SessiondExplorationHost {
+        Some(Arc::new(AgentdExplorationHost {
             state: state.clone(),
             provider_id: provider_id.clone(),
             workspace_root: workspace_root.clone(),
@@ -243,7 +243,7 @@ pub(super) fn run_session(
         async_results_tx,
     );
 
-    let host = SessiondHostTools {
+    let host = AgentdHostTools {
         state: state.clone(),
     };
 
@@ -344,7 +344,7 @@ pub(super) fn run_session(
 /// practice, not just by construction.
 fn handle_provider_event(
     host: &dyn HostTools,
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     tool_state: &ToolSessionState,
     live_state: &LiveState,
     commands_tx: &Sender<Command>,

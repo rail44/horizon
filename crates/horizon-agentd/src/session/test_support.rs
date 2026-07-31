@@ -8,11 +8,11 @@ use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::tools::ApprovalCandidate;
 use horizon_agent::wire::AgentWireEvent;
 
-use super::state::SessiondState;
+use super::state::AgentdState;
 
-pub(super) fn judge_test_state() -> Arc<SessiondState> {
+pub(super) fn judge_test_state() -> Arc<AgentdState> {
     let agent_config = AgentConfig::from_env_and_provider(None, None);
-    Arc::new(SessiondState::new(
+    Arc::new(AgentdState::new(
         ProviderRegistry::builtin_with_config(
             agent_config.clone(),
             SharedDuckdbStore::unavailable(),
@@ -55,16 +55,16 @@ pub(super) fn drain_events(
     events
 }
 
-/// Builds a hermetic [`SessiondState`] with an explicit, env-independent
+/// Builds a hermetic [`AgentdState`] with an explicit, env-independent
 /// `RigAgentConfig` (never `AgentConfig::from_env_and_provider`'s real
 /// env vars -- a developer's own `OPENAI_API_KEY` must never leak into
 /// this test's expectations). Tests observing sends subscribe the
 /// session id under test via [`Connection::subscribe_agent`].
-pub(super) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<SessiondState> {
+pub(super) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<AgentdState> {
     let mut agent_config = AgentConfig::from_env_and_provider(None, None);
     agent_config.rig.openai_enabled = openai_enabled;
     agent_config.rig.model = model.to_string();
-    Arc::new(SessiondState::new(
+    Arc::new(AgentdState::new(
         ProviderRegistry::builtin_with_config(
             agent_config.clone(),
             SharedDuckdbStore::unavailable(),

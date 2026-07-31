@@ -21,7 +21,7 @@ use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
-use crate::sessiond::{wait_for_drain, SessiondHandle, SessiondResponder, TerminaldHandle};
+use crate::runtime::{wait_for_drain, AgentdHandle, AgentdResponder, TerminaldHandle};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
@@ -159,7 +159,7 @@ impl WorkspaceShell {
                     if self.agent_sessions.contains_key(&summary.id) {
                         continue;
                     }
-                    let Some(handle) = self.sessiond.clone() else {
+                    let Some(handle) = self.agentd.clone() else {
                         continue;
                     };
                     let provider_id =
@@ -177,7 +177,7 @@ impl WorkspaceShell {
                     // design.md` decision 4a's "Open Terminal in Session
                     // Directory" command can read it back later, mirroring
                     // exactly what used to be computed inside
-                    // `SessiondHandle::start_session` itself (see
+                    // `AgentdHandle::start_session` itself (see
                     // `wire::SessionNew::workspace_root`'s doc comment).
                     // For an isolated spawn this is only the *pre-isolation*
                     // value -- agentd overrides it with the worktree path
@@ -253,7 +253,7 @@ impl WorkspaceShell {
     /// `wire_host_tool_responder`.
     pub(super) fn wire_host_tools(
         &mut self,
-        responder: SessiondResponder,
+        responder: AgentdResponder,
         host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
         cx: &mut Context<Self>,
     ) {
@@ -292,7 +292,7 @@ impl WorkspaceShell {
     /// Wires the live push of a freshly isolated session's authoritative
     /// `workspace_root`/`parent_session_id` (`wire::Control::
     /// WorkspaceRootResolved`, routed onto its own process-wide channel by
-    /// `sessiond::routing::Routes` -- see that `Control` variant's own doc
+    /// `runtime::routing::AgentRoutes` -- see that `Control` variant's own doc
     /// comment) straight into the model the moment it arrives, closing the
     /// gap `spawn_agent_resume`/`spawn_workspace_restore` only closed on the
     /// next resume/reload sweep: a session created and used within one
@@ -400,7 +400,7 @@ impl WorkspaceShell {
     /// pass rebuilds any agent pane view whose session id this resume
     /// just reattached — a no-op at startup (no agent panes exist yet)
     /// and the reload's actual pane-rebuild step.
-    pub(super) fn spawn_agent_resume(&self, handle: SessiondHandle, cx: &mut Context<Self>) {
+    pub(super) fn spawn_agent_resume(&self, handle: AgentdHandle, cx: &mut Context<Self>) {
         let window_handle = self.window;
         let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
         let list_handle = handle.clone();
@@ -420,7 +420,7 @@ impl WorkspaceShell {
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    let Some(adopted) = shell.sessiond.clone() else {
+                    let Some(adopted) = shell.agentd.clone() else {
                         return;
                     };
                     if !adopted.same_runtime(&handle) {
@@ -489,7 +489,7 @@ impl WorkspaceShell {
     /// process with that id.
     pub(super) fn spawn_workspace_restore(
         &self,
-        handle: SessiondHandle,
+        handle: AgentdHandle,
         terminal_handle: TerminaldHandle,
         cx: &mut Context<Self>,
     ) {
@@ -531,7 +531,7 @@ impl WorkspaceShell {
 
             let candidates = this
                 .update(cx, |shell, _| {
-                    let adopted = shell.sessiond.as_ref()?;
+                    let adopted = shell.agentd.as_ref()?;
                     if !adopted.same_runtime(&handle) {
                         return None;
                     }
@@ -657,7 +657,7 @@ impl WorkspaceShell {
 
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, move |shell, cx| {
-                    let Some(adopted) = shell.sessiond.as_ref() else {
+                    let Some(adopted) = shell.agentd.as_ref() else {
                         return;
                     };
                     if !adopted.same_runtime(&handle) {
@@ -848,7 +848,7 @@ impl WorkspaceShell {
     /// their pane views all stay live across the whole sequence, so no
     /// terminal resume sweep is needed either (there is nothing to
     /// re-adopt — the attachments were never severed).
-    pub(super) fn reload_agent_runtime(&self, old: Option<SessiondHandle>, cx: &mut Context<Self>) {
+    pub(super) fn reload_agent_runtime(&self, old: Option<AgentdHandle>, cx: &mut Context<Self>) {
         let socket_path = horizon_wire::socket::default_agentd_socket_path();
         let restart_socket = socket_path.clone();
         let control_socket = self.socket_path.clone();
@@ -871,8 +871,8 @@ impl WorkspaceShell {
             }
             let _ = this.update(cx, |shell, cx| {
                 let (handle, host_tool_rx, workspace_root_rx) =
-                    SessiondHandle::start(&restart_socket, &control_socket);
-                shell.sessiond = Some(handle.clone());
+                    AgentdHandle::start(&restart_socket, &control_socket);
+                shell.agentd = Some(handle.clone());
                 shell.reload_in_progress = false;
                 shell.wire_host_tools(handle.responder(), host_tool_rx, cx);
                 shell.wire_workspace_root_updates(workspace_root_rx, cx);
@@ -1018,7 +1018,7 @@ impl WorkspaceShell {
         self.workspace.exit_workspace_mode();
         if let PaneKind::View(view_kind) = kind {
             // A session-less first-party view: no session id to create,
-            // no sessiond spawn, and no `pending_terminal_spawns`/
+            // no agent-runtime spawn, and no `pending_terminal_spawns`/
             // `pending_roles` bookkeeping -- those exist only for the
             // session-backed kinds handled below.
             match placement {
@@ -1294,7 +1294,7 @@ mod tests {
 
     // `spawn_agent_resume`/`spawn_workspace_restore` are themselves
     // GPUI-entity/async-shaped and not unit-testable without a window and a
-    // live sessiond connection, same as `handle_terminal_exited` above --
+    // live agentd connection, same as `handle_terminal_exited` above --
     // but their model-level step (`Workspace::set_session_workspace_root`,
     // called with `wire::SessionSummary.workspace_root` once the daemon's
     // own report of it arrives) is the same pure building block, standing
@@ -1304,7 +1304,7 @@ mod tests {
     fn an_isolated_sessions_reported_workspace_root_wins_over_the_shells_pre_spawn_value() {
         // `docs/session-relationship-design.md`: `reconcile`'s Agent branch
         // records a session's *pre-isolation* `workspace_root` on the model
-        // right away (the value it sent in `SessionNew`), since sessiond's
+        // right away (the value it sent in `SessionNew`), since agentd's
         // real isolated worktree only resolves asynchronously afterward.
         // `spawn_agent_resume`/`spawn_workspace_restore` must overwrite that
         // with whatever `wire::SessionSummary.workspace_root` the daemon
@@ -1334,7 +1334,7 @@ mod tests {
 
     /// `wire_workspace_root_updates` is, like `spawn_agent_resume`/
     /// `spawn_workspace_restore` above, GPUI-entity/async-shaped and not
-    /// unit-testable without a window and a live sessiond connection -- but
+    /// unit-testable without a window and a live agentd connection -- but
     /// its whole fold body is exactly these two model setters, called
     /// together the moment a `wire::Control::WorkspaceRootResolved`
     /// announcement arrives. Unlike the test above, this never goes through

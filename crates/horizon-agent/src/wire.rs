@@ -148,7 +148,7 @@ pub struct SessionNew {
     /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
     /// written before this field existed still parse (as `None`), mirroring
     /// `persistence::event_log::Record::role_id`'s own additive-field
-    /// precedent. Passed into `SessiondHandle::start_session` by the
+    /// precedent. Passed into `AgentdHandle::start_session` by the
     /// workspace layer (`WorkspaceShell::reconcile`), which computes the
     /// Horizon process's own cwd once per session (falling back to `None`
     /// only if that cwd can't be read) and records the same value on the

@@ -107,12 +107,13 @@ Wire cost, as anticipated: removing methods from the middle of an
 index-encoded request enum is a hard reshape, so `SESSION_PROTOCOL_VERSION`
 is 17 **and** `MIN_SUPPORTED_PROTOCOL_VERSION` rises to 17 with it (only the
 second time, after v11). One transition wart is accepted rather than hidden:
-the automatic drain a v17 client sends to a still-running *v16* sessiond is
+the automatic drain a v17 client sends to a still-running *v16* daemon (the
+binary then named `horizon-sessiond`) is
 itself index-shifted, so that daemon ignores it and the client reports
 "kept accepting connections after the drain call; stop it manually". One
 manual kill, once, at this boundary.
 
-**Client runtime.** `src/sessiond/` hosts two runtimes: `SessiondHandle`
+**Client runtime.** `src/runtime/` hosts two runtimes: `AgentdHandle`
 (agent ops) and `TerminaldHandle` (terminal ops), each with its own
 connection, op queue, `RuntimeControl`, and route table (`AgentRoutes` /
 `TerminalRoutes` in `routing.rs`; `common.rs` holds what is genuinely
@@ -126,7 +127,7 @@ still-live connection. Per-item decode failures on the live attachment
 channels stay tolerant (skipped, rate-limit logged): one poisoned frame must
 not kill every running shell, which is the outcome this split exists to
 prevent. What the probe does *not* catch is written down at
-`terminald::establish`.
+`runtime::terminal::establish`.
 
 **UI.** `Reload Agent Runtime` now drops only agent sessions, agent
 entities, and agent pane views; terminal panes keep their views (and thus
@@ -140,14 +141,14 @@ before adopting; its cross-inventory conflict check is unchanged in logic but
 now compares reports from two processes.
 
 **Acceptance.** `horizon-terminald::e2e`'s
-`a_sessiond_drain_and_respawn_leaves_a_live_terminald_session_attachable`
+`an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable`
 spawns both daemons, performs the real `Reload Agent Runtime` sequence
-against sessiond (rtc drain → exit 0 → respawn on the same socket), and then
+against agentd (rtc drain → exit 0 → respawn on the same socket), and then
 proves the terminal session is still listed, still attachable, still carrying
 its retained frame, and still running a shell that answers new input. The
 client-side half is
 `draining_the_agent_runtime_leaves_the_terminal_runtime_untouched` in
-`src/sessiond/tests.rs`.
+`src/runtime/tests.rs`.
 
 **Deliberately not done.** `horizon-terminald` still depends on
 `horizon-session-protocol`, which names the agent vocabulary, so

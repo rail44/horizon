@@ -1086,7 +1086,7 @@ impl ProviderRegistry {
 
     /// `duckdb_cell` is shared with (a clone of) whatever else in the
     /// process needs the same live DuckDB projection handle once it exists
-    /// (`horizon-agentd`'s `SessiondState`, for the recall tools) -- see
+    /// (`horizon-agentd`'s `AgentdState`, for the recall tools) -- see
     /// `persistence::projection::duckdb::SharedDuckdbStore`'s doc comment.
     /// It's threaded in here (rather than resolved internally) because this
     /// registry -- and the rig provider it constructs -- is built at

@@ -6,13 +6,13 @@
 //! *two* of these runtimes — one per daemon, each with its own connection,
 //! op queue, and [`RuntimeControl`] — so that draining one leaves the other
 //! untouched. Everything in this module is deliberately domain-free: the
-//! agent-specific and terminal-specific halves live in [`super::connection`]
-//! and [`super::terminald`] respectively, because their op vocabularies,
+//! agent-specific and terminal-specific halves live in [`super::agent`]
+//! and [`super::terminal`] respectively, because their op vocabularies,
 //! their `hello` replies, and their recovery paths genuinely differ (only
 //! agentd has a JSONL generation to recover from; only terminald carries
 //! the below-schema skew insurance).
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
@@ -67,25 +67,20 @@ pub(super) const OP_TIMEOUT: Duration = Duration::from_secs(30);
 const DRAIN_EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const DRAIN_POLL: Duration = Duration::from_millis(50);
 
-/// One daemon connection's control block: cancellation, establishment
-/// state, and the negotiated version. Created per runtime instance and
-/// replaced wholesale when that runtime is reloaded, so a reload against a
-/// different daemon version simply reads the fresh control.
+/// One daemon connection's control block: cancellation and establishment
+/// state. Created per runtime instance and replaced wholesale when that
+/// runtime is reloaded, so a reload simply reads the fresh control.
+///
+/// The negotiated version number is deliberately *not* kept here. Under
+/// lockstep versioning it carries no information a client decision could
+/// use — whatever this build negotiates with speaks this build's wire — so
+/// the last reader of it went with the structured-input check
+/// (`docs/runtime-crate-alignment-design.md` phase 3). A dead connection is
+/// surfaced through reachability (the per-pane `RuntimeReachability`, plus
+/// the pane dropping its window when the channels close).
 pub(super) struct RuntimeControl {
     cancelled: AtomicBool,
     established: AtomicBool,
-    /// The version `hello` negotiated, or `0` before the first establishment.
-    /// Under lockstep versioning no per-feature gate reads the number any
-    /// more (those constants went with
-    /// `docs/runtime-crate-alignment-design.md` phase 2); terminal panes read
-    /// it only for `Some` vs `None` — "has this runtime finished a `hello`
-    /// yet". Set once per establishment (alongside `mark_established`) and
-    /// **not cleared on disconnect** — it holds the most recently negotiated
-    /// version until the next establishment overwrites it. A dead connection
-    /// is surfaced through reachability (the per-pane `RuntimeReachability`,
-    /// plus the pane dropping its window when the channels close), not by
-    /// zeroing this.
-    negotiated: AtomicU32,
     notify: Notify,
     stopped: (Mutex<bool>, Condvar),
 }
@@ -95,24 +90,9 @@ impl RuntimeControl {
         Self {
             cancelled: AtomicBool::new(false),
             established: AtomicBool::new(false),
-            negotiated: AtomicU32::new(0),
             notify: Notify::new(),
             stopped: (Mutex::new(false), Condvar::new()),
         }
-    }
-
-    /// The most recently negotiated protocol version, or `None` before the
-    /// first establishment — see the field's own doc for why only that
-    /// distinction is still load-bearing.
-    pub(super) fn negotiated(&self) -> Option<u32> {
-        match self.negotiated.load(Ordering::Acquire) {
-            0 => None,
-            version => Some(version),
-        }
-    }
-
-    pub(super) fn set_negotiated(&self, version: u32) {
-        self.negotiated.store(version, Ordering::Release);
     }
 
     pub(super) fn cancel(&self) {

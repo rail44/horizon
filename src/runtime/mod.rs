@@ -1,6 +1,6 @@
-//! Horizon's eager client runtimes for the session daemons — since v10
+//! Horizon's eager clients for the per-view-kind runtimes — since v10
 //! remoc hub clients (`docs/remoc-adoption-design.md` §2), and since v17
-//! **two of them**: [`SessiondHandle`] speaks to `horizon-agentd` (the
+//! **two of them**: [`AgentdHandle`] speaks to `horizon-agentd` (the
 //! agent runtime) and [`TerminaldHandle`] to `horizon-terminald` (the
 //! terminal runtime), each over its own socket, connection, op queue, and
 //! `RuntimeControl` (`docs/terminald-split-design.md`).
@@ -17,10 +17,10 @@
 //! tokio runtime on a background OS thread. The sync-world ⇄ tokio boundary
 //! did not move.
 
+mod agent;
 mod common;
-mod connection;
 mod routing;
-mod terminald;
+mod terminal;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -47,8 +47,8 @@ const SYNC_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(6
 /// The client runtime for `horizon-agentd`: agent sessions and the
 /// connection-global host-tool exchange.
 #[derive(Clone)]
-pub(crate) struct SessiondHandle {
-    ops: tokio::sync::mpsc::UnboundedSender<connection::Op>,
+pub(crate) struct AgentdHandle {
+    ops: tokio::sync::mpsc::UnboundedSender<agent::Op>,
     routes: Arc<AgentRoutes>,
     control: Arc<RuntimeControl>,
     _lifetime: Arc<RuntimeLifetime>,
@@ -57,7 +57,7 @@ pub(crate) struct SessiondHandle {
 /// The client runtime for `horizon-terminald`: terminal sessions only.
 #[derive(Clone)]
 pub(crate) struct TerminaldHandle {
-    ops: tokio::sync::mpsc::UnboundedSender<terminald::Op>,
+    ops: tokio::sync::mpsc::UnboundedSender<terminal::Op>,
     routes: Arc<TerminalRoutes>,
     control: Arc<RuntimeControl>,
     _lifetime: Arc<RuntimeLifetime>,
@@ -73,8 +73,8 @@ impl Drop for RuntimeLifetime {
     }
 }
 
-pub(crate) struct SessiondResponder {
-    ops: tokio::sync::mpsc::WeakUnboundedSender<connection::Op>,
+pub(crate) struct AgentdResponder {
+    ops: tokio::sync::mpsc::WeakUnboundedSender<agent::Op>,
 }
 
 /// A live view of `WorkspaceShell::terminald`, threaded into panes that can
@@ -125,10 +125,6 @@ pub(crate) struct TerminalSessionHandle {
     events: Receiver<TerminalUpdate>,
     session_id: Uuid,
     routes: Arc<TerminalRoutes>,
-    /// The terminal runtime's connection control, read only for its live
-    /// negotiated protocol version (`TerminalSessionHandle::
-    /// negotiated_version`).
-    control: Arc<RuntimeControl>,
 }
 
 impl AgentSessionHandle {
@@ -159,20 +155,6 @@ impl TerminalSessionHandle {
     pub(crate) fn events(&self) -> Receiver<TerminalUpdate> {
         self.events.clone()
     }
-
-    /// The protocol version this connection negotiated, or `None` while none
-    /// is established. Under lockstep versioning the *number* no longer gates
-    /// anything (the per-feature gate constants were deleted with
-    /// `docs/runtime-crate-alignment-design.md` phase 2); what the terminal
-    /// pane still reads is `Some` vs `None` — "has this pane's runtime
-    /// finished a `hello` yet", which decides whether a very early keystroke
-    /// goes out as structured input (`terminal::session::
-    /// version_supports_structured_input`). Read live so a
-    /// `Reload Terminal Runtime` against a different daemon version is
-    /// honored without recreating the handle.
-    pub(crate) fn negotiated_version(&self) -> Option<u32> {
-        self.control.negotiated()
-    }
 }
 
 impl Drop for TerminalSessionHandle {
@@ -181,15 +163,15 @@ impl Drop for TerminalSessionHandle {
     }
 }
 
-impl SessiondResponder {
+impl AgentdResponder {
     pub(crate) fn respond_host_tool(&self, response: HostToolResponse) {
         if let Some(ops) = self.ops.upgrade() {
-            let _ = ops.send(connection::Op::HostToolResponse(response));
+            let _ = ops.send(agent::Op::HostToolResponse(response));
         }
     }
 }
 
-impl SessiondHandle {
+impl AgentdHandle {
     pub(crate) fn same_runtime(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.routes, &other.routes)
     }
@@ -211,7 +193,7 @@ impl SessiondHandle {
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
     ) {
         let (handle, host_tools, workspace_roots, ops) = Self::parts();
-        connection::spawn(
+        agent::spawn(
             socket_path.to_path_buf(),
             control_socket.to_path_buf(),
             ops,
@@ -226,7 +208,7 @@ impl SessiondHandle {
         Self,
         Receiver<HostToolRequest>,
         Receiver<(contract::SessionId, wire::WorkspaceRootResolved)>,
-        tokio::sync::mpsc::UnboundedReceiver<connection::Op>,
+        tokio::sync::mpsc::UnboundedReceiver<agent::Op>,
     ) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
         let (host_tool_tx, host_tool_rx) = unbounded();
@@ -261,7 +243,7 @@ impl SessiondHandle {
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
     {
         let (handle, host_tools, workspace_roots, ops) = Self::parts();
-        connection::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
+        agent::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
         (handle, host_tools, workspace_roots)
     }
 
@@ -291,7 +273,7 @@ impl SessiondHandle {
         isolate: bool,
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
-        let _ = self.ops.send(connection::Op::NewAgent {
+        let _ = self.ops.send(agent::Op::NewAgent {
             new: wire::SessionNew {
                 session_id,
                 provider_id,
@@ -307,7 +289,7 @@ impl SessiondHandle {
 
     pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
-        let _ = self.ops.send(connection::Op::AttachAgent {
+        let _ = self.ops.send(agent::Op::AttachAgent {
             session_id,
             commands,
         });
@@ -348,8 +330,8 @@ impl SessiondHandle {
         )
     }
 
-    pub(crate) fn responder(&self) -> SessiondResponder {
-        SessiondResponder {
+    pub(crate) fn responder(&self) -> AgentdResponder {
+        AgentdResponder {
             ops: self.ops.downgrade(),
         }
     }
@@ -358,7 +340,7 @@ impl SessiondHandle {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .ops
-            .send(connection::Op::SessionList { reply: reply_tx })
+            .send(agent::Op::SessionList { reply: reply_tx })
             .is_err()
         {
             return Err("session runtime stopped before the agent list was sent".to_string());
@@ -376,7 +358,7 @@ impl SessiondHandle {
     }
 
     fn drain(&self) {
-        let _ = self.ops.send(connection::Op::Drain);
+        let _ = self.ops.send(agent::Op::Drain);
     }
 
     /// Fire-and-forget: ask the running daemon to rebuild `[provider]` from
@@ -386,7 +368,7 @@ impl SessiondHandle {
     /// waited on, so the UI thread never blocks on it; a failure is logged on
     /// the runtime's task.
     pub(crate) fn reload_provider_config(&self) {
-        let _ = self.ops.send(connection::Op::ReloadProviderConfig);
+        let _ = self.ops.send(agent::Op::ReloadProviderConfig);
     }
 
     /// Asks the daemon to exit, if this runtime ever reached it. `true`
@@ -415,11 +397,11 @@ impl TerminaldHandle {
     }
 
     /// Starts the terminal-runtime connection. Same eager, non-blocking
-    /// contract as [`SessiondHandle::start`] — a `create_terminal` queued
+    /// contract as [`AgentdHandle::start`] — a `create_terminal` queued
     /// before the daemon is even up is dispatched once it is.
     pub(crate) fn start(socket_path: &Path, control_socket: &Path) -> Self {
         let (handle, ops) = Self::parts();
-        terminald::spawn(
+        terminal::spawn(
             socket_path.to_path_buf(),
             control_socket.to_path_buf(),
             ops,
@@ -429,7 +411,7 @@ impl TerminaldHandle {
         handle
     }
 
-    fn parts() -> (Self, tokio::sync::mpsc::UnboundedReceiver<terminald::Op>) {
+    fn parts() -> (Self, tokio::sync::mpsc::UnboundedReceiver<terminal::Op>) {
         let (ops_tx, ops_rx) = tokio::sync::mpsc::unbounded_channel();
         let routes = Arc::new(TerminalRoutes::new());
         let control = Arc::new(RuntimeControl::new());
@@ -453,7 +435,7 @@ impl TerminaldHandle {
         S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
     {
         let (handle, ops) = Self::parts();
-        terminald::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
+        terminal::spawn_test_stream(stream, ops, handle.routes.clone(), handle.control.clone());
         handle
     }
 
@@ -463,7 +445,7 @@ impl TerminaldHandle {
         spec: TerminalSpawnSpec,
     ) -> TerminalSessionHandle {
         let (handle, commands) = self.register_terminal(session_id);
-        let _ = self.ops.send(terminald::Op::CreateTerminal {
+        let _ = self.ops.send(terminal::Op::CreateTerminal {
             session_id,
             spec: Box::new(spec),
             commands,
@@ -471,7 +453,7 @@ impl TerminaldHandle {
         handle
     }
 
-    /// The terminal twin of [`SessiondHandle::register_agent`]. The bridge's
+    /// The terminal twin of [`AgentdHandle::register_agent`]. The bridge's
     /// sending half is also registered with [`TerminalRoutes`] so a
     /// broadcast ([`Self::broadcast_terminal_color_scheme`]) can inject
     /// commands without a pane's handle.
@@ -504,7 +486,6 @@ impl TerminaldHandle {
                 events: event_rx,
                 session_id,
                 routes: self.routes.clone(),
-                control: self.control.clone(),
             },
             bridge_rx,
         )
@@ -530,7 +511,7 @@ impl TerminaldHandle {
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .ops
-            .send(terminald::Op::TerminalList { reply: reply_tx })
+            .send(terminal::Op::TerminalList { reply: reply_tx })
             .is_err()
         {
             return Err("terminal runtime stopped before terminal list was sent".to_string());
@@ -557,7 +538,7 @@ impl TerminaldHandle {
             let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
             let sent = self
                 .ops
-                .send(terminald::Op::AttachTerminal {
+                .send(terminal::Op::AttachTerminal {
                     session_id,
                     commands,
                     reply: reply_tx,
@@ -584,11 +565,11 @@ impl TerminaldHandle {
     }
 
     fn drain(&self) {
-        let _ = self.ops.send(terminald::Op::Drain);
+        let _ = self.ops.send(terminal::Op::Drain);
     }
 
     /// The destructive half of `Reload Terminal Runtime` — see
-    /// [`SessiondHandle::begin_reload`] for the return contract. Draining
+    /// [`AgentdHandle::begin_reload`] for the return contract. Draining
     /// terminald kills every PTY it hosts, which is why only that one
     /// explicitly-destructive command calls this.
     pub(crate) fn begin_reload(&self) -> bool {

@@ -16,7 +16,7 @@ use horizon_agent::contract::{Command, ToolCallId};
 use horizon_agent::frame::AgentFrame;
 use horizon_agent::live::LiveState;
 
-use crate::sessiond::AgentSessionHandle;
+use crate::runtime::AgentSessionHandle;
 
 /// Whether the `commands` channel to `horizon-agentd` is known dead
 /// (backlog #35: a failed send used to be a silent `let _ = ...` no-op).

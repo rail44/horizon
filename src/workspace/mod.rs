@@ -42,8 +42,8 @@ use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_
 
 use crate::agent::{AgentSession, AgentView};
 use crate::palette::PaletteDelegate;
+use crate::runtime::{AgentdHandle, TerminaldHandle, TerminaldSlot};
 use crate::session_manager::SessionManagerDelegate;
-use crate::sessiond::{SessiondHandle, TerminaldHandle, TerminaldSlot};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::terminal_focus::focus_transition;
 use crate::theme_settings::ThemeSettingsView;
@@ -290,7 +290,7 @@ pub(crate) struct WorkspaceShell {
     // ride until reconcile turns that id into a live agent session.
     pending_roles: HashMap<SessionId, horizon_agent::roles::RoleId>,
     // Staged before session-creating workspace mutations and consumed by
-    // reconcile. Sessiond resolves the source session's live cwd; Horizon
+    // reconcile. The daemon resolves the source session's live cwd; Horizon
     // carries only the source id and fallback spawn input.
     pending_terminal_spawns: HashMap<SessionId, PendingTerminalSpawn>,
     // Same staging shape, for agent spawns' own two knobs (source pane +
@@ -298,7 +298,7 @@ pub(crate) struct WorkspaceShell {
     pending_agent_spawns: HashMap<SessionId, PendingAgentSpawn>,
     // Created eagerly before the first reconcile. Its op queue accepts
     // agent requests while connect/hello proceeds in the background.
-    sessiond: Option<SessiondHandle>,
+    agentd: Option<AgentdHandle>,
     // The terminal daemon's own client runtime, started alongside
     // `agentd` and reloaded independently
     // (`docs/terminald-split-design.md`): `Reload Agent Runtime` replaces
@@ -358,7 +358,7 @@ impl WorkspaceShell {
         let mut workspace_state = WorkspaceStateStore::from_environment();
         let (workspace, restoring_workspace, persistence_ready) =
             load_workspace_state(&mut workspace_state);
-        let (sessiond, host_tool_rx, workspace_root_rx) = SessiondHandle::start(
+        let (agentd, host_tool_rx, workspace_root_rx) = AgentdHandle::start(
             &horizon_wire::socket::default_agentd_socket_path(),
             &socket_path,
         );
@@ -379,7 +379,7 @@ impl WorkspaceShell {
             pending_roles: HashMap::new(),
             pending_terminal_spawns: HashMap::new(),
             pending_agent_spawns: HashMap::new(),
-            sessiond: Some(sessiond.clone()),
+            agentd: Some(agentd.clone()),
             terminald: Some(terminald.clone()),
             terminald_slot: TerminaldSlot::new(Some(terminald.clone())),
             reload_in_progress: false,
@@ -405,16 +405,16 @@ impl WorkspaceShell {
             shell.sync_terminal_focus(window, cx);
         })
         .detach();
-        shell.wire_host_tools(sessiond.responder(), host_tool_rx, cx);
+        shell.wire_host_tools(agentd.responder(), host_tool_rx, cx);
         shell.wire_workspace_root_updates(workspace_root_rx, cx);
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         if shell.restoring_workspace {
-            shell.spawn_workspace_restore(sessiond, terminald, cx);
+            shell.spawn_workspace_restore(agentd, terminald, cx);
         } else {
             shell.reconcile(window, cx);
             shell.focus_active(window, cx);
             shell.spawn_terminal_resume(terminald, cx);
-            shell.spawn_agent_resume(sessiond, cx);
+            shell.spawn_agent_resume(agentd, cx);
         }
         shell
     }

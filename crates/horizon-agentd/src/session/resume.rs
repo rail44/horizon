@@ -16,7 +16,7 @@ use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
 use super::spawn::spawn_session_thread;
-use super::state::{lock_unpoisoned, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree;
 
 /// `docs/agent-runtime-split-design.md` step 4, "agentd start": reads the
@@ -42,7 +42,7 @@ use crate::worktree;
 /// loop, not printed per session -- a real archived log can carry dozens of
 /// long-dead sessions, which used to bury the "resumed session" lines for
 /// the ones that actually matter.
-pub(crate) fn resume_persisted_sessions(state: &Arc<SessiondState>, records: Vec<Record>) {
+pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<Record>) {
     let Some(writer) = state.writer() else {
         return;
     };

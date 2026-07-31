@@ -34,7 +34,7 @@ Filed 2026-07-25 from owner dogfooding of a read-only delegated task.
 ## Resolution
 
 Fixed by switching the base-ref dispatch in
-`crates/horizon-sessiond/src/worktree.rs::create_isolated_worktree` to
+`crates/horizon-agentd/src/worktree.rs::create_isolated_worktree` to
 always read the source session's working-tree HEAD via
 `git rev-parse HEAD`, instead of consulting `origin/<default>` when
 the source is not an owned worktree. The previous dispatch (decision 3

@@ -49,7 +49,7 @@ Caveats:
   lacks).
 - The control socket is fixed per-uid (`/tmp/horizon-control-<uid>.sock`);
   a second instance logs a bind failure and runs without external control.
-  Both one-shot scripts isolate sessiond, agent persistence, and workspace
+  Both one-shot scripts isolate the daemons, agent persistence, and workspace
   state under their output directory (mind macOS's ~104-byte `SUN_LEN`
   socket-path limit).
 - The launched window takes focus, so keys the owner types during the

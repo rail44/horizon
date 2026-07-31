@@ -1,5 +1,5 @@
 //! Isolation/worktree creation at spawn -- `docs/session-relationship-design.md`
-//! decisions 3 and 5. Sessiond-side (the design's pinned call): a spawn
+//! decisions 3 and 5. Agentd-side (the design's pinned call): a spawn
 //! requesting isolation gets its own `git worktree` under the target
 //! repository's `.horizon/worktrees/<slug>`, branched per decision 3's base-ref
 //! rule, and that worktree is removed (never the branch) on a clean terminate
@@ -28,7 +28,7 @@ pub(crate) struct WorktreeInfo {
 /// Resolves where a new isolated worktree should be created *from*: the one
 /// pure function the design's implementation notes ask for. `source` is
 /// `Some((dir, _))` when the spawn's source session is still live in
-/// `agentd` (see `SessiondState::session_directory`): `dir` is that
+/// `agentd` (see `AgentdState::session_directory`): `dir` is that
 /// session's own worktree path if it owns one, else its plain
 /// `workspace_root`. `source` is `None` for an unknown/foreign source id (a
 /// terminal isn't tracked here yet -- deferred, see the design doc's

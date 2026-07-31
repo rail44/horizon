@@ -29,11 +29,11 @@ use super::{read, ReadReport, Record};
 /// The fix enforced at the call site (`horizon-agentd`'s `open_persistence`,
 /// the only place that constructs a production `WriterHandle`) is a
 /// process-global cache: every agent session hosted by that agentd
-/// process shares one `WriterHandle` (held on `SessiondState` and cloned
+/// process shares one `WriterHandle` (held on `AgentdState` and cloned
 /// out per session), i.e. one thread and one open file, and appends are
 /// serialized through that thread's channel. Within a process this makes
 /// concurrent appends impossible by construction rather than by locking.
-/// See `SessiondState::writer`/`set_writer` for the caller-side enforcement
+/// See `AgentdState::writer`/`set_writer` for the caller-side enforcement
 /// and why per-session log files were rejected as the alternative.
 #[derive(Clone)]
 pub struct WriterHandle {

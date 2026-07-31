@@ -8,7 +8,7 @@
 //! stop events*") and `docs/agent-async-task-design.md` decision 6 made
 //! load-bearing. Its v1 consumer is the background `task` tool
 //! (`horizon_agent::tools::ExplorationHost`, implemented by
-//! [`super::exploration::SessiondExplorationHost`]), which uses exactly two
+//! [`super::exploration::AgentdExplorationHost`]), which uses exactly two
 //! classes of event off the stream:
 //!
 //! - **stop/completion** — `TurnEnded`, `StateChanged(Terminated)`,
@@ -27,7 +27,7 @@
 //! not a new seam. Nothing here filters by kind: a subscriber sees every
 //! event the session emits, in order, and decides for itself.
 //!
-//! **Ordering guarantee.** [`SessiondState::subscribe_to_session`] must be
+//! **Ordering guarantee.** [`AgentdState::subscribe_to_session`] must be
 //! called *before* the observed session's thread is spawned
 //! ([`super::spawn::spawn_session_thread`]); the fan-out
 //! ([`super::events::send_session_event`]) only reaches subscribers that
@@ -47,7 +47,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use horizon_agent::contract::{Event, SessionId};
 
-use super::state::{lock_unpoisoned, SessiondState};
+use super::state::{lock_unpoisoned, AgentdState};
 
 /// Every in-process subscription currently installed, keyed by the
 /// *observed* session's id. At most one per session: the only subscriber
@@ -58,7 +58,7 @@ pub(super) type SessionSubscriptions = Mutex<HashMap<SessionId, Sender<Event>>>;
 
 /// A live subscription to one session's event stream. Held by the
 /// subscriber for as long as it cares; released by
-/// [`SessiondState::unsubscribe_from_session`] (which the `task` seam calls
+/// [`AgentdState::unsubscribe_from_session`] (which the `task` seam calls
 /// as part of terminating a child, so a subscription never outlives the
 /// session it observes).
 pub(super) struct SessionSubscription {
@@ -68,7 +68,7 @@ pub(super) struct SessionSubscription {
     pub(super) events: Receiver<Event>,
 }
 
-impl SessiondState {
+impl AgentdState {
     /// Subscribes to `session_id`'s event stream -- see the module doc,
     /// including the "subscribe before spawning" ordering requirement.
     pub(super) fn subscribe_to_session(&self, session_id: SessionId) -> SessionSubscription {

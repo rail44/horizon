@@ -30,12 +30,12 @@
 //! whether that background work has finished; `session_list`/`session_load`/
 //! `session_new` would return an incomplete (or, right after bind, empty)
 //! view of history if answered too early, so they block on [`session::
-//! SessiondState::wait_until_resume_ready`] first -- a readiness gate, not a
+//! AgentdState::wait_until_resume_ready`] first -- a readiness gate, not a
 //! protocol change.
 //!
 //! **The DuckDB rebuild is off the readiness path too.** It used to run
-//! synchronously inside [`open_persistence`], *before* [`SessiondState::
-//! set_writer`]/[`session::resume_persisted_sessions`]/[`SessiondState::
+//! synchronously inside [`open_persistence`], *before* [`AgentdState::
+//! set_writer`]/[`session::resume_persisted_sessions`]/[`AgentdState::
 //! mark_resume_ready`] -- meaning every readiness-gated request waited on a
 //! full synchronous rebuild of a derived, non-authoritative read model that
 //! no session actually needs (sessions resume from the JSONL log directly).
@@ -47,7 +47,7 @@
 //! background writer thread (`horizon_agent::persistence::event_log::
 //! writer`) does the rebuild-or-skip itself, right after it sends
 //! `WriterInit::Ready` (which is what [`open_persistence`]'s blocking
-//! `init_rx.recv()` -- and therefore [`SessiondState::mark_resume_ready`] --
+//! `init_rx.recv()` -- and therefore [`AgentdState::mark_resume_ready`] --
 //! actually waits on) and before it starts draining/durably writing further
 //! appends. Readiness still doesn't wait on DuckDB at all, and the same
 //! skip-when-current freshness check still applies (see that module's
@@ -73,7 +73,7 @@ use horizon_wire::socket::default_agentd_socket_path;
 use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
 use hub::Hub;
 use remoc::rtc::{Client as _, ServerShared as _};
-use session::{Connection, SessiondState};
+use session::{AgentdState, Connection};
 use tokio::net::{UnixListener, UnixStream};
 
 /// Reported in this binary's `hello` reply's `binary_id`. The negotiated
@@ -114,7 +114,7 @@ async fn main() -> anyhow::Result<()> {
         raw_config.provider.base_url.clone(),
     );
     // Resolved once at startup and handed to every session's
-    // `ToolSessionState` (see `SessiondState::config_path`/`run_session`):
+    // `ToolSessionState` (see `AgentdState::config_path`/`run_session`):
     // the `config.read`/`config.write` agent tools' one and only target.
     let config_path = horizon_config::resolved_path();
     eprintln!(
@@ -131,12 +131,12 @@ async fn main() -> anyhow::Result<()> {
     // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
     // the event log's writer thread, and therefore any real DuckDB store,
     // exists) and handed to both the provider registry (the rig provider's
-    // history replay) and `SessiondState` (the recall tools' context);
+    // history replay) and `AgentdState` (the recall tools' context);
     // populated later, once, by `spawn_resume_task`'s propagator.
     let duckdb_cell = SharedDuckdbStore::new();
     let providers =
         ProviderRegistry::builtin_with_config(agent_config.clone(), duckdb_cell.clone());
-    let state = Arc::new(SessiondState::new(
+    let state = Arc::new(AgentdState::new(
         providers,
         agent_config.clone(),
         None,
@@ -169,7 +169,7 @@ async fn main() -> anyhow::Result<()> {
 /// reintroduce DuckDB onto the readiness path this function's own doc
 /// comment describes avoiding.
 fn spawn_resume_task(
-    state: Arc<SessiondState>,
+    state: Arc<AgentdState>,
     agent_config: AgentConfig,
     duckdb_cell: SharedDuckdbStore,
 ) {
@@ -217,7 +217,7 @@ fn test_resume_delay() -> Option<Duration> {
 /// so the caller can resume every session they belong to
 /// ([`session::resume_persisted_sessions`]), and the human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
-/// [`spawn_resume_task`] can stash it on [`SessiondState`] for `main::
+/// [`spawn_resume_task`] can stash it on [`AgentdState`] for `main::
 /// run_session_hosting_loop` to forward to a connecting client -- restoring
 /// the step-3 trim recorded in `docs/agent-runtime-split-design.md`
 /// ("Skipped-lines status reporting is omitted").
@@ -279,7 +279,7 @@ fn open_persistence(
 async fn run(
     listener: UnixListener,
     socket_path: &Path,
-    state: Arc<SessiondState>,
+    state: Arc<AgentdState>,
 ) -> anyhow::Result<()> {
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
 
@@ -314,7 +314,7 @@ async fn run(
 /// (`docs/remoc-adoption-design.md` §3); a range-rejected client can still
 /// call `drain`, which is how the auto-recovery path restarts a stale
 /// daemon at the right version.
-async fn handle_connection(stream: UnixStream, state: Arc<SessiondState>) -> anyhow::Result<()> {
+async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
     let (read_half, write_half) = stream.into_split();
     let connect = remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
         remoc::Cfg::default(),

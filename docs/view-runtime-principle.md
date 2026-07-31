@@ -11,7 +11,8 @@ Horizon は当初「セッションの daemon」（`horizon-sessiond`）を 1 �
 **「ビュー種別ごとに runtime プロセスがあり、それぞれ独立に更新・
 再起動される」**構造に変わった。`Reload Session Runtime` は今や
 セッション一般ではなく *エージェントというビュー種別* の runtime だけ
-を再起動し、`horizon-sessiond` はエージェント runtime のホストである。
+を再起動し、agent runtime のホスト（当時 `horizon-sessiond`、現在の
+`horizon-agentd`）はその 1 種別を持つに過ぎない。
 
 つまり実体が先に動き、名前と概念が遅れている。本 doc はその概念を
 正典化する（名前の追随は別途）。
@@ -51,7 +52,10 @@ workspace restore の inventory 検査も種別の数だけ膨らむ。したが
 
 - **命名の追随**（`sessiond` → agent runtime を指す名前、
   `Reload Session Runtime` → 対応する名前）: 実体に言葉を合わせる
-  機械的な整理。
+  機械的な整理。**完了 2026-07-31**: crate は `horizon-agentd`、
+  コマンドは `Reload Agent Runtime`、shell 側 client は
+  `src/runtime/`（`AgentdHandle` / `TerminaldHandle`）。
+  `docs/runtime-crate-alignment-design.md` phase 3。
 - **WASM プラグインビュー**（roadmap）: 上記基準を満たすなら第 3 の
   runtime として立てる。満たさないうちは既存 runtime に相乗りさせる。
   いずれにせよ「相乗りさせたまま結合を作り込まない」ことを、この

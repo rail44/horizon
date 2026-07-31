@@ -239,12 +239,12 @@ blocked** by that open (POSIX file locks are per-process, and DuckDB's own
 locking follows suit here) — but it reads DuckDB's own on-disk,
 last-checkpointed state, which can trail behind what the live writer
 connection has actually committed in memory. Treat a `duckdb -readonly`
-read taken while sessiond is running as a **diagnostic snapshot that may be
+read taken while agentd is running as a **diagnostic snapshot that may be
 stale**, not as an authoritative live view. For anything time-sensitive (a
 session's most recent few events, "did this just happen"), **prefer the
 JSONL recipes earlier in this doc** — they read the same file the writer
 itself appends to, with no separate database engine's checkpoint timing in
-the way. For a guaranteed-current DuckDB read, stop sessiond first (a plain
+the way. For a guaranteed-current DuckDB read, stop agentd first (a plain
 kill/stop, or `horizon reload-agent-runtime`; agent sessions survive it,
 and since the 2026-07-30 terminald split it no longer ends the UI's terminal
 sessions either — that was verified true on 2026-07-25, before terminals

@@ -1,7 +1,7 @@
 //! The `horizon-terminald` client connection: connect, negotiate, dispatch
 //! terminal ops (`docs/terminald-split-design.md`).
 //!
-//! Structurally the twin of [`super::connection`], with two deliberate
+//! Structurally the twin of [`super::agent`], with two deliberate
 //! differences that follow from what this daemon *is*:
 //!
 //! 1. **No JSONL generation to recover from.** `horizon-terminald` was born
@@ -25,7 +25,6 @@ use std::time::Duration;
 
 use horizon_terminal_core::wire::{
     terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
-    TerminalHubHello,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
 use horizon_wire::{
@@ -305,7 +304,7 @@ where
         result = establish(stream) => result,
         _ = control.cancelled() => return StreamEnd::Cancelled,
     };
-    let (hub, hello, conn_task) = match established {
+    let (hub, conn_task) = match established {
         Ok(established) => established,
         Err(EstablishError::Transient(message)) => return StreamEnd::PreHelloTransport { message },
         Err(EstablishError::Silence(message)) => return StreamEnd::Silence { message },
@@ -314,7 +313,6 @@ where
         Err(EstablishError::Fatal(message)) => return StreamEnd::Fatal(message),
     };
     control.mark_established();
-    control.set_negotiated(hello.negotiated);
 
     let live = Live {
         hub: hub.clone(),
@@ -344,7 +342,6 @@ where
 
 type EstablishedParts = (
     TerminalHubClient<WireCodec>,
-    TerminalHubHello,
     JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>,
 );
 
@@ -466,7 +463,7 @@ where
         )));
     }
 
-    Ok((hub, hello, conn_task))
+    Ok((hub, conn_task))
 }
 
 /// Dispatches one op. Every rtc call runs on its own task (the calls are

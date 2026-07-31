@@ -17,7 +17,7 @@ use horizon_agent::wire::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::resume::session_is_dead;
-use super::state::SessiondState;
+use super::state::AgentdState;
 
 /// What the dedicated session thread was doing when an unwind crossed its
 /// runtime boundary. Provider events retain their exact contract kind so a
@@ -105,7 +105,7 @@ pub(super) fn catch_session_panic<T>(
 /// this thread and provider handle are dropped, so the final state is
 /// deliberately `Terminated`.
 pub(super) fn record_session_loop_panic(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
     failure: &SessionPanic,
@@ -131,7 +131,7 @@ pub(super) fn record_session_loop_panic(
 /// so a trailing error item suppresses the generic fallback diagnostic while
 /// this function still closes the active turn and terminates the session.
 pub(super) fn record_unexpected_provider_exit(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
 ) {
@@ -165,7 +165,7 @@ fn unexpected_provider_exit_events(frame: &AgentFrame) -> Vec<Event> {
 /// active turn tracker at this boundary, so it records only the diagnostic
 /// and terminal state rather than fabricating a turn-less `TurnEnded`.
 pub(super) fn record_uncaught_session_panic(
-    state: &Arc<SessiondState>,
+    state: &Arc<AgentdState>,
     session_id: SessionId,
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,

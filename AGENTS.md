@@ -241,10 +241,11 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `sessiond/` — the shell's two eager daemon client runtimes (one per
-  daemon: agent and terminal), each with its own connection, op queue, and
-  route table: non-blocking connect/spawn, per-domain routing, and explicit
-  per-daemon drain. See `docs/terminald-split-design.md` for why reloading
+- `runtime/` — the shell's two eager runtime clients (`agent.rs` for
+  `horizon-agentd`, `terminal.rs` for `horizon-terminald`, over the
+  shared machinery in `common.rs`), each with its own connection, op
+  queue, and route table: non-blocking connect/spawn, per-domain routing,
+  and explicit per-daemon drain. See `docs/terminald-split-design.md` for why reloading
   one must not disturb the other.
 - `terminal/` — the terminal pane: the daemon-backed per-session model entity
   (`session.rs`) and the view (grid painting, key/mouse/IME handling,

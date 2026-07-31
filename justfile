@@ -1,6 +1,6 @@
-# Build everything (sessiond included) and launch the freshly built binary
+# Build everything (both daemons included) and launch the freshly built binary
 # directly. Bypassing `cargo run` keeps cargo's environment (CARGO_*,
-# RUSTUP_*, LD_LIBRARY_PATH into target/debug) out of Horizon and sessiond —
+# RUSTUP_*, LD_LIBRARY_PATH into target/debug) out of Horizon and the daemons —
 # see docs/tasks/backlog.md item 12.
 dev *ARGS:
     cargo build --workspace
