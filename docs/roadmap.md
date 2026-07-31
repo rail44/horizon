@@ -467,6 +467,15 @@ lands:
   to append-only discipline (tmux precedent), with binary_id-keyed
   clean refusal as the below-the-schema insurance. Phased: UI-side
   resume wiring + config-only reload first, then the daemon split.
+  Both phases shipped (split at wire v17; config-only `[provider]`
+  reload at v18, merged 2026-07-30 with the lockstep-no-gates
+  versioning decision). **Follow-up consult open: runtime granularity**
+  (`docs/runtime-granularity-design.md`, new 2026-07-31) — per-daemon
+  wire versions so agentd bumps stop auto-draining terminald, protocol
+  crate granularity, crate/process map coherence under the view-runtime
+  principle (`docs/view-runtime-principle.md`), vestigial gate-constant
+  cleanup, and the WASM-plugin runtime story. Owner-led domain session
+  to consult and implement.
 
 
 
