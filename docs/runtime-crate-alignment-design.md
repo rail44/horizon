@@ -81,7 +81,11 @@ shared session abstraction left to host.
    version pairs start at 18/18; the artifact becomes
    `agent-wire.json` + `terminal-wire.json` with unchanged inner keys;
    `check-wire-schema.sh` and the two `wire_schema` generator tests
-   follow. Acceptance: `horizon-agentd`'s dev-dependency on
+   follow. The vestigial pre-lockstep gate constants
+   (`SCROLLBACK_WINDOW_MIN_VERSION`, `TERMINAL_STRUCTURED_INPUT_VERSION`)
+   and their always-true fallback branches are deleted in the same move
+   (dead under MIN>=17; `docs/runtime-granularity-design.md` Q4).
+   Acceptance: `horizon-agentd`'s dev-dependency on
    `horizon-terminal-core` is gone; both artifacts' content matches the
    old union artifact section-for-section.
 3. **Rename the shell/daemon residue**: `src/sessiond/` → per-runtime

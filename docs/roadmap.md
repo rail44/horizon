@@ -35,13 +35,6 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-- **Runtime-boundary crate alignment — core judgments decided
-  2026-07-31** (`docs/runtime-crate-alignment-design.md`). Sessions
-  become attachment records; `horizon-wire` carve-out (subsumes backlog
-  70), hubs move into their domain crates with per-runtime version
-  pairs and split schema artifacts, "sessiond" vocabulary leaves the
-  tree. Three wire-neutral phases, worker-sized.
-
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
@@ -476,13 +469,15 @@ lands:
   resume wiring + config-only reload first, then the daemon split.
   Both phases shipped (split at wire v17; config-only `[provider]`
   reload at v18, merged 2026-07-30 with the lockstep-no-gates
-  versioning decision). **Follow-up consult open: runtime granularity**
-  (`docs/runtime-granularity-design.md`, new 2026-07-31) — per-daemon
-  wire versions so agentd bumps stop auto-draining terminald, protocol
-  crate granularity, crate/process map coherence under the view-runtime
-  principle (`docs/view-runtime-principle.md`), vestigial gate-constant
-  cleanup, and the WASM-plugin runtime story. Owner-led domain session
-  to consult and implement.
+  versioning decision). **Follow-up decided 2026-07-31: runtime-boundary
+  crate alignment** (`docs/runtime-crate-alignment-design.md`; consult
+  record `docs/runtime-granularity-design.md`) — sessions become
+  attachment records; `horizon-wire` carve-out (subsumes backlog 70),
+  hubs move into their domain crates with per-runtime version pairs and
+  split schema artifacts so agentd bumps stop auto-draining terminald,
+  "sessiond" vocabulary leaves the tree, vestigial gate constants go.
+  Three wire-neutral worker-sized phases; the WASM runtime story stays
+  open.
 
 
 

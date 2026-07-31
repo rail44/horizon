@@ -1,10 +1,10 @@
 # Runtime granularity: crate/process/version seams
 
-Status: **open consult** — this document captures the decided baseline
-and the open questions for an owner-led domain session (consult +
-implement on a branch, hand back per AGENTS.md "Branch and Integration
-Flow"). Nothing under "Open questions" is decided; the session makes
-those decisions with the owner and updates this doc as they land.
+Status: consult held 2026-07-31 (fork session 6fa635f0). Questions 1-4
+are **decided** — the decision record and implementation plan is
+`docs/runtime-crate-alignment-design.md`; per-question outcomes are
+annotated inline below. Question 5 (the WASM runtime story) stays open
+for when that view kind arrives.
 
 ## Ratified baseline (do not relitigate, cite instead)
 
@@ -42,7 +42,12 @@ exact pain the terminald split removed. Flagged at the v18 decision
 
 ## Open questions
 
-1. **Per-daemon wire versions.** Split the version pair per hub
+1. **Decided 2026-07-31**: per-hub version pairs living in each hub's
+   own crate, two schema artifacts with unchanged inner keys,
+   section-scoped checking (`docs/runtime-crate-alignment-design.md`
+   judgments 3 and 6, phase 2). The v17 "drain stays put" concern
+   becomes per-hub as predicted.
+   Original question: **Per-daemon wire versions.** Split the version pair per hub
    (agent wire vs terminal wire), so an agentd bump leaves terminald
    pairings negotiable. What carries the split: two constant pairs in
    one protocol crate, or two crates (see 2)? What happens to the
@@ -51,21 +56,33 @@ exact pain the terminald split removed. Flagged at the v18 decision
    "drain stays put" index-alignment concern
    (`horizon-session-protocol/src/lib.rs` v17 note) is per-hub and
    should get simpler, not harder — verify.
-2. **Protocol crate granularity.** Does `horizon-session-protocol`
+2. **Decided 2026-07-31**: `horizon-session-protocol` dissolves —
+   domain-free foundation into a new `horizon-wire`, each hub into its
+   domain crate (`horizon-agent::wire` / `horizon-terminal-core::wire`)
+   (judgments 2-3 there).
+   Original question: **Protocol crate granularity.** Does `horizon-session-protocol`
    itself split (agent wire / terminal wire / shared plumbing:
    `VersionRange`, `WireCodec`, caps, hello discipline)? Or stay one
    crate with two version pairs? Weigh against the view-runtime
    principle: the wire slices already belong to different runtimes
    with different change cadences (terminal wire: append-only
    discipline, tmux precedent; agent wire: still evolving fast).
-3. **Crate/process map coherence.** With the principle ratified, audit
+3. **Decided 2026-07-31**: sessions are attachment records; the
+   "sessiond" vocabulary (`src/sessiond/`, `SessiondState`) is swept in
+   phase 3. `horizon-control`'s versioning story explicitly stays as-is
+   (a shell-local socket, not a runtime hub). Process composition is
+   unchanged.
+   Original question: **Crate/process map coherence.** With the principle ratified, audit
    the seams: `src/sessiond/` hosts both daemons' client runtimes
    under a stale name; the control plane (`horizon-control`) is a
    third socket with its own ad-hoc versioning story; `horizon-agent`
    vs `horizon-agentd` and `horizon-terminal-core` vs
    `horizon-terminald` layering. What, if anything, moves — and what
    explicitly stays, recorded with reasons.
-4. **Vestigial gate constants.** `SCROLLBACK_WINDOW_MIN_VERSION` (12)
+4. **Decided 2026-07-31**: delete, with their fallback paths, in phase
+   2 when the terminal wire moves — dead code under MIN>=17 lockstep,
+   so the deletion is wire- and behavior-neutral.
+   Original question: **Vestigial gate constants.** `SCROLLBACK_WINDOW_MIN_VERSION` (12)
    and `TERMINAL_STRUCTURED_INPUT_VERSION` (13) and their fallback
    code paths are dead under MIN=17+ lockstep. Delete with their
    fallbacks, or keep until the per-daemon split settles the
