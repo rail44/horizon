@@ -59,7 +59,7 @@ pub fn run(
         }
     };
 
-    let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id) {
+    let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {
         Ok(resolved) => resolved,
         Err(message) => {
             let _ = writeln!(stderr, "error: {message}");
@@ -111,7 +111,12 @@ pub fn run(
         }
     }
 
-    let request = commands::to_request(&parsed.subcommand, resolved_split.as_deref());
+    // The issuer session id (from `HORIZON_SESSION_ID`) is carried as the
+    // `"issuer"` wire key so the shell can parent the new session to the
+    // dispatching pane rather than the focused pane (issue 013). An empty
+    // string is treated as absent -- it is not a valid session id.
+    let issuer = env_session_id.as_deref().filter(|value| !value.is_empty());
+    let request = commands::to_request(&parsed.subcommand, resolved_split.as_deref(), issuer);
     match conn.send_request(request) {
         Ok(body) => {
             output::render(&body, parsed.global.json, stdout);

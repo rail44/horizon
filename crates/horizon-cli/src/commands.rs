@@ -60,15 +60,23 @@ pub fn is_destructive(subcommand: &Subcommand) -> bool {
 /// runs, "here" has already become a concrete session id or the caller has
 /// already bailed out, so the wire only ever carries an explicit target
 /// (`docs/cli-control-plane-design.md`'s "Targets are explicit in v1"
-/// principle); every other subcommand ignores this parameter. `args`
-/// interpretation on the server side is entirely its own concern (per
-/// [`Invoke`]'s doc comment); this function's only job is to fill it in
-/// consistently.
-pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Request {
+/// principle); every other subcommand ignores this parameter. `issuer` is
+/// the session id of the pane that launched this CLI invocation (from
+/// `HORIZON_SESSION_ID`), carried as the `"issuer"` wire key so the shell
+/// can parent the new session to the issuer rather than the focused pane
+/// (issue 013); `None` (no `HORIZON_SESSION_ID`, or it is empty) omits the
+/// key, and the new session becomes a root. `args` interpretation on the
+/// server side is entirely its own concern (per [`Invoke`]'s doc comment);
+/// this function's only job is to fill it in consistently.
+pub fn to_request(
+    subcommand: &Subcommand,
+    resolved_split: Option<&str>,
+    issuer: Option<&str>,
+) -> Request {
     match subcommand {
         Subcommand::NewTerminal { activate, .. } => invoke(
             "new-terminal",
-            create_session_args(resolved_split, *activate, None, None),
+            create_session_args(resolved_split, *activate, None, None, issuer),
         ),
         Subcommand::NewAgent {
             prompt,
@@ -82,6 +90,7 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
                 *activate,
                 prompt.as_deref(),
                 share.then_some(false),
+                issuer,
             ),
         ),
         Subcommand::NewConfigAgent {
@@ -96,6 +105,7 @@ pub fn to_request(subcommand: &Subcommand, resolved_split: Option<&str>) -> Requ
                 *activate,
                 prompt.as_deref(),
                 share.then_some(false),
+                issuer,
             ),
         ),
         Subcommand::Attach {
@@ -158,20 +168,23 @@ fn invoke(command: &str, args: serde_json::Value) -> Request {
 
 /// `new-terminal`/`new-agent`'s wire args -- the mirror image of
 /// `app::external_commands::create_session_invocation`'s parsing on the
-/// server side. `split`/`prompt`/`isolate` are only included when present,
-/// so an unadorned `new-terminal`/`new-agent` sends the same
-/// `{"activate":false}` shape v1 already sent (plus the always-present
+/// server side. `split`/`prompt`/`isolate`/`issuer` are only included when
+/// present, so an unadorned `new-terminal`/`new-agent` sends the same
+/// `{\"activate\":false}` shape v1 already sent (plus the always-present
 /// `activate` field the Second revision adds). `isolate` is `new-agent`/
 /// `new-config-agent`'s `--share` override (`Some(false)`) turned into the
 /// wire's `docs/session-relationship-design.md` decision 3 knob; `None`
 /// (the common case) omits the key entirely, letting the server apply its
 /// own CLI-origin default (isolated) -- `new-terminal` always passes `None`
-/// here, since isolation isn't offered for terminal spawns.
+/// here, since isolation isn't offered for terminal spawns. `issuer` is
+/// the dispatching pane's session id (issue 013), omitted when the CLI
+/// runs outside any pane.
 fn create_session_args(
     split: Option<&str>,
     activate: bool,
     prompt: Option<&str>,
     isolate: Option<bool>,
+    issuer: Option<&str>,
 ) -> serde_json::Value {
     let mut args = serde_json::Map::new();
     if let Some(split) = split {
@@ -189,6 +202,12 @@ fn create_session_args(
     }
     if let Some(isolate) = isolate {
         args.insert("isolate".to_string(), serde_json::Value::Bool(isolate));
+    }
+    if let Some(issuer) = issuer {
+        args.insert(
+            "issuer".to_string(),
+            serde_json::Value::String(issuer.to_string()),
+        );
     }
     serde_json::Value::Object(args)
 }
@@ -257,6 +276,7 @@ mod tests {
                 session_id: "s-1".to_string(),
             },
             None,
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -268,6 +288,7 @@ mod tests {
                 session_id: "s-1".to_string(),
             },
             None,
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -277,7 +298,7 @@ mod tests {
 
     #[test]
     fn new_terminal_with_no_flags_sends_activate_false_and_no_split() {
-        let Request::Invoke(invoke) = to_request(&new_terminal(None, false), None) else {
+        let Request::Invoke(invoke) = to_request(&new_terminal(None, false), None, None) else {
             panic!("expected an Invoke request");
         };
         assert_eq!(invoke.command, "new-terminal");
@@ -286,7 +307,7 @@ mod tests {
 
     #[test]
     fn new_terminal_with_active_sends_activate_true() {
-        let Request::Invoke(invoke) = to_request(&new_terminal(None, true), None) else {
+        let Request::Invoke(invoke) = to_request(&new_terminal(None, true), None, None) else {
             panic!("expected an Invoke request");
         };
         assert_eq!(invoke.args, serde_json::json!({ "activate": true }));
@@ -294,9 +315,11 @@ mod tests {
 
     #[test]
     fn new_terminal_carries_the_resolved_split_target() {
-        let Request::Invoke(invoke) =
-            to_request(&new_terminal(Some(SplitFlag::Here), false), Some("s-1"))
-        else {
+        let Request::Invoke(invoke) = to_request(
+            &new_terminal(Some(SplitFlag::Here), false),
+            Some("s-1"),
+            None,
+        ) else {
             panic!("expected an Invoke request");
         };
         assert_eq!(
@@ -307,7 +330,7 @@ mod tests {
 
     #[test]
     fn new_agent_without_prompt_sends_activate_false_and_no_prompt() {
-        let Request::Invoke(invoke) = to_request(&new_agent(None, None, false), None) else {
+        let Request::Invoke(invoke) = to_request(&new_agent(None, None, false), None, None) else {
             panic!("expected an Invoke request");
         };
         assert_eq!(invoke.command, "new-agent");
@@ -328,6 +351,7 @@ mod tests {
                 share: true,
             },
             None,
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -346,6 +370,7 @@ mod tests {
                 true,
             ),
             Some("s-1"),
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -356,12 +381,68 @@ mod tests {
     }
 
     #[test]
+    fn new_terminal_with_issuer_carries_it_in_the_args() {
+        let Request::Invoke(invoke) = to_request(
+            &new_terminal(None, false),
+            None,
+            Some("00000000-0000-0000-0000-000000000001"),
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "new-terminal");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "activate": false,
+                "issuer": "00000000-0000-0000-0000-000000000001"
+            })
+        );
+    }
+
+    #[test]
+    fn new_agent_with_issuer_and_split_carries_both() {
+        let Request::Invoke(invoke) = to_request(
+            &new_agent(
+                Some("fix the bug"),
+                Some(SplitFlag::Explicit("s-1".to_string())),
+                true,
+            ),
+            Some("s-1"),
+            Some("00000000-0000-0000-0000-000000000002"),
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "new-agent");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "split": "s-1",
+                "activate": true,
+                "prompt": "fix the bug",
+                "issuer": "00000000-0000-0000-0000-000000000002"
+            })
+        );
+    }
+
+    #[test]
+    fn no_issuer_key_when_issuer_is_none() {
+        let Request::Invoke(invoke) = to_request(&new_agent(None, None, false), None, None) else {
+            panic!("expected an Invoke request");
+        };
+        assert!(
+            !invoke.args.as_object().unwrap().contains_key("issuer"),
+            "args should not contain an issuer key when issuer is None"
+        );
+    }
+
+    #[test]
     fn attach_carries_the_session_id_and_activate() {
         let Request::Invoke(invoke) = to_request(
             &Subcommand::Attach {
                 session_id: "s-1".to_string(),
                 activate: true,
             },
+            None,
             None,
         ) else {
             panic!("expected an Invoke request");
@@ -380,6 +461,7 @@ mod tests {
                 session_id: "s-1".to_string(),
             },
             None,
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -395,6 +477,7 @@ mod tests {
                 call_id: "c-1".to_string(),
             },
             None,
+            None,
         ) else {
             panic!("expected an Invoke request");
         };
@@ -409,6 +492,7 @@ mod tests {
                 session_id: "s-1".to_string(),
                 call_id: "c-1".to_string(),
             },
+            None,
             None,
         ) else {
             panic!("expected an Invoke request");
@@ -426,7 +510,8 @@ mod tests {
             external_name(&Subcommand::ReloadTerminalRuntime),
             "reload-terminal-runtime"
         );
-        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadTerminalRuntime, None) else {
+        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadTerminalRuntime, None, None)
+        else {
             panic!("expected an invoke request");
         };
         assert_eq!(invoke.command, "reload-terminal-runtime");
@@ -441,7 +526,7 @@ mod tests {
         );
         assert_eq!(external_name(&Subcommand::ReloadConfig), "reload-config");
 
-        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadConfig, None) else {
+        let Request::Invoke(invoke) = to_request(&Subcommand::ReloadConfig, None, None) else {
             panic!("expected an Invoke request");
         };
         assert_eq!(invoke.command, "reload-config");
@@ -456,7 +541,8 @@ mod tests {
         );
         assert!(!is_destructive(&Subcommand::OpenTerminalInSessionDirectory));
 
-        let Request::Invoke(invoke) = to_request(&Subcommand::OpenTerminalInSessionDirectory, None)
+        let Request::Invoke(invoke) =
+            to_request(&Subcommand::OpenTerminalInSessionDirectory, None, None)
         else {
             panic!("expected an Invoke request");
         };
@@ -467,11 +553,11 @@ mod tests {
     #[test]
     fn sessions_and_state_are_queries() {
         assert!(matches!(
-            to_request(&Subcommand::Sessions, None),
+            to_request(&Subcommand::Sessions, None, None),
             Request::Query(q) if q.what == "sessions"
         ));
         assert!(matches!(
-            to_request(&Subcommand::State, None),
+            to_request(&Subcommand::State, None, None),
             Request::Query(q) if q.what == "state"
         ));
     }

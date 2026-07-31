@@ -53,15 +53,29 @@ pub(super) struct PendingAgentSpawn {
 }
 
 /// Kind-agnostic spawn-source resolution: an explicit target (e.g. the
-/// `--split`/split-target session) wins, else whatever pane is currently
-/// active. Shared by [`WorkspaceShell::pending_terminal_spawn`] and
-/// [`WorkspaceShell::pending_agent_spawn`] -- terminal cwd inheritance and
-/// agent lineage/isolation both need exactly the same "spawned from" pane.
+/// `--split`/split-target session) wins, else the caller-supplied fallback.
+/// The palette passes the active session as the fallback (a "child of the
+/// current pane" gesture); the control plane passes the issuer instead (see
+/// [`control_plane_spawn_source`]). Shared by terminal cwd inheritance and
+/// agent lineage/isolation -- both need exactly the same "spawned from"
+/// pane.
 fn resolve_spawn_source(
     explicit_source: Option<SessionId>,
-    active_session: Option<SessionId>,
+    fallback: Option<SessionId>,
 ) -> Option<SessionId> {
-    explicit_source.or(active_session)
+    explicit_source.or(fallback)
+}
+
+/// Control-plane (CLI) spawn-source resolution: an explicit `--split`
+/// target wins, else the issuing session (carried in the request from
+/// `HORIZON_SESSION_ID`), else `None` (root). The focused pane is
+/// deliberately *not* consulted -- a CLI dispatch parents to its issuer,
+/// never to whatever pane happened to be focused (issue 013).
+fn control_plane_spawn_source(
+    explicit_split: Option<SessionId>,
+    issuer: Option<SessionId>,
+) -> Option<SessionId> {
+    resolve_spawn_source(explicit_split, issuer)
 }
 
 fn terminal_fallback_cwd(
@@ -940,12 +954,9 @@ impl WorkspaceShell {
         .detach();
     }
 
-    fn pending_terminal_spawn(&self, explicit_source: Option<SessionId>) -> PendingTerminalSpawn {
+    fn pending_terminal_spawn(&self, source_session_id: Option<SessionId>) -> PendingTerminalSpawn {
         PendingTerminalSpawn {
-            source_session_id: resolve_spawn_source(
-                explicit_source,
-                self.workspace.active_session_id(),
-            ),
+            source_session_id,
             fallback_cwd: Self::default_terminal_cwd(),
         }
     }
@@ -957,14 +968,11 @@ impl WorkspaceShell {
     /// further default to apply.
     fn pending_agent_spawn(
         &self,
-        explicit_source: Option<SessionId>,
+        source_session_id: Option<SessionId>,
         isolate: bool,
     ) -> PendingAgentSpawn {
         PendingAgentSpawn {
-            source_session_id: resolve_spawn_source(
-                explicit_source,
-                self.workspace.active_session_id(),
-            ),
+            source_session_id,
             isolate,
         }
     }
@@ -1038,14 +1046,20 @@ impl WorkspaceShell {
             self.focus_active(window, cx);
             return;
         }
+        // Palette origin: the new session is a child of the focused pane
+        // (the "current pane" gesture) -- the active session is the spawn
+        // source, no explicit target. Contrast `external_new_session`'s
+        // control-plane path, which parents to the issuer instead (issue
+        // 013).
+        let active = self.workspace.active_session_id();
         let terminal_spawn =
-            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(None));
+            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(active));
         // Palette origin defaults to shared, not isolated (`docs/session-
         // relationship-design.md` decision 3); `isolate` is the caller's
         // explicit opt-in (the view chooser's dedicated "Agent (Isolated
         // Worktree)…" choice), not a further default to apply here.
         let agent_spawn =
-            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(None, isolate));
+            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(active, isolate));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -1120,12 +1134,32 @@ impl WorkspaceShell {
     /// default, `Some` is an explicit override (the CLI's `--share`) --
     /// `control_plane::dispatch_invoke` already rejects a non-`None` value
     /// for a terminal spawn, so this never has to.
+    ///
+    /// `issuer` is the session that dispatched this request (the CLI's
+    /// `HORIZON_SESSION_ID`, carried in the request's `"issuer"` arg).
+    /// The spawn source resolves as [`control_plane_spawn_source`]:
+    /// explicit `--split` target wins, else `issuer`, else `None` (root)
+    /// -- the focused pane is never consulted, unlike
+    /// [`WorkspaceShell::create_session`]'s palette path (issue 013).
+    /// When `issuer` is a *terminal* session (the common CLI case: a
+    /// command-line tool running in a terminal pane dispatches
+    /// `new-agent`), `horizon-agentd` does not host it, so
+    /// `session_directory` returns `None` for its id and the
+    /// isolated-worktree base falls back to the root-spawn behavior
+    /// (`resolve_and_create_isolated_worktree`'s `fallback_dir`). That
+    /// degradation is acceptable: the terminal's cwd would be the honest
+    /// base, but carrying it on the wire is a separate task; this change
+    /// does not touch the wire. The lineage edge (parent = the terminal)
+    /// is still recorded correctly on worktree-creation success, since
+    /// the parent is `spawn_source_session_id` itself, not the
+    /// worktree-derivation result.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn external_new_session(
         &mut self,
         kind: PaneKind,
         role_id: Option<horizon_agent::roles::RoleId>,
         split: Option<(SessionId, SplitAxis)>,
+        issuer: Option<SessionId>,
         activate: bool,
         prompt: Option<String>,
         isolate: Option<bool>,
@@ -1135,11 +1169,11 @@ impl WorkspaceShell {
         if self.restoring_workspace {
             return Err("workspace restore is still in progress".to_string());
         }
-        let terminal_spawn = matches!(kind, PaneKind::Terminal)
-            .then(|| self.pending_terminal_spawn(split.map(|(target, _)| target)));
-        let agent_spawn = matches!(kind, PaneKind::Agent).then(|| {
-            self.pending_agent_spawn(split.map(|(target, _)| target), isolate.unwrap_or(true))
-        });
+        let source = control_plane_spawn_source(split.map(|(target, _)| target), issuer);
+        let terminal_spawn =
+            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(source));
+        let agent_spawn = matches!(kind, PaneKind::Agent)
+            .then(|| self.pending_agent_spawn(source, isolate.unwrap_or(true)));
         let session_id = match split {
             Some((target, axis)) => self
                 .workspace
@@ -1177,19 +1211,50 @@ mod tests {
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
     use super::{
-        pinned_terminal_spawn, resolve_spawn_source, terminal_fallback_cwd,
-        terminal_resume_candidates,
+        control_plane_spawn_source, pinned_terminal_spawn, resolve_spawn_source,
+        terminal_fallback_cwd, terminal_resume_candidates,
     };
 
     #[test]
-    fn explicit_split_target_wins_as_the_spawn_source() {
+    fn explicit_split_target_wins_over_the_fallback() {
         let explicit = SessionId::new();
-        let active = SessionId::new();
+        let fallback = SessionId::new();
         assert_eq!(
-            resolve_spawn_source(Some(explicit), Some(active)),
+            resolve_spawn_source(Some(explicit), Some(fallback)),
             Some(explicit)
         );
-        assert_eq!(resolve_spawn_source(None, Some(active)), Some(active));
+    }
+
+    #[test]
+    fn missing_explicit_source_falls_back_to_the_provided_session() {
+        let fallback = SessionId::new();
+        assert_eq!(resolve_spawn_source(None, Some(fallback)), Some(fallback));
+    }
+
+    #[test]
+    fn no_explicit_source_and_no_fallback_is_a_root_spawn() {
+        assert_eq!(resolve_spawn_source(None, None), None);
+    }
+
+    /// Issue 013: the control-plane path must parent to the issuer (or the
+    /// explicit `--split` target), never to the focused pane. The focused
+    /// pane is not even a parameter to `control_plane_spawn_source` -- the
+    /// function signature itself enforces that the active session is never
+    /// consulted.
+    #[test]
+    fn control_plane_source_prefers_split_then_issuer_then_root_ignoring_focus() {
+        let split = SessionId::new();
+        let issuer = SessionId::new();
+
+        // Explicit split wins over issuer.
+        assert_eq!(
+            control_plane_spawn_source(Some(split), Some(issuer)),
+            Some(split)
+        );
+        // No split: issuer is the parent.
+        assert_eq!(control_plane_spawn_source(None, Some(issuer)), Some(issuer));
+        // No split, no issuer: root spawn (never the focused pane).
+        assert_eq!(control_plane_spawn_source(None, None), None);
     }
 
     #[test]
