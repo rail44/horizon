@@ -28,7 +28,7 @@
 //! `deserialize_any`) cannot.
 
 use horizon_agent::contract::{JsonValue, ToolCallId, ToolCallRequest};
-use horizon_session_protocol::WireCodec;
+use horizon_wire::WireCodec;
 use remoc::codec::Codec;
 use remoc::prelude::*;
 use serde::{Deserialize, Serialize};

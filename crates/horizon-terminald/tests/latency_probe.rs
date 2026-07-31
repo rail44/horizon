@@ -35,13 +35,13 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use horizon_session_protocol::{
-    CappedWatchReceiver, ClientHello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
-    WireCodec, FRAME_MAX_ITEM_BYTES,
+    our_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
 };
 use horizon_terminal_core::{
     KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
     TerminalSpawnSpec,
 };
+use horizon_wire::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
 use remoc::rch;
 use termwiz::input::{KeyCode, Modifiers};
 use tokio::net::UnixStream;
@@ -149,7 +149,7 @@ async fn connect_hub(socket_path: &std::path::Path) -> HubClient {
         .await
         .expect("base recv")
         .expect("hub client handover");
-    hub.hello(ClientHello::new("latency-probe"))
+    hub.hello(our_client_hello("latency-probe"))
         .await
         .expect("hello");
     HubClient { hub, conn_task }

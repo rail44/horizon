@@ -156,3 +156,10 @@ without a single symbol being used. That is build-time only — process,
 socket, and trait separation all hold — and carving the protocol crate's
 domain-free foundation into its own crate is tracked as follow-up
 (`docs/tasks/backlog.md`) so the wire itself moves exactly once.
+
+*Update (`docs/runtime-crate-alignment-design.md` phase 1):* the
+foundation is carved out as `horizon-wire`, and `horizon-terminald`'s
+manifest no longer names `horizon-agent` — the socket-path convention it
+reached for lives in `horizon_wire::socket` now. The *transitive* link
+survives, because both hub traits still share `horizon-session-protocol`;
+phase 2 moves `TerminalHub` into `horizon-terminal-core` and closes it.

@@ -9,36 +9,13 @@ use crate::config::AgentConfig;
 use crate::roles::RoleId;
 use schemars::JsonSchema;
 
-/// This crate's own session identifier: a UUID newtype that serializes as a
-/// bare UUID string (serde's transparent treatment of one-field tuple
-/// structs) — the shape a future wire/IPC boundary will use (see
-/// `docs/agent-runtime-split-design.md`). Horizon has its own shared
-/// `session::SessionId` (used across terminal and agent sessions alike) —
-/// this crate cannot depend on it (that's the whole point of the split), so
-/// the two are distinct types connected by `From` impls at the seam in
-/// Horizon's `agent` module.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
-pub struct SessionId(Uuid);
-
-impl SessionId {
-    pub fn new() -> Self {
-        Self(Uuid::new_v4())
-    }
-
-    pub fn as_uuid(self) -> Uuid {
-        self.0
-    }
-
-    pub fn from_uuid(uuid: Uuid) -> Self {
-        Self(uuid)
-    }
-}
-
-impl Default for SessionId {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+/// The session identifier, re-exported from its home in `horizon-wire`:
+/// it is the one part of a session two runtimes must agree on, so it is
+/// shared foundation rather than agent vocabulary
+/// (`docs/runtime-crate-alignment-design.md` judgments 1 and 2). Kept
+/// re-exported at this path because `contract::SessionId` is named
+/// throughout this crate and its dependents.
+pub use horizon_wire::SessionId;
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderId(pub String);

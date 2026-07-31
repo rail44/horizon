@@ -24,13 +24,16 @@ use std::thread;
 use std::time::Duration;
 
 use horizon_session_protocol::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, HubError, SessionHub as _, SessionHubClient,
-    TerminalHub as _, TerminalHubClient, VersionRange, WireCodec, FRAME_MAX_ITEM_BYTES,
-    MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION, TERMINAL_EVENT_MAX_ITEM_BYTES,
+    our_client_hello, HubError, SessionHub as _, SessionHubClient, TerminalHub as _,
+    TerminalHubClient, MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
     TerminalSummary, TerminalUpdate,
+};
+use horizon_wire::{
+    CappedReceiver, CappedWatchReceiver, ClientHello, VersionRange, WireCodec,
+    FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use tokio::net::UnixStream;
@@ -280,7 +283,7 @@ async fn connect_hub(socket_path: &Path) -> HubTestClient {
     let stream = connect_with_retry(socket_path).await;
     let (hub, conn_task) = connect_raw(stream).await;
     let hello = hub
-        .hello(ClientHello::new("terminald-e2e"))
+        .hello(our_client_hello("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
     HubTestClient {
@@ -647,7 +650,7 @@ async fn drain_sessiond(socket_path: &Path) {
         .await
         .expect("base channel recv")
         .expect("agentd should hand over its hub client");
-    hub.hello(ClientHello::new("terminald-e2e"))
+    hub.hello(our_client_hello("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
     let _ = tokio::time::timeout(Duration::from_secs(5), hub.drain()).await;

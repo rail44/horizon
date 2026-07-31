@@ -11,8 +11,8 @@
 
 use std::time::Duration;
 
-use horizon_session_protocol::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
 use horizon_terminal_core::TerminalFrame;
+use horizon_wire::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
 use remoc::prelude::*;
 use serde::{Deserialize, Serialize};
 use tokio::net::UnixStream;

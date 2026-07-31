@@ -27,6 +27,10 @@ futures-util = "0.3"
 globset = "0.4"
 horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-sandbox-proxy = { path = "../horizon-sandbox-proxy" }
+# `contract::SessionId` re-exports `horizon_wire::SessionId`; the socket-path
+# conventions this crate used to host live there now too
+# (docs/runtime-crate-alignment-design.md judgment 2).
+horizon-wire = { path = "../horizon-wire" }
 ignore = "0.4"
 libc = "0.2"
 regex = "1"

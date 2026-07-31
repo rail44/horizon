@@ -1,4 +1,4 @@
-//! CLI wrapper around [`horizon_session_protocol::schema_check`] for the
+//! CLI wrapper around [`horizon_wire::schema_check`] for the
 //! pre-commit quality gate: `check_wire_schema <old.json> <new.json>`
 //! classifies every difference between two versions of the wire-schema
 //! artifact and exits non-zero if any change is a reshape without a
@@ -7,7 +7,7 @@
 
 use std::process::ExitCode;
 
-use horizon_session_protocol::schema_check::classify_schema_change;
+use horizon_wire::schema_check::classify_schema_change;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);

@@ -6,13 +6,13 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
-# The socket-path convention only (`socket::default_terminald_socket_path`),
-# which lives beside sessiond's so the two cannot drift apart. Nothing of the
-# agent runtime is used here -- see this crate's `main` module doc for the
-# dependency-graph note that follows from it.
-horizon-agent = { path = "../horizon-agent" }
 horizon-session-protocol = { path = "../horizon-session-protocol" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
+# The domain-free foundation: codec pin, size caps, negotiation, and the
+# socket-path convention that used to be parked in `horizon-agent` -- which
+# is why no agent crate is named here (see this crate's `main` module doc's
+# dependency-graph note).
+horizon-wire = { path = "../horizon-wire" }
 portable-pty = "0.9.0"
 remoc = { workspace = true }
 sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }

@@ -3608,6 +3608,7 @@ dependencies = [
  "horizon-control",
  "horizon-session-protocol",
  "horizon-terminal-core",
+ "horizon-wire",
  "horizon-workspace",
  "remoc",
  "serde_json",
@@ -3631,6 +3632,7 @@ dependencies = [
  "globset",
  "horizon-sandbox",
  "horizon-sandbox-proxy",
+ "horizon-wire",
  "ignore",
  "libc",
  "regex",
@@ -3657,6 +3659,7 @@ dependencies = [
  "horizon-sandbox",
  "horizon-session-protocol",
  "horizon-terminal-core",
+ "horizon-wire",
  "remoc",
  "schemars 1.2.1",
  "serde_json",
@@ -3735,6 +3738,7 @@ version = "0.1.0"
 dependencies = [
  "horizon-agent",
  "horizon-terminal-core",
+ "horizon-wire",
  "remoc",
  "schemars 1.2.1",
  "serde",
@@ -3765,14 +3769,26 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
- "horizon-agent",
  "horizon-session-protocol",
  "horizon-terminal-core",
+ "horizon-wire",
  "portable-pty",
  "remoc",
  "sysinfo 0.39.6",
  "termwiz",
  "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-wire"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "remoc",
+ "schemars 1.2.1",
+ "serde",
+ "serde_json",
  "uuid",
 ]
 

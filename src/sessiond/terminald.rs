@@ -24,10 +24,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_session_protocol::{
-    ClientHello, DecodeSkipLog, HubError, TerminalAttachment, TerminalHub as _, TerminalHubClient,
-    TerminalHubHello, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
+    our_client_hello, HubError, TerminalAttachment, TerminalHub as _, TerminalHubClient,
+    TerminalHubHello,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
+use horizon_wire::{DecodeSkipLog, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
 use remoc::rtc::Client as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -410,7 +411,7 @@ where
     hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
     hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
 
-    let client_hello = ClientHello::new(concat!("horizon/", env!("CARGO_PKG_VERSION")));
+    let client_hello = our_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     let hello = match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
         Ok(Ok(hello)) => hello,
         Ok(Err(error @ HubError::IncompatibleVersion { .. })) => {

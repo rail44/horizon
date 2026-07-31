@@ -8,8 +8,8 @@
 # than additive (new optional field, appended variant, new definition) —
 # unless the same change bumps SESSION_PROTOCOL_VERSION, which the artifact
 # embeds as x-session-protocol-version. Classification lives in
-# horizon_session_protocol::schema_check; this wrapper only supplies git
-# plumbing. Runs from hooks/pre-commit.
+# horizon_wire::schema_check; this wrapper only supplies git plumbing.
+# Runs from hooks/pre-commit.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -40,5 +40,5 @@ old_file="$(mktemp "${TMPDIR:-/tmp}/session-wire-base.XXXXXX.json")"
 trap 'rm -f "$old_file"' EXIT
 printf '%s\n' "$old" > "$old_file"
 
-cargo run --quiet -p horizon-session-protocol --example check_wire_schema -- \
+cargo run --quiet -p horizon-wire --example check_wire_schema -- \
   "$old_file" "$artifact"

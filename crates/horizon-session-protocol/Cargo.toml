@@ -13,6 +13,9 @@ edition = "2021"
 [dependencies]
 horizon-agent = { path = "../horizon-agent" }
 horizon-terminal-core = { path = "../horizon-terminal-core" }
+# The domain-free foundation both hubs sit on: codec pin, size caps,
+# version negotiation (docs/runtime-crate-alignment-design.md judgment 2).
+horizon-wire = { path = "../horizon-wire" }
 remoc = { workspace = true }
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }

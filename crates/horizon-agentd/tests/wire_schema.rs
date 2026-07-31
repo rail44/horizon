@@ -7,7 +7,7 @@
 //! every wire change is visible, reviewable text in its PR diff, and
 //! forgetting to regenerate is a red test. The merge-time additive-vs-
 //! reshape classification of that diff is `scripts/check-wire-schema.sh`
-//! (pre-commit), built on `horizon_session_protocol::schema_check`.
+//! (pre-commit), built on `horizon_wire::schema_check`.
 //!
 //! To regenerate after an intentional wire change:
 //!
@@ -73,12 +73,13 @@ use horizon_agent::wire::{
     AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
 };
 use horizon_session_protocol::{
-    schema_check::PROTOCOL_VERSION_KEY, AgentAttachment, ClientHello, HubError, HubHello,
-    TerminalAttachment, TerminalHubHello, SESSION_PROTOCOL_VERSION,
+    AgentAttachment, HubError, HubHello, TerminalAttachment, TerminalHubHello,
+    SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
+use horizon_wire::{schema_check::PROTOCOL_VERSION_KEY, ClientHello};
 
 const ARTIFACT_RELATIVE_PATH: &str = "../horizon-session-protocol/schema/session-wire.json";
 

@@ -1,16 +1,18 @@
 //! This process's control-plane socket path -- see
 //! `docs/cli-control-plane-design.md`'s "Discovery" decision, amended by its
 //! Second revision's "Fixed well-known socket path" item. Modeled on
-//! `horizon_agent::socket`'s stale-socket handling and default-path shape,
-//! without sharing code with it: `horizon-agent` is Horizon's *agent* seam
-//! (contract/providers/tools/persistence) and must stay a library any future
-//! consumer beyond Horizon can depend on without pulling in workspace-
-//! control concerns -- reusing its socket module here would point the
-//! dependency the wrong way (see `docs/agent-runtime-split-design.md`'s
-//! reusable-asset boundary).
+//! `horizon_wire::socket`'s stale-socket handling and default-path shape,
+//! without sharing code with it: that module holds the *runtime daemons'*
+//! socket conventions (agentd, terminald), whereas this is the control
+//! plane's own socket -- a different lifecycle with a different override
+//! variable. (Until `docs/runtime-crate-alignment-design.md` phase 1 those
+//! conventions lived in `horizon_agent::socket`, and the argument against
+//! sharing was the reusable-asset boundary of
+//! `docs/agent-runtime-split-design.md`; the crates realigned, the
+//! duplication decision has not been revisited.)
 //!
 //! The path is fixed per *user*, exactly like
-//! `horizon_agent::socket::default_socket_path` -- the single-instance norm
+//! `horizon_wire::socket::default_agentd_socket_path` -- the single-instance norm
 //! justifies this (a second Horizon finding a live owner at this path
 //! doesn't steal it: it starts without a control listener and logs a
 //! warning, see `host::listener::bind`/`host::listener::spawn`). At the
@@ -21,7 +23,7 @@
 //! (`horizon-cli`, which already depends on this crate for contract/wire)
 //! calls this shared function rather than keeping its former byte-identical
 //! copy (deduplicated 2026-07-18); the one deliberate duplication that
-//! remains is the `horizon_agent::socket` relationship described above.
+//! remains is the `horizon_wire::socket` relationship described above.
 //! `HORIZON_SOCKET` remains the
 //! override on both sides and is still injected into panes/agentd, which
 //! is what keeps a nested dev instance addressable (see the design doc).

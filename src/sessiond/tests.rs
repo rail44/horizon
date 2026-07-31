@@ -29,13 +29,14 @@ use std::time::{Duration, Instant};
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
 use horizon_agent::wire::{AgentWireEvent, SessionNew, WorkspaceRootResolved};
 use horizon_session_protocol::{
-    AgentAttachment, ClientHello, HubError, HubHello, SessionHub, SessionHubClient,
+    our_version_range, AgentAttachment, HubError, HubHello, SessionHub, SessionHubClient,
     SessionHubServerShared, TerminalAttachment, TerminalHub, TerminalHubClient, TerminalHubHello,
-    TerminalHubServerShared, VersionRange, WireCodec, SESSION_PROTOCOL_VERSION,
+    TerminalHubServerShared, SESSION_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     ClipboardDestination, TerminalColorScheme, TerminalFrame, TerminalSize,
 };
+use horizon_wire::{ClientHello, VersionRange, WireCodec};
 use remoc::rch;
 use remoc::rch::watch::WatchExt as _;
 use remoc::rtc::{Client as _, ServerShared as _};
@@ -172,10 +173,10 @@ struct FakeSessionHub {
 impl FakeTerminalHub {
     fn terminal_attachment(&self, seed: TerminalFrame) -> (TerminalAttachment, TerminalPeer) {
         let (frame_tx, frame_rx) = rch::watch::channel::<TerminalFrame, WireCodec>(seed)
-            .with_max_item_size::<{ horizon_session_protocol::FRAME_MAX_ITEM_BYTES }>();
+            .with_max_item_size::<{ horizon_wire::FRAME_MAX_ITEM_BYTES }>();
         let (event_tx, event_rx) = rch::mpsc::channel::<TerminalUpdate, WireCodec>(16);
-        let event_rx = event_rx
-            .set_max_item_size::<{ horizon_session_protocol::TERMINAL_EVENT_MAX_ITEM_BYTES }>();
+        let event_rx =
+            event_rx.set_max_item_size::<{ horizon_wire::TERMINAL_EVENT_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<TerminalCommand, WireCodec>(16);
         (
             TerminalAttachment {
@@ -195,8 +196,7 @@ impl FakeTerminalHub {
 impl FakeSessionHub {
     fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
         let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
-        let event_rx =
-            event_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
+        let event_rx = event_rx.set_max_item_size::<{ horizon_wire::TOOL_IO_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
         (
             AgentAttachment {
@@ -213,7 +213,7 @@ impl FakeSessionHub {
 
 fn rejected_hello() -> HubError {
     HubError::IncompatibleVersion {
-        client: VersionRange::ours(),
+        client: our_version_range(),
         daemon: VersionRange {
             min_supported: SESSION_PROTOCOL_VERSION + 5,
             current: SESSION_PROTOCOL_VERSION + 5,
@@ -308,12 +308,10 @@ impl SessionHub for FakeSessionHub {
         }
         let _ = self.calls.send(AgentCall::Hello);
         let (_request_tx, request_rx) = rch::mpsc::channel::<HostToolRequest, WireCodec>(4);
-        let request_rx =
-            request_rx.set_max_item_size::<{ horizon_session_protocol::TOOL_IO_MAX_ITEM_BYTES }>();
+        let request_rx = request_rx.set_max_item_size::<{ horizon_wire::TOOL_IO_MAX_ITEM_BYTES }>();
         let (response_tx, _response_rx) = rch::mpsc::channel::<HostToolResponse, WireCodec>(4);
         let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
-        let skipped_rx =
-            skipped_rx.set_max_item_size::<{ horizon_session_protocol::CONTROL_MAX_ITEM_BYTES }>();
+        let skipped_rx = skipped_rx.set_max_item_size::<{ horizon_wire::CONTROL_MAX_ITEM_BYTES }>();
         Ok(HubHello {
             negotiated: SESSION_PROTOCOL_VERSION,
             binary_id: "fake-agentd".to_string(),
@@ -385,8 +383,8 @@ where
         TerminalHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
     // Mirror the real daemon's pre-transport rtc caps (main.rs) so the
     // boundary tests exercise the same enforcement.
-    client.set_max_request_size(horizon_session_protocol::RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(horizon_session_protocol::RTC_MAX_REPLY_BYTES);
+    client.set_max_request_size(horizon_wire::RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(horizon_wire::RTC_MAX_REPLY_BYTES);
     base_tx
         .send(client)
         .await
@@ -428,8 +426,8 @@ where
     };
     let (server, mut client) =
         SessionHubServerShared::<_, WireCodec>::new(std::sync::Arc::new(hub), 8);
-    client.set_max_request_size(horizon_session_protocol::RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(horizon_session_protocol::RTC_MAX_REPLY_BYTES);
+    client.set_max_request_size(horizon_wire::RTC_MAX_REQUEST_BYTES);
+    client.set_max_reply_size(horizon_wire::RTC_MAX_REPLY_BYTES);
     base_tx
         .send(client)
         .await

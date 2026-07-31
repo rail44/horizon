@@ -17,12 +17,14 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use horizon_session_protocol::{
-    ClientHello, DecodeSkipLog, HubError, TerminalAttachment, TerminalHub, TerminalHubHello,
-    VersionRange, WireCodec, COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
-    TERMINAL_EVENT_MAX_ITEM_BYTES,
+    our_version_range, HubError, TerminalAttachment, TerminalHub, TerminalHubHello,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+};
+use horizon_wire::{
+    ClientHello, DecodeSkipLog, WireCodec, COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
+    TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use uuid::Uuid;
@@ -154,7 +156,7 @@ impl TerminalHub for Hub {
     /// reply is just the negotiated version plus this binary's id (the skew
     /// insurance the client records — see [`TerminalHubHello`]).
     async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError> {
-        let ours = VersionRange::ours();
+        let ours = our_version_range();
         let Some(negotiated) = ours.negotiate(client.supported) else {
             let reason = HubError::IncompatibleVersion {
                 client: client.supported,
@@ -234,7 +236,8 @@ impl TerminalHub for Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_session_protocol::VersionRange;
+    use horizon_session_protocol::our_client_hello;
+    use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {
         Hub::new(TerminalHost::new(), "test-terminald")
@@ -275,7 +278,7 @@ mod tests {
             Err(HubError::HelloRequired)
         ));
 
-        hub.hello(ClientHello::new("test-client"))
+        hub.hello(our_client_hello("test-client"))
             .await
             .expect("a matching range must negotiate");
         assert_eq!(hub.list_terminals().await.unwrap(), Vec::new());
@@ -287,7 +290,7 @@ mod tests {
     async fn hello_reports_the_negotiated_version_and_this_binarys_id() {
         let hub = test_hub();
         let hello = hub
-            .hello(ClientHello::new("test-client"))
+            .hello(our_client_hello("test-client"))
             .await
             .expect("a matching range must negotiate");
         assert_eq!(
