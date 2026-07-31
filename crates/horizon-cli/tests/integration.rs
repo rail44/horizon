@@ -104,6 +104,34 @@ fn run_ctl_with_ask(
     )
 }
 
+/// Like [`run_ctl`] but also injects an `env_session_id` (the
+/// `HORIZON_SESSION_ID` env var), so tests can verify the issuer-session-id
+/// propagation (issue 013).
+fn run_ctl_with_session(
+    args: &[&str],
+    socket_path: &Path,
+    stdin_is_tty: bool,
+    env_session_id: Option<&str>,
+) -> (u8, String, String) {
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = horizon_cli::run(
+        &args,
+        Some(socket_path.display().to_string()),
+        env_session_id.map(str::to_string),
+        &mut stdout,
+        &mut stderr,
+        stdin_is_tty,
+        &mut |_| panic!("ask() should not be called in this test"),
+    );
+    (
+        code,
+        String::from_utf8(stdout).unwrap(),
+        String::from_utf8(stderr).unwrap(),
+    )
+}
+
 #[test]
 fn sessions_query_round_trips_through_the_handshake() {
     let socket_path = temp_socket_path("sessions");
@@ -493,6 +521,62 @@ fn a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic() {
             .contains("failed to connect"),
         "expected a clear connection-failure message"
     );
+}
+
+#[test]
+fn new_agent_carries_the_issuer_session_id_in_the_wire_args() {
+    // Issue 013: the CLI must carry the dispatching pane's session id
+    // (HORIZON_SESSION_ID) as the "issuer" wire key so the shell parents
+    // the new session to the issuer, not the focused pane.
+    let socket_path = temp_socket_path("new-agent-issuer");
+    let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
+    let received_command: std::sync::Arc<std::sync::Mutex<Option<(String, serde_json::Value)>>> =
+        std::sync::Arc::default();
+    let received_command_clone = received_command.clone();
+    thread::spawn(move || {
+        let (stream, _addr) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+
+        let hello = wire::read_envelope(&mut reader).unwrap().unwrap();
+        wire::write_envelope(&mut writer, &Envelope::new(hello.id, our_hello_ack())).unwrap();
+
+        let request = wire::read_envelope(&mut reader).unwrap().unwrap();
+        if let EnvelopeBody::Invoke(invoke) = request.body {
+            *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
+        }
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::new(request.id, EnvelopeBody::Ok { session_id: None }),
+        )
+        .unwrap();
+    });
+
+    let issuer_id = "00000000-0000-0000-0000-000000000abc";
+    let (code, _stdout, stderr) = run_ctl_with_session(
+        &["new-agent", "--prompt", "fix the bug"],
+        &socket_path,
+        false,
+        Some(issuer_id),
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+
+    let received = received_command
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("server saw a request");
+    assert_eq!(received.0, "new-agent");
+    assert_eq!(
+        received.1,
+        serde_json::json!({
+            "activate": false,
+            "prompt": "fix the bug",
+            "issuer": issuer_id
+        })
+    );
+
+    let _ = std::fs::remove_file(&socket_path);
 }
 
 #[test]

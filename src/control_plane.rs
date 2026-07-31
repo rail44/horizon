@@ -131,6 +131,10 @@ fn dispatch_invoke(
                 Ok(split) => split,
                 Err(message) => return error_body(message),
             };
+            let issuer = match optional_plain_session_id_arg(args, "issuer") {
+                Ok(issuer) => issuer,
+                Err(message) => return error_body(message),
+            };
             let activate = match activate_arg(args) {
                 Ok(activate) => activate,
                 Err(message) => return error_body(message),
@@ -152,9 +156,9 @@ fn dispatch_invoke(
             if isolate.is_some() && kind != PaneKind::Agent {
                 return error_body("`isolate` is only accepted for agent sessions");
             }
-            match shell
-                .external_new_session(kind, role_id, split, activate, prompt, isolate, window, cx)
-            {
+            match shell.external_new_session(
+                kind, role_id, split, issuer, activate, prompt, isolate, window, cx,
+            ) {
                 Ok(session_id) => EnvelopeBody::Ok {
                     session_id: Some(session_id),
                 },
@@ -327,6 +331,24 @@ fn optional_session_id_arg(
         Some(serde_json::Value::String(raw)) => raw
             .parse::<uuid::Uuid>()
             .map(|uuid| Some((SessionId::from_uuid(uuid), SplitAxis::Horizontal)))
+            .map_err(|_| format!("`{key}` must be a UUID string")),
+        Some(_) => Err(format!("`{key}` must be a string")),
+    }
+}
+
+/// Parses an optional session-id argument that is *not* a split target --
+/// the `"issuer"` key (issue 013): the session that dispatched the CLI
+/// request. Mirrors [`optional_session_id_arg`]'s shape but returns a bare
+/// `SessionId` without the `SplitAxis` pairing the split path needs.
+fn optional_plain_session_id_arg(
+    args: &serde_json::Value,
+    key: &str,
+) -> Result<Option<SessionId>, String> {
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(raw)) => raw
+            .parse::<uuid::Uuid>()
+            .map(|uuid| Some(SessionId::from_uuid(uuid)))
             .map_err(|_| format!("`{key}` must be a UUID string")),
         Some(_) => Err(format!("`{key}` must be a string")),
     }
