@@ -1,7 +1,7 @@
 ---
 id: 013
 title: CLI new-agent parents the session to whatever pane was focused, not the pane that issued the command
-status: open
+status: resolved
 severity: medium
 area: cli, control-plane, workspace, session-manager
 ---
@@ -58,3 +58,29 @@ commits.
 
 Filed from the project session at the owner's direction (2026-07-30),
 after the lineage tree surfaced wrong during dogfood integration.
+
+## Resolution
+
+Fixed in `5cebd55` (merged as `78d6276`). The CLI carries
+`HORIZON_SESSION_ID` as an `"issuer"` key in the control-plane invoke
+args (free-form `serde_json::Value`, so no protocol bump), and the shell
+resolves a control-plane spawn's source as **explicit `--split` target >
+issuer > none (root)** via a dedicated `control_plane_spawn_source`
+(`src/workspace/session_lifecycle.rs`). The active-session fallback is
+gone for control-plane dispatches and kept for palette/UI launches,
+where "child of the current pane" is the intended reading of the
+gesture. `resolve_spawn_source`'s second argument was renamed from
+`active_session` to a neutral `fallback` so each caller decides what its
+fallback means.
+
+Per the owner's decision (2026-07-30), the worktree-base side effect is
+left as-is: a terminal issuer is not a session `horizon-agentd` hosts,
+so `session_directory` returns `None` and isolated-worktree creation
+falls back to root-spawn behavior. Carrying the terminal's cwd on the
+wire is deliberately a separate task; this change touches no wire type.
+
+Tests: `resolve_spawn_source`'s existing test split into explicit-wins /
+fallback / root, a new `control_plane_spawn_source` test covering all
+three precedence cases, and CLI integration tests asserting the
+`"issuer"` key reaches the wire (and is omitted when
+`HORIZON_SESSION_ID` is unset or empty).
