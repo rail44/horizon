@@ -94,6 +94,14 @@ pub struct StartSession {
     /// (`providers::rig::session::session_extra_sections`) both reflect the
     /// session's actual root instead of the daemon's `cwd`.
     pub workspace_root: Option<PathBuf>,
+    /// Prior session events for a resumed session -- empty for a fresh
+    /// `Control::SessionNew`. Carries the JSONL event log's events so the
+    /// rig provider can rebuild provider history from them when the DuckDB
+    /// projection store is unavailable (issue 012: a resumed session must
+    /// not silently lose its history when the store can't be opened). The
+    /// normal path -- store available -- still loads from DuckDB; this is
+    /// only the fallback when `store` is `None`.
+    pub history: Vec<Event>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1123,6 +1131,7 @@ impl ProviderRegistry {
         session_id: SessionId,
         role_id: Option<RoleId>,
         workspace_root: Option<PathBuf>,
+        history: Vec<Event>,
     ) -> Option<SessionHandle> {
         if let Some(role_id) = &role_id {
             crate::roles::resolve(role_id)?;
@@ -1133,6 +1142,7 @@ impl ProviderRegistry {
                 provider_id: provider_id.clone(),
                 role_id,
                 workspace_root,
+                history,
             })
         })
     }

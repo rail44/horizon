@@ -46,6 +46,7 @@ pub(super) fn spawn_rig_session(
     let environment = session_environment(&request);
     let provider_id = request.provider_id;
     let session_id = request.session_id;
+    let fallback_events = request.history;
 
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
@@ -59,9 +60,28 @@ pub(super) fn spawn_rig_session(
             // resumed-session bug this fixed -- a session's own real history
             // silently not showing up.
             let duckdb_store = duckdb_cell.wait();
-            let persisted = load_rig_session_history(duckdb_store.as_ref(), session_id);
+            let store_was_available = duckdb_store.is_some();
+            let persisted =
+                load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events);
             let rig_history = persisted.messages;
             let cleared_call_ids = persisted.cleared_call_ids;
+            // Issue 012: when the DuckDB projection store is unavailable and
+            // the JSONL event log also yielded no reconstructable history for
+            // a resumed session (events were present but produced no
+            // messages), don't proceed silently — surface the failure as a
+            // visible error in the frame so the operator knows the session
+            // resumed without its provider history.
+            if !store_was_available && !fallback_events.is_empty() && rig_history.is_empty() {
+                let _ = events_tx.send(
+                    Event::Error(Error {
+                        message: "Provider history could not be loaded: the DuckDB \
+                                  projection store is unavailable and the event log \
+                                  yielded no reconstructable history."
+                            .to_string(),
+                    })
+                    .into(),
+                );
+            }
             let extra_sections = session_extra_sections(&environment, &config, role);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()

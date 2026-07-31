@@ -790,7 +790,7 @@ fn loads_initial_rig_history_from_duckdb_projection() {
         .expect("append events");
     let shared_store = DuckdbStoreHandle::new(store);
 
-    let persisted = load_rig_session_history(Some(&shared_store), session_id);
+    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]);
     assert_eq!(
         persisted.messages,
         rig_messages_from_horizon_events(&events)
@@ -802,6 +802,59 @@ fn loads_initial_rig_history_from_duckdb_projection() {
 
     drop(shared_store);
     let _ = std::fs::remove_file(path);
+}
+
+/// Issue 012: when the DuckDB projection store is unavailable (`None` — it
+/// failed to open or rebuild, e.g. lock contention from a stale daemon),
+/// `load_rig_session_history` must not silently return an empty history.
+/// Instead it rebuilds from the JSONL event log's events the resume path
+/// threads through `StartSession::history`, using the same reconstruction
+/// the store path uses. This test proves the fallback: `None` store +
+/// non-empty fallback events → the same messages and cleared set the store
+/// would have produced.
+#[test]
+fn load_rig_session_history_falls_back_to_event_log_when_store_is_unavailable() {
+    let session_id = crate::contract::SessionId::new();
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "what is 2+2?".to_string(),
+        }),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "4".to_string(),
+        }),
+    ];
+
+    let persisted = load_rig_session_history(None, session_id, &events);
+
+    assert_eq!(
+        persisted.messages,
+        rig_messages_from_horizon_events(&events),
+        "a None store must rebuild the same messages from the fallback events"
+    );
+    assert!(
+        persisted.cleared_call_ids.is_empty(),
+        "no clearing events → empty cleared set"
+    );
+}
+
+/// Issue 012: when the store is `None` and the fallback events are also
+/// empty (a fresh `Control::SessionNew`, or persistence unavailable in a
+/// test), the original empty-history return is preserved — no spurious
+/// reconstruction, no error.
+#[test]
+fn load_rig_session_history_returns_empty_when_store_and_events_are_both_empty() {
+    let session_id = crate::contract::SessionId::new();
+    let persisted = load_rig_session_history(None, session_id, &[]);
+    assert!(
+        persisted.messages.is_empty(),
+        "no store and no events → empty messages"
+    );
+    assert!(
+        persisted.cleared_call_ids.is_empty(),
+        "no store and no events → empty cleared set"
+    );
 }
 
 /// The resume path end to end: a session whose persisted events carry the
@@ -842,7 +895,7 @@ fn resumed_history_from_duckdb_is_pairing_valid() {
         .expect("append events");
     let shared_store = DuckdbStoreHandle::new(store);
 
-    let persisted = load_rig_session_history(Some(&shared_store), session_id);
+    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]);
     // user, assistant(call-1 + "Let me check."), tool(call-1),
     // assistant(call-2), tool(cancelled call-2).
     assert_pairing_valid(&persisted.messages);
@@ -1717,6 +1770,7 @@ fn start_fallback_rig_session_as(
             provider_id: AgentProvider::provider_id(&provider),
             role_id,
             workspace_root: None,
+            history: Vec::new(),
         },
     );
     let tx = handle.sender();
@@ -2656,6 +2710,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             provider_id: AgentProvider::provider_id(&provider),
             role_id: Some(RoleId("config".to_string())),
             workspace_root: None,
+            history: Vec::new(),
         },
     );
 
@@ -2806,6 +2861,7 @@ fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_ses
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: Some(isolated_root.clone()),
+        history: Vec::new(),
     };
 
     let environment = session_environment(&request);
@@ -2825,6 +2881,7 @@ fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known
         provider_id: ProviderId("builtin.agent.rig".to_string()),
         role_id: None,
         workspace_root: None,
+        history: Vec::new(),
     };
 
     let environment = session_environment(&request);
