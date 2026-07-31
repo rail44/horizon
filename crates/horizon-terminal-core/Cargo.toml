@@ -12,6 +12,12 @@ edition = "2021"
 [dependencies]
 alacritty_terminal = "0.26.0"
 crossbeam-channel = "0.5"
+# The `wire` module only (docs/runtime-crate-alignment-design.md judgment
+# 3): the domain-free negotiation/codec/caps foundation, and the remoc rtc
+# trait plus channel halves this runtime's hub is made of. Nothing else in
+# this crate touches either.
+horizon-wire = { path = "../horizon-wire" }
+remoc = { workspace = true }
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 # Real (non-dev) dependency since the schemars derives name
@@ -26,6 +32,10 @@ uuid = { version = "1.18", features = ["serde"] }
 # pre-extraction `horizon` crate's dev-dependency this one replaces.
 base64 = "0.22"
 serde_json = "1.0"
+# The live-connection wire tests (`tests/frame_watch.rs`,
+# `tests/limits.rs`), which host both ends of a real remoc connection over
+# a `UnixStream` pair.
+tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "net", "time", "io-util"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

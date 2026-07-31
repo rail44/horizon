@@ -41,14 +41,12 @@ use horizon_agent::frame::agent_frame_from_events;
 use horizon_agent::persistence::event_log::{Appender, WriterHandle, WriterInit};
 use horizon_agent::roles::RoleId;
 use horizon_agent::wire::{
-    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
-};
-use horizon_session_protocol::{
-    our_version_range, HubError, SessionHub as _, SessionHubClient, MIN_SUPPORTED_PROTOCOL_VERSION,
-    SESSION_PROTOCOL_VERSION,
+    agent_version_range, AgentWireEvent, HostToolRequest, HostToolResponse, SessionHub as _,
+    SessionHubClient, SessionNew, SessionSummary, AGENT_PROTOCOL_VERSION,
+    MIN_SUPPORTED_AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::{
-    CappedReceiver, ClientHello, VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES,
+    CappedReceiver, ClientHello, HubError, VersionRange, WireCodec, CONTROL_MAX_ITEM_BYTES,
     TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -550,7 +548,7 @@ async fn establish_hub(
 /// advertised range -- every session-hosting test's entry point.
 async fn connect_hub(socket_path: &Path) -> HubTestClient {
     let stream = connect_with_retry(socket_path).await;
-    establish_hub(stream, our_version_range())
+    establish_hub(stream, agent_version_range())
         .await
         .expect("hello should succeed at a matching version range")
 }
@@ -771,7 +769,7 @@ async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
 
     // hello's range negotiation settles on this build's version, and the
     // reply carries the daemon's binary id.
-    assert_eq!(client.negotiated, SESSION_PROTOCOL_VERSION);
+    assert_eq!(client.negotiated, AGENT_PROTOCOL_VERSION);
     assert_eq!(
         client.binary_id,
         concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"))
@@ -800,7 +798,7 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     let mut agentd = SessiondProcess::spawn();
 
     // A client that only speaks a future version the daemon doesn't.
-    let future = SESSION_PROTOCOL_VERSION + 5;
+    let future = AGENT_PROTOCOL_VERSION + 5;
     let stream = connect_with_retry(&agentd.socket_path).await;
     let (read_half, write_half) = stream.into_split();
     let (conn, _base_tx, mut base_rx) =
@@ -828,8 +826,8 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     match result {
         Err(HubError::IncompatibleVersion { client, daemon }) => {
             assert_eq!(client.current, future);
-            assert_eq!(daemon.min_supported, MIN_SUPPORTED_PROTOCOL_VERSION);
-            assert_eq!(daemon.current, SESSION_PROTOCOL_VERSION);
+            assert_eq!(daemon.min_supported, MIN_SUPPORTED_AGENT_PROTOCOL_VERSION);
+            assert_eq!(daemon.current, AGENT_PROTOCOL_VERSION);
         }
         Err(other) => panic!("expected IncompatibleVersion, got {other:?}"),
         Ok(_) => panic!("a disjoint version range must be rejected"),

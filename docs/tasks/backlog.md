@@ -113,8 +113,8 @@ entries live in `backlog-resolved.md` keeping their original numbers
     non-blocking connect/spawn intent: whatever the fix surfaces, the
     shell must stay operable while runtime connect fails at startup.
     Start at `src/sessiond/` (connect/hello retry, the startup
-    operability gap) and the hello error surface in
-    `crates/horizon-session-protocol`. Recorded 2026-07-19.
+    operability gap) and the hello error surface (`horizon_wire::HubError`
+    plus each hub's `hello`). Recorded 2026-07-19.
     **Surface doubled 2026-07-30 (terminald split):** there are now two
     daemons that can be stale independently, so this item's fix has to
     cover both connections. What changed in its favour: the two runtimes'
@@ -131,9 +131,14 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (an error event into panes plus stderr) is enough or a one-action
     prompt is still wanted.
 
-70. **Subsumed 2026-07-31 into `docs/runtime-crate-alignment-design.md`**
-    (phase 1 there; the doc fixes the full target shape and the
-    wire-neutral constraints). Original entry follows.
+70. **Done 2026-07-31.** Subsumed into
+    `docs/runtime-crate-alignment-design.md` (phase 1 there) and finished
+    by its phase 2: `horizon-wire` holds the domain-free foundation, each
+    hub moved into its own runtime crate, and `horizon-session-protocol`
+    is deleted. `cargo tree -p horizon-terminald -e normal` now has
+    neither `horizon-agent` nor libduckdb (the one remaining agent edge is
+    `tests/e2e.rs`'s dev-dependency, which drives a real agentd to prove
+    the split's acceptance property). Original entry follows.
     **Carve the protocol crate's domain-free foundation out of
     `horizon-session-protocol`.** After the terminald split
     (`docs/terminald-split-design.md`), `horizon-terminald` depends on

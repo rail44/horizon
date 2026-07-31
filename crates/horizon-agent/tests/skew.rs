@@ -6,9 +6,15 @@
 //! the *actual v10 wire codec* (Postbag, [`WireCodec`]) — at the codec
 //! level and, for the poisoned-item rule, through a live `rch::mpsc`
 //! channel. The frozen types are the *executable* form of the schema
-//! artifact (`schema/session-wire.json`); the artifact's own drift/additive
-//! checks live in `crates/horizon-agentd/tests/wire_schema.rs` and
+//! artifact (`schema/agent-wire.json`); the artifact's own drift/additive
+//! checks live in this crate's `tests/wire_schema.rs` and
 //! `scripts/check-wire-schema.sh`.
+//!
+//! These rules are wire-wide, not agent-specific, but they must live in
+//! *some* crate that can host a live remoc connection; the agent side is
+//! where the free-form `contract::JsonValue` payload proof needs to be, so
+//! `docs/runtime-crate-alignment-design.md` phase 2 parked the whole file
+//! here when `horizon-session-protocol` dissolved.
 //!
 //! v10 note: the catch-all is `#[serde(other)] Unknown` (a plain unit
 //! variant), not the JSONL era's `#[serde(untagged)] Unknown(UnknownPayload)`.

@@ -79,7 +79,7 @@ const EVENTS_ITEM_CAP_BYTES: usize = 4 * 1024 * 1024;
 /// merges into a single span) but a distinct fully-styled span *per cell*
 /// (rainbow truecolor text, which `styled_rows` cannot merge): the sibling
 /// test `a_worst_case_scroll_window_stays_under_the_events_cap`
-/// (`horizon-session-protocol/tests/limits.rs`) measures that at ~107 B/cell.
+/// (this crate's `tests/limits.rs`) measures that at ~107 B/cell.
 /// 128 rounds it up with headroom — and that headroom (128 vs the measured
 /// 107, ~20 %) is what lets [`max_window_rows`] budget the *entire* events
 /// cap rather than half of it: the over-estimate absorbs the enum/struct

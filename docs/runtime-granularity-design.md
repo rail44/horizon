@@ -97,6 +97,8 @@ exact pain the terminald split removed. Flagged at the v18 decision
 
 `docs/view-runtime-principle.md` · `docs/terminald-split-design.md` ·
 `docs/agent-runtime-split-design.md` · `docs/remoc-adoption-design.md`
-§3/§4/§6 · `crates/horizon-session-protocol/src/lib.rs` (version notes
-v11–v18) · `docs/cli-control-plane-design.md` · AGENTS.md "Branch and
+§3/§4/§6 · `crates/horizon-agent/src/wire/hub.rs` (the whole v4–v18
+version-note history, kept undivided; the terminal pair in
+`crates/horizon-terminal-core/src/wire.rs` points back at it) ·
+`docs/cli-control-plane-design.md` · AGENTS.md "Branch and
 Integration Flow".

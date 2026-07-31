@@ -1,23 +1,27 @@
-//! The agent domain's wire vocabulary for `horizon-agentd`'s socket —
-//! the payload types that cross the process boundary, and nothing else.
+//! The agent runtime's whole wire: the payload vocabulary that crosses
+//! `horizon-agentd`'s socket (this file), the [`SessionHub`] rtc trait and
+//! version pair that carry it ([`hub`]), and the quarantined pre-remoc
+//! JSONL drain encoder ([`legacy`]).
 //!
 //! The v10 remoc cutover (`docs/remoc-adoption-design.md` §2) deleted this
 //! module's JSONL machinery wholesale: the `Envelope`/`EnvelopeBody` pair,
 //! the `agent_control`/`agent_command`/`agent_event` kind constants, the
 //! `Control` dispatch enum, and the `encode_*`/`decode_*`/`read_*`/
 //! `write_*` framing helpers. What used to be `Control` variants maps onto
-//! `horizon_session_protocol::SessionHub` instead: `SessionList`/`SessionNew`/
+//! [`SessionHub`] instead: `SessionList`/`SessionNew`/
 //! `SessionLoad` are rtc calls (`list_agents`/`new_agent`/`attach_agent`),
 //! `HostToolRequest`/`HostToolResponse` ride connection-global channels
-//! handed over in `HubHello`, and the session-scoped announcements ride the
-//! per-attachment [`AgentWireEvent`] channel.
+//! handed over in [`HubHello`], and the session-scoped announcements ride
+//! the per-attachment [`AgentWireEvent`] channel.
 //!
 //! **Guardrail 1 (contract ≠ wire)** still holds: this module references
 //! [`crate::contract`] types (`Command`, `Event`, `SessionId`, ...); nothing
-//! in `contract` references this module. And the vocabulary stays
-//! serde-plain and remoc-free — the hub trait that names these types lives
-//! in `horizon-session-protocol`, keeping the exit cost of a transport
-//! re-swap bounded (`docs/remoc-adoption-design.md` §1).
+//! in `contract` references this module. The vocabulary types in this file
+//! also stay serde-plain and remoc-free; remoc is confined to [`hub`],
+//! which is where it arrived when
+//! `docs/runtime-crate-alignment-design.md` phase 2 moved the hub trait out
+//! of the dissolved `horizon-session-protocol` and into the runtime crate
+//! that owns it.
 
 use std::path::PathBuf;
 
@@ -27,10 +31,24 @@ use serde::{Deserialize, Serialize};
 use crate::contract::{Event, JsonValue, ProviderId, RequestId, SessionId, ToolCallProgress};
 use crate::roles::RoleId;
 
+mod hub;
+pub mod legacy;
+
+// Glob rather than a hand-listed surface: `#[rtc::remote]` generates a
+// dozen companion items (client, the four server flavors, the request
+// enums) whose names are the macro's business, and every one of them is
+// part of this wire by construction.
+pub use hub::*;
+
 /// Everything a hosted agent session pushes to its attached client, on the
 /// attachment's event channel (`horizon_session_protocol::AgentAttachment::
 /// events`): the session's provider events, plus the session-scoped
 /// announcements that were their own control envelopes on the JSONL wire.
+//
+// The stale crate path above is frozen deliberately: this doc comment is
+// the type's `description` in the committed wire-schema artifact, so
+// rewording it would show up as an artifact diff for no wire reason. The
+// channel is `wire::AgentAttachment::events` now.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum AgentWireEvent {
     /// A folded provider event — the transcript's raw material, identical
@@ -194,17 +212,18 @@ mod tests {
     // (`docs/remoc-adoption-design.md` §4 rule 4). Their job, forcing a
     // human decision on every wire-shape change, now belongs to the
     // committed schema artifact and its checkers: any wire change shows up
-    // as a diff of `crates/horizon-session-protocol/schema/session-wire.json`
-    // (drift-enforced by `crates/horizon-agentd/tests/wire_schema.rs`,
-    // where the v1-v10 bump history those tests narrated now lives), and
+    // as a diff of `crates/horizon-agent/schema/agent-wire.json`
+    // (drift-enforced by this crate's `tests/wire_schema.rs`, and
+    // narrated by `AGENT_PROTOCOL_VERSION`'s own doc comment, where the
+    // v1-v18 bump history those tests carried now lives), and
     // `scripts/check-wire-schema.sh` fails any non-additive change that
-    // doesn't bump `SESSION_PROTOCOL_VERSION` alongside it.
+    // doesn't bump `AGENT_PROTOCOL_VERSION` alongside it.
 
     /// An event variant from a future build decodes as
     /// [`AgentWireEvent::Unknown`] -- the §4 skew catch-all. serde_json can
     /// only prove the unit-variant case (`#[serde(other)]` insists on unit
     /// content there); the payload-carrying case is proven under the wire
-    /// codec in `horizon-session-protocol/tests/skew.rs`.
+    /// codec in this crate's `tests/skew.rs`.
     #[test]
     fn unknown_unit_event_variant_decodes_to_unknown_not_an_error() {
         let event: AgentWireEvent = serde_json::from_value(serde_json::json!("SessionTeleport"))

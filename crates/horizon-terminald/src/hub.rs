@@ -16,14 +16,14 @@
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use horizon_session_protocol::{
-    our_version_range, HubError, TerminalAttachment, TerminalHub, TerminalHubHello,
+use horizon_terminal_core::wire::{
+    terminal_version_range, TerminalAttachment, TerminalHub, TerminalHubHello,
 };
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    ClientHello, DecodeSkipLog, WireCodec, COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
+    ClientHello, DecodeSkipLog, HubError, WireCodec, COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
     TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -156,7 +156,7 @@ impl TerminalHub for Hub {
     /// reply is just the negotiated version plus this binary's id (the skew
     /// insurance the client records — see [`TerminalHubHello`]).
     async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError> {
-        let ours = our_version_range();
+        let ours = terminal_version_range();
         let Some(negotiated) = ours.negotiate(client.supported) else {
             let reason = HubError::IncompatibleVersion {
                 client: client.supported,
@@ -236,7 +236,7 @@ impl TerminalHub for Hub {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_session_protocol::our_client_hello;
+    use horizon_terminal_core::wire::{terminal_client_hello, TERMINAL_PROTOCOL_VERSION};
     use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {
@@ -278,7 +278,7 @@ mod tests {
             Err(HubError::HelloRequired)
         ));
 
-        hub.hello(our_client_hello("test-client"))
+        hub.hello(terminal_client_hello("test-client"))
             .await
             .expect("a matching range must negotiate");
         assert_eq!(hub.list_terminals().await.unwrap(), Vec::new());
@@ -290,13 +290,10 @@ mod tests {
     async fn hello_reports_the_negotiated_version_and_this_binarys_id() {
         let hub = test_hub();
         let hello = hub
-            .hello(our_client_hello("test-client"))
+            .hello(terminal_client_hello("test-client"))
             .await
             .expect("a matching range must negotiate");
-        assert_eq!(
-            hello.negotiated,
-            horizon_session_protocol::SESSION_PROTOCOL_VERSION
-        );
+        assert_eq!(hello.negotiated, TERMINAL_PROTOCOL_VERSION);
         assert_eq!(hello.binary_id, "test-terminald");
     }
 }

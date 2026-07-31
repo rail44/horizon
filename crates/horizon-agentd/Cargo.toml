@@ -9,7 +9,6 @@ crossbeam-channel = "0.5"
 horizon-agent = { path = "../horizon-agent" }
 horizon-config = { path = "../horizon-config" }
 horizon-sandbox = { path = "../horizon-sandbox" }
-horizon-session-protocol = { path = "../horizon-session-protocol" }
 horizon-wire = { path = "../horizon-wire" }
 remoc = { workspace = true }
 serde_json = "1.0"
@@ -18,15 +17,12 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
-# The wire-schema artifact generator/drift test (`tests/wire_schema.rs`).
-# It documents *both* daemons' hubs in one artifact, so it still needs the
-# terminal vocabulary even though this crate stopped hosting terminals in
-# v17 (`docs/terminald-split-design.md`) -- a dev-dependency, so the shipped
-# `horizon-agentd` binary links none of it.
-horizon-terminal-core = { path = "../horizon-terminal-core" }
-schemars = { version = "1", features = ["uuid1"] }
+# No terminal crate here, not even as a dev-dependency
+# (docs/runtime-crate-alignment-design.md phase 2 acceptance): the union
+# wire-schema artifact that used to force one is now two artifacts, each
+# generated beside the runtime crate that owns its hub. `schemars` and
+# `termwiz` left with that generator -- nothing else here used them.
 tempfile = "3"
-termwiz = { version = "0.23.3", features = ["use_serde"] }
 # Enables the `mock.approval_required` / `mock.boundary_crossing` test
 # fixtures in `horizon-agent`'s tool catalog so sessiond's own unit tests
 # and the e2e integration suite can exercise approval/boundary-crossing

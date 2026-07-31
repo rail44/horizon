@@ -34,6 +34,11 @@ horizon-wire = { path = "../horizon-wire" }
 ignore = "0.4"
 libc = "0.2"
 regex = "1"
+# The `wire::hub` module only: the `SessionHub` rtc trait and the channel
+# halves its replies carry (docs/runtime-crate-alignment-design.md judgment
+# 3 -- the hub lives with the runtime that owns it). The vocabulary types
+# themselves stay serde-plain and remoc-free.
+remoc = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rig-core = "0.39.0"
 schemars = { version = "1", features = ["uuid1"] }

@@ -11,6 +11,11 @@
 //! *per-item* — the channel survives and later items still arrive, which
 //! is what lets the receive loops treat it as a skip (adoption condition
 //! 2's size-cap sibling).
+//!
+//! The caps themselves are `horizon-wire`'s; this file lives here because
+//! the payloads that make the boundaries realistic are terminal frames and
+//! lines (`docs/runtime-crate-alignment-design.md` phase 2 moved it out of
+//! the dissolved `horizon-session-protocol`).
 
 use horizon_terminal_core::{
     TerminalColor, TerminalLine, TerminalScrollWindow, TerminalSpan, TerminalUnderline,

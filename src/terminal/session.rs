@@ -685,24 +685,23 @@ impl Scrollback {
     }
 }
 
-/// Whether a connection's `negotiated` version supports the scrollback
-/// windowing surface (`docs/terminal-scrollback-design.md` §4). Free function
-/// so the gate — the `>=` comparison, the `SCROLLBACK_WINDOW_MIN_VERSION`
-/// constant, and the `None`-means-no-connection handling — is unit-testable
-/// directly, not only through `on_wheel`'s translated `bool`. `None` (no
-/// connection yet) and any older version both gate windowing off.
-fn version_supports_windowing(negotiated: Option<u32>) -> bool {
-    negotiated
-        .is_some_and(|version| version >= horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION)
-}
-
-/// `TerminalSession::structured_input_supported` extracted to a pure function
-/// so the gate — the `>=` comparison, `TERMINAL_STRUCTURED_INPUT_VERSION`, and
-/// `None`-means-no-connection handling — is unit-testable directly.
+/// Whether structured terminal input (`TerminalCommand::KeyInput`/
+/// `TextInput`, carrying the platform's associated text) may be sent on a
+/// connection whose `hello` reported `negotiated`.
+///
+/// This used to be a *version* gate — `>= TERMINAL_STRUCTURED_INPUT_VERSION`
+/// (13), with legacy `Key`/`Input` below it. That comparison is dead under
+/// the v17/v18 lockstep floor (`docs/runtime-granularity-design.md` Q4): any
+/// peer this build negotiates with speaks structured input, so the constant
+/// and the comparison are gone. What survives is the `None` arm, and only
+/// that arm: `SessiondHandle::start_terminal` hands the pane its handle and
+/// *queues* the create op without waiting for the connection, so a keystroke
+/// typed before the terminal runtime's first `hello` completes really does
+/// see `None` here and really does take the legacy branch. That is a
+/// "no connection yet" case, not a version fallback, so it is preserved
+/// rather than deleted with the version gate it was entangled with.
 fn version_supports_structured_input(negotiated: Option<u32>) -> bool {
-    negotiated.is_some_and(|version| {
-        version >= horizon_session_protocol::TERMINAL_STRUCTURED_INPUT_VERSION
-    })
+    negotiated.is_some()
 }
 
 /// Whether the `TerminalCommand` channel to `horizon-terminald` is known dead.
@@ -1174,30 +1173,28 @@ impl TerminalSession {
         self.dispatch(TerminalCommand::RequestScrollWindow { anchor, height });
     }
 
-    /// Whether this connection's negotiated version supports the scrollback
-    /// windowing surface (`SCROLLBACK_WINDOW_MIN_VERSION`). `None` (no
-    /// connection yet) and any older version both gate it off.
-    fn windowing_supported(&self) -> bool {
-        version_supports_windowing(self.wire.negotiated_version())
-    }
-
-    /// Whether this connection's negotiated version supports structured
-    /// terminal input with associated text
-    /// (`TERMINAL_STRUCTURED_INPUT_VERSION`). `None` (no connection yet) and
-    /// any older version both gate it off, falling back to legacy `Key` and
-    /// raw UTF-8 `Input` commands.
+    /// Whether this connection may send structured terminal input with
+    /// associated text. See [`version_supports_structured_input`] for why
+    /// this is no longer a version comparison and what the one surviving
+    /// `None` case is.
     fn structured_input_supported(&self) -> bool {
         version_supports_structured_input(self.wire.negotiated_version())
     }
 
-    /// Whether the frontend owns this wheel gesture. False for old peers and
-    /// whenever an alternate-screen/mouse-reporting application owns scroll.
+    /// Whether the frontend owns this wheel gesture. False whenever an
+    /// alternate-screen/mouse-reporting application owns scroll.
+    ///
+    /// The `SCROLLBACK_WINDOW_MIN_VERSION` (12) gate that used to guard this
+    /// is gone with the lockstep floor
+    /// (`docs/runtime-granularity-design.md` Q4), and dropping it is
+    /// behavior-neutral rather than merely dead-under-lockstep: `frame` is
+    /// only ever `Some` because a frame arrived *from the daemon*, so a
+    /// negotiated connection is already implied by the flag being readable
+    /// at all.
     pub(crate) fn local_scrollback_available(&self) -> bool {
-        self.windowing_supported()
-            && self
-                .frame
-                .as_ref()
-                .is_some_and(|frame| frame.scrollback_available)
+        self.frame
+            .as_ref()
+            .is_some_and(|frame| frame.scrollback_available)
     }
 
     /// Apply one frontend displacement in presentation pixels. Conversion to
@@ -1294,8 +1291,8 @@ fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 #[cfg(test)]
 mod tests {
     use super::{
-        continuous_anchor, version_supports_structured_input, version_supports_windowing,
-        RowGenerations, RuntimeReachability, ScrollIpc, Scrollback, WindowFetch,
+        continuous_anchor, version_supports_structured_input, RowGenerations, RuntimeReachability,
+        ScrollIpc, Scrollback, WindowFetch,
     };
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
@@ -2285,49 +2282,28 @@ mod tests {
         assert_eq!(live, Scrollback::Live);
     }
 
-    /// Low-priority review item: pin the negotiated-version gate at the
-    /// translation boundary the wheel path relies on — the `>=` comparison,
-    /// the `SCROLLBACK_WINDOW_MIN_VERSION` constant, and `None` (no connection)
-    /// meaning "off" — so a later refactor (e.g. `>=` → `>`) can't silently
-    /// regress the gate without tripping a test.
+    /// What is left of the two per-feature version gates the lockstep
+    /// policy retired (`docs/runtime-granularity-design.md` Q4): structured
+    /// input is off only while this pane has no negotiated connection at
+    /// all, and on for every version a lockstep build can actually
+    /// negotiate. Kept as a test because the `None` arm is genuinely
+    /// reachable — `SessiondHandle::start_terminal` hands out the pane's
+    /// handle before the runtime's first `hello` lands — so a refactor that
+    /// dropped it would change what a very-early keystroke sends.
     #[test]
-    fn version_supports_windowing_gates_at_the_min_version() {
-        let min = horizon_session_protocol::SCROLLBACK_WINDOW_MIN_VERSION;
-        assert!(
-            !version_supports_windowing(None),
-            "no connection: gated off"
-        );
-        assert!(
-            !version_supports_windowing(Some(min - 1)),
-            "an older peer is gated off"
-        );
-        assert!(
-            version_supports_windowing(Some(min)),
-            "the min version is in"
-        );
-        assert!(
-            version_supports_windowing(Some(min + 1)),
-            "a newer peer stays in"
-        );
-    }
-
-    #[test]
-    fn version_supports_structured_input_gates_at_the_min_version() {
-        let min = horizon_session_protocol::TERMINAL_STRUCTURED_INPUT_VERSION;
+    fn structured_input_is_gated_only_on_having_a_connection() {
         assert!(
             !version_supports_structured_input(None),
-            "no connection: gated off"
+            "no connection yet: legacy Key/Input, as before the version gate went away"
         );
         assert!(
-            !version_supports_structured_input(Some(min - 1)),
-            "an older peer is gated off"
+            version_supports_structured_input(Some(
+                horizon_terminal_core::wire::MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION
+            )),
+            "the lockstep floor is in"
         );
         assert!(
-            version_supports_structured_input(Some(min)),
-            "the min version is in"
-        );
-        assert!(
-            version_supports_structured_input(Some(min + 1)),
+            version_supports_structured_input(Some(u32::MAX)),
             "a newer peer stays in"
         );
     }

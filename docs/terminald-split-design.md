@@ -163,3 +163,19 @@ manifest no longer names `horizon-agent` — the socket-path convention it
 reached for lives in `horizon_wire::socket` now. The *transitive* link
 survives, because both hub traits still share `horizon-session-protocol`;
 phase 2 moves `TerminalHub` into `horizon-terminal-core` and closes it.
+
+*Update (phase 2, landed):* closed. `TerminalHub` and its version pair
+live in `horizon_terminal_core::wire`, `SessionHub` and its pair in
+`horizon_agent::wire`, `HubError` and the rest of the shared handshake in
+`horizon-wire`, and `horizon-session-protocol` is deleted. So the
+"Protocol" paragraph above is superseded in two places: there is no
+single crate holding both traits, and the one artifact became two
+(`crates/horizon-agent/schema/agent-wire.json`,
+`crates/horizon-terminal-core/schema/terminal-wire.json`) with the inner
+keys unchanged. The version pair split with them — both halves start at
+18, so the split itself is wire-neutral — which is the point: an
+agent-side bump no longer rejects a running `horizon-terminald` and
+auto-drains its PTYs. `cargo tree -p horizon-terminald -e normal` now has
+neither `horizon-agent` nor libduckdb; the only agent edge left is
+`tests/e2e.rs`'s dev-dependency, which exists precisely to drive a real
+agentd through the acceptance property above.
