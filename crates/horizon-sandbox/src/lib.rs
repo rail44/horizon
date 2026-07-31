@@ -45,7 +45,7 @@
 mod caps;
 mod error;
 mod grant;
-#[cfg(any(target_os = "macos", all(target_os = "linux", not(test))))]
+#[cfg(any(target_os = "macos", target_os = "linux"))]
 mod helper;
 #[cfg(target_os = "linux")]
 mod linux;

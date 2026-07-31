@@ -28,7 +28,13 @@
 //! `cfg`'d away from a package entirely, so this exists only to fail
 //! loudly if somehow invoked on the wrong platform.
 
+// The protocol marker is embedded only in the real helper binary, not in
+// the test-harness variant cargo builds for this bin target. The harness
+// links the same source under `cfg(test)`, so gating the `#[used]` static
+// keeps the marker out of it — the library's `cargo_test_artifact` scan
+// then matches only the real bin, never the harness.
 #[used]
+#[cfg(not(test))]
 static HELPER_PROTOCOL_MARKER: &str = horizon_sandbox::HELPER_PROTOCOL_MARKER;
 
 #[cfg(target_os = "macos")]
@@ -36,7 +42,11 @@ fn main() {
     // Keep a protocol marker in the actual helper executable. Cargo emits
     // both this executable and a same-name test-harness artifact under
     // `target/<profile>/deps`; the library resolver uses the marker only as
-    // a unit-test fallback to avoid executing the harness by mistake.
+    // a unit-test fallback to avoid executing the harness by mistake. The
+    // `#[used]` static above is `#[cfg(not(test))]`-gated so the test harness
+    // variant does not embed the marker; this black_box keeps the reference
+    // live and is gated to match.
+    #[cfg(not(test))]
     std::hint::black_box(HELPER_PROTOCOL_MARKER);
     let mut args = std::env::args_os().skip(1);
     let (Some(policy_arg), Some(program)) = (args.next(), args.next()) else {
