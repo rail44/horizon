@@ -131,7 +131,10 @@ entries live in `backlog-resolved.md` keeping their original numbers
     (an error event into panes plus stderr) is enough or a one-action
     prompt is still wanted.
 
-70. **Carve the protocol crate's domain-free foundation out of
+70. **Subsumed 2026-07-31 into `docs/runtime-crate-alignment-design.md`**
+    (phase 1 there; the doc fixes the full target shape and the
+    wire-neutral constraints). Original entry follows.
+    **Carve the protocol crate's domain-free foundation out of
     `horizon-session-protocol`.** After the terminald split
     (`docs/terminald-split-design.md`), `horizon-terminald` depends on
     `horizon-session-protocol` for the codec pin, version negotiation,

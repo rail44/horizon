@@ -35,6 +35,13 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+- **Runtime-boundary crate alignment — core judgments decided
+  2026-07-31** (`docs/runtime-crate-alignment-design.md`). Sessions
+  become attachment records; `horizon-wire` carve-out (subsumes backlog
+  70), hubs move into their domain crates with per-runtime version
+  pairs and split schema artifacts, "sessiond" vocabulary leaves the
+  tree. Three wire-neutral phases, worker-sized.
+
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
