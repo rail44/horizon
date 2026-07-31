@@ -6,13 +6,18 @@
 //!
 //! The division of labor:
 //!
-//! - `crates/horizon-agentd/tests/wire_schema.rs` regenerates the schema
-//!   from the live wire types and fails on any drift from the committed
-//!   artifact (`crates/horizon-session-protocol/schema/session-wire.json`),
-//!   so every wire change is visible, reviewable text in its PR diff.
+//! - one `tests/wire_schema.rs` per runtime crate
+//!   (`crates/horizon-agent`, `crates/horizon-terminal-core`) regenerates
+//!   that runtime's schema from its live wire types and fails on any drift
+//!   from the committed artifact (`schema/agent-wire.json`,
+//!   `schema/terminal-wire.json`), so every wire change is visible,
+//!   reviewable text in its PR diff. The two generators share
+//!   [`strip_unknown_catch_alls`] and [`sort_object_keys`] from this
+//!   module so the artifacts stay mechanically comparable — they were one
+//!   document until `docs/runtime-crate-alignment-design.md` phase 2.
 //! - `scripts/check-wire-schema.sh` (run by `hooks/pre-commit`) feeds this
 //!   module (through this crate's `check_wire_schema` example) the
-//!   merge-base's copy of the artifact next to the current one;
+//!   merge-base's copy of each artifact next to the current one;
 //!   [`classify_schema_change`] then classifies every difference as
 //!   *additive* (pass) or *reshape* (fail).
 //!
@@ -30,10 +35,10 @@
 //!
 //! Everything else — removing or renaming anything, reordering or retyping,
 //! new `required` entries, changed constraints — is a reshape, and fails
-//! unless the same change bumps `SESSION_PROTOCOL_VERSION` (the artifact
-//! embeds it as `x-session-protocol-version`; a differing value is the §4
-//! "explicit version-bump marker" that waves the whole diff through, to be
-//! judged by the owner in review instead of by this classifier).
+//! unless the same change bumps that artifact's protocol version (the
+//! artifact embeds it as `x-session-protocol-version`; a differing value is
+//! the §4 "explicit version-bump marker" that waves the whole diff through,
+//! to be judged by the owner in review instead of by this classifier).
 //!
 //! The classifier itself knows nothing about which wire it is classifying —
 //! it takes two JSON documents — which is why it lives here rather than
@@ -41,11 +46,93 @@
 
 use serde_json::{Map, Value};
 
-/// The artifact key carrying `horizon_session_protocol::
-/// SESSION_PROTOCOL_VERSION`. A change to this value between the two
-/// compared schemas is the explicit version-bump marker that legitimizes an
-/// otherwise-forbidden reshape.
+/// The artifact key carrying the protocol version of the hub the artifact
+/// documents — `horizon_agent::wire::AGENT_PROTOCOL_VERSION` in
+/// `agent-wire.json`, `horizon_terminal_core::wire::
+/// TERMINAL_PROTOCOL_VERSION` in `terminal-wire.json`. A change to this
+/// value between the two compared schemas is the explicit version-bump
+/// marker that legitimizes an otherwise-forbidden reshape.
+///
+/// The key name is deliberately unchanged from the single-artifact era: the
+/// split kept every inner key identical so the two documents stay
+/// comparable, section for section, with the union that preceded them.
 pub const PROTOCOL_VERSION_KEY: &str = "x-session-protocol-version";
+
+/// Removes the `#[serde(other)] Unknown` skew catch-all from a generated
+/// schema: the artifact documents what a peer may *send*, and `Unknown` is
+/// never legally put on the wire (nothing constructs it on a send path).
+/// Removing it also keeps [`classify_schema_change`]'s appended-variant
+/// rule simple — schemars renders a `#[serde(other)]` unit variant as a
+/// trailing `{"const": "Unknown"}` `oneOf` branch (or, when it groups with
+/// other unit variants, as a `"Unknown"` entry in an `enum` array); a newly
+/// appended variant would otherwise read as "the branch that used to be
+/// `Unknown` changed", a false reshape. With it stripped, a new variant
+/// declared above the catch-all lands as a genuine trailing element.
+///
+/// Lives here rather than in either generator because both artifacts must
+/// be stripped identically, or the shared `$defs` they both carry
+/// (`HubError` and friends) would stop matching.
+pub fn strip_unknown_catch_alls(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            // A grouped unit-variant enum: drop the "Unknown" member.
+            if let Some(Value::Array(items)) = map.get_mut("enum") {
+                items.retain(|item| item.as_str() != Some("Unknown"));
+            }
+            for key in ["oneOf", "anyOf"] {
+                if let Some(Value::Array(branches)) = map.get_mut(key) {
+                    branches.retain(|branch| !is_unknown_catch_all(branch));
+                }
+            }
+            for child in map.values_mut() {
+                strip_unknown_catch_alls(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                strip_unknown_catch_alls(item);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Whether a `oneOf`/`anyOf` branch is the standalone `Unknown` catch-all:
+/// a `{"const": "Unknown"}` branch, or a `{"enum": ["Unknown"]}` branch
+/// that carries nothing else.
+fn is_unknown_catch_all(branch: &Value) -> bool {
+    if branch.get("const").and_then(Value::as_str) == Some("Unknown") {
+        return true;
+    }
+    matches!(
+        branch.get("enum"),
+        Some(Value::Array(items))
+            if items.len() == 1 && items[0].as_str() == Some("Unknown")
+    )
+}
+
+/// Byte-stable artifact output independent of `serde_json`'s map ordering
+/// (feature unification may switch it to insertion order): object keys are
+/// sorted recursively; arrays keep their order (variant/`required` order is
+/// meaningful).
+pub fn sort_object_keys(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<(String, Value)> = std::mem::take(map).into_iter().collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            for (key, mut child) in entries {
+                sort_object_keys(&mut child);
+                map.insert(key, child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                sort_object_keys(item);
+            }
+        }
+        _ => {}
+    }
+}
 
 /// Annotation keys whose changes never affect what decodes on the wire.
 const ANNOTATION_KEYS: [&str; 6] = [

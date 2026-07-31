@@ -15,8 +15,10 @@ row-diff frame push has been replaced by remoc rtc
 push + snapshot-on-attach baseline — frame delivery is now a
 snapshot-valued `rch::watch<TerminalFrame>` (a full frame per delivery, no
 per-connection baseline; the 16 ms rate control survives); the Step-1
-"neutral shared framing crate" note — `horizon-session-protocol` survives
-but the JSONL framing does not and its dependency direction inverted; and
+"neutral shared framing crate" note — the JSONL framing is gone, and the
+crate itself has since dissolved (`docs/runtime-crate-alignment-design.md`
+phase 2: the domain-free handshake is `horizon-wire`, each hub lives in
+its own runtime crate); and
 the Step-1 (2026-07-12) `TerminalUpdate::Snapshot`/`FrameDiff` /
 connection-local-baseline implementation notes. The sister-contract
 vocabularies, PTY ownership, cwd resolution, drain, discovery/adoption,

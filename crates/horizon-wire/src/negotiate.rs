@@ -5,9 +5,10 @@
 //!
 //! Which numbers a build puts in that range is *not* this crate's business:
 //! the version constants belong to the hub being spoken, so the "range this
-//! build advertises" constructor lives beside them (today
-//! `horizon_session_protocol::our_version_range`, one pair per hub after
-//! `docs/runtime-crate-alignment-design.md` phase 2).
+//! build advertises" constructor lives beside them --
+//! `horizon_agent::wire::agent_version_range` and
+//! `horizon_terminal_core::wire::terminal_version_range`, one pair per hub
+//! since `docs/runtime-crate-alignment-design.md` phase 2.
 //!
 //! The `[`SessionHub::hello`]` links in the type docs below point at that
 //! hub trait, which lives in the crate that owns it; the wording is pinned

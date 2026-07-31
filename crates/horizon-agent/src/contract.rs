@@ -1161,8 +1161,7 @@ mod json_value_tests {
     /// plain `serde_json::Value` field — so the event log's on-disk JSONL
     /// format is unchanged by the v10 cutover and pre-v10 log lines still
     /// decode. (The binary-wire path is proven under the actual Postbag
-    /// codec in `horizon-session-protocol/tests/skew.rs`, where remoc is a
-    /// dependency.)
+    /// codec in this crate's `tests/skew.rs`.)
     #[test]
     fn json_value_is_transparent_under_serde_json() {
         let inner = serde_json::json!({"path": "a.txt", "nested": [1, 2, {"k": true}]});

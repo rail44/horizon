@@ -23,16 +23,17 @@ use std::process::{Child, Command};
 use std::thread;
 use std::time::Duration;
 
-use horizon_session_protocol::{
-    our_client_hello, HubError, SessionHub as _, SessionHubClient, TerminalHub as _,
-    TerminalHubClient, MIN_SUPPORTED_PROTOCOL_VERSION, SESSION_PROTOCOL_VERSION,
+use horizon_agent::wire::{agent_client_hello, SessionHub as _, SessionHubClient};
+use horizon_terminal_core::wire::{
+    terminal_client_hello, TerminalHub as _, TerminalHubClient,
+    MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, TERMINAL_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize, TerminalSpawnSpec,
     TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    CappedReceiver, CappedWatchReceiver, ClientHello, VersionRange, WireCodec,
+    CappedReceiver, CappedWatchReceiver, ClientHello, HubError, VersionRange, WireCodec,
     FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -283,7 +284,7 @@ async fn connect_hub(socket_path: &Path) -> HubTestClient {
     let stream = connect_with_retry(socket_path).await;
     let (hub, conn_task) = connect_raw(stream).await;
     let hello = hub
-        .hello(our_client_hello("terminald-e2e"))
+        .hello(terminal_client_hello("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
     HubTestClient {
@@ -408,7 +409,7 @@ async fn hello_negotiates_reports_the_binary_id_and_drains_over_the_real_socket(
     let mut terminald = TerminaldProcess::spawn();
     let client = connect_hub(&terminald.socket_path).await;
 
-    assert_eq!(client.negotiated, SESSION_PROTOCOL_VERSION);
+    assert_eq!(client.negotiated, TERMINAL_PROTOCOL_VERSION);
     assert!(
         client.binary_id.starts_with("horizon-terminald/"),
         "the daemon must identify itself for the skew message (decision 6), got {:?}",
@@ -435,8 +436,8 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     let (hub, conn_task) = connect_raw(stream).await;
 
     let future = VersionRange {
-        min_supported: SESSION_PROTOCOL_VERSION + 100,
-        current: SESSION_PROTOCOL_VERSION + 100,
+        min_supported: TERMINAL_PROTOCOL_VERSION + 100,
+        current: TERMINAL_PROTOCOL_VERSION + 100,
     };
     let result = hub
         .hello(ClientHello {
@@ -447,8 +448,11 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
     match result {
         Err(HubError::IncompatibleVersion { client, daemon }) => {
             assert_eq!(client, future);
-            assert_eq!(daemon.current, SESSION_PROTOCOL_VERSION);
-            assert_eq!(daemon.min_supported, MIN_SUPPORTED_PROTOCOL_VERSION);
+            assert_eq!(daemon.current, TERMINAL_PROTOCOL_VERSION);
+            assert_eq!(
+                daemon.min_supported,
+                MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION
+            );
         }
         Err(other) => panic!("expected a version rejection, got {other:?}"),
         Ok(_) => panic!("a disjoint version range must be rejected"),
@@ -650,7 +654,7 @@ async fn drain_sessiond(socket_path: &Path) {
         .await
         .expect("base channel recv")
         .expect("agentd should hand over its hub client");
-    hub.hello(our_client_hello("terminald-e2e"))
+    hub.hello(agent_client_hello("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
     let _ = tokio::time::timeout(Duration::from_secs(5), hub.drain()).await;

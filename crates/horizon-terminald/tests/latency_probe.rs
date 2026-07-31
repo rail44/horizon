@@ -34,8 +34,8 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-use horizon_session_protocol::{
-    our_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
+use horizon_terminal_core::wire::{
+    terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
 };
 use horizon_terminal_core::{
     KeyEventKind, TerminalColorScheme, TerminalCommand, TerminalFrame, TerminalSize,
@@ -149,7 +149,7 @@ async fn connect_hub(socket_path: &std::path::Path) -> HubClient {
         .await
         .expect("base recv")
         .expect("hub client handover");
-    hub.hello(our_client_hello("latency-probe"))
+    hub.hello(terminal_client_hello("latency-probe"))
         .await
         .expect("hello");
     HubClient { hub, conn_task }

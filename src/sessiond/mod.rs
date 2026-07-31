@@ -126,8 +126,8 @@ pub(crate) struct TerminalSessionHandle {
     session_id: Uuid,
     routes: Arc<TerminalRoutes>,
     /// The terminal runtime's connection control, read only for its live
-    /// negotiated protocol version — the pane gates the v12 scrollback
-    /// windowing surface on it (`TerminalSessionHandle::negotiated_version`).
+    /// negotiated protocol version (`TerminalSessionHandle::
+    /// negotiated_version`).
     control: Arc<RuntimeControl>,
 }
 
@@ -161,10 +161,13 @@ impl TerminalSessionHandle {
     }
 
     /// The protocol version this connection negotiated, or `None` while none
-    /// is established. The terminal pane sends `RequestScrollWindow` (and
-    /// scrolls locally within the served window) only when this is ≥ 12,
-    /// otherwise it keeps today's round-trip `Scroll`
-    /// (`docs/terminal-scrollback-design.md` §4). Read live so a
+    /// is established. Under lockstep versioning the *number* no longer gates
+    /// anything (the per-feature gate constants were deleted with
+    /// `docs/runtime-crate-alignment-design.md` phase 2); what the terminal
+    /// pane still reads is `Some` vs `None` — "has this pane's runtime
+    /// finished a `hello` yet", which decides whether a very early keystroke
+    /// goes out as structured input (`terminal::session::
+    /// version_supports_structured_input`). Read live so a
     /// `Reload Terminal Runtime` against a different daemon version is
     /// honored without recreating the handle.
     pub(crate) fn negotiated_version(&self) -> Option<u32> {

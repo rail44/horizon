@@ -13,12 +13,20 @@
 //! against a live theme stays in Horizon's `theme::resolve`
 //! (`src/theme/ansi.rs`). This crate only ever sees bytes in, and hands
 //! back logical colors/commands/updates over plain channels.
+//!
+//! One exception to "plain channels", added by
+//! `docs/runtime-crate-alignment-design.md` phase 2: [`wire`] holds this
+//! runtime's hub trait, its version pair, and its schema artifact — the
+//! terminal wire now lives with the terminal runtime instead of in a union
+//! protocol crate shared with the agent wire. remoc is confined to that one
+//! module; everything else here stays transport-free.
 
 mod contract;
 mod core;
 mod protocol;
 mod session_loop;
 mod types;
+pub mod wire;
 
 pub use contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalKeyInput,

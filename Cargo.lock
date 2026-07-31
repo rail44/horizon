@@ -3606,7 +3606,6 @@ dependencies = [
  "horizon-cli",
  "horizon-config",
  "horizon-control",
- "horizon-session-protocol",
  "horizon-terminal-core",
  "horizon-wire",
  "horizon-workspace",
@@ -3636,6 +3635,7 @@ dependencies = [
  "ignore",
  "libc",
  "regex",
+ "remoc",
  "reqwest 0.13.4",
  "rig-core",
  "schemars 1.2.1",
@@ -3657,15 +3657,11 @@ dependencies = [
  "horizon-agent",
  "horizon-config",
  "horizon-sandbox",
- "horizon-session-protocol",
- "horizon-terminal-core",
  "horizon-wire",
  "remoc",
- "schemars 1.2.1",
  "serde_json",
  "sysinfo 0.39.6",
  "tempfile",
- "termwiz",
  "tokio",
  "uuid",
 ]
@@ -3733,32 +3729,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "horizon-session-protocol"
-version = "0.1.0"
-dependencies = [
- "horizon-agent",
- "horizon-terminal-core",
- "horizon-wire",
- "remoc",
- "schemars 1.2.1",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "uuid",
-]
-
-[[package]]
 name = "horizon-terminal-core"
 version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "base64",
  "crossbeam-channel",
+ "horizon-wire",
+ "remoc",
  "schemars 1.2.1",
  "serde",
  "serde_json",
  "termwiz",
+ "tokio",
  "unicode-width",
  "uuid",
 ]
@@ -3769,7 +3752,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
- "horizon-session-protocol",
+ "horizon-agent",
  "horizon-terminal-core",
  "horizon-wire",
  "portable-pty",
@@ -3789,6 +3772,7 @@ dependencies = [
  "schemars 1.2.1",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
  "uuid",
 ]
 

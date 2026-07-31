@@ -2670,7 +2670,7 @@ fn terminal_wire_vocabulary_round_trips() {
 /// guarantee). Payload-carrying unknown variants only degrade under the
 /// actual wire codec (Postbag) -- serde_json's `#[serde(other)]` insists on
 /// unit content -- so those cases are proven where the codec lives, in
-/// `horizon-session-protocol/tests/skew.rs`.
+/// `crates/horizon-agent/tests/skew.rs`.
 #[test]
 fn unknown_unit_wire_variants_decode_to_the_catch_all() {
     let command: TerminalCommand =
@@ -2698,7 +2698,7 @@ fn serializing_the_unknown_catch_all_writes_its_literal_tag() {
 /// frame -- the degradation is per-cell (`TerminalColor::Unknown`), not
 /// per-frame, and it self-heals on the next full frame. The
 /// payload-carrying-unknown-color case is proven under the wire codec in
-/// `horizon-session-protocol/tests/skew.rs`.
+/// `crates/horizon-agent/tests/skew.rs`.
 #[test]
 fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
     let mut value = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();

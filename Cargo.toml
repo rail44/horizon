@@ -6,7 +6,6 @@ members = [
     "crates/horizon-terminald",
     "crates/horizon-control",
     "crates/horizon-cli",
-    "crates/horizon-session-protocol",
     "crates/horizon-terminal-core",
     "crates/horizon-wire",
     "crates/horizon-config",
@@ -74,7 +73,6 @@ horizon-agent = { path = "crates/horizon-agent" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
-horizon-session-protocol = { path = "crates/horizon-session-protocol" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-wire = { path = "crates/horizon-wire" }
 horizon-workspace = { path = "crates/horizon-workspace" }

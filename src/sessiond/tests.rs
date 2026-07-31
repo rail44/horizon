@@ -27,16 +27,18 @@ use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use horizon_agent::contract::{Event, ProviderId, SessionId, SessionState};
-use horizon_agent::wire::{AgentWireEvent, SessionNew, WorkspaceRootResolved};
-use horizon_session_protocol::{
-    our_version_range, AgentAttachment, HubError, HubHello, SessionHub, SessionHubClient,
-    SessionHubServerShared, TerminalAttachment, TerminalHub, TerminalHubClient, TerminalHubHello,
-    TerminalHubServerShared, SESSION_PROTOCOL_VERSION,
+use horizon_agent::wire::{
+    agent_version_range, AgentAttachment, AgentWireEvent, HubHello, SessionHub, SessionHubClient,
+    SessionHubServerShared, SessionNew, WorkspaceRootResolved, AGENT_PROTOCOL_VERSION,
+};
+use horizon_terminal_core::wire::{
+    TerminalAttachment, TerminalHub, TerminalHubClient, TerminalHubHello, TerminalHubServerShared,
+    TERMINAL_PROTOCOL_VERSION,
 };
 use horizon_terminal_core::{
     ClipboardDestination, TerminalColorScheme, TerminalFrame, TerminalSize,
 };
-use horizon_wire::{ClientHello, VersionRange, WireCodec};
+use horizon_wire::{ClientHello, HubError, VersionRange, WireCodec};
 use remoc::rch;
 use remoc::rch::watch::WatchExt as _;
 use remoc::rtc::{Client as _, ServerShared as _};
@@ -213,10 +215,10 @@ impl FakeSessionHub {
 
 fn rejected_hello() -> HubError {
     HubError::IncompatibleVersion {
-        client: our_version_range(),
+        client: agent_version_range(),
         daemon: VersionRange {
-            min_supported: SESSION_PROTOCOL_VERSION + 5,
-            current: SESSION_PROTOCOL_VERSION + 5,
+            min_supported: AGENT_PROTOCOL_VERSION + 5,
+            current: AGENT_PROTOCOL_VERSION + 5,
         },
     }
 }
@@ -231,7 +233,7 @@ impl TerminalHub for FakeTerminalHub {
         }
         let _ = self.calls.send(TerminalCall::Hello);
         Ok(TerminalHubHello {
-            negotiated: SESSION_PROTOCOL_VERSION,
+            negotiated: TERMINAL_PROTOCOL_VERSION,
             binary_id: "fake-terminald".to_string(),
         })
     }
@@ -313,7 +315,7 @@ impl SessionHub for FakeSessionHub {
         let (_skipped_tx, skipped_rx) = rch::mpsc::channel::<String, WireCodec>(1);
         let skipped_rx = skipped_rx.set_max_item_size::<{ horizon_wire::CONTROL_MAX_ITEM_BYTES }>();
         Ok(HubHello {
-            negotiated: SESSION_PROTOCOL_VERSION,
+            negotiated: AGENT_PROTOCOL_VERSION,
             binary_id: "fake-agentd".to_string(),
             host_tools: request_rx,
             host_tool_responses: response_tx,
@@ -1236,8 +1238,8 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
         let line = String::from_utf8(bytes).expect("the drain probe is one JSON line");
         assert_eq!(
             line,
-            horizon_session_protocol::legacy::drain_line(
-                horizon_session_protocol::legacy::NEWEST_JSONL_VERSION
+            horizon_agent::wire::legacy::drain_line(
+                horizon_agent::wire::legacy::NEWEST_JSONL_VERSION
             ),
             "the first probe must be aimed at the newest JSONL version"
         );

@@ -15,11 +15,12 @@ use crate::types::{
 // `terminal_control`/`terminal_command`/`terminal_update` kind constants,
 // their `encode_*`/`decode_*` helpers, and the request-id-correlated
 // `TerminalControl`/`TerminalAttachResult` discovery/attach vocabulary.
-// Discovery and attach are rtc calls on `horizon_session_protocol::
-// SessionHub` now (`list_terminals`/`create_terminal`/`attach_terminal`),
-// and commands/updates ride a `TerminalAttachment`'s typed channels, so
-// this crate is back to owning only the domain vocabulary itself —
-// serde-plain and remoc-free, per `docs/remoc-adoption-design.md` §2.
+// Discovery and attach are rtc calls on `crate::wire::TerminalHub` now
+// (`list_terminals`/`create_terminal`/`attach_terminal`), and
+// commands/updates ride a `TerminalAttachment`'s typed channels. This
+// module still owns only the domain vocabulary itself — serde-plain and
+// remoc-free, per `docs/remoc-adoption-design.md` §2; remoc enters this
+// crate in `wire` alone.
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct TerminalSpawnSpec {

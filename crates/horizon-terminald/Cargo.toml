@@ -6,12 +6,15 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0"
 crossbeam-channel = "0.5"
-horizon-session-protocol = { path = "../horizon-session-protocol" }
+# This daemon's whole wire -- the `TerminalHub` rtc trait, its version
+# pair, and the vocabularies its channels carry -- lives in the runtime
+# crate it belongs to (docs/runtime-crate-alignment-design.md judgment 3),
+# so there is no union protocol crate dragging the agent graph in behind it.
 horizon-terminal-core = { path = "../horizon-terminal-core" }
-# The domain-free foundation: codec pin, size caps, negotiation, and the
-# socket-path convention that used to be parked in `horizon-agent` -- which
-# is why no agent crate is named here (see this crate's `main` module doc's
-# dependency-graph note).
+# The domain-free foundation: codec pin, size caps, negotiation, the shared
+# `HubError`, and the socket-path convention that used to be parked in
+# `horizon-agent` -- which is why no agent crate is named here (see this
+# crate's `main` module doc's dependency-graph note).
 horizon-wire = { path = "../horizon-wire" }
 portable-pty = "0.9.0"
 remoc = { workspace = true }
@@ -20,6 +23,12 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+# `tests/e2e.rs` alone: the terminald split's acceptance property is that
+# draining `horizon-agentd` leaves this daemon's PTYs alive, and proving it
+# means driving a *real* agentd -- which needs the agent hub client. The
+# shipped `horizon-terminald` binary links none of it (`cargo tree
+# -p horizon-terminald -e normal` has no agent crate and no duckdb).
+horizon-agent = { path = "../horizon-agent" }
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 
 [lints.clippy]

@@ -13,14 +13,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::contract::{self, Command};
-use horizon_agent::wire::{self, HostToolResponse};
-use horizon_session_protocol::{
-    legacy, our_client_hello, HubError, HubHello, SessionHub as _, SessionHubClient,
-    SESSION_PROTOCOL_VERSION,
+use horizon_agent::wire::{
+    self, agent_client_hello, legacy, HostToolResponse, HubHello, SessionHub as _,
+    SessionHubClient, AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::{
-    CappedReceiver, DecodeSkipLog, WireCodec, CONTROL_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
-    RTC_MAX_REQUEST_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    CappedReceiver, DecodeSkipLog, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
+    RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use remoc::rtc::Client as _;
@@ -258,7 +257,7 @@ async fn recover_generation_mismatch(
     }
     *mismatch_recovery_attempted = true;
     eprintln!(
-        "a horizon-agentd that does not speak the v{SESSION_PROTOCOL_VERSION} \
+        "a horizon-agentd that does not speak the v{AGENT_PROTOCOL_VERSION} \
          remoc wire detected ({message}); draining and restarting it"
     );
     let drained = tokio::select! {
@@ -456,7 +455,7 @@ where
     hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
     hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
 
-    let client_hello = our_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
+    let client_hello = agent_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
         Ok(Ok(hello)) => Ok((hub, hello, conn_task)),
         Ok(Err(error @ HubError::IncompatibleVersion { .. })) => {
@@ -605,10 +604,10 @@ fn handle_op(op: Op, live: &Live) {
 async fn run_agent_attachment(
     routes: Arc<AgentRoutes>,
     session_id: contract::SessionId,
-    attachment: horizon_session_protocol::AgentAttachment,
+    attachment: horizon_agent::wire::AgentAttachment,
     mut commands: UnboundedReceiver<Command>,
 ) {
-    let horizon_session_protocol::AgentAttachment {
+    let horizon_agent::wire::AgentAttachment {
         mut events,
         commands: remote_commands,
     } = attachment;
@@ -642,7 +641,7 @@ async fn run_agent_attachment(
 /// Gracefully stops a JSONL-generation daemon by sending it a
 /// `session_control` `Drain` *at its own envelope version* on a fresh
 /// connection, via the quarantined legacy encoder
-/// (`horizon_session_protocol::legacy` — the sole surviving JSONL code
+/// (`horizon_agent::wire::legacy` — the sole surviving JSONL code
 /// path, and this function is its only caller). A v≤9 daemon never
 /// reveals its version to a v10 client (it cannot decode chmux at all),
 /// so this always probes downward from the newest JSONL version; a probe
@@ -690,7 +689,7 @@ async fn drain_stale_sessiond(socket_path: &Path) -> Result<(), String> {
 /// every later method's index under the index-encoded request enum, so a
 /// *still-running v16 sessiond* decodes this drain as a different method
 /// and keeps accepting. The error below is then the honest outcome and
-/// names the manual fix (see `SESSION_PROTOCOL_VERSION`'s v17 note).
+/// names the manual fix (see `AGENT_PROTOCOL_VERSION`'s v17 note).
 async fn drain_incompatible_remoc_sessiond(socket_path: &Path) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,

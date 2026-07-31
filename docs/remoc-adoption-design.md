@@ -234,8 +234,10 @@ by accident. Rules, then enforcement:
    undecodable items (adoption condition 2).
 3. **The schema is a committed artifact, checked mechanically.** Every
    wire-visible type derives `schemars::JsonSchema`; a generator writes
-   one canonical schema file (e.g.
-   `crates/horizon-session-protocol/schema/session-wire.json`) which is
+   one canonical schema file per runtime
+   (`crates/horizon-agent/schema/agent-wire.json`,
+   `crates/horizon-terminal-core/schema/terminal-wire.json` — one union
+   file until `docs/runtime-crate-alignment-design.md` phase 2) which is
    committed. Two checks enforce it:
    - a nextest test regenerates the schema and fails on any drift from
      the committed artifact — so every wire change is visible, reviewable
@@ -493,7 +495,11 @@ Inherited unchanged:
   (PR #19).
 - `docs/session-daemon-design.md`, `docs/terminal-protocol-goals.md` — 
   the decisions §8 maps.
-- `crates/horizon-session-protocol/src/lib.rs` (remoc hub and wire policy),
+- `crates/horizon-agent/src/wire/hub.rs`,
+  `crates/horizon-terminal-core/src/wire.rs` (the two remoc hubs and the
+  wire policy; one union crate until
+  `docs/runtime-crate-alignment-design.md` phase 2),
+  `crates/horizon-wire/` (the domain-free foundation),
   `src/sessiond/` (remoc client runtime),
   `crates/horizon-agentd/src/terminal.rs` (full-frame watch publisher),
   `crates/horizon-terminal-core/src/types/frame.rs` (snapshot type),

@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use horizon_session_protocol::HubError;
+use horizon_wire::HubError;
 use tokio::sync::Notify;
 
 /// The bound on the whole remoc establishment sequence — chmux handshake,
@@ -75,15 +75,16 @@ pub(super) struct RuntimeControl {
     cancelled: AtomicBool,
     established: AtomicBool,
     /// The version `hello` negotiated, or `0` before the first establishment.
-    /// Read live by terminal panes to gate the v12 scrollback windowing
-    /// surface (`docs/terminal-scrollback-design.md` §4): a pane only sends
-    /// `RequestScrollWindow` when this is ≥ 12, otherwise it keeps today's
-    /// round-trip `Scroll`. Set once per establishment (alongside
-    /// `mark_established`) and **not cleared on disconnect** — it holds the
-    /// most recently negotiated version until the next establishment
-    /// overwrites it. A dead connection is surfaced through reachability (the
-    /// per-pane `RuntimeReachability`, plus the pane dropping its window when
-    /// the channels close), not by zeroing this.
+    /// Under lockstep versioning no per-feature gate reads the number any
+    /// more (those constants went with
+    /// `docs/runtime-crate-alignment-design.md` phase 2); terminal panes read
+    /// it only for `Some` vs `None` — "has this runtime finished a `hello`
+    /// yet". Set once per establishment (alongside `mark_established`) and
+    /// **not cleared on disconnect** — it holds the most recently negotiated
+    /// version until the next establishment overwrites it. A dead connection
+    /// is surfaced through reachability (the per-pane `RuntimeReachability`,
+    /// plus the pane dropping its window when the channels close), not by
+    /// zeroing this.
     negotiated: AtomicU32,
     notify: Notify,
     stopped: (Mutex<bool>, Condvar),
@@ -101,9 +102,8 @@ impl RuntimeControl {
     }
 
     /// The most recently negotiated protocol version, or `None` before the
-    /// first establishment. `None` and any value below 12 both gate the
-    /// scrollback windowing surface off (conservative: never send a window
-    /// request a peer might not answer).
+    /// first establishment — see the field's own doc for why only that
+    /// distinction is still load-bearing.
     pub(super) fn negotiated(&self) -> Option<u32> {
         match self.negotiated.load(Ordering::Acquire) {
             0 => None,

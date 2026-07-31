@@ -27,13 +27,17 @@
 //! backstop for losing this process is the workspace snapshot restore,
 //! exactly as before.
 //!
-//! **Dependency-graph note.** This crate no longer names `horizon-agent` in
-//! its manifest: the socket-path convention it used to reach for lives in
-//! `horizon-wire`, the domain-free foundation both daemons share
-//! (`docs/runtime-crate-alignment-design.md` phase 1). `horizon-agent` is
-//! still pulled in transitively while the two hub traits share
-//! `horizon-session-protocol`; phase 2 of that doc moves [`TerminalHub`]
-//! into `horizon-terminal-core` and closes the gap.
+//! **Dependency-graph note.** No agent crate appears anywhere in this
+//! binary's graph -- `cargo tree -p horizon-terminald -e normal` has
+//! neither `horizon-agent` nor libduckdb. The socket-path convention it
+//! used to reach into `horizon-agent` for lives in `horizon-wire`, the
+//! domain-free foundation both daemons share
+//! (`docs/runtime-crate-alignment-design.md` phase 1), and phase 2 moved
+//! `TerminalHub` itself out of the union protocol crate and into
+//! `horizon_terminal_core::wire`, dissolving the last transitive edge.
+//! (`tests/e2e.rs` alone dev-depends on `horizon-agent`: the split's
+//! acceptance property is that draining a *real* agentd leaves this
+//! daemon's PTYs alive.)
 
 mod hub;
 mod terminal;
@@ -42,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
-use horizon_session_protocol::{TerminalHubClient, TerminalHubServerShared};
+use horizon_terminal_core::wire::{TerminalHubClient, TerminalHubServerShared};
 use horizon_wire::socket::default_terminald_socket_path;
 use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
 use hub::Hub;

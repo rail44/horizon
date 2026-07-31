@@ -64,8 +64,9 @@ mod tests {
     }
 
     /// Byte-for-byte fixtures of the real pre-v10 wire, recorded by
-    /// *executing the actual v9 encoder* (`horizon-session-protocol` at
-    /// commit `f82da5b`, the last JSONL generation:
+    /// *executing the actual v9 encoder* (the since-dissolved
+    /// `horizon-session-protocol` at commit `f82da5b`, the last JSONL
+    /// generation:
     /// `Envelope::session_control_at(&SessionControl::Drain, v)` through
     /// `write_envelope`) — not derived from this module's own output, so
     /// this test can only pass while `drain_line` matches what v3–v9

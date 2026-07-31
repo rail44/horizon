@@ -71,12 +71,12 @@ shared session abstraction left to host.
 
 ## Phases (each lands gate-green and wire-neutral on its own)
 
-1. **Carve `horizon-wire`** (backlog 70): move the foundation listed in
+1. *(Landed 2026-07-31.)* **Carve `horizon-wire`** (backlog 70): move the foundation listed in
    judgment 2 out of `horizon-session-protocol` (and the socket-path
    helpers out of `horizon-agent`); repoint daemons and shell.
    Acceptance: `horizon-terminald`'s manifest has no `horizon-agent`;
    wire artifact byte-identical.
-2. **Move the hubs, split the versions and the artifact**: judgment 3.
+2. *(Landed 2026-07-31.)* **Move the hubs, split the versions and the artifact**: judgment 3.
    `horizon-session-protocol` is deleted at the end of this phase. Both
    version pairs start at 18/18; the artifact becomes
    `agent-wire.json` + `terminal-wire.json` with unchanged inner keys;
