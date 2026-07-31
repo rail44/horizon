@@ -3,6 +3,8 @@
 //! independent of any pane view. Closing a pane drops the *view* while this
 //! entity and its daemon-hosted PTY survive until explicit terminate. That is
 //! the close-vs-terminate invariant (docs/ux-principles.md) in GPUI terms.
+//! Everything here that is not specific to *terminal* sessions -- the command
+//! link and the event-stream bridge -- lives in `crate::runtime`.
 
 use std::cell::{Cell, RefCell};
 use std::ops::Range;
@@ -18,7 +20,7 @@ use horizon_terminal_core::{
 use horizon_workspace::SessionId;
 
 use crate::input_trace::{input_trace, sink as input_trace_sink};
-use crate::runtime::TerminalSessionHandle;
+use crate::runtime::{event_stream, RuntimeLink, TerminalSessionHandle};
 
 /// Per-row content generations for the visible grid — the surviving form
 /// of the wire's row-level change information (goal 3 of
@@ -33,8 +35,8 @@ use crate::runtime::TerminalSessionHandle;
 /// (`super::shape_cache`, this table's consumer) then re-shapes just the
 /// bumped rows — the shape-cache invalidation semantics that keep painting
 /// proportional to *changed* rows, not every visible row every frame. Kept
-/// free-standing and GPUI-free, like [`RuntimeReachability`], so its
-/// transitions are unit-testable without a `Context`.
+/// free-standing and GPUI-free so its transitions are unit-testable without
+/// a `Context`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct RowGenerations {
     /// Monotonic stamp, advanced once per applied frame.
@@ -685,34 +687,6 @@ impl Scrollback {
     }
 }
 
-/// Whether the `TerminalCommand` channel to `horizon-terminald` is known dead.
-/// Mirrors `agent::session::RuntimeReachability` (backlog #35): a failed send
-/// used to be a silent `let _ = ...` no-op. Kept as a free-standing state
-/// machine so its transitions are unit-testable without a GPUI `Context`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-struct RuntimeReachability(bool);
-
-impl RuntimeReachability {
-    fn is_unreachable(self) -> bool {
-        self.0
-    }
-
-    /// Applies a completed send's outcome. Returns the transition's wake signal:
-    /// `true` only when this is the *first* failure out of a reachable state.
-    fn after_send(self, failed: bool) -> (Self, bool) {
-        if failed && !self.0 {
-            (Self(true), true)
-        } else {
-            (self, false)
-        }
-    }
-
-    /// A pump event arriving means the runtime is reachable again.
-    fn after_event_received(self) -> Self {
-        Self(false)
-    }
-}
-
 /// One item from the attachment's two streams (wire v11): a full frame from
 /// the latest-only `watch<TerminalFrame>`, or an ordered non-frame event.
 enum Incoming {
@@ -776,7 +750,10 @@ pub(super) struct VisibleScrollback {
 }
 
 pub(crate) struct TerminalSession {
-    tx: crossbeam_channel::Sender<TerminalCommand>,
+    /// The command channel to `horizon-terminald` plus its reachability
+    /// bookkeeping, including the notify pump a failed send needs to reach
+    /// the view with (see [`Self::dispatch`]).
+    link: RuntimeLink<TerminalCommand>,
     pub(crate) frame: Option<TerminalFrame>,
     /// Which rows of `frame` changed, as per-row generations — see
     /// [`RowGenerations`]. Updated in lockstep with `frame` by the pump,
@@ -790,13 +767,7 @@ pub(crate) struct TerminalSession {
     /// Last error message from `TerminalUpdate::Error`, or a synthetic message
     /// when the update channel closes unexpectedly.
     error: RefCell<Option<String>>,
-    /// Whether the command channel to terminald is known dead.
-    runtime: Cell<RuntimeReachability>,
     traffic_trace: TrafficTraceStats,
-    /// Wakes the tiny notify pump spawned in `spawn` so a `dispatch`
-    /// failure -- synchronous, `&self`-only, no `Context` in hand -- still
-    /// reaches `cx.notify()` promptly.
-    wake_notify: futures::channel::mpsc::UnboundedSender<()>,
     /// Notifies the shell that this terminal's shell has exited, so the shell
     /// can terminate the workspace session and replace it if it was the last
     /// pane.
@@ -813,8 +784,8 @@ pub(crate) struct TerminalSession {
     scrollback_generation: u64,
     /// The attachment handle, held purely for its `Drop`: releasing it
     /// unregisters this session's routes in the terminal runtime. Its
-    /// channels were cloned out at construction (`tx`, plus the pumps), so
-    /// nothing reads the handle itself.
+    /// channels were cloned out at construction (the link's sender, plus the
+    /// pumps), so nothing reads the handle itself.
     _attachment: TerminalSessionHandle,
 }
 
@@ -853,14 +824,6 @@ impl TerminalSession {
         // replayed every obsolete frame for seconds after PTY output stopped.
         // `watch::changed` collapses that backlog: after each main-thread
         // update completes, the next borrow observes only the newest frame.
-        let (event_tx, mut event_rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
-            while let Ok(event) = events_rx.recv() {
-                if event_tx.unbounded_send(event).is_err() {
-                    return;
-                }
-            }
-        });
         let dump_path = std::env::var_os("HORIZON_GPUI_DUMP").map(std::path::PathBuf::from);
         cx.spawn(async move |this, cx| {
             while frames_rx.changed().await.is_ok() {
@@ -879,6 +842,7 @@ impl TerminalSession {
 
         // Non-frame events retain FIFO semantics: clipboard writes, exit,
         // errors, bells and scroll-window replies must not be collapsed.
+        let mut event_rx = event_stream(events_rx);
         cx.spawn(async move |this, cx| {
             while let Some(event) = event_rx.next().await {
                 let apply = this.update(cx, |session, cx| {
@@ -896,7 +860,7 @@ impl TerminalSession {
                     session
                         .error
                         .replace(Some("terminal runtime disconnected".to_string()));
-                    session.runtime.set(RuntimeReachability(true));
+                    session.link.mark_unreachable();
                 }
                 // Drop any held/awaited window: a disconnected runtime never
                 // serves one, so a dead pane must not freeze scrolled back
@@ -907,29 +871,14 @@ impl TerminalSession {
         })
         .detach();
 
-        // The notify pump: wakes on `dispatch`'s first send failure and
-        // re-notifies this entity. Ends when `wake_notify` drops with the
-        // entity.
-        let (wake_tx, mut wake_rx) = futures::channel::mpsc::unbounded();
-        cx.spawn(async move |this, cx| {
-            while wake_rx.next().await.is_some() {
-                if this.update(cx, |_, cx| cx.notify()).is_err() {
-                    return;
-                }
-            }
-        })
-        .detach();
-
         Self {
-            tx: handle.sender(),
+            link: RuntimeLink::new(handle.sender(), cx),
             frame: None,
             row_generations: RowGenerations::default(),
             session_id,
             exited: Cell::new(false),
             error: RefCell::new(None),
-            runtime: Cell::new(RuntimeReachability::default()),
             traffic_trace: TrafficTraceStats::new(),
-            wake_notify: wake_tx,
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
             scrollback_generation: 0,
@@ -953,7 +902,7 @@ impl TerminalSession {
         }
         // Any traffic from the runtime means it is reachable again
         // (stale-death recovery, parity with AgentSession).
-        self.runtime.set(self.runtime.get().after_event_received());
+        self.link.mark_reachable();
         // Whether this item needs a repaint. Every arm notifies as before,
         // except a live frame arriving while a scrollback window is held.
         let notify = match incoming {
@@ -979,7 +928,7 @@ impl TerminalSession {
             }
             Incoming::Event(TerminalUpdate::Error(error)) => {
                 self.error.replace(Some(error));
-                self.runtime.set(RuntimeReachability(true));
+                self.link.mark_unreachable();
                 self.scrollback.borrow_mut().abandon();
                 true
             }
@@ -1029,29 +978,19 @@ impl TerminalSession {
     }
 
     pub(crate) fn runtime_unreachable(&self) -> bool {
-        self.runtime.get().is_unreachable()
+        self.link.is_unreachable()
     }
 
-    /// Every command send funnels through here: short-circuits once the
-    /// channel is known dead, and on the first failure flags it and wakes the
-    /// notify pump so the view picks it up.
+    /// Every command send funnels through here. The link short-circuits once
+    /// the channel is known dead and, on the failure that discovers the death,
+    /// flags it and wakes the notify pump so the view picks it up. The
+    /// terminal adds one step of its own: a dead runtime never answers an
+    /// outstanding window request, so any held / awaited scrollback window is
+    /// dropped rather than left frozen on a pending fetch (review fix ⑤). The
+    /// link's wake repaints it.
     fn dispatch(&self, command: TerminalCommand) {
-        if self.runtime.get().is_unreachable() {
-            return;
-        }
-        let failed = self.tx.send(command).is_err();
-        let (next, should_wake) = self.runtime.get().after_send(failed);
-        self.runtime.set(next);
-        if failed {
-            // The command channel just died (this is the first failure — the
-            // guard above short-circuits every later send). A dead runtime
-            // never answers an outstanding window request, so drop any held /
-            // awaited window rather than freeze scrolled back on a pending
-            // fetch (review fix ⑤). The `should_wake` notify below repaints.
+        if self.link.dispatch(command) {
             self.scrollback.borrow_mut().abandon();
-        }
-        if should_wake {
-            let _ = self.wake_notify.unbounded_send(());
         }
     }
 
@@ -1249,59 +1188,20 @@ fn write_to_primary(cx: &mut Context<TerminalSession>, text: String) {
 #[cfg(not(any(target_os = "linux", target_os = "freebsd")))]
 fn write_to_primary(_cx: &mut Context<TerminalSession>, _text: String) {}
 
-// Deliberately `use super::RuntimeReachability` rather than `use super::*` --
-// session.rs's top-level `use gpui::*` glob-imports `gpui::test`, which would
-// otherwise shadow the standard `#[test]` attribute in this module.
+// Deliberately a named `use super::{...}` rather than `use super::*` --
+// session.rs's top-level `use gpui::*` glob-imports `gpui::test` (the
+// GPUI-aware async-test attribute macro), which would otherwise shadow the
+// standard `#[test]` attribute in this module and send every plain `#[test]`
+// fn below through `gpui_macros`' expansion instead, which recurses without
+// terminating on a non-async fn (a real stack overflow inside
+// libgpui_macros.so at recursion_limit 256, confirming it's runaway, not just
+// a step-count formality).
 #[cfg(test)]
 mod tests {
-    use super::{
-        continuous_anchor, RowGenerations, RuntimeReachability, ScrollIpc, Scrollback, WindowFetch,
-    };
+    use super::{continuous_anchor, RowGenerations, ScrollIpc, Scrollback, WindowFetch};
     use horizon_terminal_core::{
         TerminalFrame, TerminalScrollWindow, TerminalSelection, TerminalSelectionPoint,
     };
-
-    #[test]
-    fn starts_reachable() {
-        assert!(!RuntimeReachability::default().is_unreachable());
-    }
-
-    #[test]
-    fn first_failure_flags_unreachable_and_wakes() {
-        let (next, should_wake) = RuntimeReachability::default().after_send(true);
-        assert!(next.is_unreachable());
-        assert!(should_wake);
-    }
-
-    #[test]
-    fn a_success_from_reachable_stays_reachable_and_does_not_wake() {
-        let (next, should_wake) = RuntimeReachability::default().after_send(false);
-        assert!(!next.is_unreachable());
-        assert!(!should_wake);
-    }
-
-    #[test]
-    fn event_received_clears_an_unreachable_flag() {
-        let unreachable = RuntimeReachability::default().after_send(true).0;
-        assert!(unreachable.is_unreachable());
-        let recovered = unreachable.after_event_received();
-        assert!(!recovered.is_unreachable());
-    }
-
-    #[test]
-    fn event_received_is_a_noop_already_reachable() {
-        let reachable = RuntimeReachability::default();
-        assert_eq!(reachable.after_event_received(), reachable);
-    }
-
-    #[test]
-    fn a_repeat_failure_after_recovery_wakes_again() {
-        let unreachable = RuntimeReachability::default().after_send(true).0;
-        let recovered = unreachable.after_event_received();
-        let (next, should_wake) = recovered.after_send(true);
-        assert!(next.is_unreachable());
-        assert!(should_wake);
-    }
 
     /// Drives [`RowGenerations::apply_frame`] the way the pump does — track
     /// the previously held frame, compare the next against it — and returns

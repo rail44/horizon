@@ -246,7 +246,12 @@ The shell is GPUI-based (the Floem shell retired at tag
   shared machinery in `common.rs`), each with its own connection, op
   queue, and route table: non-blocking connect/spawn, per-domain routing,
   and explicit per-daemon drain. See `docs/terminald-split-design.md` for why reloading
-  one must not disturb the other.
+  one must not disturb the other. `link.rs` and `notify.rs` are the same
+  layer's view-facing half — the per-session machinery every view kind
+  needs (`RuntimeLink`'s command channel plus reachability and the
+  `&self` notify pump, the blocking-receiver→stream bridge) and the
+  optional repaint coalescer the agent pane uses — so a third view kind
+  inherits them instead of copying the second one's copy.
 - `terminal/` — the terminal pane: the daemon-backed per-session model entity
   (`session.rs`) and the view (grid painting, key/mouse/IME handling,
   `input.rs` mapping). PTY ownership lives in `crates/horizon-terminald`;
@@ -269,10 +274,13 @@ The shell is GPUI-based (the Floem shell retired at tag
 - `keymap.rs` — `[keybindings]` chord/command translation;
   `theme.rs` — config-driven color scheme; `terminal_focus.rs` — the
   focus-reporting decision; `main.rs` — CLI-vs-GUI entry point.
-- `ui/` — cross-domain UI primitives only. Domain-specific views live next
-  to their domains.
-- `plugins/` — WASM plugin groundwork; the future path for hot-reloadable
-  panes. Not yet wired into the app shell.
+- There is no cross-domain UI-primitive module and no plugin module:
+  `ui/` and `plugins/` were Floem-era directories, both deleted when that
+  shell was retired. The shared visual vocabulary is gpui-component's
+  widgets plus `theme/` (and `theme_settings/`, the live theme editor
+  pane); every view lives next to its domain. WASM plugin views are a
+  prospective third *runtime*, not a `src/` directory — see
+  `docs/view-runtime-principle.md`.
 
 ## Conventions
 

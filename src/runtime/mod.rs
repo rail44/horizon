@@ -16,9 +16,15 @@
 //! started eagerly and non-blocking, backed by one dedicated current-thread
 //! tokio runtime on a background OS thread. The sync-world ⇄ tokio boundary
 //! did not move.
+//!
+//! [`link`] and [`notify`] are this layer's view-facing half: the machinery a
+//! session entity needs to pump one attachment, shared across view kinds
+//! rather than re-grown per kind.
 
 mod agent;
 mod common;
+mod link;
+mod notify;
 mod routing;
 mod terminal;
 
@@ -35,6 +41,9 @@ use routing::{AgentRoutes, TerminalRoutes};
 use uuid::Uuid;
 
 use common::RuntimeControl;
+
+pub(crate) use link::{event_stream, RuntimeLink};
+pub(crate) use notify::{NotifyCoalescer, NotifyDecision};
 
 /// The sync world's overall budget for one queued list request: the op may
 /// legitimately wait out connection establishment (retries with backoff)
