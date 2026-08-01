@@ -1,0 +1,21 @@
+[package]
+name = "horizon-daemon-testkit"
+version = "0.1.0"
+edition = "2021"
+
+# Test support only: this crate is a `[dev-dependencies]` entry of the two
+# daemon crates and is never linked into a shipped binary. It deliberately
+# depends on nothing domain-specific -- no agent crate, no terminal crate --
+# so both daemons' suites can use it without either one dragging the other's
+# graph in behind it.
+[dependencies]
+# The domain-free wire foundation: `WireCodec` (the workspace's one codec
+# pin) is all this crate needs to establish a remoc connection for either
+# hub.
+horizon-wire = { path = "../horizon-wire" }
+remoc = { workspace = true }
+tokio = { version = "1.52", features = ["net", "rt", "time"] }
+uuid = { version = "1.18", features = ["v4"] }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

@@ -17,13 +17,16 @@
 //! must be polled concurrently with the test's own awaits (adoption
 //! condition 3) while some helpers block briefly (process spawn/kill).
 
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
-use std::thread;
+use std::process::Command;
 use std::time::Duration;
 
 use horizon_agent::wire::{agent_client_hello, SessionHub as _, SessionHubClient};
+use horizon_daemon_testkit::{
+    connect_hub_client, connect_with_retry, drain_with_timeout, resolve_daemon_binary,
+    scratch_socket, sibling_daemon_binary, wait_for_exit, AgentdPaths, AgentdProcess, AgentdSpawn,
+    DaemonProcess,
+};
 use horizon_terminal_core::wire::{
     terminal_client_hello, TerminalHub as _, TerminalHubClient,
     MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, TERMINAL_PROTOCOL_VERSION,
@@ -39,200 +42,42 @@ use horizon_wire::{
 use remoc::rch;
 use tokio::net::UnixStream;
 
-/// See `horizon-agentd`'s e2e suite for the full write-up of why the
-/// *runtime* env var is preferred over the same-named compile-time `env!()`
-/// bake (`docs/tasks/backlog.md` #40): under this repo's shared build-dir a
-/// cached test binary's baked path can point into a deleted worktree, while
-/// cargo/nextest inject the runtime value fresh for every invocation.
-const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-terminald";
-
-/// How long to wait once before re-probing/re-spawning after finding a
-/// daemon binary transiently missing — cargo's own non-atomic artifact
-/// uplift window (`docs/tasks/backlog.md` #36).
-const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
-
 const TERMINAL_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Resolves the `horizon-terminald` binary to spawn. Only the `env!()` bake
+/// has to be produced here (that macro expands only inside the package that
+/// owns the `[[bin]]` target); the resolution rule and its rationale live in
+/// `horizon_daemon_testkit::binary`.
 fn resolve_terminald_binary() -> PathBuf {
-    if let Ok(runtime_var) = std::env::var(CARGO_BIN_EXE_VAR) {
-        let path = PathBuf::from(runtime_var);
-        if path.is_file() {
-            return path;
-        }
-    }
-    let baked_in = PathBuf::from(env!("CARGO_BIN_EXE_horizon-terminald"));
-    if baked_in.is_file() {
-        return baked_in;
-    }
-    panic!(
-        "could not locate the horizon-terminald binary to spawn for this e2e test -- probed \
-         runtime env var {CARGO_BIN_EXE_VAR} = {:?} and compile-time bake = {} (exists = {}) \
-         -- see docs/tasks/backlog.md #40",
-        std::env::var(CARGO_BIN_EXE_VAR),
-        baked_in.display(),
-        baked_in.is_file(),
-    );
+    resolve_daemon_binary("horizon-terminald", env!("CARGO_BIN_EXE_horizon-terminald"))
 }
 
-/// `horizon-agentd` for the cross-daemon acceptance test, resolved as a
-/// *sibling* of the terminald binary: `CARGO_BIN_EXE_<name>` is only
-/// injected for binaries of the package a test belongs to, and every
-/// workspace binary is uplifted into the same target directory, so the
-/// sibling lookup is the one honest way to reach it from here (the same rule
-/// `horizon_agent::client::resolve_daemon_binary` uses in production).
-fn resolve_agentd_binary() -> PathBuf {
-    let terminald = resolve_terminald_binary();
-    let candidate = terminald
-        .parent()
-        .expect("the terminald binary must live in a directory")
-        .join("horizon-agentd");
-    assert!(
-        candidate.is_file(),
-        "expected horizon-agentd next to horizon-terminald at {} -- run \
-         `cargo build --workspace` (the quality gate does)",
-        candidate.display()
-    );
-    candidate
+/// Spawns `horizon-terminald` on a fresh throwaway socket. The daemon owns
+/// no persistence, so the socket is the only scratch state to clean up --
+/// the handle kills the child and unlinks it (and with it the PTYs) on drop.
+fn spawn_terminald() -> DaemonProcess {
+    let socket_path = scratch_socket("td-e2e");
+    let mut command = Command::new(resolve_terminald_binary());
+    command.arg("--socket").arg(&socket_path);
+    DaemonProcess::spawn(&mut command, socket_path)
 }
 
-fn spawn_daemon(command: &mut Command) -> Child {
-    match command.spawn() {
-        Ok(child) => child,
-        Err(first_error) if first_error.kind() == ErrorKind::NotFound => {
-            thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
-            command.spawn().unwrap_or_else(|retry_error| {
-                let program = command.get_program().to_owned();
-                panic!(
-                    "failed to spawn {} even after a retry for a transient link window: \
-                     first error = {first_error}, retry error = {retry_error} -- see \
-                     docs/tasks/backlog.md #36",
-                    program.to_string_lossy(),
-                )
-            })
-        }
-        Err(error) => panic!("failed to spawn a daemon: {error}"),
-    }
-}
-
-/// A short, SUN_LEN-safe socket path in the system temp dir.
-fn scratch_socket(tag: &str) -> PathBuf {
-    let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
-    std::env::temp_dir().join(format!("hzn-{tag}-{short_id}.sock"))
-}
-
-/// Owns a spawned `horizon-terminald` and its socket path; kills the child
-/// and removes the socket file on drop so a failing assertion doesn't leak
-/// either (nor the PTYs the daemon owns) across test runs.
-struct TerminaldProcess {
-    child: Child,
-    socket_path: PathBuf,
-}
-
-impl TerminaldProcess {
-    fn spawn() -> Self {
-        let socket_path = scratch_socket("td-e2e");
-        let mut command = Command::new(resolve_terminald_binary());
-        command.arg("--socket").arg(&socket_path);
-        Self {
-            child: spawn_daemon(&mut command),
-            socket_path,
-        }
-    }
-}
-
-impl Drop for TerminaldProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket_path);
-    }
-}
-
-/// The acceptance test's `horizon-agentd`, spawned hermetically: its own
-/// throwaway event log and DuckDB projection plus a nonexistent config
-/// file, so it never reads or rebuilds a real developer's agent state.
-struct AgentdProcess {
-    child: Child,
-    socket_path: PathBuf,
-    event_log_path: PathBuf,
-    state_db_path: PathBuf,
-}
-
-impl AgentdProcess {
-    fn spawn() -> Self {
-        let socket_path = scratch_socket("sd-for-td-e2e");
-        let unique = format!("{}-{}", std::process::id(), uuid::Uuid::new_v4());
-        let event_log_path =
-            std::env::temp_dir().join(format!("horizon-terminald-e2e-events-{unique}.jsonl"));
-        let state_db_path =
-            std::env::temp_dir().join(format!("horizon-terminald-e2e-state-{unique}.duckdb"));
-        Self::spawn_at(socket_path, event_log_path, state_db_path)
-    }
-
-    fn spawn_at(socket_path: PathBuf, event_log_path: PathBuf, state_db_path: PathBuf) -> Self {
-        let missing_config_path = std::env::temp_dir().join(format!(
-            "horizon-terminald-e2e-no-such-config-{}-{}.toml",
-            std::process::id(),
-            uuid::Uuid::new_v4()
-        ));
-        let mut command = Command::new(resolve_agentd_binary());
-        command
-            .arg("--socket")
-            .arg(&socket_path)
-            .env("HORIZON_CONFIG", &missing_config_path)
-            .env("HORIZON_AGENT_EVENT_LOG", &event_log_path)
-            .env("HORIZON_AGENT_STATE_DB", &state_db_path)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_SYSTEM", "/dev/null");
-        Self {
-            child: spawn_daemon(&mut command),
-            socket_path,
-            event_log_path,
-            state_db_path,
-        }
-    }
-
-    /// Respawns a fresh process at the same paths — what `Reload Session
-    /// Runtime` does after the drain completes.
-    fn respawn_at_same_paths(self) -> Self {
-        let socket_path = self.socket_path.clone();
-        let event_log_path = self.event_log_path.clone();
-        let state_db_path = self.state_db_path.clone();
-        // Skip `Drop` (which would remove the paths): the point is to bring a
-        // new process up on exactly the same socket and log.
-        std::mem::forget(self);
-        Self::spawn_at(socket_path, event_log_path, state_db_path)
-    }
-}
-
-impl Drop for AgentdProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket_path);
-        let _ = std::fs::remove_file(&self.event_log_path);
-        let _ = std::fs::remove_file(&self.state_db_path);
-    }
-}
-
-async fn connect_with_retry(path: &Path) -> UnixStream {
-    for _ in 0..200 {
-        if let Ok(stream) = UnixStream::connect(path).await {
-            return stream;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("no daemon ever accepted a connection on {}", path.display());
-}
-
-async fn wait_for_exit(child: &mut Child) -> std::process::ExitStatus {
-    for _ in 0..200 {
-        if let Ok(Some(status)) = child.try_wait() {
-            return status;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the daemon did not exit in time");
+/// The acceptance test's `horizon-agentd`, spawned through the testkit's
+/// definition of that daemon's hermetic contract -- the same one agentd's
+/// own suite spawns through, so this suite cannot silently fall behind it
+/// (it used to keep a hand-written copy, which could go stale while staying
+/// green against a *less* isolated daemon).
+///
+/// The binary is resolved as a *sibling* of the terminald one:
+/// `CARGO_BIN_EXE_<name>` is only injected for binaries of the package a
+/// test belongs to, and every workspace binary is uplifted into the same
+/// target directory.
+fn spawn_agentd() -> AgentdProcess {
+    AgentdSpawn::new(
+        sibling_daemon_binary(&resolve_terminald_binary(), "horizon-agentd"),
+        AgentdPaths::scratch("agentd-td-e2e"),
+    )
+    .spawn()
 }
 
 // --- the terminal hub test harness -----------------------------------------
@@ -260,24 +105,7 @@ impl Drop for HubTestClient {
 async fn connect_raw(
     stream: UnixStream,
 ) -> (TerminalHubClient<WireCodec>, tokio::task::JoinHandle<()>) {
-    let (read_half, write_half) = stream.into_split();
-    let (conn, _base_tx, mut base_rx) =
-        remoc::Connect::io::<_, _, (), TerminalHubClient<WireCodec>, WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        )
-        .await
-        .expect("remoc connect to the real daemon");
-    let conn_task = tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let hub = base_rx
-        .recv()
-        .await
-        .expect("base channel recv")
-        .expect("the daemon should hand over its hub client");
-    (hub, conn_task)
+    connect_hub_client::<TerminalHubClient<WireCodec>>(stream).await
 }
 
 async fn connect_hub(socket_path: &Path) -> HubTestClient {
@@ -296,12 +124,10 @@ async fn connect_hub(socket_path: &Path) -> HubTestClient {
 }
 
 impl HubTestClient {
-    /// Gracefully drains the daemon. The daemon exits inside the call, so
-    /// the reply never travels -- the call resolves as a transport error,
-    /// which is expected; the caller confirms the exit via
-    /// [`wait_for_exit`].
+    /// Gracefully drains the daemon -- see `drain_with_timeout` for why the
+    /// call's own outcome is discarded.
     async fn drain(&self) {
-        let _ = tokio::time::timeout(Duration::from_secs(5), self.hub.drain()).await;
+        drain_with_timeout(self.hub.drain()).await;
     }
 }
 
@@ -406,7 +232,7 @@ async fn collect_terminal_frame_until(
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hello_negotiates_reports_the_binary_id_and_drains_over_the_real_socket() {
-    let mut terminald = TerminaldProcess::spawn();
+    let mut terminald = spawn_terminald();
     let client = connect_hub(&terminald.socket_path).await;
 
     assert_eq!(client.negotiated, TERMINAL_PROTOCOL_VERSION);
@@ -431,7 +257,7 @@ async fn hello_negotiates_reports_the_binary_id_and_drains_over_the_real_socket(
 /// path `Reload Terminal Runtime`'s automatic recovery depends on.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
-    let mut terminald = TerminaldProcess::spawn();
+    let mut terminald = spawn_terminald();
     let stream = connect_with_retry(&terminald.socket_path).await;
     let (hub, conn_task) = connect_raw(stream).await;
 
@@ -472,7 +298,7 @@ async fn an_incompatible_version_range_is_rejected_but_drain_still_works() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socket() {
-    let terminald = TerminaldProcess::spawn();
+    let terminald = spawn_terminald();
     let session_id = uuid::Uuid::new_v4();
     let client = connect_hub(&terminald.socket_path).await;
 
@@ -528,7 +354,7 @@ async fn terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socke
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
-    let terminald = TerminaldProcess::spawn();
+    let terminald = spawn_terminald();
     let high_id = uuid::Uuid::from_u128(2);
     let low_id = uuid::Uuid::from_u128(1);
 
@@ -582,7 +408,7 @@ async fn terminal_list_is_sorted_and_a_missing_attach_is_explicit() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
-    let terminald = TerminaldProcess::spawn();
+    let terminald = spawn_terminald();
     let root = std::env::temp_dir().join(format!("hzn-cwd-e2e-{}", uuid::Uuid::new_v4()));
     let source_cwd = root.join("source");
     let fallback_cwd = root.join("fallback");
@@ -637,27 +463,11 @@ async fn terminal_spawn_uses_fallback_and_source_session_cwds() {
 /// exit with [`wait_for_exit`].
 async fn drain_agentd(socket_path: &Path) {
     let stream = connect_with_retry(socket_path).await;
-    let (read_half, write_half) = stream.into_split();
-    let (conn, _base_tx, mut base_rx) =
-        remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        )
-        .await
-        .expect("remoc connect to agentd");
-    let conn_task = tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let hub = base_rx
-        .recv()
-        .await
-        .expect("base channel recv")
-        .expect("agentd should hand over its hub client");
+    let (hub, conn_task) = connect_hub_client::<SessionHubClient<WireCodec>>(stream).await;
     hub.hello(agent_client_hello("terminald-e2e"))
         .await
         .expect("hello should succeed at a matching version range");
-    let _ = tokio::time::timeout(Duration::from_secs(5), hub.drain()).await;
+    drain_with_timeout(hub.drain()).await;
     conn_task.abort();
 }
 
@@ -674,12 +484,12 @@ async fn drain_agentd(socket_path: &Path) {
 /// `TerminalHost::shutdown_all`). The test is deliberately end-to-end over
 /// two real daemons on two real sockets, because that separation is the
 /// whole deliverable — the client-side half is pinned separately in
-/// `src/agentd/tests.rs`
+/// `src/runtime/tests.rs`
 /// (`draining_the_agent_runtime_leaves_the_terminal_runtime_untouched`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable() {
-    let terminald = TerminaldProcess::spawn();
-    let mut agentd = AgentdProcess::spawn();
+    let terminald = spawn_terminald();
+    let mut agentd = spawn_agentd();
 
     // A live terminal session with recognizable output.
     let session_id = uuid::Uuid::new_v4();

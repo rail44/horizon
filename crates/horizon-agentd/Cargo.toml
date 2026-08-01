@@ -28,6 +28,10 @@ tempfile = "3"
 # and the e2e integration suite can exercise approval/boundary-crossing
 # paths without those tools ever being advertised to a real provider.
 horizon-agent = { path = "../horizon-agent", features = ["test-fixtures"] }
+# The shared daemon-process helpers `tests/e2e.rs` uses -- binary
+# resolution, spawn-with-retry, and the one definition of this daemon's
+# hermetic-spawn contract that terminald's suite also spawns through.
+horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

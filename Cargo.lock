@@ -3656,6 +3656,7 @@ dependencies = [
  "crossbeam-channel",
  "horizon-agent",
  "horizon-config",
+ "horizon-daemon-testkit",
  "horizon-sandbox",
  "horizon-wire",
  "remoc",
@@ -3692,6 +3693,16 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 2.0.18",
+ "uuid",
+]
+
+[[package]]
+name = "horizon-daemon-testkit"
+version = "0.1.0"
+dependencies = [
+ "horizon-wire",
+ "remoc",
+ "tokio",
  "uuid",
 ]
 
@@ -3753,6 +3764,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "horizon-agent",
+ "horizon-daemon-testkit",
  "horizon-terminal-core",
  "horizon-wire",
  "portable-pty",

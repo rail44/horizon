@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/horizon-agent",
     "crates/horizon-agentd",
+    "crates/horizon-daemon-testkit",
     "crates/horizon-terminald",
     "crates/horizon-control",
     "crates/horizon-cli",

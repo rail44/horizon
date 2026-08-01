@@ -19,21 +19,23 @@
 //! v17 terminald split (`docs/terminald-split-design.md`) -- the daemon it
 //! probes is `horizon-terminald` now.
 //!
-//! This intentionally reuses `tests/e2e.rs`'s spawn/handshake/wire-helper
-//! shapes rather than importing them (a `tests/*.rs` file is its own
-//! binary crate; sharing would need a `tests/common/mod.rs` restructure
-//! this throwaway investigation file isn't worth forcing on that suite).
+//! The spawn/connect helpers it drives the daemon with are shared with
+//! `tests/e2e.rs` through `horizon-daemon-testkit` -- a `tests/*.rs` file is
+//! its own binary crate, so a dev-only crate is how two of them share code
+//! at all.
 //!
 //! Run explicitly, e.g.:
 //! ```sh
 //! cargo test -p horizon-terminald --test latency_probe -- --ignored --nocapture --test-threads=1
 //! ```
 
-use std::io::ErrorKind;
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+use horizon_daemon_testkit::{
+    connect_hub_client, connect_with_retry, resolve_daemon_binary, scratch_socket, DaemonProcess,
+};
 use horizon_terminal_core::wire::{
     terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
 };
@@ -44,76 +46,25 @@ use horizon_terminal_core::{
 use horizon_wire::{CappedWatchReceiver, WireCodec, FRAME_MAX_ITEM_BYTES};
 use remoc::rch;
 use termwiz::input::{KeyCode, Modifiers};
-use tokio::net::UnixStream;
 
-const TRANSIENT_LINK_RETRY_DELAY: Duration = Duration::from_millis(200);
-const CARGO_BIN_EXE_VAR: &str = "CARGO_BIN_EXE_horizon-terminald";
-
-fn resolve_terminald_binary() -> PathBuf {
-    if let Ok(runtime_var) = std::env::var(CARGO_BIN_EXE_VAR) {
-        let path = PathBuf::from(runtime_var);
-        if path.is_file() {
-            return path;
-        }
-    }
-    PathBuf::from(env!("CARGO_BIN_EXE_horizon-terminald"))
-}
-
-fn spawn_terminald(command: &mut Command) -> Child {
-    match command.spawn() {
-        Ok(child) => child,
-        Err(first_error) if first_error.kind() == ErrorKind::NotFound => {
-            std::thread::sleep(TRANSIENT_LINK_RETRY_DELAY);
-            command.spawn().expect("failed to spawn horizon-terminald")
-        }
-        Err(error) => panic!("failed to spawn horizon-terminald: {error}"),
-    }
-}
-
-struct TerminaldProcess {
-    child: Child,
-    socket_path: PathBuf,
-}
-
-impl TerminaldProcess {
-    /// Throwaway socket path per run. Unlike the pre-v17 version of this
-    /// probe (which spawned `horizon-agentd` and had to point its event
-    /// log and DuckDB projection at scratch files), `horizon-terminald` owns
-    /// no persistence at all, so there is nothing to isolate but the socket.
-    fn spawn() -> Self {
-        let short_id = &uuid::Uuid::new_v4().simple().to_string()[..8];
-        let socket_path = std::env::temp_dir().join(format!("hzn-latprobe-{short_id}.sock"));
-
-        let mut command = Command::new(resolve_terminald_binary());
-        command
-            .arg("--socket")
-            .arg(&socket_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let child = spawn_terminald(&mut command);
-        Self { child, socket_path }
-    }
-}
-
-impl Drop for TerminaldProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = std::fs::remove_file(&self.socket_path);
-    }
-}
-
-async fn connect_with_retry(path: &std::path::Path) -> UnixStream {
-    for _ in 0..200 {
-        if let Ok(stream) = UnixStream::connect(path).await {
-            return stream;
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    panic!(
-        "horizon-terminald never accepted a connection on {}",
-        path.display()
-    );
+/// Spawns `horizon-terminald` on a throwaway socket, with its output
+/// silenced so the probe's own report is the only thing on stdout. Unlike
+/// the pre-v17 version of this probe (which spawned `horizon-agentd` and had
+/// to point its event log and DuckDB projection at scratch files),
+/// `horizon-terminald` owns no persistence at all, so there is nothing to
+/// isolate but the socket.
+fn spawn_terminald() -> DaemonProcess {
+    let socket_path = scratch_socket("latprobe");
+    let mut command = Command::new(resolve_daemon_binary(
+        "horizon-terminald",
+        env!("CARGO_BIN_EXE_horizon-terminald"),
+    ));
+    command
+        .arg("--socket")
+        .arg(&socket_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    DaemonProcess::spawn(&mut command, socket_path)
 }
 
 /// A connected `SessionHub` client over the real socket, plus the chmux
@@ -132,23 +83,7 @@ impl Drop for HubClient {
 
 async fn connect_hub(socket_path: &std::path::Path) -> HubClient {
     let stream = connect_with_retry(socket_path).await;
-    let (read_half, write_half) = stream.into_split();
-    let (conn, _base_tx, mut base_rx) =
-        remoc::Connect::io::<_, _, (), TerminalHubClient<WireCodec>, WireCodec>(
-            remoc::Cfg::default(),
-            read_half,
-            write_half,
-        )
-        .await
-        .expect("remoc connect");
-    let conn_task = tokio::spawn(async move {
-        let _ = conn.await;
-    });
-    let hub = base_rx
-        .recv()
-        .await
-        .expect("base recv")
-        .expect("hub client handover");
+    let (hub, conn_task) = connect_hub_client::<TerminalHubClient<WireCodec>>(stream).await;
     hub.hello(terminal_client_hello("latency-probe"))
         .await
         .expect("hello");
@@ -297,8 +232,8 @@ async fn wait_for_marker(
 #[tokio::test]
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_baseline_shell_echo() {
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -432,8 +367,8 @@ while True:
 
 async fn run_sync_tui_scenario(label: &str, mode: &str, iterations: usize, gap: Duration) {
     let script = write_fixture(&format!("hzn-latprobe-sync-tui-{mode}.py"), SYNC_TUI_SCRIPT);
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -518,8 +453,8 @@ async fn probe_synthetic_sync_output_multi_chunk() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_delayed_esu() {
     let script = write_fixture("hzn-latprobe-sync-tui-delayed-esu.py", SYNC_TUI_SCRIPT);
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -567,8 +502,8 @@ async fn probe_synthetic_sync_output_delayed_esu() {
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_synthetic_sync_output_malformed() {
     let script = write_fixture("hzn-latprobe-sync-tui-malformed.py", SYNC_TUI_SCRIPT);
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -661,8 +596,8 @@ while True:
 #[ignore = "research probe, not a product gate -- run explicitly, see module doc"]
 async fn probe_decrqm_negotiation_bare_query() {
     let script = write_fixture("hzn-latprobe-decrqm-probe.py", DECRQM_PROBE_SCRIPT);
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,
@@ -730,8 +665,8 @@ async fn probe_real_claude_composer_typing() {
         return;
     };
 
-    let agentd = TerminaldProcess::spawn();
-    let client = connect_hub(&agentd.socket_path).await;
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
 
     let TerminalAttachment {
         mut frames,

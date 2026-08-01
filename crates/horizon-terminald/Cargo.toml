@@ -29,6 +29,11 @@ uuid = { version = "1.18", features = ["v4"] }
 # shipped `horizon-terminald` binary links none of it (`cargo tree
 # -p horizon-terminald -e normal` has no agent crate and no duckdb).
 horizon-agent = { path = "../horizon-agent" }
+# The shared daemon-process helpers both test binaries here use. Crucially it
+# also owns `horizon-agentd`'s hermetic-spawn contract, so the acceptance
+# test's agentd is spawned by the same definition agentd's own suite uses
+# rather than a copy that can silently fall behind it.
+horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
 termwiz = { version = "0.23.3", features = ["use_serde"] }
 
 [lints.clippy]
