@@ -637,10 +637,8 @@ impl AgentTranscript {
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
         let (mark, mark_color) = if !call.finished {
             ("…", theme::text_subtle())
-        } else if call.is_error {
-            ("✗", theme::danger())
         } else {
-            ("✓", theme::success())
+            super::rows::finished_tool_call_mark(call).glyph_and_color()
         };
 
         let content: AnyElement = match &call.kind {
