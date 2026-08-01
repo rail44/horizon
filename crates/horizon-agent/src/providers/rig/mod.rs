@@ -1,9 +1,11 @@
 mod clearing;
 mod completion;
+mod guards;
 mod history;
 mod mapping;
 mod model_limits;
 mod session;
+mod session_prompt;
 mod stream;
 
 use clearing::ClearingState;

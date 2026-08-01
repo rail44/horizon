@@ -8,6 +8,7 @@ use super::completion::{
     ProviderRequestSpan, ProviderWait, Retried, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
     PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
+use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
     horizon_tool_definition_from_rig, repair_replayed_message_pairing,
@@ -17,9 +18,9 @@ use super::mapping::{
 };
 use super::session::{
     append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
-    halt_turn_loop, session_environment, session_extra_sections, tool_result_fingerprint,
-    BatchStep, GuardHalt, TurnLoopGuard,
+    halt_turn_loop, BatchStep,
 };
+use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
 use crate::config::RigAgentConfig;
 use crate::roles::{resolve, RoleId};
