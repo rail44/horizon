@@ -57,7 +57,7 @@ impl PanicReport {
         }
     }
 
-    pub fn message(&self, context: &str) -> String {
+    pub(crate) fn message(&self, context: &str) -> String {
         match &self.location {
             Some(location) => format!("{context} at {location}: {}", self.payload),
             None => format!("{context}: {}", self.payload),

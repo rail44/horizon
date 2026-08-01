@@ -17,7 +17,7 @@ use super::tool_call::ToolCallView;
 /// always stays individual chips (the command itself is meaningful, per
 /// the owner's own framing).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CallClass {
+pub(crate) enum CallClass {
     Edit,
     Bash,
     Query,

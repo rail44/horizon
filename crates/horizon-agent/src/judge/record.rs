@@ -29,7 +29,7 @@ use crate::persistence::event_log::{
 use super::{JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};
 
 /// Current enforcing-mode event label.
-pub const JUDGE_VERDICT_EVENT_KIND: &str = "judge_verdict";
+pub(crate) const JUDGE_VERDICT_EVENT_KIND: &str = "judge_verdict";
 
 /// Writes one real verdict's calibration record.
 pub(super) fn write_verdict(

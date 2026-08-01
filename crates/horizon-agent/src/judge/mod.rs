@@ -47,7 +47,6 @@ use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
-pub use record::JUDGE_VERDICT_EVENT_KIND;
 
 use client::{ModelClient, RawCompletionRequest};
 
@@ -57,7 +56,7 @@ use client::{ModelClient, RawCompletionRequest};
 /// the final verdict (the design only defines a confidence signal for
 /// stage 1's single-token response).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct JudgeVerdict {
+pub(crate) struct JudgeVerdict {
     pub decision: JudgeDecision,
     pub stage: u8,
     pub confidence: Option<f32>,
@@ -71,7 +70,7 @@ pub enum JudgeDecision {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum JudgeFallbackReason {
+pub(crate) enum JudgeFallbackReason {
     ClientError,
     Unparseable,
     Timeout,

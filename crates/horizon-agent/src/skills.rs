@@ -62,7 +62,7 @@ enum SkillBody {
 /// repository's `.horizon/skills/` directory for this session
 /// ([`SkillRegistry::discover`]).
 #[derive(Clone, Debug)]
-pub struct Skill {
+pub(crate) struct Skill {
     /// The identifier used both in a role's `skill_ids` and in
     /// `skill.read`'s `id` input -- taken verbatim from the `SKILL.md`
     /// frontmatter's `name:` field (not the containing directory's name,

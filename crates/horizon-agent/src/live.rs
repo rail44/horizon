@@ -11,7 +11,7 @@ use super::frame::{
 };
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct State {
+pub(crate) struct State {
     events: Vec<Event>,
     frame: AgentFrame,
     /// Turn bookkeeping continued across every subsequent
@@ -33,7 +33,7 @@ pub struct State {
 }
 
 impl State {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::from_history(Vec::new())
     }
 
@@ -43,7 +43,7 @@ impl State {
     /// cold replay, so a session resumed from a persisted log looks
     /// identical — from the very first fold onward — to one that had been
     /// running the whole time.
-    pub fn from_history(events: Vec<Event>) -> Self {
+    pub(crate) fn from_history(events: Vec<Event>) -> Self {
         let (frame, turn) = agent_frame_and_turn_clock_from_events(&events);
         Self {
             events,
@@ -64,7 +64,7 @@ impl State {
     /// instead of touching the frame at all -- see that field's doc comment.
     /// Every other event goes through the normal `apply_agent_event_to_frame`
     /// reducer, unchanged.
-    pub fn extend_provider_events(
+    pub(crate) fn extend_provider_events(
         &mut self,
         events: impl IntoIterator<Item = ProviderEvent>,
     ) -> AgentFrame {
@@ -83,11 +83,11 @@ impl State {
         self.frame.clone()
     }
 
-    pub fn frame(&self) -> &AgentFrame {
+    pub(crate) fn frame(&self) -> &AgentFrame {
         &self.frame
     }
 
-    pub fn session_model(&self) -> Option<&str> {
+    pub(crate) fn session_model(&self) -> Option<&str> {
         self.session_model.as_deref()
     }
 }
@@ -106,12 +106,12 @@ pub struct LiveState {
 
 impl LiveState {
     #[cfg(test)]
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 
     #[cfg(test)]
-    pub fn extend_events(&self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
+    pub(crate) fn extend_events(&self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
         self.extend_provider_events(events.into_iter().map(ProviderEvent::from))
     }
 
@@ -144,7 +144,7 @@ impl LiveState {
     /// -- `horizon-agentd`'s `run_session` is the one real caller. Kept as
     /// a shorthand for tests that don't care about history.
     #[cfg(test)]
-    pub fn with_event_log(
+    pub(crate) fn with_event_log(
         session_id: SessionId,
         provider_id: Option<ProviderId>,
         role_id: Option<RoleId>,
