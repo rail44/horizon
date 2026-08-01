@@ -21,6 +21,8 @@ use crate::{
     tools::cancelled_tool_call_result,
 };
 
+use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
+use super::session_prompt::{session_environment, session_extra_sections};
 use super::{
     complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
     load_rig_session_history, model_limits::model_limits, rig_initialization_message,
@@ -132,92 +134,6 @@ pub(super) fn spawn_rig_session(
     });
 
     SessionHandle::new(commands_tx, events_rx)
-}
-
-/// Builds a session's [`SessionEnvironment`] from the `StartSession` request
-/// that started it. Extracted as its own function (rather than inlined at
-/// its one call site above) so the 2026-07-19 dogfooding fix -- an isolated
-/// session's prompt must reflect its own workspace root, not the daemon
-/// process's `cwd` -- is directly unit-testable without spinning up the
-/// session's real thread.
-pub(super) fn session_environment(request: &StartSession) -> SessionEnvironment {
-    SessionEnvironment::for_workspace_root(request.workspace_root.as_deref())
-}
-
-/// Builds the `extra_sections` a session's system prompt is composed from
-/// (`prompt::system_prompt`), in order: the delegation-routing block (only
-/// for a session that actually has the `task` tool -- see
-/// [`advertises_task_tool`]), the role's own prompt section (if any), then a
-/// skills listing, then repository `AGENTS.md`/`CLAUDE.md` instructions --
-/// but only when `role.include_repository_instructions` allows it
-/// (`roles::CONFIG_ROLE` sets this `false`; see its own doc comment for
-/// why).
-///
-/// The skills listing (`skills::SkillRegistry`, composed here from this
-/// session's own cwd -- see `skills`' module doc for the v2 repository
-/// layer) covers *every* skill for a role-less session
-/// (`SkillRegistry::prompt_section_for_all`) and just that role's
-/// `skill_ids` for a role-bearing one (`SkillRegistry::
-/// prompt_section_for_ids`) -- so `role: None` no longer reproduces the
-/// pre-v2 prompt byte-for-byte whenever this build has any skill to
-/// disclose (it always does -- see `skills`' embedded builtins); it stays
-/// byte-identical only in the hypothetical case of an empty registry,
-/// exercised directly in `skills`' own tests.
-pub(super) fn session_extra_sections(
-    environment: &SessionEnvironment,
-    config: &RigAgentConfig,
-    role: Option<&'static RoleDefinition>,
-) -> Vec<String> {
-    let skills = crate::skills::SkillRegistry::discover(&environment.cwd);
-    let mut sections = Vec::new();
-    if advertises_task_tool(config) {
-        sections.push(crate::prompt::DELEGATION_ROUTING_SECTION.to_string());
-    }
-    let include_repository_instructions = match role {
-        Some(role) => {
-            sections.push(role.prompt_section.to_string());
-            if let Some(skills_section) = skills.prompt_section_for_ids(role.skill_ids) {
-                sections.push(skills_section);
-            }
-            role.include_repository_instructions
-        }
-        None => {
-            if let Some(skills_section) = skills.prompt_section_for_all() {
-                sections.push(skills_section);
-            }
-            true
-        }
-    };
-    if include_repository_instructions {
-        sections.extend(crate::instructions::extra_sections(
-            &environment.cwd,
-            config.repository_instructions_cap_chars,
-        ));
-    }
-    sections
-}
-
-/// Whether this session is actually offered the `task` tool, decided from
-/// the same allowlist `completion::rig_tool_definitions` filters the
-/// advertised catalog with -- `config` here is already role-adjusted
-/// (`super::role_adjusted_config`, applied before `spawn_rig_session`), so
-/// `None` means the unrestricted role-less toolset and `Some` is the role's
-/// exact list.
-///
-/// This is the whole conditionality of `prompt::DELEGATION_ROUTING_SECTION`.
-/// The probes measured its wording unhedged ("your FIRST action must be
-/// task"), so the wording keeps no "when it is available" escape clause;
-/// instead the block is simply absent from a prompt whose session has no
-/// such tool. An exploration session is exactly that case: its role allows
-/// `fs.read`/`fs.grep`/`fs.glob` only (`roles::EXPLORE_ROLE`, which
-/// deliberately excludes this tool so explorations cannot recurse), and
-/// instructing it to delegate first would be an instruction it could only
-/// fail.
-fn advertises_task_tool(config: &RigAgentConfig) -> bool {
-    match &config.allowed_tool_ids {
-        Some(allowed) => allowed.iter().any(|id| id == crate::tools::TASK_TOOL_ID),
-        None => true,
-    }
 }
 
 /// Builds this session's [`ClearingState`] from the provider's declared
@@ -1078,147 +994,14 @@ fn emit_cancelled_turn(events_tx: &Sender<ProviderEvent>) {
     let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
 }
 
-// --- Turn-loop guards ------------------------------------------------------
+// --- Turn-loop guard response ---------------------------------------------
 //
-// Two independent safety nets against a runaway tool-calling loop, per
-// `docs/agent-tools-design.md`'s "Error Model and Loop Guards" section:
-//
-// - an iteration cap on consecutive tool-driven turns since the last user
-//   message (a model that never stops calling tools), and
-// - doom-loop detection on repeated identical (tool, args, result)
-//   fingerprints (a model stuck re-issuing the same call to the same
-//   effect).
-//
-// Both halt the same way (`halt_turn_loop`): the same cancellation
-// machinery `Command::Cancel` uses for still-pending calls (so
-// `rig_history` stays API-valid), a `TurnEnded` event carrying which guard
-// fired (rendered as a calm "paused" receipt, not an error -- see
-// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution),
-// and a return to `WaitingForUser` so either a new user message or
-// `Command::ContinueTurn` works normally. `TurnLoopGuard` itself is pure
-// (no I/O), so its counting and fingerprinting logic is unit-tested
-// directly in `tests.rs`.
-
-/// Why the turn loop halted itself rather than running another turn.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum GuardHalt {
-    IterationCapExceeded,
-    DoomLoopDetected,
-}
-
-impl GuardHalt {
-    /// The specific [`TurnEndReason`] this halt reports, so the UI can
-    /// render the right calm reason text without needing to know the
-    /// guard's internals — see [`TurnEndReason::HaltedByIterationCap`]/
-    /// [`TurnEndReason::HaltedByDoomLoop`]'s own doc comments.
-    fn turn_end_reason(self) -> TurnEndReason {
-        match self {
-            GuardHalt::IterationCapExceeded => TurnEndReason::HaltedByIterationCap,
-            GuardHalt::DoomLoopDetected => TurnEndReason::HaltedByDoomLoop,
-        }
-    }
-}
-
-/// Pure turn-loop guard state: counts consecutive tool-driven turns since
-/// the last user message, and keeps a short window of tool-result
-/// fingerprints to detect a doom loop. Free of I/O so it can be tested
-/// directly as a small unit, independent of the session's channels and
-/// async plumbing.
-///
-/// `iteration_cap`/`doom_loop_window` come from `agent::config::
-/// RigAgentConfig` (formerly the hardcoded `TOOL_TURN_ITERATION_CAP`/
-/// `DOOM_LOOP_WINDOW` constants) and are fixed for the guard's lifetime;
-/// `reset` only clears the running counters below, never these.
-/// Maximum consecutive auto-continues after the provider truncated tool
-/// calls mid-stream before giving up and falling back to `WaitingForUser`
-/// (the owner's design: three consecutive truncation auto-continues,
-/// then stop).
-const MAX_CONSECUTIVE_TRUNCATION_CONTINUES: u32 = 3;
-
-#[derive(Debug)]
-pub(super) struct TurnLoopGuard {
-    iteration_cap: u32,
-    doom_loop_window: usize,
-    consecutive_tool_turns: u32,
-    consecutive_truncation_continues: u32,
-    recent_fingerprints: VecDeque<u64>,
-}
-
-impl TurnLoopGuard {
-    pub(super) fn new(iteration_cap: u32, doom_loop_window: usize) -> Self {
-        Self {
-            iteration_cap,
-            doom_loop_window,
-            consecutive_tool_turns: 0,
-            consecutive_truncation_continues: 0,
-            recent_fingerprints: VecDeque::new(),
-        }
-    }
-
-    /// Resets both the iteration count and the fingerprint window. Called
-    /// when a `Command::UserMessage` starts a fresh interaction.
-    pub(super) fn reset(&mut self) {
-        self.consecutive_tool_turns = 0;
-        self.consecutive_truncation_continues = 0;
-        self.recent_fingerprints.clear();
-    }
-
-    /// Records that a tool-driven turn is about to run. Returns
-    /// `Some(GuardHalt::IterationCapExceeded)` once the cap is exceeded
-    /// (i.e. on the `iteration_cap + 1`-th consecutive call).
-    pub(super) fn record_tool_turn(&mut self) -> Option<GuardHalt> {
-        self.consecutive_tool_turns += 1;
-        (self.consecutive_tool_turns > self.iteration_cap)
-            .then_some(GuardHalt::IterationCapExceeded)
-    }
-
-    /// Records an incoming tool result's fingerprint. Returns
-    /// `Some(GuardHalt::DoomLoopDetected)` once the last `doom_loop_window`
-    /// fingerprints are all identical.
-    pub(super) fn record_fingerprint(&mut self, fingerprint: u64) -> Option<GuardHalt> {
-        self.recent_fingerprints.push_back(fingerprint);
-        if self.recent_fingerprints.len() > self.doom_loop_window {
-            self.recent_fingerprints.pop_front();
-        }
-        let is_doom_loop = self.recent_fingerprints.len() == self.doom_loop_window
-            && self.recent_fingerprints.iter().all(|fp| *fp == fingerprint);
-        is_doom_loop.then_some(GuardHalt::DoomLoopDetected)
-    }
-
-    /// Records that a truncation-triggered auto-continue is about to run.
-    /// Returns `true` while under the cap (the continue may proceed),
-    /// `false` once the cap is exceeded (the session must fall back to
-    /// `WaitingForUser`).
-    pub(super) fn record_truncation_continue(&mut self) -> bool {
-        self.consecutive_truncation_continues += 1;
-        self.consecutive_truncation_continues <= MAX_CONSECUTIVE_TRUNCATION_CONTINUES
-    }
-
-    /// Resets the truncation counter — called when a turn completes
-    /// without truncation, breaking the consecutive-truncation streak.
-    pub(super) fn reset_truncation_counter(&mut self) {
-        self.consecutive_truncation_continues = 0;
-    }
-}
-
-/// Fingerprints a tool result as (tool, args, output) — the triple the
-/// design doc specifies. Args are included so distinct, productive calls
-/// that happen to return identical output (e.g. greps for different
-/// patterns, each with zero matches) are not mistaken for a doom loop.
-/// Call ids are deliberately excluded: each call gets a fresh id even when
-/// the model repeats the same call verbatim.
-pub(super) fn tool_result_fingerprint(
-    tool_id: &str,
-    args: &serde_json::Value,
-    output: &serde_json::Value,
-) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    tool_id.hash(&mut hasher);
-    args.to_string().hash(&mut hasher);
-    output.to_string().hash(&mut hasher);
-    hasher.finish()
-}
+// The pure guard *detectors* (iteration cap + doom-loop fingerprinting,
+// `GuardHalt`/`TurnLoopGuard`/`tool_result_fingerprint`) live in `guards.rs`.
+// What remains here is the guard's *response*: `halt_turn_loop` cancels
+// still-pending calls, optionally runs a cap-summary turn, emits the calm
+// `TurnEnded` reason, and returns the session to `WaitingForUser` — work
+// coupled to the session's turn-execution machinery, so it stays here.
 
 /// Halts the turn loop in response to a tripped guard.
 ///
