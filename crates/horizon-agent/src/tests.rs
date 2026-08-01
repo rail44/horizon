@@ -1,5 +1,6 @@
 use crate::contract::SessionId;
 use crate::prompt::{system_prompt, SessionEnvironment};
+use crate::registry;
 use crate::{contract as agent, frame::*, policy::horizon_events_for_provider_event};
 
 fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::ProviderEvent {
@@ -10,11 +11,11 @@ fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::
 #[test]
 fn mock_agent_emits_initial_session_events() {
     let provider = crate::providers::mock::MockProvider::new();
-    let handle = agent::Provider::start_session(
+    let handle = registry::Provider::start_session(
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: agent::Provider::provider_id(&provider),
+            provider_id: registry::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -723,11 +724,11 @@ fn horizon_policy_adds_approval_for_requested_tool() {
 #[test]
 fn mock_agent_accepts_tool_call_result_command() {
     let provider = crate::providers::mock::MockProvider::new();
-    let handle = agent::Provider::start_session(
+    let handle = registry::Provider::start_session(
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: agent::Provider::provider_id(&provider),
+            provider_id: registry::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -760,11 +761,11 @@ fn mock_agent_accepts_tool_call_result_command() {
 #[test]
 fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
     let provider = crate::providers::mock::MockProvider::new();
-    let handle = agent::Provider::start_session(
+    let handle = registry::Provider::start_session(
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: agent::Provider::provider_id(&provider),
+            provider_id: registry::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -857,11 +858,11 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
 #[test]
 fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
     let provider = crate::providers::mock::MockProvider::new();
-    let handle = agent::Provider::start_session(
+    let handle = registry::Provider::start_session(
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: agent::Provider::provider_id(&provider),
+            provider_id: registry::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -911,11 +912,11 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
 #[test]
 fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
     let provider = crate::providers::mock::MockProvider::new();
-    let handle = agent::Provider::start_session(
+    let handle = registry::Provider::start_session(
         &provider,
         agent::StartSession {
             session_id: SessionId::new(),
-            provider_id: agent::Provider::provider_id(&provider),
+            provider_id: registry::Provider::provider_id(&provider),
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
@@ -1302,7 +1303,7 @@ fn system_prompt_built_from_workspace_root_reports_the_session_root() {
 
 #[test]
 fn provider_registry_starts_builtin_provider() {
-    let registry = agent::ProviderRegistry::builtin();
+    let registry = registry::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
         .start_session(&provider_id, SessionId::new(), None, None, Vec::new())

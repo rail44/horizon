@@ -289,8 +289,8 @@ mod tests {
     use super::*;
     use crate::session::AgentdState;
     use horizon_agent::config::AgentConfig;
-    use horizon_agent::contract::ProviderRegistry;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+    use horizon_agent::registry::ProviderRegistry;
     use horizon_agent::wire::agent_client_hello;
     use horizon_wire::VersionRange;
     use std::sync::Arc;

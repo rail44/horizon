@@ -18,8 +18,9 @@ use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 
 use crate::{
     config::RigAgentConfig,
-    contract::{Provider as AgentProvider, ProviderId, SessionHandle, StartSession},
+    contract::{ProviderId, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
+    registry::{Provider as AgentProvider, SessionHandle},
     roles::{RoleDefinition, RoleId},
 };
 
@@ -51,7 +52,7 @@ impl AgentProvider for Provider {
     /// Resolves `request.role_id` (defensively -- an unresolvable role here
     /// silently has no effect on this session's config/prompt, but
     /// production sessions never reach this with one:
-    /// `contract::ProviderRegistry::start_session` already refused to start
+    /// `registry::ProviderRegistry::start_session` already refused to start
     /// them -- see that method's doc comment) and derives a per-session
     /// [`RigAgentConfig`] from it before spawning, per
     /// `docs/plans/agent-foundation/03-roles-and-config-agent.md`.

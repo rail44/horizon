@@ -33,6 +33,7 @@ use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{self, Command, ProviderEvent};
+use horizon_agent::registry;
 use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
@@ -118,7 +119,7 @@ impl TerminaldSlot {
 }
 
 pub(crate) struct AgentSessionHandle {
-    inner: contract::SessionHandle,
+    inner: registry::SessionHandle,
     session_id: contract::SessionId,
     routes: Arc<AgentRoutes>,
 }
@@ -331,7 +332,7 @@ impl AgentdHandle {
         });
         (
             AgentSessionHandle {
-                inner: contract::SessionHandle::new(command_tx, event_rx),
+                inner: registry::SessionHandle::new(command_tx, event_rx),
                 session_id,
                 routes: self.routes.clone(),
             },

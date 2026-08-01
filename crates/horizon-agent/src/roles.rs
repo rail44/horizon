@@ -20,7 +20,7 @@
 //! provider builds its per-session config and prompt from
 //! (`providers::rig::Provider::start_session`). An unresolvable `RoleId` at
 //! session start must never silently degrade to a role-less session --
-//! callers that start sessions (currently `contract::ProviderRegistry::
+//! callers that start sessions (currently `registry::ProviderRegistry::
 //! start_session`) are responsible for treating `resolve` returning `None`
 //! as a hard failure (a session error event), not a fallback.
 

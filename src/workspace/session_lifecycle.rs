@@ -177,7 +177,7 @@ impl WorkspaceShell {
                         continue;
                     };
                     let provider_id =
-                        horizon_agent::contract::ProviderRegistry::default().default_provider_id();
+                        horizon_agent::registry::ProviderRegistry::default().default_provider_id();
                     let role_id = self.pending_roles.remove(&summary.id);
                     let spawn = self
                         .pending_agent_spawns

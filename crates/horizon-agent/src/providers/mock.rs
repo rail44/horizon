@@ -3,6 +3,7 @@ use std::{collections::HashSet, thread, time::Duration};
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
 use crate::contract::*;
+use crate::registry::{Provider, SessionHandle};
 use crate::roles::RoleId;
 use crate::tools::{cancelled_tool_call_result, tool_result_message};
 

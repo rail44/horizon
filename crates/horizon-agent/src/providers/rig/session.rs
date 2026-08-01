@@ -11,11 +11,12 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::RigAgentConfig,
     contract::{
-        Command, Error, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionHandle,
-        SessionState, StartSession, ToolCallId, ToolCallResult, TurnEndReason,
+        Command, Error, Event, Message as AgentMessage, MessageRole, ProviderEvent, SessionState,
+        StartSession, ToolCallId, ToolCallResult, TurnEndReason,
     },
     persistence::projection::duckdb::SharedDuckdbStore,
     prompt::SessionEnvironment,
+    registry::SessionHandle,
     roles::RoleDefinition,
     runtime_panic::catch_runtime_panic,
     tools::cancelled_tool_call_result,
