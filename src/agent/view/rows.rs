@@ -544,24 +544,65 @@ impl AgentTranscript {
     }
 }
 
-/// The status glyph (running/superseded/finished/error) shared by the
-/// running card's row (`render_tool_call_row`) and the expanded receipt's
-/// expandable row (`render_expandable_tool_call_row`).
+/// The mark a *finished* tool call carries -- the three outcomes every
+/// renderer agrees on once a call is closed. The still-running case is
+/// caller-specific (the live row shows `●`, the receipt chip's defensive
+/// never-finished case shows `…`), so it stays out of this shared type and
+/// each caller branches on `finished` itself before delegating here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ToolCallMark {
+    /// An abandoned denial-retry attempt -- ran, was refused, and an
+    /// approved retry replaced it. Neither success nor failure.
+    Superseded,
+    Error,
+    Success,
+}
+
+impl ToolCallMark {
+    /// The glyph/color pair every finished-call renderer paints for this
+    /// mark. Shared so the receipt chip and the tool-call row can never
+    /// disagree: the chip once lacked the `Superseded` branch and fell
+    /// through to the success check, reading an abandoned retry as the
+    /// outcome (backlog 55).
+    pub(super) fn glyph_and_color(self) -> (&'static str, Hsla) {
+        match self {
+            ToolCallMark::Superseded => ("↻", theme::text_subtle()),
+            ToolCallMark::Error => ("✗", theme::danger()),
+            ToolCallMark::Success => ("✓", theme::success()),
+        }
+    }
+}
+
+/// Derives the finished-case mark shared by the running-card row
+/// ([`tool_call_glyph`]) and the receipt chip (`render_receipt_chip`).
 ///
 /// `superseded` is checked before the success/error split because it is
 /// neither: the abandoned attempt of a denial retry ran, was refused, and
 /// an approved retry replaced it (backlog 55). A muted glyph reads as
 /// "closed, but not the outcome" -- the row's own summary says
-/// "superseded by retry".
+/// "superseded by retry". `is_error` stays false for a superseded call
+/// (the superseded-by-retry result carries no error), so without this
+/// branch first the chip read it as a plain success.
+pub(super) fn finished_tool_call_mark(call: &turns::ToolCallView) -> ToolCallMark {
+    if call.superseded {
+        ToolCallMark::Superseded
+    } else if call.is_error {
+        ToolCallMark::Error
+    } else {
+        ToolCallMark::Success
+    }
+}
+
+/// The status glyph (running/superseded/finished/error) for the running
+/// card's row (`render_tool_call_row`) and the expanded receipt's
+/// expandable row (`render_expandable_tool_call_row`). The finished cases
+/// delegate to [`finished_tool_call_mark`] so they can't diverge from the
+/// receipt chip; only the live-running `●` is this renderer's own.
 fn tool_call_glyph(call: &turns::ToolCallView) -> (&'static str, Hsla) {
     if !call.finished {
         ("●", theme::accent())
-    } else if call.superseded {
-        ("↻", theme::text_subtle())
-    } else if call.is_error {
-        ("✗", theme::danger())
     } else {
-        ("✓", theme::success())
+        finished_tool_call_mark(call).glyph_and_color()
     }
 }
 
@@ -690,4 +731,55 @@ fn truncation_note(omitted: usize) -> AnyElement {
         .text_color(theme::text_subtle())
         .child(format!("… {omitted} more line(s) trimmed"))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::finished_tool_call_mark;
+    use super::turns::{ApprovalState, ToolCallKind, ToolCallView};
+    use super::ToolCallMark;
+    use horizon_agent::contract::ToolCallId;
+
+    /// A finished `ToolCallView` with only the outcome flags varying -- the
+    /// mark only reads `superseded` and `is_error` (the `finished` split is
+    /// the caller's), so the rest is inert filler.
+    fn finished_view(superseded: bool, is_error: bool) -> ToolCallView {
+        ToolCallView {
+            call_id: ToolCallId("c".to_string()),
+            tool_id: "bash".to_string(),
+            verb: "Bash".to_string(),
+            target: None,
+            result_summary: None,
+            kind: ToolCallKind::Bash {
+                command_head: "echo".to_string(),
+            },
+            affected_files: Vec::new(),
+            finished: true,
+            is_error,
+            superseded,
+            approval: ApprovalState::None,
+        }
+    }
+
+    /// A superseded attempt finished without error (the superseded-by-retry
+    /// result carries `superseded_by_retry: true` and leaves `is_error`
+    /// false), so the only thing distinguishing it from a plain success is
+    /// the `superseded` flag. The mark must read `Superseded`, not fall
+    /// through to `Success` -- the receipt chip once did exactly that
+    /// (backlog 55).
+    #[test]
+    fn finished_tool_call_mark_reads_superseded_not_success() {
+        assert_eq!(
+            finished_tool_call_mark(&finished_view(true, false)),
+            ToolCallMark::Superseded
+        );
+        assert_eq!(
+            finished_tool_call_mark(&finished_view(false, false)),
+            ToolCallMark::Success
+        );
+        assert_eq!(
+            finished_tool_call_mark(&finished_view(false, true)),
+            ToolCallMark::Error
+        );
+    }
 }
