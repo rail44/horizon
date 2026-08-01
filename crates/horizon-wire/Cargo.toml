@@ -9,12 +9,17 @@ edition = "2021"
 # config -- which is what lets each daemon link it without dragging the
 # other view kind's graph (and its libduckdb) along.
 [dependencies]
+anyhow = "1.0"
 libc = "0.2"
 remoc = { workspace = true }
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+# The daemon lifecycle (`daemon`) and its client half (`spawn`) both live
+# here, so this crate owns the unix-socket, timer and signal surface both
+# daemons used to carry their own copy of.
+tokio = { version = "1.52", features = ["rt", "net", "time", "signal", "macros"] }
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
 [lints.clippy]

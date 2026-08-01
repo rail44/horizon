@@ -89,7 +89,7 @@ pub(super) fn spawn(
             let mut consecutive_silences: u32 = 0;
             loop {
                 let stream = tokio::select! {
-                    result = horizon_agent::client::connect_or_spawn_retrying(
+                    result = horizon_wire::spawn::connect_or_spawn_agentd_retrying(
                         &socket_path,
                         &control_socket,
                     ) => match result {
@@ -230,8 +230,8 @@ pub(super) fn spawn(
 /// (`docs/remoc-adoption-design.md` §6, extending PR #18's decisions):
 /// drain the stale daemon at *its own* envelope version via the
 /// quarantined legacy encoder, then let the caller's next
-/// `connect_or_spawn_retrying` start a fresh binary. `Break` means the
-/// runtime must stop (budget already spent, drain failed, or cancelled)
+/// `connect_or_spawn_agentd_retrying` start a fresh binary. `Break` means
+/// the runtime must stop (budget already spent, drain failed, or cancelled)
 /// -- `connection_failed` has already been fanned out then; `Continue`
 /// means recovery succeeded and the caller should reconnect.
 async fn recover_generation_mismatch(
@@ -655,8 +655,8 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
             Ok(stream) => stream,
             // Nothing is accepting any more: either a previous probe's
             // drain just landed or the daemon died on its own. Done either
-            // way -- the caller's next connect_or_spawn_retrying starts a
-            // fresh daemon.
+            // way -- the caller's next connect_or_spawn_agentd_retrying
+            // starts a fresh daemon.
             Err(_) => return Ok(()),
         };
         if stream

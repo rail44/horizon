@@ -240,11 +240,14 @@ impl WriterHandle {
     /// own page cache — this is not an `fsync`).
     ///
     /// Used by tests to assert durability deterministically, and by
-    /// `horizon-agentd`'s `flush_event_log_before_exit` (called right
-    /// before `std::process::exit(0)` on a `SessionControl::Drain`) so a
-    /// graceful drain doesn't lose whatever is still sitting in the
-    /// writer's buffer. A hard kill bypasses this and can still leave a
-    /// torn final line — `event_log::read` tolerates that (see
+    /// `horizon-agentd`'s `flush_event_log_before_exit` — which that daemon
+    /// calls on *both* of the exits it can intercept, so neither loses
+    /// whatever is still sitting in the writer's buffer: the hub's `drain`
+    /// (right before `std::process::exit(0)`) and its SIGTERM hook (a plain
+    /// `kill`, which returns from the accept loop rather than exiting from
+    /// under it). Only what no handler can run ahead of bypasses this —
+    /// SIGKILL and a crash — and that can still leave a torn final line,
+    /// which `event_log::read` tolerates (see
     /// `ReadReport::ignored_partial_line`).
     pub fn flush(&self) -> Result<()> {
         let (tx, rx) = crossbeam_channel::bounded(1);

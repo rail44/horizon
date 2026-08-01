@@ -109,7 +109,7 @@ pub(super) fn spawn(
             let mut consecutive_silences: u32 = 0;
             loop {
                 let stream = tokio::select! {
-                    result = horizon_agent::client::connect_or_spawn_terminald_retrying(
+                    result = horizon_wire::spawn::connect_or_spawn_terminald_retrying(
                         &socket_path,
                         &control_socket,
                     ) => match result {
