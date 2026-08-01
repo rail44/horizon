@@ -12,16 +12,16 @@
 //! [`SessionHub::drain`] (and therefore `Reload Agent Runtime`) safe to
 //! run as often as an agent-side rebuild demands.
 //!
-//! Bridging pattern, used by every attachment: the PTY/session side of the
+//! Bridging pattern, used by every attachment: the session side of the
 //! daemon is synchronous (std threads, crossbeam channels), so each remote
 //! channel gets a local unbounded tokio channel as its sync-sendable half,
 //! and a small async pump task that drains it into the remote `rch`
-//! sender. On the receive side, pumps skip an item whose deserialization
-//! failed (adoption condition 2: a non-final [`recv
-//! error`](remoc::rch::mpsc::RecvError::is_final) never tears the channel
-//! down) and stop on final errors.
-
-use std::sync::atomic::{AtomicBool, Ordering};
+//! sender. The receive side is not written here at all — it is
+//! [`horizon_wire::receive_pump`], the same loop terminald drives its
+//! inbound channels with, so adoption condition 2's skip-vs-fatal boundary
+//! has one definition rather than one per runtime. The *send* pumps stay
+//! local: a send error latches on the local sender, so they end the channel
+//! instead of skipping.
 
 use horizon_agent::contract::{Command, Event, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
@@ -30,26 +30,23 @@ use horizon_agent::wire::{
     HubHello, SessionHub, SessionNew, SessionSummary,
 };
 use horizon_wire::{
-    ClientHello, DecodeSkipLog, HubError, WireCodec, COMMAND_MAX_ITEM_BYTES,
-    CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    receive_pump, ClientHello, HelloGate, HubError, WireCodec, CHANNEL_BUFFER,
+    COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::session::Connection;
-
-/// Local buffer of each remote channel (the rch-side counterpart of the
-/// unbounded local bridges). Frames are the hot path; 64 matches the spike
-/// bench's channel sizing.
-const CHANNEL_BUFFER: usize = 64;
+use crate::DAEMON_NAME;
 
 pub(crate) struct Hub {
     connection: Connection,
     binary_id: &'static str,
     /// Whether this connection's `hello` has completed successfully — the
     /// enforcement half of "`hello` is the first call on every connection"
-    /// (§3). See [`Self::require_hello`].
-    hello_completed: AtomicBool,
+    /// (§3), shared with `horizon-terminald`'s hub so the invariant has one
+    /// definition.
+    hello: HelloGate,
 }
 
 impl Hub {
@@ -57,19 +54,7 @@ impl Hub {
         Self {
             connection,
             binary_id,
-            hello_completed: AtomicBool::new(false),
-        }
-    }
-
-    /// The hello gate: every method except `hello` itself and `drain` (the
-    /// version-stable recovery surface a *rejected* client legitimately
-    /// calls) refuses to run before a successful negotiation, rather than
-    /// trusting the client to call in order.
-    fn require_hello(&self) -> Result<(), HubError> {
-        if self.hello_completed.load(Ordering::Acquire) {
-            Ok(())
-        } else {
-            Err(HubError::HelloRequired)
+            hello: HelloGate::new(),
         }
     }
 
@@ -96,21 +81,14 @@ impl Hub {
             }
         });
 
-        let (mut command_tx, mut command_rx) =
-            rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
+        let (mut command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
         command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
-        tokio::spawn(async move {
-            let mut skips = DecodeSkipLog::new("horizon-agentd agent commands");
-            loop {
-                match command_rx.recv().await {
-                    Ok(Some(command)) => connection.route_command(session_id, command),
-                    Ok(None) => break,
-                    Err(err) if err.is_final() => break,
-                    Err(err) => skips.note(&err),
-                }
-            }
-        });
+        tokio::spawn(receive_pump(
+            command_rx,
+            "horizon-agentd agent commands",
+            move |command| connection.route_command(session_id, command),
+        ));
 
         AgentAttachment {
             events: event_rx,
@@ -125,18 +103,8 @@ impl SessionHub for Hub {
     /// ordering in `main` relies on it answering immediately, before the
     /// event-log resume finishes).
     async fn hello(&self, client: ClientHello) -> Result<HubHello, HubError> {
-        let ours = agent_version_range();
-        let Some(negotiated) = ours.negotiate(client.supported) else {
-            let reason = HubError::IncompatibleVersion {
-                client: client.supported,
-                daemon: ours,
-            };
-            eprintln!(
-                "horizon-agentd: rejecting hello from {}: {reason}",
-                client.binary_id
-            );
-            return Err(reason);
-        };
+        let negotiated =
+            horizon_wire::negotiate_hello(agent_version_range(), &client, DAEMON_NAME)?;
 
         // Host-tool requests: sessions push into the connection-global
         // local bridge; this pump forwards them to the client.
@@ -158,21 +126,15 @@ impl SessionHub for Hub {
 
         // Host-tool responses: routed to whichever session thread blocks
         // on the matching request id.
-        let (mut response_tx, mut response_rx) =
+        let (mut response_tx, response_rx) =
             rch::mpsc::channel::<HostToolResponse, WireCodec>(CHANNEL_BUFFER);
         response_tx.set_max_item_size(TOOL_IO_MAX_ITEM_BYTES);
         let connection = self.connection.clone();
-        tokio::spawn(async move {
-            let mut skips = DecodeSkipLog::new("horizon-agentd host-tool responses");
-            loop {
-                match response_rx.recv().await {
-                    Ok(Some(response)) => connection.handle_host_tool_response(response),
-                    Ok(None) => break,
-                    Err(err) if err.is_final() => break,
-                    Err(err) => skips.note(&err),
-                }
-            }
-        });
+        tokio::spawn(receive_pump(
+            response_rx,
+            "horizon-agentd host-tool responses",
+            move |response| connection.handle_host_tool_response(response),
+        ));
 
         // Startup skipped-lines diagnostics: at most one message, after
         // the resume finishes — never blocking hello's own reply.
@@ -186,7 +148,7 @@ impl SessionHub for Hub {
             }
         });
 
-        self.hello_completed.store(true, Ordering::Release);
+        self.hello.mark_completed();
         Ok(HubHello {
             negotiated,
             binary_id: self.binary_id.to_string(),
@@ -200,7 +162,7 @@ impl SessionHub for Hub {
     /// fix in `main`): a client connecting while the startup resume is
     /// still running must not see a partial view.
     async fn list_agents(&self) -> Result<Vec<SessionSummary>, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
         Ok(self.connection.session_list())
     }
@@ -211,7 +173,7 @@ impl SessionHub for Hub {
     /// for its whole lifetime (see the old `Control::SessionNew` arm's
     /// comment, preserved by this gate).
     async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
         let session_id = new.session_id;
         let local_events = self.connection.subscribe_agent(session_id);
@@ -224,7 +186,7 @@ impl SessionHub for Hub {
     /// flow — all in order through the same bridge. An unknown session id
     /// succeeds with an empty replay, as before.
     async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
         let local_events = self.connection.subscribe_agent(session_id);
         let mut skipped_unknown = 0_u64;
@@ -269,7 +231,7 @@ impl SessionHub for Hub {
     /// and a failure here is a race the UI's own `horizon_config::reload`
     /// already ruled out for the same file).
     async fn reload_provider_config(&self) -> Result<(), HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         if let Err(error) = self.connection.reload_provider_config() {
             eprintln!(
                 "horizon-agentd: provider config reload failed, keeping the previous config: {error}"
@@ -360,7 +322,7 @@ mod tests {
     /// successful negotiation opens the gate. (`drain` is deliberately
     /// exempt: it is the version-stable recovery surface a rejected
     /// client legitimately calls — enforced by it taking no
-    /// `require_hello`, which this test cannot exercise directly since
+    /// `hello.require()`, which this test cannot exercise directly since
     /// `drain` exits the process.)
     #[tokio::test]
     async fn non_hello_methods_are_refused_until_hello_succeeds() {

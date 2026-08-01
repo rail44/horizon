@@ -101,6 +101,29 @@ shared session abstraction left to host.
    `TerminalCommand::KeyInput`/`TextInput` with its associated text
    rather than the legacy `Key`/`Input`. The negotiated version number
    had no other client-side reader and its plumbing went with it.
+4. *(Landed 2026-08-01.)* **De-duplicate the daemon plumbing**: the last
+   copy-paste the phases above left standing, judgment 2's "one shared
+   foundation" applied to behavior rather than types. Into `horizon-wire`:
+   `spawn` (spawn-or-connect for both daemons, misfiled in
+   `horizon-agent::client` — which is why the shell's *terminal* client
+   reached into the *agent* crate to start terminald), `daemon`
+   (`bind_listener`/`socket_path_from_args`/`CONNECT_TIMEOUT` plus the
+   accept loop and the per-connection remoc serve, generic over
+   `rtc::ServerShared`), `HelloGate`/`negotiate_hello` beside the
+   `HelloRequired`/`IncompatibleVersion` variants they enforce, and
+   `CHANNEL_BUFFER`/`receive_pump` beside the size caps. Pure move; no
+   wire, no behavior, both artifacts untouched.
+
+   Four things were examined and deliberately **not** unified, because
+   they share a signature or a shape but not a meaning: the two `drain`s
+   (agentd kills nothing, terminald kills every PTY), the SIGTERM hook for
+   the same reason (an explicit `on_sigterm` parameter, never a shared
+   "shutdown"), the send-side pumps (an `rch::watch` send is synchronous
+   and fails only when every receiver is gone; an mpsc send error latches
+   — different break conditions, different failure meanings), and the two
+   state registries (`AgentdState`/`Connection` vs `TerminalHost`, which
+   share a discipline, not code). Terminald's *absence* of a readiness
+   gate is likewise correct, not a gap.
 
 ## Explicitly out of scope (recorded so they are not lost)
 

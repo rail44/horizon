@@ -456,7 +456,7 @@ step to be automated. Decisions:
   envelope version* on a fresh connection (the pre-hello loop has honored
   Drain since v3), waits for the socket to refuse connections (same 2s
   budget as `wait_for_drain`), and lets its existing
-  `connect_or_spawn_retrying` loop start a fresh daemon. SIGTERM was
+  `connect_or_spawn_agentd_retrying` loop start a fresh daemon. SIGTERM was
   rejected as the mechanism: no pidfile or `Child` handle survives to
   target it with, and the SIGTERM path exits without the event-log flush
   that only a graceful drain performs.

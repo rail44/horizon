@@ -9,12 +9,12 @@
 //! daemon is synchronous (std threads, crossbeam channels), so each remote
 //! channel gets a local unbounded tokio channel as its sync-sendable half,
 //! and a small async pump task that drains it into the remote `rch` sender.
-//! On the receive side, pumps skip an item whose deserialization failed
-//! (adoption condition 2: a non-final [`recv
-//! error`](remoc::rch::mpsc::RecvError::is_final) never tears the channel
-//! down) and stop on final errors.
-
-use std::sync::atomic::{AtomicBool, Ordering};
+//! The receive side is not written here at all — it is
+//! [`horizon_wire::receive_pump`], the same loop agentd drives its inbound
+//! channels with, so adoption condition 2's skip-vs-fatal boundary has one
+//! definition rather than one per runtime. The *send* pumps stay local:
+//! their break conditions genuinely differ (a latching mpsc send error, a
+//! watch whose send fails only once every receiver is gone).
 
 use horizon_terminal_core::wire::{
     terminal_version_range, TerminalAttachment, TerminalHub, TerminalHubHello,
@@ -23,26 +23,23 @@ use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use horizon_wire::{
-    ClientHello, DecodeSkipLog, HubError, WireCodec, COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES,
-    TERMINAL_EVENT_MAX_ITEM_BYTES,
+    receive_pump, ClientHello, HelloGate, HubError, WireCodec, CHANNEL_BUFFER,
+    COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use uuid::Uuid;
 
 use crate::terminal::{SubscriberChannels, TerminalHost};
-
-/// Local buffer of each remote channel (the rch-side counterpart of the
-/// unbounded local bridges). Frames are the hot path; 64 matches the spike
-/// bench's channel sizing.
-const CHANNEL_BUFFER: usize = 64;
+use crate::DAEMON_NAME;
 
 pub(crate) struct Hub {
     terminals: TerminalHost,
     binary_id: &'static str,
     /// Whether this connection's `hello` has completed successfully — the
     /// enforcement half of "`hello` is the first call on every connection"
-    /// (`docs/remoc-adoption-design.md` §3). See [`Self::require_hello`].
-    hello_completed: AtomicBool,
+    /// (`docs/remoc-adoption-design.md` §3), shared with `horizon-agentd`'s
+    /// hub so the invariant has one definition.
+    hello: HelloGate,
 }
 
 impl Hub {
@@ -50,19 +47,7 @@ impl Hub {
         Self {
             terminals,
             binary_id,
-            hello_completed: AtomicBool::new(false),
-        }
-    }
-
-    /// The hello gate: every method except `hello` itself and `drain` (the
-    /// version-stable recovery surface a *rejected* client legitimately
-    /// calls) refuses to run before a successful negotiation, rather than
-    /// trusting the client to call in order.
-    fn require_hello(&self) -> Result<(), HubError> {
-        if self.hello_completed.load(Ordering::Acquire) {
-            Ok(())
-        } else {
-            Err(HubError::HelloRequired)
+            hello: HelloGate::new(),
         }
     }
 
@@ -122,25 +107,17 @@ impl Hub {
             }
         });
 
-        let (mut command_tx, mut command_rx) =
+        let (mut command_tx, command_rx) =
             rch::mpsc::channel::<TerminalCommand, WireCodec>(CHANNEL_BUFFER);
         // A transported sender carries the cap its creator set: this is
         // the daemon-side receive limit for the UI's commands.
         command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
         let terminals = self.terminals.clone();
-        tokio::spawn(async move {
-            let mut skips = DecodeSkipLog::new("horizon-terminald terminal commands");
-            loop {
-                match command_rx.recv().await {
-                    Ok(Some(command)) => terminals.handle_command(session_id, command),
-                    Ok(None) => break,
-                    Err(err) if err.is_final() => break,
-                    // Adoption condition 2: one undecodable command is
-                    // skipped; the channel survives.
-                    Err(err) => skips.note(&err),
-                }
-            }
-        });
+        tokio::spawn(receive_pump(
+            command_rx,
+            "horizon-terminald terminal commands",
+            move |command| terminals.handle_command(session_id, command),
+        ));
 
         TerminalAttachment {
             frames: frame_rx,
@@ -156,19 +133,9 @@ impl TerminalHub for Hub {
     /// reply is just the negotiated version plus this binary's id (the skew
     /// insurance the client records — see [`TerminalHubHello`]).
     async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError> {
-        let ours = terminal_version_range();
-        let Some(negotiated) = ours.negotiate(client.supported) else {
-            let reason = HubError::IncompatibleVersion {
-                client: client.supported,
-                daemon: ours,
-            };
-            eprintln!(
-                "horizon-terminald: rejecting hello from {}: {reason}",
-                client.binary_id
-            );
-            return Err(reason);
-        };
-        self.hello_completed.store(true, Ordering::Release);
+        let negotiated =
+            horizon_wire::negotiate_hello(terminal_version_range(), &client, DAEMON_NAME)?;
+        self.hello.mark_completed();
         Ok(TerminalHubHello {
             negotiated,
             binary_id: self.binary_id.to_string(),
@@ -176,7 +143,7 @@ impl TerminalHub for Hub {
     }
 
     async fn list_terminals(&self) -> Result<Vec<TerminalSummary>, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         Ok(self.terminals.list())
     }
 
@@ -185,7 +152,7 @@ impl TerminalHub for Hub {
         session_id: Uuid,
         spec: TerminalSpawnSpec,
     ) -> Result<TerminalAttachment, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         // Subscribe before spawning so the session's very first frames
         // are never lost — the JSONL flow's `mark_attached`-before-create,
         // made structural.
@@ -211,7 +178,7 @@ impl TerminalHub for Hub {
     }
 
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError> {
-        self.require_hello()?;
+        self.hello.require()?;
         // Existence check and subscriber install happen under one lock
         // (`TerminalHost::attach_subscribe`), so a session exiting
         // concurrently either turns this into `TerminalNotFound` or
@@ -247,7 +214,7 @@ mod tests {
     /// *rejected* hello — is refused with `HelloRequired`; a successful
     /// negotiation opens the gate. (`drain` is deliberately exempt: it is
     /// the version-stable recovery surface a rejected client legitimately
-    /// calls — enforced by it taking no `require_hello`, which this test
+    /// calls — enforced by it taking no `hello.require()`, which this test
     /// cannot exercise directly since `drain` exits the process.)
     #[tokio::test]
     async fn non_hello_methods_are_refused_until_hello_succeeds() {

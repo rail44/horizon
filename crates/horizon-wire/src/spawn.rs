@@ -1,29 +1,35 @@
-//! Horizon-side client for `horizon-agentd`: spawn-or-connect (decision 4 in
-//! `docs/agent-runtime-split-design.md`). Transport-agnostic on purpose --
-//! this module hands back a raw, connected `UnixStream`; the v10 remoc
-//! connection (and the `hello` range negotiation that rides it as the
-//! first rtc call) is owned by the shared `src/agentd` runtime.
+//! Spawn-or-connect: how a client reaches a runtime daemon that may not be
+//! running yet. The client half of [`crate::socket`]'s path conventions --
+//! that module says *where* a daemon listens, this one gets a connected
+//! socket at that path, starting the daemon once if nothing is there yet
+//! (`docs/agent-runtime-split-design.md` decision 4, extended to
+//! `horizon-terminald` by `docs/terminald-split-design.md` decision 1).
 //!
-//! `horizon-agentd` is the *only* place agent sessions run -- there is no
-//! in-process fallback or daemon feature flag.
+//! Domain-free like the rest of this crate: it hands back a raw, connected
+//! `UnixStream` and knows nothing about what will be spoken over it. The
+//! remoc connection, and the `hello` range negotiation that rides it as the
+//! first rtc call, belong to the shell-side runtime clients in
+//! `src/runtime/`.
 //!
-//! Horizon has no process-wide Tokio runtime; `src/agentd` owns a dedicated
-//! current-thread runtime on a background OS thread so a slow or failing
-//! daemon never blocks window startup.
+//! Both daemons are the *only* place their view kind's sessions run --
+//! there is no in-process fallback or daemon feature flag -- and Horizon has
+//! no process-wide Tokio runtime, so `src/runtime/` gives each client a
+//! dedicated current-thread runtime on a background OS thread and a slow or
+//! failing daemon never blocks window startup.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio::net::UnixStream;
 
-/// Starting delay for [`connect_or_spawn_retrying`]'s exponential backoff
-/// (doubling, capped at 1s -- see that function). Verified still generous
-/// after `horizon-agentd`'s bind-first startup fix (it binds the socket
-/// as its first action, before reading its event log or resuming any
-/// session -- see that binary's `main` module doc): a freshly spawned
+/// Starting delay for the connect retry loop's exponential backoff
+/// (doubling, capped at 1s -- see [`connect_or_spawn_daemon`]). Verified
+/// still generous after `horizon-agentd`'s bind-first startup fix (it binds
+/// the socket as its first action, before reading its event log or resuming
+/// any session -- see that binary's `main` module doc): a freshly spawned
 /// agentd's `connect` now succeeds within milliseconds of process start
-/// regardless of event-log size, since nothing before `bind_listener`
-/// touches the log.
+/// regardless of event-log size, since nothing before the bind touches the
+/// log.
 const RETRY_DELAY: Duration = Duration::from_millis(50);
 
 /// The binary name `horizon-agentd` is spawned as/looked up as -- see
@@ -37,21 +43,21 @@ const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
 
 /// Connects immediately when agentd is already listening; otherwise starts
 /// it once and keeps retrying with capped backoff until its socket is ready.
-/// The Horizon-side shared runtime owns the handshake and all routing after
-/// this returns.
-pub async fn connect_or_spawn_retrying(
+/// The caller's runtime client owns the handshake and all routing after this
+/// returns.
+pub async fn connect_or_spawn_agentd_retrying(
     socket_path: &Path,
     control_socket: &Path,
 ) -> Result<UnixStream, String> {
     connect_or_spawn_daemon(socket_path, control_socket, AGENTD_BINARY_NAME).await
 }
 
-/// [`connect_or_spawn_retrying`]'s `horizon-terminald` twin. The terminal
-/// daemon is deliberately long-lived (it survives every `Reload Session
-/// Runtime`), so in practice this connects to an already-running process far
-/// more often than it spawns one -- but the on-demand spawn is what makes a
-/// first launch, or a recovery after `Reload Terminal Runtime`, need no
-/// separate supervisor.
+/// [`connect_or_spawn_agentd_retrying`]'s `horizon-terminald` twin. The
+/// terminal daemon is deliberately long-lived (it survives every `Reload
+/// Agent Runtime`), so in practice this connects to an already-running
+/// process far more often than it spawns one -- but the on-demand spawn is
+/// what makes a first launch, or a recovery after `Reload Terminal Runtime`,
+/// need no separate supervisor.
 pub async fn connect_or_spawn_terminald_retrying(
     socket_path: &Path,
     control_socket: &Path,

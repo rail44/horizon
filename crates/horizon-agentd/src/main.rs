@@ -18,11 +18,12 @@
 //! retry budget, conclude nothing was listening, and spawn a second
 //! `horizon-agentd` -- which itself would replay the whole log a second
 //! time before discovering the first instance already owns the socket (see
-//! `bind_listener`'s stale-socket handling). Binding first makes that whole
-//! failure mode structurally impossible in the normal path: a client's
+//! `horizon_wire::daemon::bind_listener`'s stale-socket handling). Binding
+//! first makes that whole failure mode structurally impossible in the
+//! normal path: a client's
 //! `connect` succeeds (queued by the kernel) the instant `listen` returns,
 //! long before any persistence work starts, and a genuine second instance
-//! now hits `bind_listener`'s "already accepting" bail immediately, before
+//! now hits that function's "already accepting" bail immediately, before
 //! it ever opens its own log.
 //!
 //! The event-log read and session resume move to a background task
@@ -61,7 +62,7 @@ mod hub;
 mod session;
 mod worktree;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -69,24 +70,21 @@ use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
-use horizon_agent::wire::{SessionHubClient, SessionHubServerShared};
+use horizon_agent::wire::SessionHubServerShared;
+use horizon_wire::daemon;
 use horizon_wire::socket::default_agentd_socket_path;
-use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
+use horizon_wire::WireCodec;
 use hub::{flush_event_log_before_exit, Hub};
-use remoc::rtc::{Client as _, ServerShared as _};
 use session::{AgentdState, Connection};
 use tokio::net::{UnixListener, UnixStream};
+
+/// This daemon's name in every log line and diagnostic, including the ones
+/// `horizon-wire`'s shared daemon plumbing emits on its behalf.
+const DAEMON_NAME: &str = "horizon-agentd";
 
 /// Reported in this binary's `hello` reply's `binary_id`. The negotiated
 /// protocol version is carried separately in the same `HubHello`.
 const BINARY_ID: &str = concat!("horizon-agentd/", env!("CARGO_PKG_VERSION"));
-
-/// How long an accepted connection gets to complete the remoc (chmux)
-/// handshake before the daemon gives up on it. A v10 client completes it
-/// in milliseconds; what this bounds is a *JSONL-generation* (v<=9) peer —
-/// whose line-framed hello is chmux garbage — or a port scanner, neither
-/// of which may wedge the one-at-a-time accept loop for chmux's raw 60 s.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
@@ -98,8 +96,8 @@ const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let socket_path =
-        socket_path_from_args(std::env::args().skip(1)).unwrap_or_else(default_agentd_socket_path);
+    let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
+        .unwrap_or_else(default_agentd_socket_path);
 
     // `horizon-agentd` is now the one process that reads Horizon's config
     // file directly (see `docs/agent-runtime-split-design.md`'s "the child
@@ -126,7 +124,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Bind-first (see the module doc): this is the first thing that touches
     // the socket path, and it happens before the event log is even opened.
-    let listener = bind_listener(&socket_path).await?;
+    let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
 
     // Shared, multi-reader-blocking handle onto the live DuckDB projection
     // -- see `SharedDuckdbStore`'s doc comment. Created empty here (before
@@ -278,184 +276,53 @@ fn open_persistence(
     }
 }
 
+/// The accept loop, over `horizon-wire`'s shared daemon lifecycle
+/// ([`daemon::run`]): everything about "bind, accept, serve, unlink" is the
+/// same in both daemons, and the one thing that is not — what SIGTERM has
+/// to do before this process may exit — is the hook passed below. Here that
+/// is the same durability obligation a `drain` has, for the same reason: an
+/// `append` only enqueues, so exiting without flushing drops whatever the
+/// writer thread hadn't dequeued yet (see [`flush_event_log_before_exit`]).
+/// `horizon-terminald`'s hook kills its PTYs instead, and that asymmetry is
+/// the terminald split itself.
 async fn run(
     listener: UnixListener,
     socket_path: &Path,
     state: Arc<AgentdState>,
 ) -> anyhow::Result<()> {
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _addr) = accepted?;
-                if let Err(err) = handle_connection(stream, state.clone()).await {
-                    eprintln!("horizon-agentd: connection error: {err}");
-                }
-            }
-            _ = sigterm.recv() => {
-                eprintln!("horizon-agentd: SIGTERM received, shutting down");
-                // Same durability obligation a `drain` has, for the same
-                // reason: an `append` only enqueues, so exiting here without
-                // flushing drops whatever the writer thread hadn't dequeued
-                // yet. See [`flush_event_log_before_exit`].
-                flush_event_log_before_exit(state.writer());
-                break;
-            }
-        }
-    }
-
-    let _ = std::fs::remove_file(socket_path);
-    Ok(())
+    let shutdown_state = state.clone();
+    daemon::run(
+        listener,
+        socket_path,
+        DAEMON_NAME,
+        |stream| handle_connection(stream, state.clone()),
+        move || flush_event_log_before_exit(shutdown_state.writer()),
+    )
+    .await
 }
 
-/// One connection at a time by construction: [`run`]'s accept loop awaits
-/// this to completion before accepting the next connection (multi-client
-/// support is explicitly out of scope -- see the design doc's "Out of scope
-/// here"). The v10 shape: establish the remoc connection (bounded by
-/// [`CONNECT_TIMEOUT`] so a JSONL-generation peer's garbage can't wedge the
-/// accept loop), hand the client its `SessionHubClient` over the base
-/// channel, then serve the [`Hub`] with per-call task spawning until the
-/// client goes away. Version negotiation is no longer a transport-level
-/// concern at all -- it is the `hello` rtc call, answered by the hub
-/// (`docs/remoc-adoption-design.md` §3); a range-rejected client can still
-/// call `drain`, which is how the auto-recovery path restarts a stale
-/// daemon at the right version.
+/// Builds one connection's [`Hub`] and serves it for as long as the client
+/// lives ([`daemon::serve_connection`] owns the remoc handshake, the size
+/// caps, and the serve loop). The [`Connection`] is this daemon's
+/// per-connection seam onto process-lifetime state, so it is also what the
+/// post-connection cleanup closes: the sessions themselves keep running
+/// (they are scoped to the process, not the connection), but their bridges
+/// to this connection are dead.
 async fn handle_connection(stream: UnixStream, state: Arc<AgentdState>) -> anyhow::Result<()> {
-    let (read_half, write_half) = stream.into_split();
-    let connect = remoc::Connect::io::<_, _, SessionHubClient<WireCodec>, (), WireCodec>(
-        remoc::Cfg::default(),
-        read_half,
-        write_half,
-    );
-    let (conn, mut base_tx, _base_rx) = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => {
-            eprintln!(
-                "horizon-agentd: dropping a connection that failed the remoc handshake \
-                 (a pre-v10 JSONL client, or not a Horizon client at all): {error}"
-            );
-            return Ok(());
-        }
-        Err(_elapsed) => {
-            eprintln!(
-                "horizon-agentd: dropping a connection with no remoc handshake within \
-                 {CONNECT_TIMEOUT:?} (a pre-v10 JSONL client, or not a Horizon client at all)"
-            );
-            return Ok(());
-        }
-    };
-    // The chmux multiplexer must be polled for the connection to make any
-    // progress (adoption condition 3) -- spawned, so it runs alongside the
-    // serve loop below.
-    let mut conn_task = tokio::spawn(conn);
-
     let connection = Connection::new(state);
     let hub = Hub::new(connection.clone(), BINARY_ID);
-    let (server, mut client) = SessionHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
-    // Effective placement of the rtc size caps (see the `RTC_MAX_*`
-    // constants): the request cap must be set on the client *before* it
-    // is transported -- a transported mpsc sender carries its creator's
-    // cap as the daemon-side receive limit, so an oversized request is
-    // dropped per-item here and the call fails client-side when its
-    // reply channel closes. The reply cap travels per-request from the
-    // client's own setting; this one seeds the default.
-    client.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(RTC_MAX_REPLY_BYTES);
-    if base_tx.send(client).await.is_err() {
-        conn_task.abort();
-        return Ok(());
-    }
-
-    // `serve` ends when the client (and every clone of it) is gone --
-    // dropped by the UI, or severed with the connection. Racing the mux
-    // task covers the pathological case where the mux dies without the
-    // serve loop noticing.
-    tokio::select! {
-        served = server.serve(true) => {
-            if let Err(error) = served {
-                eprintln!("horizon-agentd: hub serve error: {error}");
-            }
-        }
-        _ = &mut conn_task => {}
-    }
-
-    // Post-connection cleanup: sessions keep running (they are scoped to
-    // the process, not the connection), but their bridges to this
-    // connection are dead.
-    connection.disconnect();
-    conn_task.abort();
-    Ok(())
-}
-
-/// Binds `path`, handling the stale-socket case: if a socket file already
-/// exists there but nothing is accepting connections on it (a previous
-/// `horizon-agentd` that didn't shut down cleanly), remove it and rebind.
-/// If something *is* accepting, refuses to steal the path out from under a
-/// live instance.
-async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
-    if path.exists() {
-        match UnixStream::connect(path).await {
-            Ok(_stream) => {
-                anyhow::bail!(
-                    "{} is already accepting connections -- is another horizon-agentd running?",
-                    path.display()
-                );
-            }
-            Err(_) => {
-                eprintln!(
-                    "horizon-agentd: removing stale socket {} (nothing was accepting)",
-                    path.display()
-                );
-                std::fs::remove_file(path)?;
-            }
-        }
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    Ok(UnixListener::bind(path)?)
-}
-
-fn socket_path_from_args<I: Iterator<Item = String>>(mut args: I) -> Option<PathBuf> {
-    while let Some(arg) = args.next() {
-        if arg == "--socket" {
-            return args.next().map(PathBuf::from);
-        }
-        if let Some(value) = arg.strip_prefix("--socket=") {
-            return Some(PathBuf::from(value));
-        }
-    }
-    None
+    daemon::serve_connection::<_, SessionHubServerShared<_, WireCodec>>(
+        stream,
+        DAEMON_NAME,
+        Arc::new(hub),
+        || connection.disconnect(),
+    )
+    .await
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn socket_path_from_args_reads_the_space_separated_form() {
-        let args = vec!["--socket".to_string(), "/tmp/sock".to_string()];
-        assert_eq!(
-            socket_path_from_args(args.into_iter()),
-            Some(PathBuf::from("/tmp/sock"))
-        );
-    }
-
-    #[test]
-    fn socket_path_from_args_reads_the_equals_form() {
-        let args = vec!["--socket=/tmp/sock2".to_string()];
-        assert_eq!(
-            socket_path_from_args(args.into_iter()),
-            Some(PathBuf::from("/tmp/sock2"))
-        );
-    }
-
-    #[test]
-    fn socket_path_from_args_is_none_when_the_flag_is_absent() {
-        let args: Vec<String> = vec!["--other-flag".to_string()];
-        assert_eq!(socket_path_from_args(args.into_iter()), None);
-    }
 
     /// How long the writer thread's startup read is held open below. The
     /// test's own correctness does not depend on this number: with the
@@ -526,7 +393,9 @@ mod tests {
             None,
             Vec::new(),
         ));
-        let listener = bind_listener(&socket_path).await.expect("bind");
+        let listener = daemon::bind_listener(&socket_path, DAEMON_NAME)
+            .await
+            .expect("bind");
 
         // Installed before anything raises SIGTERM, so this process can
         // never take the default (fatal) disposition: tokio's handler is

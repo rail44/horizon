@@ -42,204 +42,64 @@
 mod hub;
 mod terminal;
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
 
-use horizon_terminal_core::wire::{TerminalHubClient, TerminalHubServerShared};
+use horizon_terminal_core::wire::TerminalHubServerShared;
+use horizon_wire::daemon;
 use horizon_wire::socket::default_terminald_socket_path;
-use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
+use horizon_wire::WireCodec;
 use hub::Hub;
-use remoc::rtc::{Client as _, ServerShared as _};
 use terminal::TerminalHost;
-use tokio::net::{UnixListener, UnixStream};
+use tokio::net::UnixStream;
+
+/// This daemon's name in every log line and diagnostic, including the ones
+/// `horizon-wire`'s shared daemon plumbing emits on its behalf.
+const DAEMON_NAME: &str = "horizon-terminald";
 
 /// Reported in this binary's `hello` reply's `binary_id` — the value the
 /// client records for decision 6's skew message. The negotiated protocol
 /// version is carried separately in the same `TerminalHubHello`.
 const BINARY_ID: &str = concat!("horizon-terminald/", env!("CARGO_PKG_VERSION"));
 
-/// How long an accepted connection gets to complete the remoc (chmux)
-/// handshake before the daemon gives up on it — the same bound agentd
-/// applies, for the same reason: a peer that is not speaking chmux (a port
-/// scanner, a stale generation) must not wedge the one-at-a-time accept
-/// loop for chmux's raw 60 s.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let socket_path = socket_path_from_args(std::env::args().skip(1))
+    let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
         .unwrap_or_else(default_terminald_socket_path);
     eprintln!("horizon-terminald: starting on {}", socket_path.display());
 
-    let listener = bind_listener(&socket_path).await?;
+    let listener = daemon::bind_listener(&socket_path, DAEMON_NAME).await?;
     let terminals = TerminalHost::new();
-    run(listener, &socket_path, terminals).await
+    // The accept loop is `horizon-wire`'s ("bind, accept, serve, unlink" is
+    // the same in both daemons); the SIGTERM hook is not, and this is the
+    // destructive half of the terminald split: stopping this process means
+    // every PTY it owns dies with it, whereas agentd's hook flushes an event
+    // log and kills nothing. That asymmetry must stay an explicit hook.
+    daemon::run(
+        listener,
+        &socket_path,
+        DAEMON_NAME,
+        |stream| handle_connection(stream, terminals.clone()),
+        || terminals.shutdown_all(),
+    )
+    .await
 }
 
-async fn run(
-    listener: UnixListener,
-    socket_path: &Path,
-    terminals: TerminalHost,
-) -> anyhow::Result<()> {
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-
-    loop {
-        tokio::select! {
-            accepted = listener.accept() => {
-                let (stream, _addr) = accepted?;
-                if let Err(err) = handle_connection(stream, terminals.clone()).await {
-                    eprintln!("horizon-terminald: connection error: {err}");
-                }
-            }
-            _ = sigterm.recv() => {
-                eprintln!("horizon-terminald: SIGTERM received, shutting down");
-                terminals.shutdown_all();
-                break;
-            }
-        }
-    }
-
-    let _ = std::fs::remove_file(socket_path);
-    Ok(())
-}
-
-/// One connection at a time by construction: [`run`]'s accept loop awaits
-/// this to completion before accepting the next connection (multi-client
-/// support is explicitly out of scope, exactly as for agentd). Establish
-/// the remoc connection (bounded by [`CONNECT_TIMEOUT`]), hand the client
-/// its `TerminalHubClient` over the base channel, then serve the [`Hub`]
-/// with per-call task spawning until the client goes away.
+/// Builds one connection's [`Hub`] and serves it for as long as the client
+/// lives ([`daemon::serve_connection`] owns the remoc handshake, the size
+/// caps, and the serve loop).
 ///
 /// A dropped connection is *not* a session lifecycle event: the terminals
 /// keep running (process-scoped), which is the whole point — a UI restart,
 /// or a `Reload Agent Runtime` that happens to reconnect everything, finds
-/// them alive and re-attaches.
+/// them alive and re-attaches. Only their subscriber bridges to the departed
+/// client are cleared.
 async fn handle_connection(stream: UnixStream, terminals: TerminalHost) -> anyhow::Result<()> {
-    let (read_half, write_half) = stream.into_split();
-    let connect = remoc::Connect::io::<_, _, TerminalHubClient<WireCodec>, (), WireCodec>(
-        remoc::Cfg::default(),
-        read_half,
-        write_half,
-    );
-    let (conn, mut base_tx, _base_rx) = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => {
-            eprintln!(
-                "horizon-terminald: dropping a connection that failed the remoc handshake \
-                 (not a Horizon client, or one built against a different transport): {error}"
-            );
-            return Ok(());
-        }
-        Err(_elapsed) => {
-            eprintln!(
-                "horizon-terminald: dropping a connection with no remoc handshake within \
-                 {CONNECT_TIMEOUT:?}"
-            );
-            return Ok(());
-        }
-    };
-    // The chmux multiplexer must be polled for the connection to make any
-    // progress (adoption condition 3) -- spawned, so it runs alongside the
-    // serve loop below.
-    let mut conn_task = tokio::spawn(conn);
-
     let hub = Hub::new(terminals.clone(), BINARY_ID);
-    let (server, mut client) = TerminalHubServerShared::<_, WireCodec>::new(Arc::new(hub), 16);
-    // Effective placement of the rtc size caps (see the `RTC_MAX_*`
-    // constants): the request cap must be set on the client *before* it is
-    // transported -- a transported mpsc sender carries its creator's cap as
-    // the daemon-side receive limit.
-    client.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    client.set_max_reply_size(RTC_MAX_REPLY_BYTES);
-    if base_tx.send(client).await.is_err() {
-        conn_task.abort();
-        return Ok(());
-    }
-
-    tokio::select! {
-        served = server.serve(true) => {
-            if let Err(error) = served {
-                eprintln!("horizon-terminald: hub serve error: {error}");
-            }
-        }
-        _ = &mut conn_task => {}
-    }
-
-    // Post-connection cleanup: sessions keep running, but their bridges to
-    // this connection are dead.
-    terminals.clear_subscribers();
-    conn_task.abort();
-    Ok(())
-}
-
-/// Binds `path`, handling the stale-socket case: if a socket file already
-/// exists there but nothing is accepting connections on it (a previous
-/// `horizon-terminald` that didn't shut down cleanly), remove it and rebind.
-/// If something *is* accepting, refuses to steal the path out from under a
-/// live instance -- which is what keeps a racing second spawn from orphaning
-/// the terminals the first one owns.
-async fn bind_listener(path: &Path) -> anyhow::Result<UnixListener> {
-    if path.exists() {
-        match UnixStream::connect(path).await {
-            Ok(_stream) => {
-                anyhow::bail!(
-                    "{} is already accepting connections -- is another horizon-terminald running?",
-                    path.display()
-                );
-            }
-            Err(_) => {
-                eprintln!(
-                    "horizon-terminald: removing stale socket {} (nothing was accepting)",
-                    path.display()
-                );
-                std::fs::remove_file(path)?;
-            }
-        }
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    Ok(UnixListener::bind(path)?)
-}
-
-fn socket_path_from_args<I: Iterator<Item = String>>(mut args: I) -> Option<PathBuf> {
-    while let Some(arg) = args.next() {
-        if arg == "--socket" {
-            return args.next().map(PathBuf::from);
-        }
-        if let Some(value) = arg.strip_prefix("--socket=") {
-            return Some(PathBuf::from(value));
-        }
-    }
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn socket_path_from_args_reads_the_space_separated_form() {
-        let args = vec!["--socket".to_string(), "/tmp/sock".to_string()];
-        assert_eq!(
-            socket_path_from_args(args.into_iter()),
-            Some(PathBuf::from("/tmp/sock"))
-        );
-    }
-
-    #[test]
-    fn socket_path_from_args_reads_the_equals_form() {
-        let args = vec!["--socket=/tmp/sock2".to_string()];
-        assert_eq!(
-            socket_path_from_args(args.into_iter()),
-            Some(PathBuf::from("/tmp/sock2"))
-        );
-    }
-
-    #[test]
-    fn socket_path_from_args_is_none_when_the_flag_is_absent() {
-        let args: Vec<String> = vec!["--other-flag".to_string()];
-        assert_eq!(socket_path_from_args(args.into_iter()), None);
-    }
+    daemon::serve_connection::<_, TerminalHubServerShared<_, WireCodec>>(
+        stream,
+        DAEMON_NAME,
+        Arc::new(hub),
+        || terminals.clear_subscribers(),
+    )
+    .await
 }

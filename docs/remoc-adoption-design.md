@@ -168,7 +168,7 @@ promptly and distinguishably).
 | `SessionControl::Ping/Pong` | gone — channel-level disconnect detection subsumes it; a liveness probe, if ever wanted, is an rtc call |
 | connection-loss fan-out (`Routes::connection_failed`) | per-channel error results |
 | sister vocabularies (`TerminalCommand`, agent `Command`/`Event`, …) | **kept as-is**, serde-plain, remoc-free |
-| socket discovery, `connect_or_spawn_retrying`, drain semantics | kept |
+| socket discovery, `connect_or_spawn_agentd_retrying`, drain semantics | kept |
 | 16 ms coalescing, daemon-retained latest frame | kept (transport-independent) |
 
 ### Crate shape and dependency direction
@@ -375,7 +375,7 @@ layer"). The daemon speaks only remoc from v10 on; what needs care is the
 **The legacy JSONL drain prober outlives JSONL.** PR #18's
 contract-mismatch auto-recovery (drain the stale daemon at *its own*
 envelope version, probing v9 down to v3 when it never revealed one, then
-let `connect_or_spawn_retrying` start a fresh binary) is retained after
+let `connect_or_spawn_agentd_retrying` start a fresh binary) is retained after
 the cutover as the **only** path by which a remoc-generation UI can
 automatically clear a JSONL-generation daemon: a v10 client's chmux
 handshake gets no valid reply from a JSONL daemon (detected by a bounded

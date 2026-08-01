@@ -1,7 +1,9 @@
 //! Domain-free hub plumbing: the error vocabulary every runtime's hub
 //! trait returns (`docs/runtime-crate-alignment-design.md` judgment 3 —
 //! "domain-free hub plumbing shared by both belongs in `horizon-wire`, not
-//! duplicated").
+//! duplicated"), and the `hello`-first invariant two of its variants
+//! describe — [`HelloGate`] and [`negotiate_hello`] are the enforcement
+//! half, kept next to the definition so the invariant has exactly one.
 //!
 //! [`HubError`] is one enum for *both* hubs on purpose. Its variants are
 //! plain data — the same reasoning that lets this crate host the
@@ -10,12 +12,14 @@
 //! index-based codec, i.e. a wire reshape for a pure code move. One enum
 //! also keeps a rejected `hello` decodable on whichever socket produced it.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use remoc::prelude::*;
 
-use crate::negotiate::VersionRange;
+use crate::negotiate::{ClientHello, VersionRange};
 
 /// The hub's error vocabulary. One enum for every method: domain errors
 /// and transport errors share it, per remoc's own rtc pattern (the
@@ -65,6 +69,72 @@ pub enum HubError {
 impl From<rtc::CallError> for HubError {
     fn from(err: rtc::CallError) -> Self {
         Self::Call(err.to_string())
+    }
+}
+
+/// One connection's answer to "has `hello` completed on it yet?" — the
+/// enforcement half of [`HubError::HelloRequired`], and the reason that
+/// variant's doc is a contract rather than a hope. Every hub owns one per
+/// accepted connection; `require` is what its non-`hello`, non-`drain`
+/// methods call first.
+#[derive(Debug, Default)]
+pub struct HelloGate {
+    completed: AtomicBool,
+}
+
+impl HelloGate {
+    pub const fn new() -> Self {
+        Self {
+            completed: AtomicBool::new(false),
+        }
+    }
+
+    /// Opens the gate. Called by `hello` once it has produced a reply it is
+    /// actually going to return — never merely once the versions matched,
+    /// so a `hello` that fails after negotiating leaves the gate closed.
+    pub fn mark_completed(&self) {
+        self.completed.store(true, Ordering::Release);
+    }
+
+    /// Refuses to run before a successful negotiation, rather than trusting
+    /// the client to call in order. Every hub method except `hello` itself
+    /// and `drain` (the version-stable recovery surface a *rejected* client
+    /// legitimately calls) goes through this.
+    pub fn require(&self) -> Result<(), HubError> {
+        if self.completed.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err(HubError::HelloRequired)
+        }
+    }
+}
+
+/// `hello`'s range negotiation (`docs/remoc-adoption-design.md` §3): the
+/// highest version both peers can honor, or a logged
+/// [`HubError::IncompatibleVersion`] naming the daemon that refused.
+///
+/// The version *numbers* are deliberately not this crate's business — each
+/// hub owns its own pair and passes `ours` in (see [`crate::negotiate`]) —
+/// but the rejection shape is, because a client's recovery keys on it and
+/// two independently written rejections could drift apart.
+pub fn negotiate_hello(
+    ours: VersionRange,
+    client: &ClientHello,
+    daemon_name: &str,
+) -> Result<u32, HubError> {
+    match ours.negotiate(client.supported) {
+        Some(negotiated) => Ok(negotiated),
+        None => {
+            let reason = HubError::IncompatibleVersion {
+                client: client.supported,
+                daemon: ours,
+            };
+            eprintln!(
+                "{daemon_name}: rejecting hello from {}: {reason}",
+                client.binary_id
+            );
+            Err(reason)
+        }
     }
 }
 

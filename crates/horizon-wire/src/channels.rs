@@ -1,5 +1,7 @@
-//! Per-purpose wire size caps, the capped channel aliases that carry them,
-//! and the schema stand-in a transported channel half renders as.
+//! The shared channel discipline: per-purpose wire size caps, the buffer
+//! behind them, the capped channel aliases that carry them, the schema
+//! stand-in a transported channel half renders as, and the one receive loop
+//! every hub drives its inbound channels with ([`receive_pump`]).
 //!
 //! remoc's own default (`rch::DEFAULT_MAX_ITEM_SIZE`, 16 MiB) is one
 //! blanket limit for everything; these caps size each channel class to what
@@ -32,7 +34,17 @@
 use remoc::prelude::*;
 use schemars::JsonSchema;
 
-use crate::codec::WireCodec;
+use crate::codec::{DecodeSkipLog, WireCodec};
+
+/// The item buffer every hub gives the remote `rch::mpsc` channels it hands
+/// a client -- the rch-side counterpart of the unbounded local channels each
+/// daemon's synchronous side pumps into them. 64 is the spike bench's
+/// channel sizing (`docs/research/remoc-spike-2026-07-20.md`), applied
+/// uniformly to every mpsc class in every runtime rather than tuned per
+/// channel, because nothing measured has ever been buffer-bound. (The v11
+/// frame path is an `rch::watch` and has no buffer at all -- it keeps only
+/// the latest value; see [`FRAME_MAX_ITEM_BYTES`].)
+pub const CHANNEL_BUFFER: usize = 64;
 
 /// Terminal frame channel items (`TerminalFrame`). Since wire v11 the
 /// frame path is an `rch::watch<TerminalFrame>` snapshot-valued signal
@@ -125,6 +137,39 @@ pub type CappedReceiver<T, const MAX_ITEM_SIZE: usize> =
 /// [`set_max_item_size`](remoc::rch::watch::Receiver::set_max_item_size).
 pub type CappedWatchReceiver<T, const MAX_ITEM_SIZE: usize> =
     rch::watch::Receiver<T, WireCodec, MAX_ITEM_SIZE>;
+
+/// Drains one inbound `rch::mpsc` channel into `route`, forever: the
+/// receive-side loop every hub repeats for every channel a client sends
+/// *to* it (agent commands, host-tool responses, terminal commands). Spawn
+/// it as a task; it returns when the channel ends.
+///
+/// It encodes adoption condition 2's skip-vs-fatal boundary once, so no
+/// runtime can get it subtly wrong: `Ok(None)` (every sender gone) and a
+/// [`final`](remoc::rch::mpsc::RecvError::is_final) error end the channel,
+/// while a non-final error -- one undecodable or oversized item -- is
+/// counted by `label`'s [`DecodeSkipLog`] and the channel survives.
+///
+/// Deliberately *not* the shape the send side uses. An `rch::watch` send
+/// (the frame path) is synchronous and fails only once every receiver is
+/// gone, and an mpsc send failure latches on the local sender, so both send
+/// pumps break on their first error rather than skipping -- a different
+/// break condition and a different meaning, which is why unifying them with
+/// this would be a wrong seam.
+pub async fn receive_pump<T, const BUFFER: usize, const MAX_ITEM_SIZE: usize>(
+    mut channel: rch::mpsc::Receiver<T, WireCodec, BUFFER, MAX_ITEM_SIZE>,
+    label: &'static str,
+    mut route: impl FnMut(T),
+) {
+    let mut skips = DecodeSkipLog::new(label);
+    loop {
+        match channel.recv().await {
+            Ok(Some(item)) => route(item),
+            Ok(None) => break,
+            Err(err) if err.is_final() => break,
+            Err(err) => skips.note(&err),
+        }
+    }
+}
 
 /// The schema stand-in for a remoc channel half: on the wire it is a chmux
 /// port reference, not data, so the artifact documents it as an opaque
