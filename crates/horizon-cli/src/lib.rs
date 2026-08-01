@@ -19,7 +19,7 @@ mod commands;
 pub mod confirm;
 mod output;
 
-use std::io::{BufReader, Write};
+use std::io::{BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 
 /// Runs one `horizon-cli` invocation end to end and returns the process
@@ -31,33 +31,62 @@ use std::os::unix::net::UnixStream;
 ///   -- all of these only become knowable *after* argv was already accepted
 ///   and (for the destructive case) a live `state` query answered.
 /// - `2`: a pure usage error -- [`cli::parse`] rejected argv without ever
-///   touching the network.
+///   touching the network, or `send` resolved an empty message body (an
+///   empty explicit argument or an empty stdin).
 ///
-/// `stdout`/`stderr` and `ask` are injected so tests can capture output
+/// `stdout`/`stderr`/`stdin` and `ask` are injected so tests can capture output
 /// without redirecting the process's real streams and can script the
-/// interactive-confirmation answer without a real tty; `stdin_is_tty` is
+/// interactive-confirmation answer without a real tty; `stdin` feeds `send`'s
+/// stdin-fallback text (the multi-line-brief pasting use case);
+/// `stdin_is_tty` is
 /// injected for the same reason (`std::io::IsTerminal` on a piped test
 /// stdin is always `false`, so a test proving the *interactive* path needs
 /// to say so explicitly). `env_socket`/`env_session_id` are the two real
 /// `std::env::var` reads (`HORIZON_SOCKET`/`HORIZON_SESSION_ID`), done by
 /// the caller so this function stays a pure mapping from its arguments to
 /// an exit code plus writes to `stdout`/`stderr`.
+#[allow(clippy::too_many_arguments)]
 pub fn run(
     args: &[String],
     env_socket: Option<String>,
     env_session_id: Option<String>,
     stdout: &mut impl Write,
     stderr: &mut impl Write,
+    stdin: &mut impl Read,
     stdin_is_tty: bool,
     ask: &mut impl FnMut(&str) -> bool,
 ) -> u8 {
-    let parsed = match cli::parse(args) {
+    let mut parsed = match cli::parse(args) {
         Ok(parsed) => parsed,
         Err(err) => {
             let _ = writeln!(stderr, "{err}");
             return 2;
         }
     };
+
+    // `send`'s text resolution: an explicit positional argument wins;
+    // otherwise read stdin to EOF (the multi-line-brief pasting use case).
+    // Empty input -- whether an empty explicit argument or an empty stdin
+    // -- is a usage error (exit 2), matching the convention `parse` already
+    // uses for argv problems. After this block `text` is `Some(non_empty)`.
+    if let cli::Subcommand::Send { text, .. } = &mut parsed.subcommand {
+        if text.is_none() {
+            let mut buf = String::new();
+            if let Err(err) = stdin.read_to_string(&mut buf) {
+                let _ = writeln!(stderr, "error: failed to read stdin: {err}");
+                return 1;
+            }
+            *text = Some(buf);
+        }
+        if text.as_ref().is_none_or(|t| t.is_empty()) {
+            let _ = writeln!(
+                stderr,
+                "{}",
+                cli::UsageError("send requires non-empty text".to_string())
+            );
+            return 2;
+        }
+    }
 
     let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {
         Ok(resolved) => resolved,

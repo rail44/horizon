@@ -91,6 +91,16 @@ pub enum Subcommand {
     ContinueTurn {
         session_id: String,
     },
+    /// Delivers a user message to an already-running agent session -- the
+    /// same path as pasting into the composer (`AgentSession::send_user_message`).
+    /// `text` is `None` when the caller omitted it on the command line, in
+    /// which case [`crate::run`] reads stdin to EOF as the message body
+    /// (the multi-line-brief-pasting use case); after that resolution `text`
+    /// is always `Some` (and non-empty) before it reaches the wire.
+    Send {
+        session_id: String,
+        text: Option<String>,
+    },
     ReloadAgentRuntime,
     /// `reload-agent-runtime`'s terminal-daemon counterpart
     /// (`docs/terminald-split-design.md` decision 3). Destructive: it
@@ -137,6 +147,7 @@ Subcommands:\n  \
   deny <session-id> <call-id>\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
+  send <session-id> [text]\n  \
   reload-agent-runtime\n  \
   reload-terminal-runtime\n  \
   reload-config\n  \
@@ -284,6 +295,12 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let session_id = next_required(&mut positionals, "continue-turn", "session-id")?;
             reject_extra(&mut positionals, "continue-turn")?;
             Subcommand::ContinueTurn { session_id }
+        }
+        "send" => {
+            let session_id = next_required(&mut positionals, "send", "session-id")?;
+            let text = positionals.next();
+            reject_extra(&mut positionals, "send")?;
+            Subcommand::Send { session_id, text }
         }
         "reload-agent-runtime" | "reload-session-runtime" => {
             reject_extra(&mut positionals, "reload-agent-runtime")?;
@@ -660,6 +677,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_send_with_and_without_text() {
+        assert_eq!(
+            parse(&args(&["send", "s-1", "fix the bug"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::Send {
+                session_id: "s-1".to_string(),
+                text: Some("fix the bug".to_string())
+            }
+        );
+        // Omitted text -- `run` resolves it from stdin later; `parse` is
+        // pure and never touches stdin, so it records `None` here.
+        assert_eq!(
+            parse(&args(&["send", "s-1"])).unwrap().subcommand,
+            Subcommand::Send {
+                session_id: "s-1".to_string(),
+                text: None
+            }
+        );
+    }
+
+    #[test]
     fn parses_cancel_turn_and_reload() {
         assert_eq!(
             parse(&args(&["cancel-turn", "s-1"])).unwrap().subcommand,
@@ -723,6 +762,7 @@ mod tests {
         assert!(parse(&args(&["terminate-session"])).is_err());
         assert!(parse(&args(&["approve", "s-1"])).is_err());
         assert!(parse(&args(&["attach"])).is_err());
+        assert!(parse(&args(&["send"])).is_err());
     }
 
     #[test]
@@ -730,6 +770,7 @@ mod tests {
         assert!(parse(&args(&["sessions", "extra"])).is_err());
         assert!(parse(&args(&["terminate-session", "s-1", "extra"])).is_err());
         assert!(parse(&args(&["attach", "s-1", "extra"])).is_err());
+        assert!(parse(&args(&["send", "s-1", "a", "b"])).is_err());
     }
 
     #[test]

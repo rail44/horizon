@@ -7,7 +7,7 @@
 //! echo, and the destructive `--yes` path -- exactly as a real invocation
 //! would, minus the process boundary.
 
-use std::io::BufReader;
+use std::io::{BufReader, Read};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -74,7 +74,8 @@ fn our_hello_ack() -> EnvelopeBody {
 /// (tests that need the interactive path pass their own `ask` inline
 /// instead) and returns `(exit_code, stdout, stderr)`.
 fn run_ctl(args: &[&str], socket_path: &Path, stdin_is_tty: bool) -> (u8, String, String) {
-    run_ctl_with_ask(args, socket_path, stdin_is_tty, &mut |_| {
+    let mut stdin = std::io::empty();
+    run_ctl_with_ask(args, socket_path, stdin_is_tty, &mut stdin, &mut |_| {
         panic!("ask() should not be called in this test")
     })
 }
@@ -83,6 +84,7 @@ fn run_ctl_with_ask(
     args: &[&str],
     socket_path: &Path,
     stdin_is_tty: bool,
+    stdin: &mut impl Read,
     ask: &mut impl FnMut(&str) -> bool,
 ) -> (u8, String, String) {
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
@@ -94,6 +96,7 @@ fn run_ctl_with_ask(
         None,
         &mut stdout,
         &mut stderr,
+        stdin,
         stdin_is_tty,
         ask,
     );
@@ -116,12 +119,14 @@ fn run_ctl_with_session(
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let mut stdin = std::io::empty();
     let code = horizon_cli::run(
         &args,
         Some(socket_path.display().to_string()),
         env_session_id.map(str::to_string),
         &mut stdout,
         &mut stderr,
+        &mut stdin,
         stdin_is_tty,
         &mut |_| panic!("ask() should not be called in this test"),
     );
@@ -472,10 +477,12 @@ fn destructive_subcommand_on_a_tty_asks_and_honors_the_answer() {
     );
 
     let mut asked_for = None;
+    let mut stdin = std::io::empty();
     let (code, stdout, stderr) = run_ctl_with_ask(
         &["terminate-all-detached"],
         &socket_path,
         true,
+        &mut stdin,
         &mut |name| {
             asked_for = Some(name.to_string());
             true
@@ -505,12 +512,14 @@ fn a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic() {
     ];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let mut stdin = std::io::empty();
     let code = horizon_cli::run(
         &args,
         None,
         None,
         &mut stdout,
         &mut stderr,
+        &mut stdin,
         false,
         &mut |_| false,
     );
@@ -584,14 +593,150 @@ fn usage_error_exits_with_code_two() {
     let args: Vec<String> = vec!["not-a-real-subcommand".to_string()];
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
+    let mut stdin = std::io::empty();
     let code = horizon_cli::run(
         &args,
         Some("/tmp/should-not-be-used.sock".to_string()),
         None,
         &mut stdout,
         &mut stderr,
+        &mut stdin,
         false,
         &mut |_| panic!("must not get far enough to ask"),
     );
     assert_eq!(code, 2);
+}
+
+#[test]
+fn send_with_text_arg_reaches_the_server_and_reports_ok() {
+    let socket_path = temp_socket_path("send-text");
+    let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
+    let received_command: std::sync::Arc<std::sync::Mutex<Option<(String, serde_json::Value)>>> =
+        std::sync::Arc::default();
+    let received_command_clone = received_command.clone();
+    thread::spawn(move || {
+        let (stream, _addr) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+
+        let hello = wire::read_envelope(&mut reader).unwrap().unwrap();
+        wire::write_envelope(&mut writer, &Envelope::new(hello.id, our_hello_ack())).unwrap();
+
+        let request = wire::read_envelope(&mut reader).unwrap().unwrap();
+        if let EnvelopeBody::Invoke(invoke) = request.body {
+            *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
+        }
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::new(request.id, EnvelopeBody::Ok { session_id: None }),
+        )
+        .unwrap();
+    });
+
+    let mut stdin = std::io::empty();
+    let (code, stdout, stderr) = run_ctl_with_ask(
+        &["send", "s-1", "fix the bug"],
+        &socket_path,
+        false,
+        &mut stdin,
+        &mut |_| panic!("ask() should not be called in this test"),
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "OK\n");
+
+    let received = received_command
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("server saw a request");
+    assert_eq!(received.0, "send");
+    assert_eq!(
+        received.1,
+        serde_json::json!({ "session_id": "s-1", "text": "fix the bug" })
+    );
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
+fn send_without_text_arg_reads_stdin_for_the_body() {
+    let socket_path = temp_socket_path("send-stdin");
+    let listener = UnixListener::bind(&socket_path).expect("bind stub socket");
+    let received_command: std::sync::Arc<std::sync::Mutex<Option<(String, serde_json::Value)>>> =
+        std::sync::Arc::default();
+    let received_command_clone = received_command.clone();
+    thread::spawn(move || {
+        let (stream, _addr) = listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+
+        let hello = wire::read_envelope(&mut reader).unwrap().unwrap();
+        wire::write_envelope(&mut writer, &Envelope::new(hello.id, our_hello_ack())).unwrap();
+
+        let request = wire::read_envelope(&mut reader).unwrap().unwrap();
+        if let EnvelopeBody::Invoke(invoke) = request.body {
+            *received_command_clone.lock().unwrap() = Some((invoke.command, invoke.args));
+        }
+        wire::write_envelope(
+            &mut writer,
+            &Envelope::new(request.id, EnvelopeBody::Ok { session_id: None }),
+        )
+        .unwrap();
+    });
+
+    let mut stdin = std::io::Cursor::new("multi\nline\nbrief".as_bytes().to_vec());
+    let (code, stdout, stderr) = run_ctl_with_ask(
+        &["send", "s-1"],
+        &socket_path,
+        false,
+        &mut stdin,
+        &mut |_| panic!("ask() should not be called in this test"),
+    );
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert_eq!(stdout, "OK\n");
+
+    let received = received_command
+        .lock()
+        .unwrap()
+        .clone()
+        .expect("server saw a request");
+    assert_eq!(received.0, "send");
+    assert_eq!(
+        received.1,
+        serde_json::json!({ "session_id": "s-1", "text": "multi\nline\nbrief" })
+    );
+
+    let _ = std::fs::remove_file(&socket_path);
+}
+
+#[test]
+fn send_with_empty_stdin_is_a_usage_error() {
+    // No server needed: the empty-text check fires before the connection.
+    let socket_path = temp_socket_path("send-empty-stdin");
+    let mut stdin = std::io::empty();
+    let (code, _stdout, stderr) = run_ctl_with_ask(
+        &["send", "s-1"],
+        &socket_path,
+        false,
+        &mut stdin,
+        &mut |_| panic!("ask() should not be called in this test"),
+    );
+    assert_eq!(code, 2);
+    assert!(stderr.contains("non-empty text"), "stderr: {stderr}");
+}
+
+#[test]
+fn send_with_empty_text_arg_is_a_usage_error() {
+    // No server needed: the empty-text check fires before the connection.
+    let socket_path = temp_socket_path("send-empty-text");
+    let mut stdin = std::io::empty();
+    let (code, _stdout, stderr) = run_ctl_with_ask(
+        &["send", "s-1", ""],
+        &socket_path,
+        false,
+        &mut stdin,
+        &mut |_| panic!("ask() should not be called in this test"),
+    );
+    assert_eq!(code, 2);
+    assert!(stderr.contains("non-empty text"), "stderr: {stderr}");
 }
