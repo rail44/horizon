@@ -50,7 +50,7 @@ impl Appender {
     /// that point on, so the records written after it must say so -- the
     /// records before it are already correct and are never rewritten. A
     /// no-op for an appender with no context at all (legacy fixtures).
-    pub fn set_filesystem_grants(&mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) {
+    pub(crate) fn set_filesystem_grants(&mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) {
         if let Some(context) = self.session_context.as_mut() {
             context.filesystem_grants = grants;
         }

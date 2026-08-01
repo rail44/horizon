@@ -256,17 +256,6 @@ impl WriterHandle {
             .context("enqueue agent event log flush")?;
         rx.recv().context("wait for agent event log flush")?
     }
-
-    /// Identity check: do these two handles share the same background
-    /// writer thread? Intended to assert that the process-global cache
-    /// described on [`WriterHandle`]'s own doc comment (one writer shared by
-    /// every session hosted in a process) really does hand out one shared
-    /// writer instead of silently creating a second one. Not `cfg(test)`
-    /// so a downstream crate's regression test could exercise it without
-    /// tripping this crate's own `cfg(test)`, though nothing currently does.
-    pub fn same_channel(&self, other: &Self) -> bool {
-        self.tx.same_channel(&other.tx)
-    }
 }
 
 enum AgentEventLogWriterCommand {

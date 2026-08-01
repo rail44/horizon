@@ -515,7 +515,7 @@ impl ToolSessionState {
 /// the sender side of the channel a `bash` call's eventual result is
 /// delivered back to the UI thread on (see `tools::bash::BashCompletion`).
 #[derive(Clone)]
-pub struct SessionRuntime {
+pub(crate) struct SessionRuntime {
     pub tool_state: ToolSessionState,
     pub live_state: LiveState,
     pub async_results: crossbeam_channel::Sender<ToolCompletion>,

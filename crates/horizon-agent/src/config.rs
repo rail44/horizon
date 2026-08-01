@@ -90,7 +90,7 @@ const CLEARING_THRESHOLD_PCT_VAR: &str = "HORIZON_AGENT_CLEARING_THRESHOLD_PCT";
 /// surface is frozen (2026-07-18 config-narrowing wave), so promoting this
 /// to a config-file key is a deliberate later decision, not implied by this
 /// override existing.
-pub const JUDGE_MODEL_VAR: &str = "HORIZON_AGENT_JUDGE_MODEL";
+pub(crate) const JUDGE_MODEL_VAR: &str = "HORIZON_AGENT_JUDGE_MODEL";
 
 /// The judge's default model id: a synthetic.new provider-maintained
 /// small-model *alias* (owner decision 2026-07-19, `docs/agent-approval-
@@ -101,7 +101,7 @@ pub const JUDGE_MODEL_VAR: &str = "HORIZON_AGENT_JUDGE_MODEL";
 /// vendor's model/governance direction. Never hardcode a raw vendor id in
 /// its place -- this constant, or [`JUDGE_MODEL_VAR`]'s override, is the
 /// only sanctioned source of the judge's model id.
-pub const DEFAULT_JUDGE_MODEL: &str = "syn:small:text";
+pub(crate) const DEFAULT_JUDGE_MODEL: &str = "syn:small:text";
 
 /// `$HOME`, read once per resolution call to expand a leading `~/` in a
 /// path-typed env value (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`)
@@ -384,7 +384,7 @@ impl Default for RigAgentConfig {
 }
 
 impl RigAgentConfig {
-    pub fn from_env_and_provider(model: Option<String>, base_url: Option<String>) -> Self {
+    pub(crate) fn from_env_and_provider(model: Option<String>, base_url: Option<String>) -> Self {
         Self {
             openai_enabled: std::env::var_os(OPENAI_API_KEY_VAR).is_some(),
             model: resolve_model(std::env::var(RIG_MODEL_VAR).ok(), model),
@@ -459,7 +459,7 @@ impl AgentPersistenceConfig {
     /// config-narrowing wave, leaving `HORIZON_AGENT_EVENT_LOG`/
     /// `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default as the
     /// only override path.
-    pub fn from_env() -> Self {
+    pub(crate) fn from_env() -> Self {
         let home = std::env::var(HOME_VAR).ok();
         let xdg_data_home = std::env::var(XDG_DATA_HOME_VAR).ok();
         Self {

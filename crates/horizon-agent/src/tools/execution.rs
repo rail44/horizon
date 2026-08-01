@@ -331,7 +331,7 @@ fn execute_auto_tool(
     ]
 }
 
-pub fn tool_result_message(result: &ToolCallResult) -> Event {
+pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
     Event::MessageCommitted(Message {
         role: MessageRole::Assistant,
         text: format!("Tool result received for {}.", result.call_id.0),

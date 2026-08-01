@@ -289,7 +289,7 @@ fn spawn_host(
 /// or a Git operation approval -- see [`SandboxedApprovalOrigin`] -- so the
 /// eventual `Finished` result is annotated honestly.
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_sandboxed(
+pub(crate) fn spawn_sandboxed(
     session_id: SessionId,
     call_id: ToolCallId,
     input: Value,
@@ -496,7 +496,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// provider-originated `ToolCallFinished` (see `agent::tools::processing`),
 /// since a cancelled turn's synthetic `ToolCallFinished` is exactly the
 /// signal that a still-running bash child needs to be killed.
-pub fn kill_if_running(call_id: &ToolCallId) {
+pub(crate) fn kill_if_running(call_id: &ToolCallId) {
     registry::kill(call_id);
 }
 

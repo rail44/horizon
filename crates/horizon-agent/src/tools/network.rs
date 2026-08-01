@@ -152,7 +152,7 @@ impl SessionNetworkProxy {
     }
 
     /// Standard HTTP proxy URL injected into sandboxed command environments.
-    pub fn proxy_url(&self) -> String {
+    pub(crate) fn proxy_url(&self) -> String {
         format!("http://{}", self.proxy.addr())
     }
 
@@ -161,7 +161,7 @@ impl SessionNetworkProxy {
     /// (`tools::approval`'s domain-denial-retry path). Scoped to this
     /// session's own `AllowlistProxy` instance only: no other session's
     /// `SessionNetworkProxy` is ever touched.
-    pub fn allow_domain(&self, domain: impl Into<String>) {
+    pub(crate) fn allow_domain(&self, domain: impl Into<String>) {
         self.proxy.allow(domain);
     }
 

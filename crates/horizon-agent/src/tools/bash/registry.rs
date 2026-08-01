@@ -71,7 +71,7 @@ fn unregister(call_id: &ToolCallId) {
 /// own, or may not be a bash call at all; `agent::tools::processing` calls
 /// this unconditionally for every provider-originated `ToolCallFinished`,
 /// e.g. the synthetic one a cancelled turn produces).
-pub fn kill(call_id: &ToolCallId) -> bool {
+pub(crate) fn kill(call_id: &ToolCallId) -> bool {
     let handle = lock(table()).remove(call_id);
     let found = handle.is_some();
     if let Some(handle) = handle {

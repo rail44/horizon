@@ -4,7 +4,7 @@ use serde_json::json;
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-pub struct Definition {
+pub(crate) struct Definition {
     pub id: String,
     pub title: String,
     pub description: String,
@@ -12,7 +12,7 @@ pub struct Definition {
     pub permission: ToolPermission,
 }
 
-pub fn definitions() -> Vec<Definition> {
+pub(crate) fn definitions() -> Vec<Definition> {
     vec![
         Definition {
             id: "workspace.snapshot".to_string(),
@@ -587,7 +587,7 @@ pub fn definitions() -> Vec<Definition> {
     ]
 }
 
-pub fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
+pub(crate) fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
     definitions()
         .into_iter()
         .find(|definition| definition.id == tool_id)

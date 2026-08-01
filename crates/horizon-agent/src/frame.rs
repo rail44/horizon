@@ -165,7 +165,7 @@ impl AgentFrame {
     /// to [`pending_approval_call_ids_in`] so a caller holding only the
     /// `items` field (not a whole `AgentFrame`) can reuse the exact same
     /// logic without a whole-frame clone.
-    pub fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
+    pub(crate) fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
         pending_approval_call_ids_in(&self.items)
     }
 
@@ -204,7 +204,7 @@ impl AgentFrame {
     /// sandbox-denial retry (`docs/agent-approval-design.md` leg 4b), the
     /// same way [`Self::tool_call_request`] recovers a pending call's
     /// `tool_id`/`input`.
-    pub fn approval_kind(&self, call_id: &ToolCallId) -> Option<ApprovalKind> {
+    pub(crate) fn approval_kind(&self, call_id: &ToolCallId) -> Option<ApprovalKind> {
         self.items.iter().rev().find_map(|item| match item {
             AgentFrameItem::ApprovalRequested(request) if &request.call_id == call_id => {
                 Some(request.kind.clone())
@@ -259,7 +259,7 @@ impl AgentFrame {
     /// turn — the daemon-side half of the "session stuck on an edit call
     /// with no working Approve" report; [`Self::tool_call_request`]'s own
     /// `.rev()` scoping was already immune to this.
-    pub fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
+    pub(crate) fn has_tool_call_finished(&self, call_id: &ToolCallId) -> bool {
         self.items_since_latest_request(call_id).any(|item| {
             matches!(item, AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id)
         })
@@ -285,7 +285,7 @@ impl AgentFrame {
     /// Falls back to the call_id match whenever either side carries no
     /// occurrence (replayed pre-`OccurrenceId` logs, synthetic results),
     /// which is exactly [`Self::has_tool_call_finished`]'s behavior.
-    pub fn has_live_occurrence_finished(&self, call_id: &ToolCallId) -> bool {
+    pub(crate) fn has_live_occurrence_finished(&self, call_id: &ToolCallId) -> bool {
         let live = self
             .tool_call_request(call_id)
             .and_then(|request| request.occurrence_id.as_ref());
@@ -365,7 +365,7 @@ impl AgentFrame {
 /// already been acted on, so there is nothing left pending a UI reaction to
 /// -- only the tool's eventual *result* (irrelevant to this queue) is still
 /// outstanding for `bash`.
-pub fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
+pub(crate) fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
     let mut pending = Vec::<ToolCallId>::new();
     for item in items {
         match item {
@@ -465,7 +465,7 @@ pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
 /// reason is returned **regardless** of whether it's a halt or a normal
 /// completion: a non-halt reason is itself useful audit context (it marks
 /// a `ContinueTurn` sent to a non-halted session as a no-op replay).
-pub fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
+pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
     items.iter().rev().find_map(|item| match item {
         AgentFrameItem::TurnEnded { reason, .. } => Some(*reason),
         _ => None,
@@ -486,7 +486,7 @@ pub fn state_indicates_turn_in_flight(state: Option<SessionState>) -> bool {
 }
 
 #[cfg(test)]
-pub fn render_agent_transcript(events: &[Event]) -> String {
+pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
     let mut lines = vec!["Agent session".to_string(), String::new()];
 
     for event in events {

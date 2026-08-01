@@ -185,7 +185,7 @@ const EXPLORE_ITERATION_CAP: u32 = 25;
 /// `AGENTS.md`/`CLAUDE.md` context the requester itself has. There is no
 /// tier crossing here -- the repository is the subject, and the exploration
 /// can only read it.
-pub const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
+pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     id: EXPLORE_ROLE_ID,
     title: "Exploration Session",
     prompt_section: EXPLORE_ROLE_PROMPT_SECTION,

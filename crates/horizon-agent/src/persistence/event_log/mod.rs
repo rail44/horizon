@@ -18,8 +18,8 @@ pub use appender::Appender;
 use turn::TurnTracker;
 pub use writer::{WriterHandle, WriterInit};
 
-pub const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub const AGENT_EVENT_LOG_VERSION: u32 = 1;
+pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 1;
 
 /// Host-resolved session placement needed to restore the same confinement
 /// after `horizon-agentd` restarts. This is deliberately event-log

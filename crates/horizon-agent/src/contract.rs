@@ -76,7 +76,7 @@ impl OccurrenceId {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct StartSession {
+pub(crate) struct StartSession {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
     /// `None` for a role-less session (unchanged behavior). `Some` must
@@ -404,7 +404,7 @@ pub struct ToolCallProgress {
 }
 
 impl ProviderEvent {
-    pub fn new(event: Event) -> Self {
+    pub(crate) fn new(event: Event) -> Self {
         Self {
             event,
             provider_payload: None,
@@ -413,7 +413,7 @@ impl ProviderEvent {
         }
     }
 
-    pub fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
+    pub(crate) fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
         Self {
             event,
             provider_payload: Some(provider_payload),
@@ -527,7 +527,7 @@ pub enum MessageRole {
 /// Internal to `horizon-agent` -- not on the wire; see
 /// [`MessageRole::provider_side`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ProviderSide {
+pub(crate) enum ProviderSide {
     User,
     Assistant,
 }
@@ -551,7 +551,7 @@ impl MessageRole {
     /// and read back by `query::parse_role`. Each role is projected
     /// honestly under its own label; readers already fall back to
     /// assistant for unrecognized labels.
-    pub fn db_key(self) -> &'static str {
+    pub(crate) fn db_key(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::Assistant => "assistant",
@@ -577,7 +577,7 @@ impl MessageRole {
     /// own past. The distinct role exists for persistence and the transcript,
     /// not for the provider -- see [`MessageRole::TaskNotification`].
     /// `Unknown` replays as assistant-authored (never invent user words).
-    pub fn provider_side(self) -> ProviderSide {
+    pub(crate) fn provider_side(self) -> ProviderSide {
         match self {
             Self::User | Self::TaskNotification | Self::AutoContinue => ProviderSide::User,
             // Unknown replays as assistant-authored -- see
@@ -632,17 +632,13 @@ pub struct MessageDelta {
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
 /// indexing keep their shape); construct via `From<serde_json::Value>` /
-/// [`Self::new`], unwrap via [`Self::into_value`] or `.0`.
+/// [`Self::new`], unwrap via `.0`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct JsonValue(pub serde_json::Value);
 
 impl JsonValue {
     pub fn new(value: serde_json::Value) -> Self {
         Self(value)
-    }
-
-    pub fn into_value(self) -> serde_json::Value {
-        self.0
     }
 }
 
@@ -821,7 +817,7 @@ impl ToolCallResult {
     /// field's own doc comment. Always `is_error: true` (a denial is
     /// definitionally a failure), regardless of what `output` itself
     /// carries. `occurrence_id` is forwarded the same way as [`Self::new`].
-    pub fn denied(
+    pub(crate) fn denied(
         call_id: ToolCallId,
         occurrence_id: Option<OccurrenceId>,
         output: impl Into<JsonValue>,
@@ -1046,7 +1042,7 @@ impl SessionHandle {
     }
 }
 
-pub trait Provider: Send + Sync {
+pub(crate) trait Provider: Send + Sync {
     fn provider_id(&self) -> ProviderId;
     fn start_session(&self, request: StartSession) -> SessionHandle;
     /// The model id a session with this `role_id` would run with, resolved
@@ -1077,7 +1073,7 @@ impl ProviderRegistry {
     /// immediately with no history, and never block, exactly like the
     /// pre-recall behavior of a provider constructed with no DuckDB path.
     #[cfg(test)]
-    pub fn builtin() -> Self {
+    pub(crate) fn builtin() -> Self {
         Self::builtin_with_config(
             AgentConfig::from_env_and_provider(None, None),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
@@ -1105,7 +1101,7 @@ impl ProviderRegistry {
         registry
     }
 
-    pub fn insert(&mut self, provider: Arc<dyn Provider>) {
+    pub(crate) fn insert(&mut self, provider: Arc<dyn Provider>) {
         self.providers.insert(provider.provider_id(), provider);
     }
 
