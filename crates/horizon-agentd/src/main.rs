@@ -67,9 +67,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::config::AgentConfig;
-use horizon_agent::contract::ProviderRegistry;
 use horizon_agent::persistence::event_log::{Record, WriterHandle, WriterInit};
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
+use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::wire::SessionHubServerShared;
 use horizon_wire::daemon;
 use horizon_wire::socket::default_agentd_socket_path;

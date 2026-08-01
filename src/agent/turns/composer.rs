@@ -163,7 +163,7 @@ mod tests {
     #[test]
     fn composer_model_chip_falls_back_to_the_turn_model_when_the_session_model_is_unknown() {
         // e.g. a role-less session, or a provider with no resolvable model
-        // (`contract::Provider::resolved_model`'s doc comment) -- the latest
+        // (`registry::Provider::resolved_model`'s doc comment) -- the latest
         // completed turn is still the best available value.
         assert_eq!(composer_model_chip(None, Some("gpt-5")), Some("gpt-5"));
     }

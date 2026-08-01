@@ -33,10 +33,11 @@ const TEST_ITERATION_CAP: u32 = 100;
 const TEST_DOOM_LOOP_WINDOW: usize = 5;
 use crate::contract::SessionId;
 use crate::contract::{
-    Command, Event, Message as AgentMessage, MessageDelta, MessageRole, Provider as AgentProvider,
-    ProviderEvent, ProviderId, ProviderRequestUsage, SessionState, StartSession, ToolCallId,
-    ToolCallRequest, ToolCallResult, ToolPermission, TurnEndReason,
+    Command, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent, ProviderId,
+    ProviderRequestUsage, SessionState, StartSession, ToolCallId, ToolCallRequest, ToolCallResult,
+    ToolPermission, TurnEndReason,
 };
+use crate::registry::Provider as AgentProvider;
 use rig_core::{
     completion::{
         message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},

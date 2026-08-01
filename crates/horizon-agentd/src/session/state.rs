@@ -10,9 +10,10 @@ use std::sync::Mutex;
 use crossbeam_channel::Sender;
 
 use horizon_agent::config::AgentConfig;
-use horizon_agent::contract::{Command, Event, ProviderId, ProviderRegistry, SessionId};
+use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
+use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
 use horizon_agent::wire::{AgentWireEvent, HostToolRequest, HostToolResponse};
 use tokio::sync::mpsc::UnboundedSender;

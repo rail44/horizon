@@ -403,8 +403,9 @@ mod tests {
     use crate::session::Connection;
     use crossbeam_channel::unbounded;
     use horizon_agent::config::AgentConfig;
-    use horizon_agent::contract::{ProviderRegistry, SessionId};
+    use horizon_agent::contract::SessionId;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+    use horizon_agent::registry::ProviderRegistry;
     use horizon_agent::tools::ApprovalCandidate;
 
     /// Regression test for backlog #34: `SessionState::WaitingForUser`

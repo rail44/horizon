@@ -26,7 +26,7 @@ pub(crate) struct AgentSession {
     /// `LiveState::session_model`) arrives, either right after a fresh
     /// session starts or alongside a resumed session's replay. `None` until
     /// then (e.g. a role-less session, or a provider with no resolvable
-    /// model -- see `contract::Provider::resolved_model`'s doc comment).
+    /// model -- see `registry::Provider::resolved_model`'s doc comment).
     /// Read by the composer's model chip alongside `turns::latest_turn_model`
     /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum for the precedence between the two.
