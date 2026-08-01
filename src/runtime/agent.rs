@@ -14,22 +14,21 @@ use std::time::Duration;
 
 use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{
-    self, agent_client_hello, legacy, HostToolResponse, HubHello, SessionHub as _,
-    SessionHubClient, AGENT_PROTOCOL_VERSION,
+    self, agent_client_hello, HostToolResponse, HubHello, SessionHub as _, SessionHubClient,
+    AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::{
     CappedReceiver, DecodeSkipLog, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
-    RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
 use remoc::rtc::Client as _;
-use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::task::JoinHandle;
 
 use super::common::{
-    classify_connect_error, establish_timeout, wait_until_refusing, with_deadline, EstablishError,
-    RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
+    connect_hub, establish_timeout, wait_until_refusing, with_deadline, ConnTask, Connected,
+    EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
 };
 use super::routing::AgentRoutes;
 
@@ -195,7 +194,7 @@ pub(super) fn spawn(
                         mismatch_recovery_attempted = true;
                         eprintln!("{message}; draining and restarting the daemon");
                         let drained = tokio::select! {
-                            drained = drain_incompatible_remoc_agentd(&socket_path) => drained,
+                            drained = drain_stale_agentd(&socket_path) => drained,
                             _ = control.cancelled() => {
                                 routes.connection_failed("agentd runtime stopped".to_string());
                                 break;
@@ -226,14 +225,18 @@ pub(super) fn spawn(
     });
 }
 
-/// The once-per-runtime JSONL-generation recovery
-/// (`docs/remoc-adoption-design.md` §6, extending PR #18's decisions):
-/// drain the stale daemon at *its own* envelope version via the
-/// quarantined legacy encoder, then let the caller's next
-/// `connect_or_spawn_agentd_retrying` start a fresh binary. `Break` means
-/// the runtime must stop (budget already spent, drain failed, or cancelled)
-/// -- `connection_failed` has already been fanned out then; `Continue`
-/// means recovery succeeded and the caller should reconnect.
+/// The once-per-runtime recovery for a daemon generation this build cannot
+/// negotiate with (`docs/remoc-adoption-design.md` §6, extending PR #18's
+/// decisions): drain it over the version-stable rtc surface, then let the
+/// caller's next `connect_or_spawn_agentd_retrying` start a fresh binary.
+/// `Break` means the runtime must stop (budget already spent, drain failed,
+/// or cancelled) -- `connection_failed` has already been fanned out then;
+/// `Continue` means recovery succeeded and the caller should reconnect.
+///
+/// A daemon too old to answer that rtc call at all (a pre-remoc, v≤9 binary
+/// still holding the socket) is no longer recoverable automatically: the
+/// JSONL drain prober that used to cover it was deleted on 2026-08-01, so
+/// this path reports the failure and the user stops the process by hand.
 async fn recover_generation_mismatch(
     message: &str,
     mismatch_recovery_attempted: &mut bool,
@@ -340,11 +343,7 @@ where
     };
     let (hub, hello, conn_task) = match established {
         Ok(established) => established,
-        Err(EstablishError::Transient(message)) => return StreamEnd::PreHelloTransport { message },
-        Err(EstablishError::Silence(message)) => return StreamEnd::Silence { message },
-        Err(EstablishError::Garbage(message)) => return StreamEnd::GenerationMismatch { message },
-        Err(EstablishError::Rejected(message)) => return StreamEnd::VersionRejected { message },
-        Err(EstablishError::Fatal(message)) => return StreamEnd::Fatal(message),
+        Err(error) => return error.into(),
     };
     control.mark_established();
 
@@ -389,70 +388,21 @@ where
     end
 }
 
-type EstablishedParts = (
-    SessionHubClient<WireCodec>,
-    HubHello,
-    JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>,
-);
+type EstablishedParts = (SessionHubClient<WireCodec>, HubHello, ConnTask);
 
-/// Runs the remoc connect + base handover + `hello`, each leg bounded by
-/// one shared establish deadline. The chmux multiplexer task is spawned as
-/// soon as the connect completes (adoption condition 3 — it must be polled
-/// concurrently with everything that follows) and is aborted before
-/// returning on every failure path, so a timed-out establishment never
-/// leaks a task still holding the socket.
+/// Runs the shared connect prelude ([`connect_hub`]) and then this hub's own
+/// `hello`, both legs bounded by the one establish deadline the prelude
+/// opened.
 async fn establish<S>(stream: S) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    let timeout = establish_timeout();
-    let deadline = tokio::time::Instant::now() + timeout;
-    let (read_half, write_half) = tokio::io::split(stream);
-
-    let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
-        remoc::Cfg::default(),
-        read_half,
-        write_half,
-    );
-    let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => return Err(classify_connect_error(DAEMON, &error)),
-        Err(_elapsed) => {
-            return Err(EstablishError::Silence(format!(
-                "agentd sent no remoc handshake within {timeout:?}"
-            )))
-        }
-    };
-    let conn_task = tokio::spawn(conn);
-
-    let mut hub = match tokio::time::timeout_at(deadline, base_rx.recv()).await {
-        Ok(Ok(Some(hub))) => hub,
-        // Base-channel EOF/errors: the chmux handshake *did* complete, so
-        // the peer speaks remoc — a drop here is a dying daemon, not a
-        // generation signal. Transient.
-        Ok(Ok(None)) | Ok(Err(_)) => {
-            conn_task.abort();
-            return Err(EstablishError::Transient(
-                "agentd closed the connection before handing over its hub client".to_string(),
-            ));
-        }
-        Err(_elapsed) => {
-            conn_task.abort();
-            return Err(EstablishError::Silence(format!(
-                "agentd handed over no hub client within {timeout:?}"
-            )));
-        }
-    };
-
-    // The reply cap travels with each request (the macro caps the
-    // per-call reply channel from this value), so setting it here is the
-    // effective knob for what this client will accept per reply. The
-    // request cap, by contrast, is enforced daemon-side from the value
-    // the daemon set before transporting this client — the local set
-    // below only re-documents the intended bound (a transported sender's
-    // local cap is not re-checked).
-    hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+    let Connected {
+        hub,
+        conn_task,
+        deadline,
+        timeout,
+    } = connect_hub::<_, SessionHubClient<WireCodec>>(stream, DAEMON).await?;
 
     let client_hello = agent_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
@@ -637,60 +587,24 @@ async fn run_agent_attachment(
     }
 }
 
-/// Gracefully stops a JSONL-generation daemon by sending it a
-/// `session_control` `Drain` *at its own envelope version* on a fresh
-/// connection, via the quarantined legacy encoder
-/// (`horizon_agent::wire::legacy` — the sole surviving JSONL code
-/// path, and this function is its only caller). A v≤9 daemon never
-/// reveals its version to a v10 client (it cannot decode chmux at all),
-/// so this always probes downward from the newest JSONL version; a probe
-/// at the wrong version is harmless (the daemon logs a malformed message
-/// and closes that one connection), and a probe at the right one drains
-/// it. A wrong-generation probe against a healthy remoc daemon is equally
-/// harmless: the line is chmux garbage, the daemon's handshake timeout
-/// drops that one connection.
-async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
-    for version in (legacy::OLDEST_DRAINABLE_VERSION..=legacy::NEWEST_JSONL_VERSION).rev() {
-        let mut stream = match tokio::net::UnixStream::connect(socket_path).await {
-            Ok(stream) => stream,
-            // Nothing is accepting any more: either a previous probe's
-            // drain just landed or the daemon died on its own. Done either
-            // way -- the caller's next connect_or_spawn_agentd_retrying
-            // starts a fresh daemon.
-            Err(_) => return Ok(()),
-        };
-        if stream
-            .write_all(legacy::drain_line(version).as_bytes())
-            .await
-            .is_err()
-        {
-            continue;
-        }
-        let _ = stream.flush().await;
-        drop(stream);
-        if wait_until_refusing(socket_path).await {
-            return Ok(());
-        }
-    }
-    Err(
-        "horizon-agentd kept accepting connections after every drain probe; \
-         stop it manually"
-            .to_string(),
-    )
-}
-
-/// Gracefully stops a remoc daemon whose version range doesn't overlap
-/// ours: `hello` and `drain` are the version-stable hub surface, so the
-/// drain travels as an ordinary rtc call on a fresh connection.
+/// Gracefully stops a running agentd this build cannot talk to: `hello` and
+/// `drain` are the version-stable hub surface, so the drain travels as an
+/// ordinary rtc call on a fresh connection.
 ///
-/// One documented exception, at the v16→v17 boundary only: the terminald
-/// split removed methods from the middle of `SessionHub`, which shifts
-/// every later method's index under the index-encoded request enum, so a
-/// *still-running v16 daemon* (the binary then named `horizon-sessiond`)
-/// decodes this drain as a different method
-/// and keeps accepting. The error below is then the honest outcome and
-/// names the manual fix (see `AGENT_PROTOCOL_VERSION`'s v17 note).
-async fn drain_incompatible_remoc_agentd(socket_path: &Path) -> Result<(), String> {
+/// It reaches every daemon that still speaks *some* remoc wire, which since
+/// 2026-08-01 is the only generation this recovery covers: the pre-remoc
+/// (JSONL) drain prober -- the last remnant of that era -- was deleted then,
+/// so a v≤9 daemon still holding the socket falls into the same bucket as the
+/// documented v16→v17 case below — the error is the honest outcome and names
+/// the manual fix.
+///
+/// That v16→v17 case: the terminald split removed methods from the middle of
+/// `SessionHub`, which shifts every later method's index under the
+/// index-encoded request enum, so a *still-running v16 daemon* (the binary
+/// then named `horizon-sessiond`) decodes this drain as a different method
+/// and keeps accepting (see `AGENT_PROTOCOL_VERSION`'s v17 note, which tells
+/// the operator to stop the process manually).
+async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
     let stream = match tokio::net::UnixStream::connect(socket_path).await {
         Ok(stream) => stream,
         Err(_) => return Ok(()),
@@ -722,13 +636,7 @@ async fn drain_incompatible_remoc_agentd(socket_path: &Path) -> Result<(), Strin
 /// no `hello`, since the whole point is that `hello` already failed.
 async fn establish_for_drain(
     stream: tokio::net::UnixStream,
-) -> Result<
-    (
-        SessionHubClient<WireCodec>,
-        JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>,
-    ),
-    String,
-> {
+) -> Result<(SessionHubClient<WireCodec>, ConnTask), String> {
     let deadline = tokio::time::Instant::now() + establish_timeout();
     let (read_half, write_half) = stream.into_split();
     let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(

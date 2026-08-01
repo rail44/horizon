@@ -129,12 +129,15 @@ use crate::contract::{Command, SessionId};
 /// decoding), so every wire enum now carries the spike-validated
 /// `#[serde(other)] Unknown` unit variant instead. A v10 peer cannot talk
 /// to a v≤9 JSONL peer at all; that transition is detected by a bounded
-/// connect timeout and recovered by the [`super::legacy`] drain prober, not
-/// negotiated. From here on the version bumps only on a deliberate
-/// semantic break: additive evolution (new `#[serde(default)]` fields,
-/// new `Unknown`-guarded variants, new hub methods) ships with no version
-/// event, and [`SessionHub::hello`]'s `[min_supported, current]` range
-/// negotiation gates *behavior*, not decodability.
+/// connect timeout, never negotiated, and it was recovered by a quarantined
+/// JSONL drain prober until that prober was deleted on 2026-08-01 — a
+/// still-running pre-remoc daemon is stopped by hand now, the same answer
+/// this wire gives at the v17 boundary below. From here on the version bumps
+/// only on a deliberate semantic break: additive evolution (new
+/// `#[serde(default)]` fields, new `Unknown`-guarded variants, new hub
+/// methods) ships with no version event, and [`SessionHub::hello`]'s
+/// `[min_supported, current]` range negotiation gates *behavior*, not
+/// decodability.
 ///
 /// Version 11: **the frame path becomes a snapshot-valued signal**
 /// (`docs/remoc-adoption-design.md` §5 Option A, ratified 2026-07-20). The

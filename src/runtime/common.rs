@@ -1,6 +1,7 @@
 //! What both daemon client runtimes share: the per-runtime control handle,
-//! the establishment deadlines and their classification, the per-call
-//! deadline wrapper, and the drained-daemon probe.
+//! the remoc connect prelude every establishment opens with, the
+//! establishment deadlines and their classification, the per-call deadline
+//! wrapper, and the drained-daemon probe.
 //!
 //! Since the terminald split (`docs/terminald-split-design.md`) Horizon runs
 //! *two* of these runtimes — one per daemon, each with its own connection,
@@ -8,16 +9,20 @@
 //! untouched. Everything in this module is deliberately domain-free: the
 //! agent-specific and terminal-specific halves live in [`super::agent`]
 //! and [`super::terminal`] respectively, because their op vocabularies,
-//! their `hello` replies, and their recovery paths genuinely differ (only
-//! agentd has a JSONL generation to recover from; only terminald carries
-//! the below-schema skew insurance).
+//! their `hello` replies, and what a drain costs genuinely differ (agentd's
+//! drain kills nothing; terminald's kills every PTY, which is also why only
+//! terminald carries the below-schema skew insurance).
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
 use std::time::Duration;
 
-use horizon_wire::HubError;
+use horizon_wire::{HubError, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
+use remoc::rtc;
+use remoc::RemoteSend;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
+use tokio::task::JoinHandle;
 
 /// The bound on the whole remoc establishment sequence — chmux handshake,
 /// base-channel handover, and the `hello` rtc call. A healthy daemon
@@ -184,6 +189,23 @@ pub(super) enum StreamEnd {
     Dropped,
 }
 
+/// How a failed establishment enters the reconnect loop's vocabulary. The
+/// mapping is one-to-one by construction — [`EstablishError`] is what the
+/// establish legs can fail with, [`StreamEnd`] is what both runtimes'
+/// reconnect loops dispatch on — and each [`EstablishError`] variant's doc
+/// names its counterpart, so the two types must stay in step.
+impl From<EstablishError> for StreamEnd {
+    fn from(error: EstablishError) -> Self {
+        match error {
+            EstablishError::Transient(message) => StreamEnd::PreHelloTransport { message },
+            EstablishError::Silence(message) => StreamEnd::Silence { message },
+            EstablishError::Garbage(message) => StreamEnd::GenerationMismatch { message },
+            EstablishError::Rejected(message) => StreamEnd::VersionRejected { message },
+            EstablishError::Fatal(message) => StreamEnd::Fatal(message),
+        }
+    }
+}
+
 /// Classifies a failed `Connect::io`: framing/protocol violations are
 /// positive "the peer is not speaking chmux" evidence (measured: a JSONL
 /// line read as a chmux length prefix fails instantly with a
@@ -209,6 +231,99 @@ pub(super) fn classify_connect_error(
     } else {
         EstablishError::Transient(format!("remoc connect to {daemon} failed: {error}"))
     }
+}
+
+/// The chmux multiplexer task, which must be polled for the connection to
+/// make any progress (adoption condition 3) and aborted once the connection
+/// ends -- including on every failure path, so a timed-out establishment
+/// never leaks a task still holding the socket.
+pub(super) type ConnTask =
+    JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>;
+
+/// What [`connect_hub`] hands back: the daemon's hub client, its multiplexer
+/// task, and what is left of the establish budget for the caller's `hello`.
+pub(super) struct Connected<C> {
+    pub(super) hub: C,
+    pub(super) conn_task: ConnTask,
+    /// The one deadline the whole establishment shares — the caller's
+    /// `hello` leg rides the remainder of it.
+    pub(super) deadline: tokio::time::Instant,
+    /// The full budget behind that deadline, for the caller's own
+    /// "no answer within {timeout:?}" message.
+    pub(super) timeout: Duration,
+}
+
+/// The client half of [`horizon_wire::daemon::serve_connection`], and the
+/// only part of an establishment that is genuinely domain-free: connect
+/// remoc over `stream`, take the hub client the daemon hands over on the
+/// base channel, and set the rtc size caps. Both runtimes then diverge at
+/// their own `hello` — a different call on a different hub, answered by a
+/// different reply — which is why this stops one leg short of it.
+///
+/// Every leg is bounded by one shared deadline ([`establish_timeout`], the
+/// client-side counterpart of the server's `CONNECT_TIMEOUT`): a daemon
+/// generation that cannot speak chmux presents as silence here rather than
+/// as chmux's own raw 60 s timeout.
+pub(super) async fn connect_hub<S, C>(
+    stream: S,
+    daemon: &str,
+) -> Result<Connected<C>, EstablishError>
+where
+    S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
+    C: RemoteSend + rtc::Client,
+{
+    let timeout = establish_timeout();
+    let deadline = tokio::time::Instant::now() + timeout;
+    let (read_half, write_half) = tokio::io::split(stream);
+
+    let connect =
+        remoc::Connect::io::<_, _, (), C, WireCodec>(remoc::Cfg::default(), read_half, write_half);
+    let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
+        Ok(Ok(connected)) => connected,
+        Ok(Err(error)) => return Err(classify_connect_error(daemon, &error)),
+        Err(_elapsed) => {
+            return Err(EstablishError::Silence(format!(
+                "{daemon} sent no remoc handshake within {timeout:?}"
+            )))
+        }
+    };
+    let conn_task = tokio::spawn(conn);
+
+    let mut hub = match tokio::time::timeout_at(deadline, base_rx.recv()).await {
+        Ok(Ok(Some(hub))) => hub,
+        // Base-channel EOF/errors: the chmux handshake *did* complete, so
+        // the peer speaks remoc — a drop here is a dying daemon, not a
+        // generation signal. Transient.
+        Ok(Ok(None)) | Ok(Err(_)) => {
+            conn_task.abort();
+            return Err(EstablishError::Transient(format!(
+                "{daemon} closed the connection before handing over its hub client"
+            )));
+        }
+        Err(_elapsed) => {
+            conn_task.abort();
+            return Err(EstablishError::Silence(format!(
+                "{daemon} handed over no hub client within {timeout:?}"
+            )));
+        }
+    };
+
+    // The reply cap travels with each request (the macro caps the
+    // per-call reply channel from this value), so setting it here is the
+    // effective knob for what this client will accept per reply. The
+    // request cap, by contrast, is enforced daemon-side from the value
+    // the daemon set before transporting this client — the local set
+    // below only re-documents the intended bound (a transported sender's
+    // local cap is not re-checked).
+    hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
+    hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+
+    Ok(Connected {
+        hub,
+        conn_task,
+        deadline,
+        timeout,
+    })
 }
 
 /// Bounds one established-phase rtc call. A deadline expiry fails only
