@@ -47,10 +47,7 @@ use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::tools::ToolSessionState;
 
 pub use handle::JudgeHandle;
-#[allow(deprecated)]
-pub use record::{
-    JUDGE_VERDICT_EVENT_KIND, LEGACY_SHADOW_VERDICT_EVENT_KIND, SHADOW_VERDICT_EVENT_KIND,
-};
+pub use record::JUDGE_VERDICT_EVENT_KIND;
 
 use client::{ModelClient, RawCompletionRequest};
 

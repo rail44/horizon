@@ -65,7 +65,7 @@ mod grouping;
 mod receipt;
 mod tool_call;
 
-pub use bursts::{segment_bursts, thinking_visible_outside_burst, Burst};
+pub use bursts::{segment_bursts, Burst};
 pub use diff::{aggregate_changes, reconstruct_line_diff, DiffLine, DiffLineKind, FileChange};
 pub use grouping::{contains_user_message, group_into_turns, latest_turn_model, TurnEnd, TurnSpan};
 pub use receipt::{aggregate_receipt, CallClass, ReceiptAggregate};

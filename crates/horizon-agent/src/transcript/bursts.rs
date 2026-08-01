@@ -4,7 +4,6 @@
 use crate::contract::{Message, MessageRole};
 use crate::frame::AgentFrameItem;
 
-use super::grouping::TurnEnd;
 use super::tool_call::build_tool_call_views;
 
 /// Whether `item` is part of a tool call's lifecycle -- used by
@@ -163,26 +162,6 @@ pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
     bursts
 }
 
-/// Whether a `ReasoningDelta` item outside every burst's own absorbed range
-/// should render at all (owner requirement 2026-07-13: closing an
-/// un-instructed deviation from base decision 5 -- thinking was completely
-/// invisible while a turn ran, since `AgentView::render_turn`'s per-item
-/// walk never had a match arm for it). A reasoning item that falls *inside*
-/// a burst's `[start, end)` range (between two of its tool-related items,
-/// "a stray reasoning delta" per [`segment_bursts`]'s own doc comment)
-/// never reaches this decision at all -- it's structurally absorbed into
-/// `burst_items` and dropped by `build_tool_call_views`, unaffected by this
-/// fix, exactly as it always has been. For everything else (before the
-/// first burst, between two bursts, after the last one, or a turn with no
-/// bursts at all), visibility is simply "the turn hasn't ended yet":
-/// decision 1's "thinking folds into the receipt on completion" applies
-/// uniformly regardless of which of those positions a given item happened
-/// to land in, so once `TurnEnded` folds, this goes back to invisible too --
-/// no different from the burst-absorbed case's own fold.
-pub fn thinking_visible_outside_burst(ended: Option<&TurnEnd>) -> bool {
-    ended.is_none()
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -191,17 +170,6 @@ mod tests {
 
     use super::super::test_support::*;
     use super::*;
-
-    #[test]
-    fn thinking_visible_outside_burst_only_while_the_turn_is_running() {
-        assert!(thinking_visible_outside_burst(None));
-        let end = TurnEnd {
-            reason: TurnEndReason::Completed,
-            model: None,
-            elapsed: std::time::Duration::ZERO,
-        };
-        assert!(!thinking_visible_outside_burst(Some(&end)));
-    }
 
     /// The Tier 1 compaction divider closes the burst it lands in
     /// (`docs/agent-compaction-design.md`'s "transcript に区切りを表示"):

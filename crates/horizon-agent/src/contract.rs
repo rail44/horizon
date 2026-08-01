@@ -632,17 +632,13 @@ pub struct MessageDelta {
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
 /// indexing keep their shape); construct via `From<serde_json::Value>` /
-/// [`Self::new`], unwrap via [`Self::into_value`] or `.0`.
+/// [`Self::new`], unwrap via `.0`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct JsonValue(pub serde_json::Value);
 
 impl JsonValue {
     pub fn new(value: serde_json::Value) -> Self {
         Self(value)
-    }
-
-    pub fn into_value(self) -> serde_json::Value {
-        self.0
     }
 }
 

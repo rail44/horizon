@@ -30,11 +30,6 @@ use super::{JudgeDecision, JudgeFallbackReason, JudgeInput, JudgeVerdict};
 
 /// Current enforcing-mode event label.
 pub const JUDGE_VERDICT_EVENT_KIND: &str = "judge_verdict";
-/// Historical label retained so existing persisted logs and queries remain
-/// intelligible after the enforcing-mode rename.
-pub const LEGACY_SHADOW_VERDICT_EVENT_KIND: &str = "judge_shadow_verdict";
-#[deprecated(note = "new enforcing records use JUDGE_VERDICT_EVENT_KIND")]
-pub const SHADOW_VERDICT_EVENT_KIND: &str = LEGACY_SHADOW_VERDICT_EVENT_KIND;
 
 /// Writes one real verdict's calibration record.
 pub(super) fn write_verdict(
