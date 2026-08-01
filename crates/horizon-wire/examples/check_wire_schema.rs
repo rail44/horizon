@@ -6,25 +6,26 @@
 //!   classifies every difference between two versions of *one* artifact and
 //!   exits non-zero if any change is a reshape without a protocol-version
 //!   bump.
-//! - `check_wire_schema --transition <base-union.json> <agent.json>
-//!   <terminal.json>` — the one-time arm for a branch whose merge-base
-//!   still has the pre-split `session-wire.json`
+//! - `check_wire_schema --transition <base-union.json> <artifact.json>...`
+//!   — the one-time arm for a branch whose merge-base still has the
+//!   pre-split `session-wire.json`
 //!   (`docs/runtime-crate-alignment-design.md` phase 2). It reassembles the
-//!   two new artifacts into the union document they were split out of and
-//!   classifies *that* against the merge-base's copy, so the split itself
-//!   is checked exactly as strictly as any other change: a section that
-//!   quietly lost a definition, a channel, or a hub method still fails.
-//!   Skipping the check because the new files "did not exist at the
-//!   merge-base" would have been the dishonest alternative.
+//!   new artifacts (however many the script discovered — two today) into
+//!   the union document they were split out of and classifies *that*
+//!   against the merge-base's copy, so the split itself is checked exactly
+//!   as strictly as any other change: a section that quietly lost a
+//!   definition, a channel, or a hub method still fails. Skipping the check
+//!   because the new files "did not exist at the merge-base" would have
+//!   been the dishonest alternative.
 //!
 //!   Reassembly is a plain key merge (each artifact's own top-level
 //!   sections, plus a union of their `channels` and `$defs`), because the
 //!   split was defined to keep every inner key identical. Two rules keep it
 //!   from laundering a real change: a `$defs`/`channels` key present in
-//!   both artifacts with *different* content is reported as a violation
-//!   rather than silently taking one side, and the merged
-//!   `x-session-protocol-version` is the **minimum** of the two, so a bump
-//!   on one hub can never wave a reshape on the other one through.
+//!   more than one artifact with *different* content is reported as a
+//!   violation rather than silently taking one side, and the merged
+//!   `x-session-protocol-version` is the **minimum** across them, so a bump
+//!   on one hub can never wave a reshape on another one through.
 //!
 //! Once no live branch predates the artifact split, the `--transition` arm
 //! and its caller in the script can be deleted.
@@ -38,29 +39,28 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
     let (old, new) = match refs.as_slice() {
-        ["--transition", base, agent, terminal] => {
+        ["--transition", base, artifacts @ ..] if !artifacts.is_empty() => {
             let base = match read_schema(base) {
                 Ok(value) => value,
                 Err(error) => return fail_reading(base, &error),
             };
-            let agent = match read_schema(agent) {
-                Ok(value) => value,
-                Err(error) => return fail_reading(agent, &error),
-            };
-            let terminal = match read_schema(terminal) {
-                Ok(value) => value,
-                Err(error) => return fail_reading(terminal, &error),
-            };
+            let mut parsed = Vec::with_capacity(artifacts.len());
+            for path in artifacts {
+                match read_schema(path) {
+                    Ok(value) => parsed.push(value),
+                    Err(error) => return fail_reading(path, &error),
+                }
+            }
             let mut merge_violations = Vec::new();
-            let merged = reassemble_union(&agent, &terminal, &mut merge_violations);
+            let merged = reassemble_union(&parsed, &mut merge_violations);
             if !merge_violations.is_empty() {
                 for violation in &merge_violations {
                     println!("RESHAPE:  {violation}");
                 }
                 eprintln!(
-                    "the two wire-schema artifacts disagree about a shared definition, so \
+                    "the wire-schema artifacts disagree about a shared definition, so \
                      they no longer reassemble into the document they were split out of. \
-                     Fix the disagreement (both hubs share horizon-wire's types by \
+                     Fix the disagreement (every hub shares horizon-wire's types by \
                      construction) before this branch can be classified against its \
                      pre-split merge-base."
                 );
@@ -86,7 +86,7 @@ fn main() -> ExitCode {
         _ => {
             eprintln!(
                 "usage: check_wire_schema <old-schema.json> <new-schema.json>\n       \
-                 check_wire_schema --transition <base-union.json> <agent.json> <terminal.json>"
+                 check_wire_schema --transition <base-union.json> <artifact.json>..."
             );
             return ExitCode::FAILURE;
         }
@@ -116,14 +116,14 @@ fn report(result: Classification) -> ExitCode {
     }
 }
 
-/// Rebuilds the pre-split `session-wire.json` shape from the two artifacts
-/// that replaced it: each contributes its own hub section, and their
+/// Rebuilds the pre-split `session-wire.json` shape from the artifacts that
+/// replaced it: each contributes its own hub section, and their
 /// `channels`/`$defs` objects are unioned. See the module doc for why the
 /// version marker is the minimum and why a shared key with differing
 /// content is a violation rather than a silent pick.
-fn reassemble_union(agent: &Value, terminal: &Value, violations: &mut Vec<String>) -> Value {
+fn reassemble_union(sources: &[Value], violations: &mut Vec<String>) -> Value {
     let mut merged = Map::new();
-    for source in [agent, terminal] {
+    for source in sources {
         let Some(object) = source.as_object() else {
             violations.push("an artifact is not a JSON object".to_string());
             continue;
