@@ -701,6 +701,20 @@ async fn draining_the_agent_runtime_leaves_the_terminal_runtime_untouched() {
         AgentCall::Hello
     ));
 
+    // `Hello` is only the *server's* view of the handshake; the client marks
+    // the runtime established after the reply lands, and that flag is exactly
+    // what `begin_reload` reads. Drive one full round trip through the client
+    // instead -- the op loop that answers it starts only once the runtime is
+    // established, so a returned list is the established-side signal the
+    // assertion below actually depends on.
+    let list_handle = agentd.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
+    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+    assert!(matches!(
+        next_agent_call(&mut agent_calls).await,
+        AgentCall::ListAgents
+    ));
+
     assert!(agentd.begin_reload(), "the agent runtime was established");
     assert!(matches!(
         next_agent_call(&mut agent_calls).await,
