@@ -281,19 +281,27 @@ impl SessionHub for Hub {
 
 /// Blocks until every event-log record enqueued so far has actually been
 /// written and flushed to disk (see [`WriterHandle::flush`]'s doc comment),
-/// then returns -- called right before `std::process::exit(0)` on a
-/// [`SessionHub::drain`]. An `Appender::append_provider_events` call only
-/// enqueues onto the writer's own background thread; forwarding the
-/// resulting event to a connected client happens after that same enqueue,
-/// not after it becomes durable. Without this, a client observing a
-/// session's latest event over the wire and immediately draining could
-/// still race the writer's thread and lose it — indistinguishable from the
-/// `kill -9` case this binary has no signal handler for, except a graceful
-/// drain has every opportunity to just wait instead. A blocking call is
-/// safe here despite running on an async task: this is the last thing that
-/// happens before the process exits, so there is nothing else for the
-/// runtime to make progress on.
-fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
+/// then returns. An `Appender::append_provider_events` call only enqueues
+/// onto the writer's own background thread; forwarding the resulting event
+/// to a connected client happens after that same enqueue, not after it
+/// becomes durable. Without this, a client observing a session's latest
+/// event over the wire and then shutting the daemon down could still race
+/// the writer's thread and lose it.
+///
+/// **Every exit this process can intercept calls this**, and there are
+/// exactly two: [`SessionHub::drain`] (right before
+/// `std::process::exit(0)`) and [`crate::run`]'s SIGTERM arm — a plain
+/// `kill`, which is what an operator is told to use to stop this daemon by
+/// hand, and which used to unlink the socket and return without flushing.
+/// The durability boundary is therefore only what no handler can run
+/// ahead of: SIGKILL, and a crash. Those lose whatever was still queued on
+/// the writer's channel and can leave a torn final line, which
+/// `event_log::read` tolerates (`ReadReport::ignored_partial_line`).
+///
+/// A blocking call is safe on both paths despite running on an async task:
+/// nothing else the runtime hosts still needs to make progress by the time
+/// either caller reaches this.
+pub(crate) fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer {
         if let Err(error) = writer.flush() {
             eprintln!("horizon-agentd: failed to flush event log before draining: {error}");

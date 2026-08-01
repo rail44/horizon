@@ -143,8 +143,8 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
-    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see `main::
-    /// run_session_hosting_loop`, which waits for [`Self::wait_until_resume_ready`]
+    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see the hub's
+    /// `hello` (`crate::hub`), which waits for [`Self::wait_until_resume_ready`]
     /// first so this always reflects the finished startup read.
     pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
         self.state.skipped_lines_summary()
@@ -201,17 +201,19 @@ impl Connection {
             .and_then(|entry| entry.model.clone())
     }
 
-    /// Delegates to [`AgentdState::writer`] -- `main`'s `Control::Drain`
-    /// handling uses this to flush the event log's writer channel to disk
-    /// before the process exits. An `append` returning only means a record
-    /// was *enqueued*; the writer's background thread is what actually
-    /// writes and flushes it (see `WriterHandle::open`'s "Ordering
-    /// guarantee" doc comment), and forwarding an event to this connection
-    /// over the wire happens after that same enqueue, not after it's
-    /// durable. Without this, a client that drains right after observing a
-    /// session's latest event over the wire could still race the writer and
-    /// lose it -- unlike a `kill -9`, a graceful drain has no excuse to ever
-    /// do that.
+    /// Delegates to [`AgentdState::writer`] -- the hub's `drain` uses this
+    /// to flush the event log's writer channel to disk before the process
+    /// exits (`crate::run`'s SIGTERM arm does the same, straight off
+    /// [`AgentdState::writer`], since it has no connection in hand). An
+    /// `append` returning only means a record was *enqueued*; the writer's
+    /// background thread is what actually writes and flushes it (see
+    /// `WriterHandle::open`'s "Ordering guarantee" doc comment), and
+    /// forwarding an event to this connection over the wire happens after
+    /// that same enqueue, not after it's durable. Without this, a client
+    /// that drains right after observing a session's latest event over the
+    /// wire could still race the writer and lose it -- unlike a `kill -9`,
+    /// an exit this process actually gets to run code on has no excuse to
+    /// ever do that.
     pub(crate) fn writer(&self) -> Option<WriterHandle> {
         self.state.writer()
     }
@@ -219,8 +221,8 @@ impl Connection {
     /// Handles `Control::SessionLoad`: asks `session_id`'s own thread (if
     /// live) to hand back everything its `LiveState::events()` has
     /// accumulated -- already-committed history plus anything folded in
-    /// since -- so the caller (`main::run_session_hosting_loop`) can forward
-    /// it to the requesting client as ordinary event envelopes. Per the
+    /// since -- so the caller (the hub's `attach_agent`) can forward it to
+    /// the requesting client as ordinary session events. Per the
     /// design's "v1 bootstrap" note, this is exactly the events list, not a
     /// server-side frame snapshot (a later optimization). An unknown
     /// session id resolves to an empty list rather than an error -- nothing

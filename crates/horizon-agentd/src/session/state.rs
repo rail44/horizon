@@ -76,21 +76,21 @@ pub(crate) struct AgentdState {
     pub(super) host_tools_outgoing: Mutex<Option<UnboundedSender<HostToolRequest>>>,
     /// Flips once (see [`Self::mark_resume_ready`]) after
     /// [`super::resume::resume_persisted_sessions`] finishes populating `sessions` from the
-    /// log. `session_list`/`session_load` must not answer while this is
-    /// still false -- see [`Self::wait_until_resume_ready`] -- or a
+    /// log. The hub's `list_agents`/`attach_agent` must not answer while
+    /// this is still false -- see [`Self::wait_until_resume_ready`] -- or a
     /// (re)connecting client would see a partial (or, right after bind,
-    /// completely empty) view of sessions that genuinely exist. `hello`/
-    /// `ping` never check this: they don't depend on session state at all,
-    /// which is the whole point of binding first (see `main`).
+    /// completely empty) view of sessions that genuinely exist. `hello`
+    /// never checks this: it doesn't depend on session state at all, which
+    /// is the whole point of binding first (see `main`).
     resume_ready: AtomicBool,
     resume_notify: Notify,
     /// This process's own startup event-log corruption diagnostics
     /// (`persistence::event_log::ReadReport::skipped_summary`), `None` until
     /// [`Self::set_skipped_lines_summary`] runs (or forever, if the startup
     /// read found nothing to skip) -- see [`Self::skipped_lines_summary`]
-    /// and `main::run_session_hosting_loop`, which reports this once per
-    /// connection restoring the step-3 trim recorded in
-    /// `docs/agent-runtime-split-design.md`.
+    /// and the hub's `hello` (`crate::hub`), which forwards this once per
+    /// connection over `HubHello::skipped_lines`, restoring the step-3 trim
+    /// recorded in `docs/agent-runtime-split-design.md`.
     skipped_lines_summary: Mutex<Option<String>>,
     /// Shared, multi-reader-blocking handle onto the live DuckDB projection
     /// (see [`SharedDuckdbStore`]'s doc comment) -- the *same* instance
@@ -196,9 +196,9 @@ impl AgentdState {
     }
 
     /// Called once from [`crate::spawn_resume_task`], alongside
-    /// [`Self::set_writer`] -- before [`Self::mark_resume_ready`], so a
-    /// connection's readiness-gated summary send (see `main::
-    /// run_session_hosting_loop`) always observes the final value.
+    /// [`Self::set_writer`] -- before [`Self::mark_resume_ready`], so the
+    /// hub's readiness-gated summary send (the task `hello` spawns in
+    /// `crate::hub`) always observes the final value.
     pub(crate) fn set_skipped_lines_summary(&self, summary: Option<String>) {
         *self.skipped_lines_summary.lock().unwrap() = summary;
     }
@@ -214,8 +214,9 @@ impl AgentdState {
         self.resume_notify.notify_waiters();
     }
 
-    /// Blocks (async, so it only ever parks the calling connection's own
-    /// task -- see `main::run_session_hosting_loop`) until
+    /// Blocks (async, so it only ever parks the one hub-call task
+    /// `SessionHubServerShared` spawned for this request -- see
+    /// [`crate::handle_connection`]) until
     /// [`Self::mark_resume_ready`] has run. Builds the `Notified` future
     /// before re-checking the flag, per `tokio::sync::Notify`'s documented
     /// pattern for "wait for a one-time event without a missed-wakeup race"

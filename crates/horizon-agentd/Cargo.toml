@@ -12,7 +12,6 @@ horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-wire = { path = "../horizon-wire" }
 remoc = { workspace = true }
 serde_json = "1.0"
-sysinfo = { version = "0.39.6", default-features = false, features = ["system"] }
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
 uuid = { version = "1.18", features = ["v4"] }
 
@@ -23,6 +22,10 @@ uuid = { version = "1.18", features = ["v4"] }
 # generated beside the runtime crate that owns its hub. `schemars` and
 # `termwiz` left with that generator -- nothing else here used them.
 tempfile = "3"
+# `main`'s SIGTERM test raises the signal at its own process -- the only way
+# to exercise the real signal arm (and therefore its event-log flush) without
+# spawning a daemon child.
+libc = "0.2"
 # Enables the `mock.approval_required` / `mock.boundary_crossing` test
 # fixtures in `horizon-agent`'s tool catalog so agentd's own unit tests
 # and the e2e integration suite can exercise approval/boundary-crossing

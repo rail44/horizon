@@ -129,8 +129,10 @@ pub type CappedWatchReceiver<T, const MAX_ITEM_SIZE: usize> =
 /// The schema stand-in for a remoc channel half: on the wire it is a chmux
 /// port reference, not data, so the artifact documents it as an opaque
 /// marker. What flows *through* each channel is documented separately by
-/// the artifact's `channels` section (see
-/// `crates/horizon-agentd/tests/wire_schema.rs`).
+/// the artifact's `channels` section -- one artifact per runtime crate,
+/// generated beside the hub that owns it
+/// (`crates/horizon-agent/tests/wire_schema.rs` and
+/// `crates/horizon-terminal-core/tests/wire_schema.rs`).
 pub fn channel_schema<T: JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {
