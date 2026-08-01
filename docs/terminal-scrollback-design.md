@@ -310,21 +310,22 @@ Additive, under `docs/remoc-adoption-design.md` §4:
   and terminal-protocol whole-line forwarding are separate entry points, so
   the local window state machine carries no legacy fallback mode.
 - The new surface is additive by the §4 classifier's own rules
-  (`crates/horizon-session-protocol/src/schema_check.rs`): **appended enum
-  variants** (`RequestScrollWindow`, `ScrollWindow`) are additive provided
+  (`crates/horizon-wire/src/schema_check.rs`): **appended enum variants**
+  (`RequestScrollWindow`, `ScrollWindow`) are additive provided
   they precede the trailing `#[serde(other)] Unknown` and nothing is
   reordered/retyped; a **new rtc method** (delivery option i, §9) is
   additive; the new **scrollback-availability frame flag** (§2.3) is a new
   field carrying `#[serde(default)]`. Every new wire type derives
-  `JsonSchema`; the committed artifact
-  (`crates/horizon-session-protocol/schema/session-wire.json`, which strips
+  `JsonSchema`; the committed artifact for this (terminal) wire slice
+  (`crates/horizon-terminal-core/schema/terminal-wire.json`, which strips
   `Unknown` catch-alls and documents only what a peer may legally *send*)
-  regenerates in `crates/horizon-agentd/tests/wire_schema.rs`
+  regenerates in `crates/horizon-terminal-core/tests/wire_schema.rs`
   (`HORIZON_BLESS_WIRE_SCHEMA=1` to bless) and shows as reviewable diff text,
   waved through by the `x-session-protocol-version` bump. A new hub method
   would also land in the artifact's `hub` section (and must update the
-  method-surface pin test `hub_request_enum_matches_the_documented_method_surface`,
-  `crates/horizon-session-protocol/src/lib.rs:606`); a new streamed channel
+  method-surface pin test
+  `terminal_hub_request_enum_matches_the_documented_method_surface`,
+  `crates/horizon-terminal-core/src/wire.rs`); a new streamed channel
   in its `channels` section.
 - **Postbag positional discipline** (§4 rule 5): `ScrollWindow.lines` is a
   `Vec<TerminalLine>` — `TerminalLine`/`TerminalSpan` are structs, not wire
@@ -467,9 +468,10 @@ phase and the cache/eviction phase are gone entirely:
   snapshot, the loop, the frame vocabulary.
 - `crates/horizon-agentd/src/hub.rs`, `terminal.rs` — the per-subscriber
   channel bridges and the command demux.
-- `crates/horizon-session-protocol/src/lib.rs`, `schema_check.rs`,
-  `crates/horizon-agentd/tests/wire_schema.rs`,
-  `crates/horizon-session-protocol/schema/session-wire.json` — the attachment
+- `crates/horizon-terminal-core/src/wire.rs`,
+  `crates/horizon-wire/src/schema_check.rs`,
+  `crates/horizon-terminal-core/tests/wire_schema.rs`,
+  `crates/horizon-terminal-core/schema/terminal-wire.json` — the attachment
   shape, version constants, the additive classifier, the committed artifact.
 - `src/terminal/mod.rs`, `session.rs`, `input.rs` — the client scroll path,
   the notify pump, and `ScrollAccumulator`.

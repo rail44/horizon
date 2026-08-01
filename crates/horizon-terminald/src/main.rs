@@ -18,7 +18,7 @@
 //! terminald may be an older binary than the UI that connects to it, and the
 //! only honest response to a below-the-schema mismatch is a clean refusal
 //! naming `Reload Terminal Runtime` — never silent misbehavior (the tmux 3.6
-//! lesson; decision 6, implemented client-side in `src/agentd/`).
+//! lesson; decision 6, implemented client-side in `src/runtime/`).
 //!
 //! **No persistence, no readiness gate.** Unlike agentd, this daemon owns
 //! no event log and no DuckDB projection, so there is nothing to resume at

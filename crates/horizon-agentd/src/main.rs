@@ -1,12 +1,13 @@
 //! `horizon-agentd`: steps 2-4 of `docs/agent-runtime-split-design.md`'s
 //! agent-runtime split. Owns the Unix socket, the `hello` handshake, and (as
-//! of step 3) real agent sessions: `session_new` spawns the provider/tool/
-//! persistence machinery this binary hosts (see `session::run_session`),
-//! command/event envelopes route by session id, and this process owns the
-//! event log + DuckDB projection -- Horizon never opens either itself. As of
-//! step 4, every session found in the log at startup is resumed live (see
-//! `session::resume_persisted_sessions`) and `session_load` re-emits a
-//! session's committed events to a (re)connecting client.
+//! of step 3) real agent sessions: the hub's `new_agent` spawns the
+//! provider/tool/persistence machinery this binary hosts (see
+//! `session::run_session`), commands and events route by session id, and
+//! this process owns the event log + DuckDB projection -- Horizon never
+//! opens either itself. As of step 4, every session found in the log at
+//! startup is resumed live (see `session::resume_persisted_sessions`) and
+//! `attach_agent` re-emits a session's committed events to a (re)connecting
+//! client.
 //!
 //! **Bind first (startup ordering).** [`main`] binds/listens on the socket
 //! as its first action after arg/config parsing -- before it ever reads the
@@ -25,13 +26,13 @@
 //! it ever opens its own log.
 //!
 //! The event-log read and session resume move to a background task
-//! ([`spawn_resume_task`]) that races the accept loop. `hello`/`ping` never
-//! touch session state, so they're answered immediately regardless of
-//! whether that background work has finished; `session_list`/`session_load`/
-//! `session_new` would return an incomplete (or, right after bind, empty)
-//! view of history if answered too early, so they block on [`session::
-//! AgentdState::wait_until_resume_ready`] first -- a readiness gate, not a
-//! protocol change.
+//! ([`spawn_resume_task`]) that races the accept loop. `hello` -- the one
+//! [`Hub`] method that never touches session state -- is answered
+//! immediately regardless of whether that background work has finished;
+//! `list_agents`/`attach_agent`/`new_agent` would return an incomplete (or,
+//! right after bind, empty) view of history if answered too early, so they
+//! block on [`session::AgentdState::wait_until_resume_ready`] first -- a
+//! readiness gate, not a protocol change.
 //!
 //! **The DuckDB rebuild is off the readiness path too.** It used to run
 //! synchronously inside [`open_persistence`], *before* [`AgentdState::
@@ -71,7 +72,7 @@ use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDu
 use horizon_agent::wire::{SessionHubClient, SessionHubServerShared};
 use horizon_wire::socket::default_agentd_socket_path;
 use horizon_wire::{WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
-use hub::Hub;
+use hub::{flush_event_log_before_exit, Hub};
 use remoc::rtc::{Client as _, ServerShared as _};
 use session::{AgentdState, Connection};
 use tokio::net::{UnixListener, UnixStream};
@@ -90,8 +91,8 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Test-only hook (`crates/horizon-agentd/tests/e2e.rs`): when set to a
 /// number of milliseconds, [`spawn_resume_task`] sleeps that long before
 /// opening the event log, so a test can prove the bind-first ordering
-/// (hello answers well before this delay elapses; `session_list`/
-/// `session_load` don't) instead of relying on incidental timing. Never set
+/// (hello answers well before this delay elapses; `list_agents`/
+/// `attach_agent` don't) instead of relying on incidental timing. Never set
 /// in production.
 const TEST_RESUME_DELAY_MS_VAR: &str = "HORIZON_AGENTD_TEST_RESUME_DELAY_MS";
 
@@ -217,9 +218,10 @@ fn test_resume_delay() -> Option<Duration> {
 /// so the caller can resume every session they belong to
 /// ([`session::resume_persisted_sessions`]), and the human-readable
 /// skipped-lines summary (if any corrupt/torn lines were found) so
-/// [`spawn_resume_task`] can stash it on [`AgentdState`] for `main::
-/// run_session_hosting_loop` to forward to a connecting client -- restoring
-/// the step-3 trim recorded in `docs/agent-runtime-split-design.md`
+/// [`spawn_resume_task`] can stash it on [`AgentdState`] for the [`Hub`]'s
+/// `hello` to forward to a connecting client over `HubHello::skipped_lines`
+/// -- restoring the step-3 trim recorded in
+/// `docs/agent-runtime-split-design.md`
 /// ("Skipped-lines status reporting is omitted").
 ///
 /// Opens via [`WriterHandle::open_silently`] rather than [`WriterHandle::
@@ -293,6 +295,11 @@ async fn run(
             }
             _ = sigterm.recv() => {
                 eprintln!("horizon-agentd: SIGTERM received, shutting down");
+                // Same durability obligation a `drain` has, for the same
+                // reason: an `append` only enqueues, so exiting here without
+                // flushing drops whatever the writer thread hadn't dequeued
+                // yet. See [`flush_event_log_before_exit`].
+                flush_event_log_before_exit(state.writer());
                 break;
             }
         }
@@ -448,5 +455,113 @@ mod tests {
     fn socket_path_from_args_is_none_when_the_flag_is_absent() {
         let args: Vec<String> = vec!["--other-flag".to_string()];
         assert_eq!(socket_path_from_args(args.into_iter()), None);
+    }
+
+    /// How long the writer thread's startup read is held open below. The
+    /// test's own correctness does not depend on this number: with the
+    /// flush in place, [`run`]'s SIGTERM arm blocks on a real writer
+    /// barrier, so a slower machine only means a longer wait. It is what
+    /// makes the *absence* of the flush observable -- without it, `run`
+    /// returns while the writer thread is still inside this sleep and the
+    /// log file is still empty when the assertion below reads it.
+    const GATED_STARTUP_READ: Duration = Duration::from_millis(750);
+
+    fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
+        Record {
+            schema: "horizon.agent.event_log".to_string(),
+            version: 1,
+            event_id: uuid::Uuid::new_v4().to_string(),
+            sequence,
+            session_id,
+            turn_id: None,
+            provider_id: None,
+            role_id: None,
+            session_context: None,
+            event_kind: "state_changed".to_string(),
+            event: horizon_agent::contract::Event::StateChanged(
+                horizon_agent::contract::SessionState::Running,
+            ),
+            provider_payload: None,
+            created_at_unix_ms: sequence + 1,
+        }
+    }
+
+    /// The durability obligation of the SIGTERM path: a plain `kill` --
+    /// what an operator is told to use to stop this daemon by hand -- must
+    /// flush the event log, exactly as a `drain` does. `append` only
+    /// enqueues onto the writer thread's channel, so before the flush
+    /// landed, records that had already been forwarded to a client over the
+    /// wire could still die with the process.
+    ///
+    /// The writer's startup read is deliberately held open (see
+    /// [`GATED_STARTUP_READ`]), which is what pins the three appends below
+    /// in the channel -- unwritten -- at the moment SIGTERM arrives.
+    #[tokio::test]
+    async fn sigterm_flushes_the_event_log_before_exiting() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let log_path = dir.path().join("events.jsonl");
+        let socket_path = dir.path().join("agentd.sock");
+
+        let (writer, init_rx) = WriterHandle::open_with_reader(&log_path, |path| {
+            std::thread::sleep(GATED_STARTUP_READ);
+            horizon_agent::persistence::event_log::read(path)
+        });
+        let session_id = horizon_agent::contract::SessionId::new();
+        let appended = 3;
+        for sequence in 0..appended {
+            writer
+                .append(state_record(session_id, sequence))
+                .expect("append enqueues while the startup read is still gated");
+        }
+
+        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let state = Arc::new(AgentdState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            Some(writer),
+            SharedDuckdbStore::unavailable(),
+            None,
+            Vec::new(),
+        ));
+        let listener = bind_listener(&socket_path).await.expect("bind");
+
+        // Installed before anything raises SIGTERM, so this process can
+        // never take the default (fatal) disposition: tokio's handler is
+        // process-global and outlives every `Signal` stream built on it,
+        // including the one `run` makes for itself.
+        let _sigterm_guard =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("install the process-wide SIGTERM handler");
+
+        // Spawned with no `.await` between here and `run` below, so on the
+        // current-thread runtime `run` has already built its own signal
+        // stream by the time this task first runs. The repeat is belt and
+        // braces against a stream that subscribed a moment too late: a
+        // watch receiver never sees a value sent before it existed.
+        let raiser = tokio::spawn(async {
+            loop {
+                // SAFETY: `raise` is async-signal-safe and targets this
+                // process, whose SIGTERM disposition tokio already owns.
+                unsafe { libc::raise(libc::SIGTERM) };
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        });
+        run(listener, &socket_path, state).await.expect("run");
+        raiser.abort();
+
+        match init_rx.recv().expect("writer init outcome") {
+            WriterInit::Ready(_) => {}
+            WriterInit::Failed(error) => panic!("unexpected startup failure: {error}"),
+        }
+        let report = horizon_agent::persistence::event_log::read(&log_path).expect("read log");
+        assert_eq!(
+            report.records.len(),
+            appended as usize,
+            "SIGTERM must not exit before the event log's writer thread has flushed \
+             everything already enqueued"
+        );
     }
 }

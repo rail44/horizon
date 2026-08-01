@@ -90,6 +90,15 @@ max-threads = 1
 # `TcpListener::bind` (Permission denied) before any adapter logic runs. Not a
 # real Exa network call -- a localhost mock stopped by the loopback bind denial.
 #
+# agentd's SIGTERM flush test --
+# `(binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))`.
+# It drives the real `run` accept loop, so it binds a real `UnixListener`
+# under `std::env::temp_dir()` -- the same SUN_LEN mechanism that excludes
+# `host::listener::tests` above: containment provisions $TMPDIR under this
+# session's (deep) worktree and `bind()` fails with `InvalidInput` before the
+# sandbox is even consulted. Raising SIGTERM at itself is fine under
+# containment; only the socket is.
+#
 # `suggest_grants` system-root assumption --
 # `test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants/)`. Relies on two `temp_dir` siblings sharing only a system root as their common
 # ancestor (so no honest shared tree exists and per-attempt grants are
@@ -123,5 +132,6 @@ default-filter = '''
         + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
+        + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
     )
 '''
