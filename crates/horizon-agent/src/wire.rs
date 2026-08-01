@@ -1,7 +1,6 @@
 //! The agent runtime's whole wire: the payload vocabulary that crosses
-//! `horizon-agentd`'s socket (this file), the [`SessionHub`] rtc trait and
-//! version pair that carry it ([`hub`]), and the quarantined pre-remoc
-//! JSONL drain encoder ([`legacy`]).
+//! `horizon-agentd`'s socket (this file), plus the [`SessionHub`] rtc trait
+//! and version pair that carry it ([`hub`]).
 //!
 //! The v10 remoc cutover (`docs/remoc-adoption-design.md` §2) deleted this
 //! module's JSONL machinery wholesale: the `Envelope`/`EnvelopeBody` pair,
@@ -32,7 +31,6 @@ use crate::contract::{Event, JsonValue, ProviderId, RequestId, SessionId, ToolCa
 use crate::roles::RoleId;
 
 mod hub;
-pub mod legacy;
 
 // Glob rather than a hand-listed surface: `#[rtc::remote]` generates a
 // dozen companion items (client, the four server flavors, the request

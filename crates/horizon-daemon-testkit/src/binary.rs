@@ -94,7 +94,7 @@ pub fn resolve_daemon_binary(binary_name: &str, baked_in: &str) -> PathBuf {
 /// for binaries of the package a test belongs to, and every workspace binary
 /// is uplifted into the same target directory, so the sibling lookup is the
 /// one honest way to reach it (the same rule
-/// `horizon_agent::client::resolve_daemon_binary` uses in production).
+/// `horizon_wire::spawn::resolve_daemon_binary` uses in production).
 pub fn sibling_daemon_binary(anchor: &Path, binary_name: &str) -> PathBuf {
     let candidate = anchor
         .parent()

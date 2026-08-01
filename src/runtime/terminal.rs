@@ -4,10 +4,13 @@
 //! Structurally the twin of [`super::agent`], with two deliberate
 //! differences that follow from what this daemon *is*:
 //!
-//! 1. **No JSONL generation to recover from.** `horizon-terminald` was born
-//!    at wire v17, so there is no pre-remoc encoder to probe: a stale
-//!    terminald is always a remoc peer, and the one recovery path is the
-//!    version-stable rtc `drain`.
+//! 1. **Draining is destructive.** `horizon-terminald` was born at wire v17,
+//!    so a stale terminald is always a remoc peer and the one recovery path
+//!    is the version-stable rtc `drain` — the same path agentd is left with
+//!    now that its pre-remoc prober is gone. What differs is the price: this
+//!    drain kills every PTY, and whatever runs inside them, so all three
+//!    mismatch shapes funnel through the single once-per-runtime budget in
+//!    [`recover_stale_terminald`].
 //! 2. **Below-schema skew insurance** (design decision 6, the mechanized
 //!    tmux 3.6 lesson). This daemon is deliberately long-lived, so the
 //!    binary it is running may predate the client by many rebuilds — and
@@ -27,18 +30,15 @@ use horizon_terminal_core::wire::{
     terminal_client_hello, TerminalAttachment, TerminalHub as _, TerminalHubClient,
 };
 use horizon_terminal_core::{TerminalCommand, TerminalSpawnSpec, TerminalSummary, TerminalUpdate};
-use horizon_wire::{
-    DecodeSkipLog, HubError, WireCodec, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
-};
+use horizon_wire::{DecodeSkipLog, HubError, WireCodec};
 use remoc::rtc::Client as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
-use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::common::{
-    classify_connect_error, establish_timeout, wait_until_refusing, with_deadline, EstablishError,
-    RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
+    connect_hub, establish_timeout, wait_until_refusing, with_deadline, ConnTask, Connected,
+    EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
 };
 use super::routing::TerminalRoutes;
 
@@ -306,11 +306,7 @@ where
     };
     let (hub, conn_task) = match established {
         Ok(established) => established,
-        Err(EstablishError::Transient(message)) => return StreamEnd::PreHelloTransport { message },
-        Err(EstablishError::Silence(message)) => return StreamEnd::Silence { message },
-        Err(EstablishError::Garbage(message)) => return StreamEnd::GenerationMismatch { message },
-        Err(EstablishError::Rejected(message)) => return StreamEnd::VersionRejected { message },
-        Err(EstablishError::Fatal(message)) => return StreamEnd::Fatal(message),
+        Err(error) => return error.into(),
     };
     control.mark_established();
 
@@ -340,13 +336,11 @@ where
     end
 }
 
-type EstablishedParts = (
-    TerminalHubClient<WireCodec>,
-    JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>,
-);
+type EstablishedParts = (TerminalHubClient<WireCodec>, ConnTask);
 
-/// Runs the remoc connect + base handover + `hello` + the decision-6 skew
-/// probe, each leg bounded by one shared establish deadline.
+/// Runs the shared connect prelude ([`connect_hub`]), then this hub's own
+/// `hello` and the decision-6 skew probe — the `hello` bounded by the one
+/// establish deadline the prelude opened.
 ///
 /// **The probe and what it does / does not catch.** After a successful
 /// `hello` the client calls `list_terminals` once — the cheapest reply-
@@ -371,44 +365,12 @@ async fn establish<S>(stream: S) -> Result<EstablishedParts, EstablishError>
 where
     S: AsyncRead + AsyncWrite + Send + Sync + Unpin + 'static,
 {
-    let timeout = establish_timeout();
-    let deadline = tokio::time::Instant::now() + timeout;
-    let (read_half, write_half) = tokio::io::split(stream);
-
-    let connect = remoc::Connect::io::<_, _, (), TerminalHubClient<WireCodec>, WireCodec>(
-        remoc::Cfg::default(),
-        read_half,
-        write_half,
-    );
-    let (conn, _base_tx, mut base_rx) = match tokio::time::timeout_at(deadline, connect).await {
-        Ok(Ok(connected)) => connected,
-        Ok(Err(error)) => return Err(classify_connect_error(DAEMON, &error)),
-        Err(_elapsed) => {
-            return Err(EstablishError::Silence(format!(
-                "terminald sent no remoc handshake within {timeout:?}"
-            )))
-        }
-    };
-    let conn_task = tokio::spawn(conn);
-
-    let mut hub = match tokio::time::timeout_at(deadline, base_rx.recv()).await {
-        Ok(Ok(Some(hub))) => hub,
-        Ok(Ok(None)) | Ok(Err(_)) => {
-            conn_task.abort();
-            return Err(EstablishError::Transient(
-                "terminald closed the connection before handing over its hub client".to_string(),
-            ));
-        }
-        Err(_elapsed) => {
-            conn_task.abort();
-            return Err(EstablishError::Silence(format!(
-                "terminald handed over no hub client within {timeout:?}"
-            )));
-        }
-    };
-
-    hub.set_max_request_size(RTC_MAX_REQUEST_BYTES);
-    hub.set_max_reply_size(RTC_MAX_REPLY_BYTES);
+    let Connected {
+        hub,
+        conn_task,
+        deadline,
+        timeout,
+    } = connect_hub::<_, TerminalHubClient<WireCodec>>(stream, DAEMON).await?;
 
     let client_hello = terminal_client_hello(concat!("horizon/", env!("CARGO_PKG_VERSION")));
     let hello = match tokio::time::timeout_at(deadline, hub.hello(client_hello)).await {
@@ -664,13 +626,7 @@ async fn drain_stale_terminald(socket_path: &Path) -> Result<(), String> {
 
 async fn establish_for_drain(
     stream: tokio::net::UnixStream,
-) -> Result<
-    (
-        TerminalHubClient<WireCodec>,
-        JoinHandle<Result<(), remoc::chmux::ChMuxError<std::io::Error, std::io::Error>>>,
-    ),
-    String,
-> {
+) -> Result<(TerminalHubClient<WireCodec>, ConnTask), String> {
     let deadline = tokio::time::Instant::now() + establish_timeout();
     let (read_half, write_half) = stream.into_split();
     let connect = remoc::Connect::io::<_, _, (), TerminalHubClient<WireCodec>, WireCodec>(

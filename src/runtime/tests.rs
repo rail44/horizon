@@ -1204,16 +1204,18 @@ fn hold_silently(stream: tokio::net::UnixStream) -> tokio::task::JoinHandle<()> 
     })
 }
 
-/// The cross-generation recovery loop (`docs/remoc-adoption-design.md` §6,
-/// re-anchoring PR #18's scenarios on the new detection path): a v10+
-/// runtime meets a still-running JSONL daemon — which blocks silently in
-/// its pre-hello `read_line`, the measured real-v9 presentation — sees
-/// `SILENCE_MISMATCH_THRESHOLD` consecutive bounded-timeout silences
-/// (single timeouts are transient and never consume the recovery budget),
-/// probes a legacy `Drain` at the newest JSONL version, and adopts the
-/// respawned (remoc) daemon.
+/// A daemon generation this build cannot reach at all — a still-running
+/// pre-remoc (JSONL) agentd, which presents as persistent silence (its
+/// pre-hello `read_line` never completes on chmux bytes) — is no longer
+/// auto-recoverable: the JSONL drain prober that used to clear it was
+/// deleted on 2026-08-01. The detection half is unchanged
+/// (`SILENCE_MISMATCH_THRESHOLD` consecutive bounded-timeout silences,
+/// single timeouts staying transient), and the one recovery attempt now
+/// travels as the version-stable rtc `drain` over a fresh remoc connection —
+/// which such a daemon cannot answer either, so the runtime reports the
+/// failure with the manual-stop instruction instead of looping.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
+async fn a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop() {
     // Shrink the establish deadline so three consecutive silences take
     // fractions of a second, not 15 s of wall clock.
     std::env::set_var("HORIZON_TEST_ESTABLISH_TIMEOUT_MS", "300");
@@ -1221,6 +1223,14 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         AgentdHandle::start(&socket_path, &control_socket);
+    let agent = handle.start_session(
+        SessionId::new(),
+        ProviderId("mock".into()),
+        None,
+        None,
+        None,
+        false,
+    );
 
     // Connections 1..3: the silent JSONL daemon, once per establish
     // attempt (the runtime redials between timeouts).
@@ -1230,39 +1240,34 @@ async fn a_jsonl_generation_daemon_is_probed_drained_and_the_respawn_adopted() {
         held.push(hold_silently(stream));
     }
 
-    // Connection 4: the first drain probe — one newline-terminated JSONL
-    // envelope, stamped with the newest JSONL version.
+    // Connection 4: the one recovery attempt this runtime is allowed. It is
+    // a remoc connect carrying an rtc `drain`, never a JSONL line — and this
+    // daemon can no more answer that than it could answer the handshake, so
+    // it keeps accepting afterwards.
     {
         let (mut stream, _) = listener.accept().await.unwrap();
         let bytes = read_until_closed(&mut stream).await;
-        let line = String::from_utf8(bytes).expect("the drain probe is one JSON line");
-        assert_eq!(
-            line,
-            horizon_agent::wire::legacy::drain_line(
-                horizon_agent::wire::legacy::NEWEST_JSONL_VERSION
-            ),
-            "the first probe must be aimed at the newest JSONL version"
+        assert!(
+            !bytes.is_empty() && !bytes.starts_with(b"{"),
+            "the recovery must dial remoc, not a JSONL envelope; got {:?}",
+            String::from_utf8_lossy(&bytes)
         );
     }
 
-    // The probe found its mark: "exit" (stop accepting, socket file left
-    // behind), then come back as the respawned remoc daemon.
-    drop(listener);
-    tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
-
-    let (stream, _) = listener.accept().await.unwrap();
-    let (mut calls, _conn, _serve) = serve_fake_session_hub(stream, FakeBehavior::default()).await;
-    assert!(matches!(
-        next_agent_call(&mut calls).await,
-        AgentCall::Hello
-    ));
-
-    // Prove the recovered connection is fully established with a round
-    // trip.
-    let list_handle = handle.clone();
-    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
-    assert_eq!(listed.unwrap(), Ok(Vec::new()));
+    // The daemon is still there, so the drain could not be confirmed: the
+    // runtime says so, naming the manual fix, and stops.
+    let event = agent
+        .events()
+        .recv_timeout(Duration::from_secs(30))
+        .unwrap();
+    let Event::Error(error) = event.event else {
+        panic!("expected the unrecoverable mismatch to fan out as an error, got {event:?}");
+    };
+    assert!(
+        error.message.contains("stop it manually"),
+        "error was: {}",
+        error.message
+    );
 
     drop(handle);
     let _ = std::fs::remove_file(&socket_path);
@@ -1295,7 +1300,7 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
         let (stream, _) = listener.accept().await.unwrap();
         held.push(hold_silently(stream));
     }
-    // Connection 4: the one drain probe this runtime is allowed.
+    // Connection 4: the one drain attempt this runtime is allowed.
     {
         let (mut stream, _) = listener.accept().await.unwrap();
         let _ = read_until_closed(&mut stream).await;
@@ -1385,8 +1390,8 @@ async fn a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopt
 
 /// The terminal runtime's own recovery: a terminald whose hub rejects the
 /// range is drained over the version-stable rtc surface and the respawn is
-/// adopted. Unlike agentd there is no JSONL generation to probe downward
-/// through — this one path covers every stale terminald.
+/// adopted. Terminald was born at v17, so this one path has always covered
+/// every stale terminald.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted() {
     let (socket_path, control_socket) = stub_socket_paths("trej");

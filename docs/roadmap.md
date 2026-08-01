@@ -113,9 +113,11 @@ lands:
   landed as Option A (owner-ratified 2026-07-20): a full-frame
   `rch::watch` signal at protocol v11, with the diff/baseline machinery
   deleted and row-change detection moved client-side. PR #18's legacy
-  JSONL drain prober survives, quarantined in
-  `horizon_agent::wire::legacy`, as the only cross-generation
-  (v10 UI clears a v≤9 daemon) recovery path.
+  JSONL drain prober (quarantined in `horizon_agent::wire::legacy`) was
+  the only cross-generation (v10 UI clears a v≤9 daemon) recovery path
+  until the owner retired it on 2026-08-01: a still-running pre-remoc
+  daemon is stopped by hand now, and the shell's recovery is the
+  version-stable rtc `drain` alone.
 - **Inter-agent messaging.** Sessions addressing sessions — the
   coordination substrate for project → domain → task teams. Designed
   on the same derivation tree as the relationship model; a

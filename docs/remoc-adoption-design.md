@@ -163,7 +163,7 @@ promptly and distinguishably).
 | `kind` string dispatch (`routing.rs`, daemon `main.rs` hosting loop) | gone — trait method dispatch |
 | `request_id` correlation maps (`pending_terminal_lists`/`attaches`, `pending_session_list`) | gone — rtc calls return futures |
 | per-message `session_id` correlation | attach-call argument only; afterwards structural (channel identity) |
-| JSONL framing (`read_envelope`/`write_envelope`, `TornLine`) | gone — chmux framing; a minimal legacy *encoder* survives inside the drain prober (§6) |
+| JSONL framing (`read_envelope`/`write_envelope`, `TornLine`) | gone — chmux framing; a minimal legacy *encoder* survived inside the drain prober until that prober was retired on 2026-08-01 (§6) |
 | exact-version `Hello` / `HandshakeRejected` | `hello()` range negotiation (§3) |
 | `SessionControl::Ping/Pong` | gone — channel-level disconnect detection subsumes it; a liveness probe, if ever wanted, is an rtc call |
 | connection-loss fan-out (`Routes::connection_failed`) | per-channel error results |
@@ -372,23 +372,33 @@ project (the same posture as the `agentd`→`sessiond` rename —
 layer"). The daemon speaks only remoc from v10 on; what needs care is the
 *transition moment*, where a v10 UI meets a still-running v≤9 daemon.
 
-**The legacy JSONL drain prober outlives JSONL.** PR #18's
-contract-mismatch auto-recovery (drain the stale daemon at *its own*
+**The legacy JSONL drain prober outlived JSONL — until 2026-08-01.** PR
+#18's contract-mismatch auto-recovery (drain the stale daemon at *its own*
 envelope version, probing v9 down to v3 when it never revealed one, then
-let `connect_or_spawn_agentd_retrying` start a fresh binary) is retained after
-the cutover as the **only** path by which a remoc-generation UI can
+let `connect_or_spawn_agentd_retrying` start a fresh binary) was retained after
+the cutover as the **only** path by which a remoc-generation UI could
 automatically clear a JSONL-generation daemon: a v10 client's chmux
 handshake gets no valid reply from a JSONL daemon (detected by a bounded
 timeout wrapped around the connect — never the raw 60 s chmux timeout),
-which triggers the same probe-drain-respawn sequence, once per runtime,
+which triggered the same probe-drain-respawn sequence, once per runtime,
 fatal-with-rebuild-hint on the second failure exactly as #18 decided. To
 serve it, a small legacy JSONL *encoder* (versioned `session_control`
-envelope + line framing) survives, quarantined in one module whose only
-caller is the prober. A wrong-generation probe hitting a healthy remoc
-daemon costs one garbage connection, which chmux drops — the same
-"wrong probe is harmless" property #18 established.
+envelope + line framing) survived, quarantined in one module whose only
+caller was the prober.
 
-**The reverse direction does not auto-recover.** A *v≤9 (JSONL) UI*
+**Retired 2026-08-01 (owner decision).** The prober and its quarantined
+encoder (`horizon_agent::wire::legacy`) are deleted. The only daemon they
+could still stop was a binary built before the 2026-07-21 cutover and left
+running for months, and the detection half was never the part that carried
+its weight: the shell keeps its bounded-timeout silence detection and its
+once-per-runtime recovery, which now dials remoc and sends the
+version-stable rtc `drain` (`src/runtime/agent.rs`'s `drain_stale_agentd`).
+A peer too old to answer *that* is reported with "stop it manually" — the
+same answer this wire already gives at the v16→v17 boundary, where the
+method-index shift likewise leaves no drain the stale daemon can decode
+(see `AGENT_PROTOCOL_VERSION`'s v17 note).
+
+**The reverse direction does not auto-recover either.** A *v≤9 (JSONL) UI*
 meeting a *v10 daemon* cannot clear it automatically: the old UI's
 recovery only knows JSONL probes, which the remoc daemon reads as chmux
 garbage (its length-prefix decode fails instantly) and drops, so the old
