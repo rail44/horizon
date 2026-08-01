@@ -1,7 +1,7 @@
 ---
 id: 011
 title: No CLI way to send a prompt to an already-running agent session
-status: open
+status: resolved
 severity: medium
 area: cli, control-plane
 ---
@@ -39,3 +39,37 @@ no message and is a no-op on a Completed turn. The gap spans both hops:
 need the new variant, though the agentd side already accepts user
 messages from the composer, so the daemon-side plumbing exists. Wanted
 for the dogfood dispatch loop (owner request, 2026-07-30).
+
+Detached-session support is out of scope for v1: `external_send` looks
+up the session in `agent_sessions` (attached only), so a detached
+session surfaces as "unknown session". Delivering a message to a
+detached session is a separate task -- it requires either re-attaching
+first or a new path through the session hub that bypasses the
+`agent_sessions` map.
+
+## Resolution
+Implemented as `horizon send <session-id> [text]` (issue 011),
+connecting three existing pieces with no new mechanism:
+
+1. **CLI** (`crates/horizon-cli`): a new `send` subcommand. An explicit
+   `text` argument is sent verbatim; when omitted, stdin is read to EOF
+   as the message body (the multi-line-brief-pasting use case --
+   heredoc-friendly). Empty input (empty explicit argument or empty
+   stdin) is a usage error (exit 2). The wire payload is
+   `Invoke { command: "send", args: { session_id, text } }`, same shape
+   as `approve`/`deny`.
+2. **Shell** (`src/control_plane.rs`): a `"send"` arm in `dispatch_invoke`
+   extracts `session_id` (via the existing `session_id_arg`) and `text`
+   (via a new `required_string_arg` helper), then calls
+   `external_send`.
+3. **Session** (`src/workspace/commands.rs`): `external_send` mirrors
+   `external_approve` -- `agent_sessions.get(id)` → `ok_or("unknown
+   session")` → `session.read(cx).send_user_message(text)`. This reuses
+   the composer's exact path (`Command::UserMessage`), so a
+   `WaitingForUser` session resumes with the text and a mid-turn session
+   queues it as the next user turn, with no additional semantics to
+   implement.
+
+No wire changes: `Invoke.args` is free-form `serde_json::Value`, and
+`Command::UserMessage { text }` already exists in the agent contract.
+No protocol version bump; the wire-schema checker is untouched.

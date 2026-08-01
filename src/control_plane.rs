@@ -249,6 +249,23 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
+        "send" => {
+            let session_id = match session_id_arg(args, "session_id") {
+                Ok(id) => id,
+                Err(message) => return error_body(message),
+            };
+            let text = match required_string_arg(args, "text") {
+                Ok(text) => text,
+                Err(message) => return error_body(message),
+            };
+            if text.is_empty() {
+                return error_body("`text` must not be empty");
+            }
+            match shell.external_send(session_id, text, cx) {
+                Ok(()) => ok_body(),
+                Err(message) => error_body(message),
+            }
+        }
         "reload-agent-runtime" | "reload-session-runtime" => {
             shell.execute_external(CommandId::ReloadAgentRuntime, window, cx);
             ok_body()
@@ -388,8 +405,72 @@ fn call_id_arg(
     }
 }
 
+/// Parses a required plain-string argument -- the `send` command's `text`
+/// payload. Mirrors [`call_id_arg`]'s shape but returns a bare `String`
+/// rather than a typed wrapper. The `send` arm enforces non-emptiness
+/// separately (empty input is rejected at the CLI layer already; this is
+/// defensive).
+fn required_string_arg(args: &serde_json::Value, key: &str) -> Result<String, String> {
+    match args.get(key) {
+        Some(serde_json::Value::String(raw)) => Ok(raw.clone()),
+        Some(_) => Err(format!("`{key}` must be a string")),
+        None => Err(format!("`{key}` is required")),
+    }
+}
+
 /// `new-config-agent`'s fixed role id, mirroring the Floem shell's
 /// `command_actions::config_agent_role_id`.
 fn config_agent_role_id() -> horizon_agent::roles::RoleId {
     horizon_agent::roles::RoleId(horizon_agent::roles::CONFIG_ROLE.id.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    // Import only the helpers under test -- `use super::*` pulls in every
+    // item from the parent module, and the crate's `recursion_limit`
+    // (raised for `theme.rs`'s large `json!` macro) then can't absorb the
+    // `#[test]` expansion on top, hitting the limit before the test body
+    // even compiles. Narrowing the import sidesteps that.
+    use super::{required_string_arg, session_id_arg};
+
+    fn json_object(pairs: &[(&str, serde_json::Value)]) -> serde_json::Value {
+        let mut map = serde_json::Map::new();
+        for (key, value) in pairs {
+            map.insert((*key).to_string(), value.clone());
+        }
+        serde_json::Value::Object(map)
+    }
+
+    #[test]
+    fn required_string_arg_returns_the_string_when_present() {
+        let args = json_object(&[("text", serde_json::Value::String("hello".to_string()))]);
+        assert_eq!(required_string_arg(&args, "text"), Ok("hello".to_string()));
+    }
+
+    #[test]
+    fn required_string_arg_rejects_a_missing_key() {
+        let args = json_object(&[]);
+        assert_eq!(
+            required_string_arg(&args, "text").unwrap_err(),
+            "`text` is required".to_string()
+        );
+    }
+
+    #[test]
+    fn required_string_arg_rejects_a_non_string_value() {
+        let args = json_object(&[("text", serde_json::Value::Number(42.into()))]);
+        assert_eq!(
+            required_string_arg(&args, "text").unwrap_err(),
+            "`text` must be a string".to_string()
+        );
+    }
+
+    #[test]
+    fn session_id_arg_rejects_a_missing_key() {
+        let args = json_object(&[]);
+        assert_eq!(
+            session_id_arg(&args, "session_id").unwrap_err(),
+            "`session_id` is required".to_string()
+        );
+    }
 }

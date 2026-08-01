@@ -355,6 +355,27 @@ impl WorkspaceShell {
         Ok(())
     }
 
+    /// Delivers a user message to an already-running agent session -- the
+    /// same `AgentSession::send_user_message` path the composer uses
+    /// (`Command::UserMessage`), so a `WaitingForUser` session resumes with
+    /// the text and a mid-turn session queues it as the next user turn,
+    /// without any additional semantics to implement. v1 is attached-only:
+    /// a detached session is not in `agent_sessions` and surfaces as
+    /// "unknown session" (see issue 011's Notes).
+    pub(crate) fn external_send(
+        &mut self,
+        session_id: SessionId,
+        text: String,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let session = self
+            .agent_sessions
+            .get(&session_id)
+            .ok_or_else(|| "unknown session".to_string())?;
+        session.read(cx).send_user_message(text);
+        Ok(())
+    }
+
     pub(crate) fn external_terminate_all_detached(
         &mut self,
         window: &mut Window,

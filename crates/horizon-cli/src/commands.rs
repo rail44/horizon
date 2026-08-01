@@ -33,6 +33,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::Deny { .. } => "deny",
         Subcommand::CancelTurn { .. } => "cancel-turn",
         Subcommand::ContinueTurn { .. } => "continue-turn",
+        Subcommand::Send { .. } => "send",
         Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
         Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
@@ -142,6 +143,18 @@ pub fn to_request(
             "continue-turn",
             serde_json::json!({ "session_id": session_id }),
         ),
+        Subcommand::Send { session_id, text } => match text {
+            Some(text) => invoke(
+                "send",
+                serde_json::json!({ "session_id": session_id, "text": text }),
+            ),
+            // Pre-resolution state: `text` is `None` only between `parse`
+            // and `run`'s stdin-fallback step, so `to_request` is never
+            // called with `None` in production. Omitting the key lets the
+            // server's own validation reject it (defensive -- see
+            // `required_string_arg`).
+            None => invoke("send", serde_json::json!({ "session_id": session_id })),
+        },
         Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
         Subcommand::ReloadTerminalRuntime => {
             invoke("reload-terminal-runtime", serde_json::json!({}))
@@ -247,6 +260,13 @@ mod tests {
         );
         assert_eq!(external_name(&Subcommand::Sessions), "sessions");
         assert_eq!(external_name(&Subcommand::State), "state");
+        assert_eq!(
+            external_name(&Subcommand::Send {
+                session_id: "s-1".to_string(),
+                text: None
+            }),
+            "send"
+        );
     }
 
     #[test]
@@ -267,6 +287,10 @@ mod tests {
             session_id: "s-1".to_string()
         }));
         assert!(!is_destructive(&Subcommand::Sessions));
+        assert!(!is_destructive(&Subcommand::Send {
+            session_id: "s-1".to_string(),
+            text: None
+        }));
     }
 
     #[test]
@@ -498,6 +522,25 @@ mod tests {
             panic!("expected an Invoke request");
         };
         assert_eq!(deny.command, "deny");
+    }
+
+    #[test]
+    fn send_carries_session_id_and_text() {
+        let Request::Invoke(invoke) = to_request(
+            &Subcommand::Send {
+                session_id: "s-1".to_string(),
+                text: Some("fix the bug".to_string()),
+            },
+            None,
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "send");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({ "session_id": "s-1", "text": "fix the bug" })
+        );
     }
 
     #[test]

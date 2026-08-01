@@ -50,13 +50,15 @@ fn main() -> ExitCode {
 fn run_client(args: &[String]) -> ExitCode {
     let env_socket = std::env::var("HORIZON_SOCKET").ok();
     let env_session_id = std::env::var("HORIZON_SESSION_ID").ok();
-    let stdin_is_tty = io::stdin().is_terminal();
+    let mut stdin = io::stdin();
+    let stdin_is_tty = stdin.is_terminal();
     let code = horizon_cli::run(
         args,
         env_socket,
         env_session_id,
         &mut io::stdout(),
         &mut io::stderr(),
+        &mut stdin,
         stdin_is_tty,
         &mut horizon_cli::confirm::interactive_prompt,
     );
