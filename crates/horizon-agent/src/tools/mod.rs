@@ -12,7 +12,9 @@ mod state;
 pub(crate) mod web;
 
 pub use approval::{resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome};
-pub(crate) use bash::{metadata_writable_roots, requires_metadata_write};
+pub(crate) use bash::{
+    git_prefilter, metadata_writable_roots, requires_metadata_write, GitPrefilterVerdict,
+};
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`

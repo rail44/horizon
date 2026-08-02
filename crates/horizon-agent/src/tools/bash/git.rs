@@ -280,6 +280,204 @@ pub(super) fn tokenize(command: &str) -> Vec<ShellToken> {
     tokens
 }
 
+/// The deterministic prefilter's verdict for a Git metadata operation —
+/// see [`git_prefilter`].
+///
+/// A pure function (no I/O) that inspects the command a Git operation
+/// approval was derived from and decides whether the enforcing judge may
+/// evaluate it, or whether a human must be asked directly. The prefilter
+/// runs before the judge in `start_approval_gate`; it never widens access —
+/// a `HumanDirect` verdict preserves the ordinary human approval flow, and
+/// a `PassToJudge` verdict only lets the judge attempt an auto-approve (every
+/// judge failure or escalation still falls back to the human).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitPrefilterVerdict {
+    /// Skip the judge and ask the human directly. Carries a static
+    /// description of the detected construct for the approval reason text.
+    HumanDirect(&'static str),
+    /// Let the enforcing judge evaluate the command.
+    PassToJudge,
+}
+
+/// Git global options the prefilter always routes to the human: each can
+/// redirect execution to an arbitrary program or override the repository Git
+/// operates on.
+const PREFILTER_DANGEROUS_OPTIONS: &[&str] = &[
+    "-c",
+    "--config-env",
+    "--exec-path",
+    "--git-dir",
+    "--work-tree",
+    "--upload-pack",
+    "--receive-pack",
+];
+
+/// The `=`-form equivalents of [`PREFILTER_DANGEROUS_OPTIONS`].
+const PREFILTER_DANGEROUS_EQ_PREFIXES: &[&str] = &[
+    "--config-env=",
+    "--exec-path=",
+    "--git-dir=",
+    "--work-tree=",
+    "--upload-pack=",
+    "--receive-pack=",
+];
+
+/// Git subcommands that can execute arbitrary code or modify trust settings
+/// (hooks, config, filters, credential helpers). The judge handles routine
+/// metadata operations; these never bypass the human.
+const PREFILTER_DANGEROUS_SUBCOMMANDS: &[&str] = &[
+    "config",
+    "hook",
+    "filter-branch",
+    "filter-repo",
+    "credential",
+];
+
+/// Determines whether a Git metadata operation may go to the enforcing judge
+/// or must be asked of a human directly.
+///
+/// This is a cheap, deterministic first stage in front of the LLM judge
+/// (owner decision 2026-08-03): the handful of shell and Git constructs that
+/// can redirect execution or smuggle in arbitrary code always go to the
+/// human, while a plain `git commit` / `rebase` / `merge` / etc. passes to
+/// the judge for a verdict. The function is pure — it tokenizes the command
+/// string with the existing [`tokenize`] lexer and inspects the result, with
+/// no I/O and no access to the judge or the sandbox.
+pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
+    // Shell redirects (`>` `<`) and command substitution (`$(` backtick) are
+    // not surfaced as `Boundary` by `tokenize`; detect them here, quote-aware.
+    if contains_shell_redirect_or_substitution(command) {
+        return GitPrefilterVerdict::HumanDirect(
+            "a shell pipe, redirect, command substitution, or compound command",
+        );
+    }
+    // A compound command (`;` `&&` `||` `|` newline `(` `)`) produces more
+    // than one segment.
+    let segments = segments_of(command);
+    if segments.len() > 1 {
+        return GitPrefilterVerdict::HumanDirect(
+            "a shell pipe, redirect, command substitution, or compound command",
+        );
+    }
+    let words = &segments[0];
+    let Some(git_index) = git_executable_index(words) else {
+        return GitPrefilterVerdict::HumanDirect("an unrecognized command shape");
+    };
+    // Environment-variable assignment prefix before `git` (VAR=x git ...).
+    for word in &words[..git_index] {
+        if is_assignment(word) {
+            return GitPrefilterVerdict::HumanDirect(
+                "an environment-variable assignment prefix before `git`",
+            );
+        }
+    }
+    // Dangerous Git options anywhere after `git` (global or subcommand-level).
+    for arg in &words[git_index + 1..] {
+        if PREFILTER_DANGEROUS_OPTIONS.contains(&arg.as_str())
+            || PREFILTER_DANGEROUS_EQ_PREFIXES
+                .iter()
+                .any(|prefix| arg.starts_with(prefix))
+        {
+            return GitPrefilterVerdict::HumanDirect(
+                "a Git option that can redirect execution or configuration \
+                 (-c, --config-env, --exec-path, --upload-pack, --receive-pack, \
+                 --git-dir, or --work-tree)",
+            );
+        }
+    }
+    // Walk the global options to find the subcommand, checking for dangerous
+    // subcommands and unknown global flags.
+    let mut index = git_index + 1;
+    while let Some(arg) = words.get(index).map(String::as_str) {
+        match arg {
+            "-C" | "--namespace" => index += 2,
+            value if value.starts_with("--namespace=") => index += 1,
+            "--no-pager"
+            | "--paginate"
+            | "--no-replace-objects"
+            | "--bare"
+            | "--literal-pathspecs"
+            | "--glob-pathspecs"
+            | "--noglob-pathspecs"
+            | "--icase-pathspecs"
+            | "--no-optional-locks"
+            | "--version"
+            | "--help" => index += 1,
+            value if value.starts_with('-') => {
+                return GitPrefilterVerdict::HumanDirect("an unrecognized Git global option");
+            }
+            subcommand => {
+                if PREFILTER_DANGEROUS_SUBCOMMANDS.contains(&subcommand)
+                    || subcommand.starts_with("filter-")
+                {
+                    return GitPrefilterVerdict::HumanDirect(
+                        "a Git subcommand that can execute arbitrary code or modify \
+                         trust settings (config, hook, filter-branch, filter-repo, \
+                         or credential)",
+                    );
+                }
+                break;
+            }
+        }
+    }
+    GitPrefilterVerdict::PassToJudge
+}
+
+/// Splits a command into shell segments separated by `tokenize`'s `Boundary`
+/// tokens, each segment a list of words.
+fn segments_of(command: &str) -> Vec<Vec<String>> {
+    let mut segments = Vec::new();
+    let mut segment = Vec::new();
+    for token in tokenize(command) {
+        match token {
+            ShellToken::Word(word) => segment.push(word),
+            ShellToken::Boundary => {
+                segments.push(std::mem::take(&mut segment));
+            }
+        }
+    }
+    segments.push(segment);
+    segments
+}
+
+/// Detects shell redirects (`>`, `<`) and command substitution (`$(`,
+/// backtick) that `tokenize` does not surface as `Boundary`. Single-quoted
+/// content is skipped (literal in the shell); double-quoted content is scanned
+/// for `$(` and backtick, which the shell still expands there.
+fn contains_shell_redirect_or_substitution(command: &str) -> bool {
+    let mut chars = command.chars().peekable();
+    let mut quote = None;
+    while let Some(ch) = chars.next() {
+        match quote {
+            Some('\'') => {
+                if ch == '\'' {
+                    quote = None;
+                }
+            }
+            Some('"') => match ch {
+                '"' => quote = None,
+                '\\' => {
+                    chars.next();
+                }
+                '`' => return true,
+                '$' if chars.peek() == Some(&'(') => return true,
+                _ => {}
+            },
+            Some(_) => unreachable!(),
+            None => match ch {
+                '\'' | '"' => quote = Some(ch),
+                '\\' => {
+                    chars.next();
+                }
+                '>' | '<' | '`' => return true,
+                '$' if chars.peek() == Some(&'(') => return true,
+                _ => {}
+            },
+        }
+    }
+    false
+}
+
 /// Resolves the metadata directories a Git-writing command needs.
 ///
 /// For a linked worktree, both the worktree-specific gitdir and shared common
@@ -444,6 +642,67 @@ mod tests {
             "command -v git commit",
         ] {
             assert!(!command_requires_metadata_write(command), "{command}");
+        }
+    }
+
+    #[test]
+    fn prefilter_routes_dangerous_constructs_to_human_direct() {
+        let dangerous = [
+            // Dangerous global options.
+            "git -c core.hooksPath=/dev/null commit -m x",
+            "git --config-env KEY=val commit",
+            "git --exec-path /tmp commit",
+            "git --git-dir /tmp commit",
+            "git --work-tree /tmp commit",
+            "git --upload-pack /tmp/x fetch",
+            "git --receive-pack /tmp/x push",
+            "git --git-dir=/tmp commit",
+            // Environment-variable assignment prefix.
+            "GIT_DIR=/tmp git commit -m x",
+            "FOO=bar git commit -m x",
+            "env FOO=bar git commit -m x",
+            // Shell metacharacters.
+            "git commit -m x | cat",
+            "git commit -m x && git push",
+            "git commit -m x; git push",
+            "git commit -m x > log",
+            "git commit -m \"$(whoami)\"",
+            // Dangerous subcommands.
+            "git config user.name x",
+            "git hook run pre-commit",
+            "git filter-branch --all",
+        ];
+        for command in dangerous {
+            assert!(
+                matches!(git_prefilter(command), GitPrefilterVerdict::HumanDirect(_)),
+                "expected HumanDirect for: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn prefilter_passes_plain_git_metadata_operations_to_judge() {
+        let plain = [
+            "git commit -m test",
+            "git rebase main",
+            "git merge feature",
+            "git cherry-pick abc123",
+            "git add file.txt",
+            "git restore file.txt",
+            "git stash",
+            "git branch topic",
+            "git tag v1.0",
+            "git -C ../repo commit -m test",
+            "git --no-pager commit -m test",
+            "git commit --amend",
+            "git commit -m \"fix: handle x > y\"",
+        ];
+        for command in plain {
+            assert_eq!(
+                git_prefilter(command),
+                GitPrefilterVerdict::PassToJudge,
+                "expected PassToJudge for: {command}"
+            );
         }
     }
 

@@ -44,7 +44,7 @@ use crate::contract::{
     ApprovalKind, ApprovalRequest, Message, MessageRole, SessionId, ToolCallRequest,
 };
 use crate::frame::{AgentFrame, AgentFrameItem};
-use crate::tools::ToolSessionState;
+use crate::tools::{git_prefilter, GitPrefilterVerdict, ToolSessionState};
 
 pub use handle::JudgeHandle;
 
@@ -119,12 +119,16 @@ pub(crate) struct JudgeInput {
     /// Approval reruns this one call with the host process's ordinary
     /// authority rather than adding only the displayed narrow grants.
     pub(crate) host_execution_requested: bool,
+    /// This call is a Git metadata operation (commit, rebase, etc.). The
+    /// judge's prompt adds a git-specific guidance region when set.
+    pub(crate) git_metadata_operation: bool,
 }
 
 pub(crate) struct JudgeApprovalContext {
     requested_filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     requested_domains: Vec<String>,
     host_execution_requested: bool,
+    git_metadata_operation: bool,
 }
 
 /// "Small but not 1" (the research doc's Plan B recommendation for stage
@@ -227,9 +231,29 @@ async fn run_judge(model: &str, client: &dyn ModelClient, input: &JudgeInput) ->
 pub(crate) fn start_approval_gate(
     tool_state: &ToolSessionState,
     session_id: SessionId,
-    candidate: ApprovalCandidate,
+    mut candidate: ApprovalCandidate,
     result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 ) -> ApprovalGate {
+    // Deterministic prefilter for Git metadata operations (owner decision
+    // 2026-08-03): commands carrying a dangerous shell or Git construct skip
+    // the judge and go straight to the human, with the detected construct
+    // named in the approval reason. Only plain Git metadata operations
+    // reach the judge.
+    if let ApprovalKind::GitOperation { .. } = &candidate.approval.kind {
+        let command = candidate
+            .request
+            .input
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if let GitPrefilterVerdict::HumanDirect(reason) = git_prefilter(command) {
+            candidate.approval.reason = format!(
+                "{}\n\nDetected {} — this command must be approved by a human.",
+                candidate.approval.reason, reason
+            );
+            return ApprovalGate::Human(Box::new(candidate));
+        }
+    }
     let Some(judge) = tool_state.judge_handle() else {
         return ApprovalGate::Human(Box::new(candidate));
     };
@@ -261,6 +285,7 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             requested_filesystem_grants: grants.clone(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
+            git_metadata_operation: false,
         },
         ApprovalKind::GitOperation { writable_roots } => JudgeApprovalContext {
             requested_filesystem_grants: writable_roots
@@ -274,12 +299,14 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
                 .collect(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
+            git_metadata_operation: true,
         },
         ApprovalKind::DomainGrant { domains } | ApprovalKind::DomainDenialRetry { domains, .. } => {
             JudgeApprovalContext {
                 requested_filesystem_grants: Vec::new(),
                 requested_domains: domains.clone(),
                 host_execution_requested: false,
+                git_metadata_operation: false,
             }
         }
         ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry | ApprovalKind::Unknown => {
@@ -288,6 +315,7 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
                 requested_domains: Vec::new(),
                 host_execution_requested: matches!(kind, ApprovalKind::Standard)
                     && tool_id == "bash",
+                git_metadata_operation: false,
             }
         }
     }
@@ -393,6 +421,7 @@ mod tests {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
+            git_metadata_operation: false,
         }
     }
 
@@ -632,6 +661,7 @@ mod tests {
             context.requested_filesystem_grants[0].access,
             horizon_sandbox::FilesystemGrantAccess::ReadWrite
         );
+        assert!(context.git_metadata_operation);
 
         let denial = horizon_sandbox::FilesystemDenial {
             attempted_path: std::env::temp_dir().join("attempted"),
@@ -669,6 +699,7 @@ mod tests {
         );
         assert!(context.requested_domains.is_empty());
         assert!(!context.host_execution_requested);
+        assert!(!context.git_metadata_operation);
 
         let expected_domains = vec!["example.com".to_string()];
         let context = trusted_approval_context(
@@ -685,6 +716,7 @@ mod tests {
         assert!(context.requested_filesystem_grants.is_empty());
         assert_eq!(context.requested_domains, expected_domains);
         assert!(!context.host_execution_requested);
+        assert!(!context.git_metadata_operation);
 
         let context = trusted_approval_context(&ApprovalKind::Standard, "bash");
         assert!(context.host_execution_requested);
@@ -869,5 +901,84 @@ mod tests {
         assert_eq!(payload["fallback_reason"], "rate_limited");
         assert_eq!(payload["judge_decision"], "escalate");
         let _ = std::fs::remove_file(path);
+    }
+
+    fn git_candidate(command: &str) -> ApprovalCandidate {
+        let request = ToolCallRequest {
+            call_id: crate::contract::ToolCallId("call-1".to_string()),
+            tool_id: "bash".to_string(),
+            input: serde_json::json!({ "command": command }).into(),
+            occurrence_id: None,
+        };
+        ApprovalCandidate {
+            approval: ApprovalRequest {
+                call_id: request.call_id.clone(),
+                reason: "test git approval".to_string(),
+                kind: ApprovalKind::GitOperation {
+                    writable_roots: vec![std::env::temp_dir()],
+                },
+                occurrence_id: None,
+            },
+            request,
+        }
+    }
+
+    #[test]
+    fn git_prefilter_routes_dangerous_commands_to_human_even_with_judge() {
+        let path = temp_event_log("git-dangerous");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let client: Arc<dyn ModelClient> = Arc::new(ScriptedClient::new(vec![Ok(
+            ScriptedClient::text("N", None),
+        )]));
+        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let candidate = git_candidate("git -c core.hooksPath=/dev/null commit -m test");
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        let gate = start_approval_gate(&tool_state, SessionId::new(), candidate, tx);
+        match gate {
+            ApprovalGate::Human(c) => assert!(
+                c.approval.reason.contains("Detected"),
+                "reason should name the detected construct: {}",
+                c.approval.reason
+            ),
+            _ => panic!("expected Human gate for a dangerous git command"),
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn git_prefilter_passes_plain_commands_to_the_judge() {
+        let path = temp_event_log("git-plain");
+        let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
+        let client: Arc<dyn ModelClient> = Arc::new(ScriptedClient::new(vec![Ok(
+            ScriptedClient::text("N", None),
+        )]));
+        let judge = JudgeHandle::for_test("test-judge-model", client, writer);
+        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let candidate = git_candidate("git commit -m test");
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, SessionId::new(), candidate.clone(), tx),
+            ApprovalGate::Pending
+        );
+        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("judge completion")
+        else {
+            panic!("unexpected completion");
+        };
+        assert_eq!(judgment.decision, JudgeDecision::AutoApprove);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn git_operation_without_judge_falls_back_to_human() {
+        let tool_state = ToolSessionState::new(std::env::temp_dir());
+        let candidate = git_candidate("git commit -m test");
+        let (tx, _rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, SessionId::new(), candidate.clone(), tx),
+            ApprovalGate::Human(Box::new(candidate))
+        );
     }
 }

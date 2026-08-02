@@ -44,7 +44,10 @@ use crate::policy::{
 };
 use crate::tools::network::SessionNetworkProxy;
 
-pub(crate) use git::{approved_metadata_roots, metadata_writable_roots, requires_metadata_write};
+pub(crate) use git::{
+    approved_metadata_roots, git_prefilter, metadata_writable_roots, requires_metadata_write,
+    GitPrefilterVerdict,
+};
 pub(crate) use recent::{find_reusable_output, guidance_output};
 
 /// A bash call's outcome, delivered from the background thread that ran it
