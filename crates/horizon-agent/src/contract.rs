@@ -533,7 +533,8 @@ impl MessageRole {
     /// Short human-readable tag for logs and the text projection
     /// (`frame::render_agent_transcript`). `Unknown` renders as
     /// assistant-authored -- see [`MessageRole::Unknown`]'s doc.
-    pub fn log_label(self) -> &'static str {
+    #[cfg(test)]
+    pub(crate) fn log_label(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::TaskNotification => "task",
@@ -628,13 +629,14 @@ pub struct MessageDelta {
 ///   keeping the single pinned Postbag codec (owner decision, 2026-07-20).
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
-/// indexing keep their shape); construct via `From<serde_json::Value>` /
-/// [`Self::new`], unwrap via `.0`.
+/// indexing keep their shape); construct via `From<serde_json::Value>`,
+/// unwrap via `.0`.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct JsonValue(pub serde_json::Value);
 
+#[cfg(test)]
 impl JsonValue {
-    pub fn new(value: serde_json::Value) -> Self {
+    pub(crate) fn new(value: serde_json::Value) -> Self {
         Self(value)
     }
 }

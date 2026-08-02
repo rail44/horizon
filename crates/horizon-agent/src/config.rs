@@ -245,8 +245,12 @@ pub(crate) const CLEARING_TAIL_BUDGET_TOKENS: u64 = 16_384;
 /// coarse thresholds where a ±30% estimate changes nothing that matters.
 pub(crate) const CLEARING_CHARS_PER_TOKEN: u64 = 4;
 
-pub const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
-pub const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
+// Production defaults for fs tool caps; unused under cfg(test), where the
+// cfg(test) accessors below select the shrunk *_TEST_DEFAULT values instead.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) const FS_GREP_MAX_BYTES_PRODUCTION_DEFAULT: u64 = 64 * 1024 * 1024;
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) const FS_TRAVERSAL_MAX_FILES_PRODUCTION_DEFAULT: usize = 20_000;
 #[cfg(test)]
 const FS_GREP_MAX_BYTES_TEST_DEFAULT: u64 = 1024;
 #[cfg(test)]
