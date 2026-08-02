@@ -149,6 +149,25 @@ lives in `.cargo/config.toml`'s comment. If backlog 43-style phantom
 errors ever reappear, suspect artifact-level sharing having crept back
 in, not sccache — sccache never shares artifacts, only compilations.
 
+What actually makes a fresh worktree fast is the **target seed hook**
+(`hooks/post-checkout`, run automatically by `git worktree add`): it
+reflinks the main checkout's `target/` into the new worktree (btrfs
+copy-on-write — metadata-only, seconds for a multi-GB tree) and then
+strips workspace-member artifacts (`cargo clean -p` per member, names
+from `cargo metadata`), so the worktree rebuilds its own code but never
+the dependency graph. Measured 2026-08-02: worktree creation ~5s, full
+`cargo build --workspace` on the seed ~33s. The member strip is
+load-bearing, not an optimization: copied member fingerprints reference
+the main checkout's sources and would otherwise validate as fresh,
+handing the worktree main's binaries instead of its own (backlog 43's
+confusion, privately reborn). Do not skip it. `HORIZON_SKIP_TARGET_SEED=1`
+disables seeding (e.g. to measure cold builds). sccache stays as the
+compile-level cache behind the seed, but note its cross-worktree limits:
+build-script crates' cache keys are worktree-path-dependent (confirmed
+empirically 2026-08-02 — stable within a worktree, split across them),
+so sccache alone never made fresh worktrees fast; the seed hook is the
+mechanism that does.
+
 **Sandboxed sessions and sccache** (owner decision 2026-08-02): a
 sandboxed agent session's `cargo build` runs with the same
 `rustc-wrapper = sccache` from the tracked `.cargo/config.toml`, but the

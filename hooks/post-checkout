@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Seed a fresh linked worktree's target/ from the main checkout via btrfs
+# reflink (owner decision 2026-08-02), so every new worktree — agentd
+# session worktrees, .claude/worktrees workers, review checkouts — starts
+# with warm dependency artifacts instead of a cold build. `git worktree
+# add` runs this hook by default; the reflink copy is metadata-only on
+# btrfs (seconds for a multi-GB target), and copy-on-write means a
+# worktree's own builds never touch the template.
+#
+# The seed is then immediately narrowed: workspace MEMBER artifacts are
+# stripped (`cargo clean -p` per member, names from `cargo metadata`).
+# The copied member fingerprints reference the MAIN checkout's source
+# paths — which exist and are unmodified — so without this strip, cargo
+# in the new worktree would judge main's member binaries fresh and reuse
+# them even though the worktree's checked-out code differs: exactly the
+# stale-artifact confusion of backlog 43/66, reborn privately. Stripping
+# members costs only the cheap half of a build; the expensive half (the
+# dependency graph) stays seeded. incremental/ is removed wholesale for
+# the same reason — cargo only uses it for workspace-local crates.
+#
+# Failure of any step degrades to a cold build, never a broken checkout:
+# every path out of this hook is exit 0. Set HORIZON_SKIP_TARGET_SEED=1
+# to skip seeding (e.g. when deliberately measuring cold builds).
+#
+# Known, accepted race: a worktree created while the main checkout is
+# mid-build copies a torn target. Torn state self-heals — a fingerprint
+# that doesn't validate just rebuilds its unit.
+
+flag="${3:-0}"
+[ "$flag" = "1" ] || exit 0                       # file checkouts don't create worktrees
+[ -z "${HORIZON_SKIP_TARGET_SEED:-}" ] || exit 0
+command -v git >/dev/null 2>&1 || exit 0
+
+git_dir=$(git rev-parse --path-format=absolute --git-dir 2>/dev/null) || exit 0
+common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || exit 0
+[ "$git_dir" != "$common_dir" ] || exit 0         # only linked worktrees, never the main checkout
+[ ! -e target ] || exit 0                          # never clobber an existing target
+
+template="$(dirname "$common_dir")/target"
+[ -d "$template" ] || exit 0
+
+if ! cp -a --reflink=always "$template" target 2>/dev/null; then
+    # Not the same filesystem (or not CoW-capable): a full copy would cost
+    # more than it saves at this size. Degrade to a cold build.
+    rm -rf target
+    echo "post-checkout: target seed skipped (reflink unavailable)" >&2
+    exit 0
+fi
+
+# Strip workspace-member state so the worktree's own code always rebuilds.
+if command -v cargo >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+    members=$(cargo metadata --no-deps --format-version 1 --offline 2>/dev/null \
+        | python3 -c 'import sys,json; print("\n".join(p["name"] for p in json.load(sys.stdin)["packages"]))' 2>/dev/null)
+    if [ -n "$members" ]; then
+        # shellcheck disable=SC2086
+        cargo clean --offline $(printf -- '-p %s ' $members) 2>/dev/null \
+            || { rm -rf target; echo "post-checkout: member strip failed; falling back to a cold build" >&2; exit 0; }
+        rm -rf target/debug/incremental target/debug/.cargo-lock
+        echo "post-checkout: seeded target/ from the main checkout (members stripped)" >&2
+    else
+        rm -rf target
+        echo "post-checkout: cargo metadata failed; falling back to a cold build" >&2
+    fi
+else
+    rm -rf target
+    echo "post-checkout: cargo/python3 unavailable; falling back to a cold build" >&2
+fi
+exit 0
