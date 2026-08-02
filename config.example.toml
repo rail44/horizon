@@ -235,14 +235,13 @@ cyan = "#56b6c2"
 #               looser is_loopback rule), so a same-port decoy on another
 #               loopback address stays denied. Only IPv4 loopback
 #               (127.0.0.0/8) with a non-zero port is accepted; IPv6 and
-#               non-loopback ip:port entries are refused. sccache on
-#               127.0.0.1:4226 is the intended use: the tracked
-#               .cargo/config.toml sets rustc-wrapper = sccache, and this
-#               grant lets a sandboxed `cargo build` reach the host's
-#               server. The connect is performed by the unsandboxed
-#               supervisor on a duplicated child socket (TOCTOU-safe), so a
-#               mistyped endpoint that compiles against the host's sccache
-#               server is an accepted, explicit decision -- not an accident.
+#               non-loopback ip:port entries are refused. The connect is
+#               performed by the unsandboxed supervisor on a duplicated
+#               child socket (TOCTOU-safe): granting an endpoint means the
+#               session talks to that host-local service outside its own
+#               containment -- an explicit decision, not an accident.
+#               (A compile-cache daemon on 127.0.0.1:4226 was the original
+#               motivating use; the mechanism is service-agnostic.)
 #             - Anything else is a domain name, pre-seeded into the
 #               session's network-proxy allowlist so a sandboxed `bash` call
 #               reaching it is never a boundary crossing either -- no

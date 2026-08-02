@@ -1,50 +1,29 @@
-# Compiler-level caching across every worktree of this repo (main checkout,
-# `git worktree` clones, `.claude/worktrees/*` workers, `.horizon/worktrees/*`
-# agent sessions). This file is tracked, so every worktree checks it out and
-# gets the same setting with no per-shell exports.
+# Every worktree of this repo (main checkout, `git worktree` clones,
+# `.claude/worktrees/*` workers, `.horizon/worktrees/*` agent sessions)
+# builds into its own default `target/` — nothing is shared at the
+# artifact level, so cross-worktree correctness is trivial: there is no
+# file two checkouts could both claim.
 #
-# Each worktree builds into its own default `target/` — nothing is shared
-# at the artifact level, so cross-worktree correctness is trivial: there is
-# no file two checkouts could both claim. What IS shared is the compiler
-# work, through sccache (`build.rustc-wrapper`): dependency crates compile
-# to identical inputs in every worktree, so after one worktree has built
-# them, every other worktree's build is cache hits plus its own workspace
-# members. sccache keys on compiler inputs (never mtimes), carries its own
-# size-bounded LRU cache (`~/.config/sccache/config`), and passes
-# incremental units through uncached — which lands exactly right here:
-# cargo compiles workspace members incrementally (worktree-local by nature)
-# and dependencies non-incrementally (the shareable part).
+# Fresh worktrees are fast anyway: `git worktree add` runs
+# `hooks/post-checkout`, which reflinks the main checkout's `target/`
+# into the new worktree (btrfs copy-on-write) and strips
+# workspace-member artifacts so the worktree always rebuilds its own
+# code but never the dependency graph. See that hook and AGENTS.md
+# "Build setup".
 #
-# Garbage collection is automatic by construction: removing a worktree
-# removes its `target/`, and sccache's LRU bounds the shared cache.
+# History, for whoever is tempted to reintroduce sharing here:
+# - 2026-07-30: a shared `build.build-dir` + a per-worktree
+#   `rustc-workspace-wrapper` hash key fixed cross-worktree artifact
+#   corruption (backlog 43/66) but leaked ~260GB of unmappable orphans
+#   in three days, plus a per-worktree clippy build-dir side channel.
+# - 2026-08-02 (morning): sccache as `build.rustc-wrapper`. Correct, but
+#   its cache keys for build-script crates are worktree-path-dependent
+#   (verified empirically: stable within a worktree, split across
+#   worktrees), and the expensive units — gpui, arrow, aws-lc-sys — are
+#   all in that class, so fresh worktrees stayed ~11-minute builds.
+# - 2026-08-02 (evening): both removed in favor of the reflink seed
+#   hook, which delivers ~5s worktree creation + ~33s member-only
+#   builds with no compiler-level sharing at all (owner decision).
 #
-# History (2026-07-30 → 2026-08-02): the previous scheme shared one
-# `build.build-dir` across worktrees and keyed workspace-member artifacts
-# per worktree by hashing a tracked `rustc-workspace-wrapper` path into
-# their metadata (cargo's only member-gated hash input — an implementation
-# detail, not a documented guarantee). It fixed the last-writer-wins
-# corruption (backlog 43/66) but left ~260GB of unreclaimable orphans:
-# artifact hashes cannot be mapped back to worktrees, removed worktrees'
-# member sets and their per-worktree clippy build-dirs (needed because
-# `cargo clippy` overrides the workspace wrapper via env) accumulated
-# forever. Retired in favor of this scheme once merged-session worktrees
-# started being terminated (and thus cleaned) routinely.
-#
-# Requires `sccache` on PATH (`cargo install sccache`, or a distro
-# package). See AGENTS.md "Build setup".
-[build]
-rustc-wrapper = "sccache"
-
-# Keep the host's sccache server resident once auto-started by a build.
-# sccache's default idle timeout shuts the server down after 10 minutes of
-# inactivity; a sandboxed agent session that connects to it (via the
-# `network` grant on `127.0.0.1:4226`, owner decision 2026-08-02)
-# would then lose its connection target and every subsequent build would
-# pay the cold-start cost or fail outright. `0` disables the idle shutdown
-# so the server stays up for the session's lifetime. The server is still
-# bounded by sccache's own LRU cache size (`~/.config/sccache/config`).
-# If no server is running when a sandboxed build starts, the connection is
-# refused -- run any `cargo build` on the host or `sccache --start-server`
-# to start one. See AGENTS.md "Build setup".
-[env]
-SCCACHE_IDLE_TIMEOUT = "0"
+# This file is deliberately config-free today; it exists to carry this
+# history and to be the place a future build knob would go.

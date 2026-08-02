@@ -123,33 +123,9 @@ Machines without a system libduckdb can build with
 compiles DuckDB from source instead (slow — it's the single largest
 compile unit in this workspace).
 
-Every worktree builds into its own `target/`; what is shared across
-worktrees is the *compiler work*, through sccache: the tracked
-`.cargo/config.toml` sets `build.rustc-wrapper = "sccache"`, so
-dependency crates — the bulk of a from-scratch build — compile once
-machine-wide and every other worktree's build is cache hits plus its own
-workspace members. **`sccache` must be on PATH** (`cargo install
-sccache`, or a distro package); a missing binary fails the build with a
-clear error. The cache is content-keyed (never mtime-based) and
-size-bounded LRU (`~/.config/sccache/config`, machine-local); worktree
-removal cleans that worktree's artifacts by construction, so nothing
-accumulates.
-
-This replaced the 2026-07-30 shared-build-dir scheme (one
-`build.build-dir` for all worktrees, member artifacts keyed per worktree
-by hashing a tracked `rustc-workspace-wrapper` path — an undocumented,
-member-gated hash input — plus a clippy-only per-worktree build-dir
-side-channel because `cargo clippy` overrides that wrapper via env).
-That scheme fixed the last-writer-wins corruption of backlog 43/66
-(phantom E0432 on symbols that exist, a sibling's test binaries running
-as yours, a real `-D warnings` violation measured green) but its orphans
-were unreclaimable — artifact hashes cannot be mapped back to worktrees
-— and ~260GB accumulated in three days. Retired 2026-08-02; the history
-lives in `.cargo/config.toml`'s comment. If backlog 43-style phantom
-errors ever reappear, suspect artifact-level sharing having crept back
-in, not sccache — sccache never shares artifacts, only compilations.
-
-What actually makes a fresh worktree fast is the **target seed hook**
+Every worktree builds into its own `target/` — nothing is shared
+between checkouts at any level, so cross-worktree correctness is
+trivial. What makes a fresh worktree fast is the **target seed hook**
 (`hooks/post-checkout`, run automatically by `git worktree add`): it
 reflinks the main checkout's `target/` into the new worktree (btrfs
 copy-on-write — metadata-only, seconds for a multi-GB tree) and then
@@ -160,37 +136,23 @@ the dependency graph. Measured 2026-08-02: worktree creation ~5s, full
 load-bearing, not an optimization: copied member fingerprints reference
 the main checkout's sources and would otherwise validate as fresh,
 handing the worktree main's binaries instead of its own (backlog 43's
-confusion, privately reborn). Do not skip it. `HORIZON_SKIP_TARGET_SEED=1`
-disables seeding (e.g. to measure cold builds). sccache stays as the
-compile-level cache behind the seed, but note its cross-worktree limits:
-build-script crates' cache keys are worktree-path-dependent (confirmed
-empirically 2026-08-02 — stable within a worktree, split across them),
-so sccache alone never made fresh worktrees fast; the seed hook is the
-mechanism that does.
+stale-artifact confusion, privately reborn). Do not skip it.
+`HORIZON_SKIP_TARGET_SEED=1` disables seeding (e.g. to measure cold
+builds). The hook degrades to a cold build on any failure and works the
+same for agentd session worktrees, `.claude/worktrees` workers, and
+review checkouts — they are all created via plain `git worktree add`.
 
-**Sandboxed sessions and sccache** (owner decision 2026-08-02): a
-sandboxed agent session's `cargo build` runs with the same
-`rustc-wrapper = sccache` from the tracked `.cargo/config.toml`, but the
-sccache client connects to `127.0.0.1:4226` — a loopback endpoint the
-sandbox denies by default. A project's `[[grants.project]]` entry can
-grant `network = ["127.0.0.1:4226"]` so the sandboxed build
-reaches the host's sccache server directly (the supervisor performs the
-connect on a duplicated child socket, so it runs unsandboxed). The
-tracked `.cargo/config.toml` also sets `SCCACHE_IDLE_TIMEOUT = "0"` so
-the auto-started server stays resident rather than shutting down after
-10 minutes of inactivity and dropping the session's connection target.
-If no server is running when a sandboxed build starts, the connection is
-refused — run any `cargo build` on the host (which auto-starts one) or
-`sccache --start-server` to start one, then retry. The fact that a
-mistyped `network` endpoint compiles against the host's sccache
-server is an accepted, explicit decision, not an accident.
-
-**Sandboxed agent session build constraint**: your own builds inside a
-sandboxed session cannot reach sccache yet (the `network` grant
-must be configured in *your* config file for your project first). Until
-then, bypass sccache for session-internal builds by clearing the wrapper:
-`RUSTC_WRAPPER= cargo build ...`. This is a known limitation that the
-network-grant feature exists to remove.
+Two build-sharing schemes preceded this and were both retired
+(2026-07-30 shared build-dir with per-worktree wrapper keying: correct
+but leaked ~260GB of unmappable orphans in three days; 2026-08-02
+morning, sccache as `rustc-wrapper`: its cache keys for build-script
+crates are worktree-path-dependent — verified: stable within a
+worktree, split across them — and gpui/arrow/aws-lc-sys are all in that
+class, so fresh worktrees stayed ~11-minute builds). The full history
+lives in `.cargo/config.toml`'s comment, which is deliberately
+config-free today. If backlog 43-style phantom errors (E0432 on symbols
+that exist, a sibling's binaries running as yours) ever reappear,
+suspect artifact-level sharing having crept back in.
 
 ## Configuration
 
