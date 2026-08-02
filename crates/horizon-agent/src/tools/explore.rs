@@ -646,7 +646,44 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                         break Terminal::Terminated;
                     }
                     Event::Error(failure) => error = Some(failure.message),
-                    _ => {}
+                    // Guard-fail fallbacks: `TurnEnded` and
+                    // `StateChanged(WaitingForUser)` above are guarded on
+                    // `turn_started`; before the child's own user message that
+                    // guard fails and they land here as no-ops (session
+                    // startup, not an answer). `StateChanged(_)` also absorbs
+                    // the non-terminal session states this watcher never acts
+                    // on. Grouped so the match stays exhaustive without a
+                    // wildcard -- adding a variant is a compile error here,
+                    // forcing a decision (see docs/agent-event-readers.md).
+                    Event::TurnEnded(_)
+                    | Event::StateChanged(_)
+                    // Streaming deltas don't change the outcome: the answer is
+                    // captured from `MessageCommitted` text, not from deltas.
+                    | Event::ReasoningDelta(_)
+                    | Event::AssistantTextDelta(_)
+                    // Tool lifecycle is not terminal here -- the watcher waits
+                    // for the turn's final report/approval/exit, not individual
+                    // tool calls.
+                    | Event::ToolCallRequested(_)
+                    | Event::ToolCallStarted(_)
+                    | Event::ToolCallFinished(_)
+                    // Provider request lifecycle markers are timing-only and
+                    // carry no terminal signal.
+                    | Event::ProviderRequestSent(_)
+                    | Event::ProviderRequestFirstToken
+                    | Event::ProviderRequestFinished
+                    | Event::ProviderRequestUsage(_)
+                    // Tier 1 clearing is a provider-view projection, not a
+                    // terminal event for this child watcher.
+                    | Event::HistoryCleared(_)
+                    // Operator-intervention audit events: audit-only, not
+                    // terminal (and unreachable in a v1 task child -- approvals
+                    // cannot occur there; see the note above).
+                    | Event::ApprovalResolved(_)
+                    | Event::ContinueTurnRequested(_)
+                    // Skew catch-all (`Event::Unknown`'s doc): an event this
+                    // build can't name is not a terminal signal.
+                    | Event::Unknown => {}
                 }
             },
         }

@@ -323,7 +323,35 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
         .iter()
         .filter_map(|event| match event {
             Event::HistoryCleared(cleared) => Some(cleared.cleared_call_ids.iter().cloned()),
-            _ => None,
+            // Transcript/tool/approval content: none is a Tier 1 freeze
+            // boundary, so none carries a cleared call-id set -- only
+            // `HistoryCleared` does (see the module doc).
+            Event::StateChanged(_)
+            | Event::ReasoningDelta(_)
+            | Event::AssistantTextDelta(_)
+            | Event::MessageCommitted(_)
+            | Event::ToolCallRequested(_)
+            | Event::ToolCallStarted(_)
+            | Event::ToolCallFinished(_)
+            | Event::ApprovalRequested(_)
+            // Provider request lifecycle markers are timing-only: no
+            // clearing record.
+            | Event::ProviderRequestSent(_)
+            | Event::ProviderRequestFirstToken
+            | Event::ProviderRequestFinished
+            | Event::ProviderRequestUsage(_)
+            // Operator-intervention audit events: audit-only, no clearing
+            // record (the resolved call is named by the `ToolCallStarted`
+            // that follows, not by a freeze).
+            | Event::ApprovalResolved(_)
+            | Event::ContinueTurnRequested(_)
+            // Turn/exit/error signals carry no clearing record.
+            | Event::Error(_)
+            | Event::Exited(_)
+            | Event::TurnEnded(_)
+            // Skew catch-all (`Event::Unknown`'s doc): an event this build
+            // can't name carries no clearing record.
+            | Event::Unknown => None,
         })
         .flatten()
         .collect()
