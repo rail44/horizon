@@ -202,7 +202,8 @@ magenta = "#c678dd"
 cyan = "#56b6c2"
 
 # ---------------------------------------------------------------------------
-# [grants] — per-project filesystem trees agent sessions may write to.
+# [grants] — per-project filesystem trees and network destinations agent
+# sessions start with.
 #
 # An agent session's `bash` runs sandboxed: its own isolated worktree is
 # writable and everything else is not. That is right for the session's own
@@ -224,25 +225,37 @@ cyan = "#56b6c2"
 #           parent directory does NOT cover the projects beneath it.
 #   trees — directories granted read-write, recursively. A leading "~/" is
 #           expanded against $HOME.
-#   loopback_connect — loopback TCP endpoints ("ip:port") a sandboxed
-#           session of this project may connect to directly, alongside the
-#           session proxy. Each is matched by full ip:port equality (never a
-#           looser is_loopback rule), so a same-port decoy on another loopback
-#           address stays denied. Only IPv4 loopback (127.0.0.0/8) with a
-#           non-zero port is accepted; IPv6 and non-loopback are refused.
-#           sccache on 127.0.0.1:4226 is the intended use: the tracked
-#           .cargo/config.toml sets rustc-wrapper = sccache, and this grant
-#           lets a sandboxed `cargo build` reach the host's server. The
-#           connect is performed by the unsandboxed supervisor on a duplicated
-#           child socket (TOCTOU-safe), so a mistyped endpoint that compiles
-#           against the host's sccache server is an accepted, explicit
-#           decision -- not an accident.
+#   network — network destinations a sandboxed session of this project may
+#           reach beyond the empty runtime-approval default, dispatched by
+#           shape (owner decision 2026-08-02, replacing the short-lived
+#           loopback_connect key with no compatibility alias):
+#             - An entry that parses as "ip:port" (e.g. "127.0.0.1:4226") is
+#               a direct-connect endpoint, alongside the session's own
+#               domain proxy. Matched by full ip:port equality (never a
+#               looser is_loopback rule), so a same-port decoy on another
+#               loopback address stays denied. Only IPv4 loopback
+#               (127.0.0.0/8) with a non-zero port is accepted; IPv6 and
+#               non-loopback ip:port entries are refused. sccache on
+#               127.0.0.1:4226 is the intended use: the tracked
+#               .cargo/config.toml sets rustc-wrapper = sccache, and this
+#               grant lets a sandboxed `cargo build` reach the host's
+#               server. The connect is performed by the unsandboxed
+#               supervisor on a duplicated child socket (TOCTOU-safe), so a
+#               mistyped endpoint that compiles against the host's sccache
+#               server is an accepted, explicit decision -- not an accident.
+#             - Anything else is a domain name, pre-seeded into the
+#               session's network-proxy allowlist so a sandboxed `bash` call
+#               reaching it is never a boundary crossing either -- no
+#               judge/approval round trip needed. The runtime
+#               approve-on-denial flow still applies for any domain not
+#               listed here.
 #
 # Refused with a warning on stderr (and ignored): a tree that is $HOME
-# itself, "/", or a system directory such as /usr, /etc, /var, /tmp, or a
-# loopback_connect entry that is not an IPv4 loopback address with a
-# non-zero port. Those would put the sandbox's whole purpose inside the
-# grant.
+# itself, "/", or a system directory such as /usr, /etc, /var, /tmp; a
+# network entry shaped like "ip:port" that is not an IPv4 loopback address
+# with a non-zero port; or a network entry that looks like a URL, contains
+# "/", or contains whitespace. Those would put the sandbox's whole purpose
+# inside the grant, or silently fail to mean the domain name it looks like.
 #
 # This lives here, in YOUR config file, and deliberately not in the
 # repository: a tracked project file would let a repository you cloned widen
@@ -259,9 +272,9 @@ cyan = "#56b6c2"
 # Commented out: there is no built-in default, and an active entry here
 # would grant real access to anyone who copied this file verbatim.
 # [[grants.project]]
-# root  = "/home/you/src/github.com/you/your-project"
-# trees = ["~/.cargo"]
-# loopback_connect = ["127.0.0.1:4226"]
+# root    = "/home/you/src/github.com/you/your-project"
+# trees   = ["~/.cargo"]
+# network = ["127.0.0.1:4226"]
 
 # ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these

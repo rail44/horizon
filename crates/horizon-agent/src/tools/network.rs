@@ -86,11 +86,29 @@ pub struct SessionDomainPolicy {
 }
 
 impl SessionDomainPolicy {
+    /// Builds a policy pre-seeded with `domains` already allowed --
+    /// `horizon-agentd`'s `session::run::run_session` calls this with the
+    /// session's project `[[grants.project]]` `network` domain entries
+    /// (`horizon_config::grants::domains_for_project`, resolved via
+    /// `session::setup::configured_domains`) so a project-trusted domain
+    /// never needs a judge/approval round trip through the session's
+    /// network proxy. The runtime grant flow ([`Self::allow`], judge
+    /// approval) still applies on top of whatever this seeds.
+    pub fn with_allowed(domains: impl IntoIterator<Item = impl Into<String>>) -> Self {
+        Self {
+            allowlist: Arc::new(Allowlist::new(domains)),
+        }
+    }
+
     pub(crate) fn allow(&self, domain: impl Into<String>) {
         self.allowlist.allow(domain);
     }
 
-    pub(crate) fn is_allowed(&self, domain: &str) -> bool {
+    /// Whether `domain` is currently allowed. `pub` (unlike [`Self::allow`]/
+    /// [`Self::shared`]) since it's a read-only check other crates
+    /// (`horizon-agentd`'s spawn-seeding, and its own tests) need too; only
+    /// mutation and the raw `Arc<Allowlist>` extraction stay crate-scoped.
+    pub fn is_allowed(&self, domain: &str) -> bool {
         self.allowlist.is_allowed(domain)
     }
 
@@ -184,6 +202,19 @@ impl SessionNetworkProxy {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn with_allowed_pre_seeds_domains_before_any_runtime_grant() {
+        let policy = SessionDomainPolicy::with_allowed(["build-cache.internal"]);
+        assert!(policy.is_allowed("build-cache.internal"));
+        assert!(!policy.is_allowed("other.example"));
+
+        policy.allow("other.example");
+        assert!(
+            policy.is_allowed("other.example"),
+            "the runtime grant flow still applies on top of the pre-seeded set"
+        );
+    }
 
     #[test]
     fn host_tools_and_the_optional_proxy_share_one_exact_session_policy() {

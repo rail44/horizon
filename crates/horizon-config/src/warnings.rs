@@ -80,7 +80,7 @@ const SECTIONS: &[Section] = &[
 /// Keys a single `[[grants.project]]` entry recognizes. Checked separately
 /// from [`SECTIONS`], which only walks a top-level table's own keys and so
 /// can't see inside an array of tables.
-const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "loopback_connect"];
+const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
 
 /// Pure collection of warning strings for `contents` -- factored out from
 /// [`warn`] so tests can assert on the returned strings instead of
@@ -244,9 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn a_grants_section_with_loopback_connect_warns_about_nothing() {
+    fn a_grants_section_with_network_warns_about_nothing() {
         let warnings = collect_warnings(
-            "[[grants.project]]\nroot = \"/src/project\"\nloopback_connect = [\"127.0.0.1:4226\"]\n",
+            "[[grants.project]]\nroot = \"/src/project\"\n\
+             network = [\"127.0.0.1:4226\", \"build-cache.internal\"]\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }

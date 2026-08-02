@@ -58,14 +58,17 @@ pub(super) fn configured_filesystem_grants(
     grants_for_project(&state.project_grants, &project_root)
 }
 
-/// The `[grants]` `loopback_connect` endpoints this session's project entitles
-/// it to, resolved the same way [`configured_filesystem_grants`] resolves
-/// trees: look up the session's project root in the user's config and return
-/// every matching entry's endpoints. A session with no workspace root, no
-/// repository, or no matching `[[grants.project]]` entry gets nothing extra.
-/// These are threaded into the sandbox's `NetworkPolicy::Proxied` so the
-/// seccomp-notify enforcement layer allows direct connects to them alongside
-/// the session proxy (e.g. sccache on `127.0.0.1:4226`).
+/// The `[grants]` `network` entries' direct-connect endpoints this
+/// session's project entitles it to, resolved the same way
+/// [`configured_filesystem_grants`] resolves trees: look up the session's
+/// project root in the user's config and return every matching entry's
+/// endpoints (the `network` entries that dispatched as an `ip:port` shape,
+/// see `horizon_config::grants`' module doc). A session with no workspace
+/// root, no repository, or no matching `[[grants.project]]` entry gets
+/// nothing extra. These are threaded into the sandbox's
+/// `NetworkPolicy::Proxied` so the seccomp-notify enforcement layer allows
+/// direct connects to them alongside the session proxy (e.g. sccache on
+/// `127.0.0.1:4226`).
 pub(super) fn configured_loopback_connect(
     state: &Arc<AgentdState>,
     workspace_root: Option<&Path>,
@@ -74,6 +77,25 @@ pub(super) fn configured_loopback_connect(
         return Vec::new();
     };
     horizon_config::grants::loopback_connect_for_project(&state.project_grants, &project_root)
+}
+
+/// The `[grants]` `network` entries' domain names this session's project
+/// entitles it to -- the counterpart to [`configured_loopback_connect`],
+/// resolved the same way, for the `network` entries that dispatched as a
+/// domain name rather than an `ip:port` shape. Pre-seeded into this
+/// session's `SessionDomainPolicy` at spawn
+/// (`horizon_agent::tools::SessionDomainPolicy::with_allowed`) so a
+/// project-trusted domain never needs a judge/approval round trip through
+/// the session's network proxy; the runtime grant flow (approve-on-denial)
+/// still applies on top for anything not listed here.
+pub(super) fn configured_domains(
+    state: &Arc<AgentdState>,
+    workspace_root: Option<&Path>,
+) -> Vec<String> {
+    let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
+        return Vec::new();
+    };
+    horizon_config::grants::domains_for_project(&state.project_grants, &project_root)
 }
 
 /// The pure half of [`configured_filesystem_grants`], split out so the
@@ -252,7 +274,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec![canonical_tree.display().to_string()],
-                loopback_connect: Vec::new(),
+                network: Vec::new(),
             }],
             Some(std::path::Path::new("/home/someone")),
         );
@@ -274,7 +296,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec!["/src/cache".to_string()],
-                loopback_connect: Vec::new(),
+                network: Vec::new(),
             }],
             None,
         );
@@ -290,7 +312,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec![path.display().to_string()],
-                loopback_connect: Vec::new(),
+                network: Vec::new(),
             }],
             None,
         );
@@ -305,6 +327,37 @@ mod tests {
             grants_for_project(&entries, std::path::Path::new("/src/project")).is_empty(),
             "a stale config entry must not become a sandbox grant"
         );
+    }
+
+    // --- [grants]: project-scoped `network` domain pre-seeding ----------
+    //
+    // `configured_domains` itself is a thin two-line wrapper over
+    // `horizon_config::grants::domains_for_project` (root lookup, dedup --
+    // already covered by that function's own tests), so what's worth
+    // exercising here is the actual spawn-time effect: a domain configured
+    // in `[[grants.project]]` `network` ends up allowed in the
+    // `SessionDomainPolicy` `session::run::run_session` seeds with it.
+
+    #[test]
+    fn a_configured_domain_is_allowed_in_the_pre_seeded_session_domain_policy() {
+        let (entries, warnings) = horizon_config::grants::resolve(
+            &[horizon_config::RawProjectGrant {
+                root: "/src/project".to_string(),
+                trees: Vec::new(),
+                network: vec!["build-cache.internal".to_string()],
+            }],
+            None,
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+
+        let domains = horizon_config::grants::domains_for_project(
+            &entries,
+            std::path::Path::new("/src/project"),
+        );
+        let policy = horizon_agent::tools::SessionDomainPolicy::with_allowed(domains);
+
+        assert!(policy.is_allowed("build-cache.internal"));
+        assert!(!policy.is_allowed("other.example"));
     }
 
     // --- Live workspace-root announcement (real git, in temp repositories) --

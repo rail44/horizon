@@ -1,15 +1,43 @@
-//! `[grants]`: per-project filesystem trees a session may write to from
-//! the start (`docs/containment-denial-narrow-grants-design.md`'s
-//! 2026-07-26 project-scoped-tree-grants decision).
+//! `[grants]`: per-project filesystem trees and network destinations a
+//! session may access from the start
+//! (`docs/containment-denial-narrow-grants-design.md`'s 2026-07-26
+//! project-scoped-tree-grants decision).
 //!
 //! ```toml
 //! [[grants.project]]
-//! root  = "/home/satoshi/src/github.com/rail44/horizon"
-//! trees = ["~/.cargo"]
-//! loopback_connect = ["127.0.0.1:4226"]
+//! root    = "/home/satoshi/src/github.com/rail44/horizon"
+//! trees   = ["~/.cargo"]
+//! network = ["127.0.0.1:4226", "build-cache.internal"]
 //! ```
 //!
-//! Three properties of this section are deliberate, not incidental:
+//! `network` entries are dispatched by shape, not by a separate key
+//! (owner decision 2026-08-02, unifying two previously asymmetric surfaces
+//! -- see below): one that parses as a `SocketAddr` (an `ip:port` string,
+//! e.g. `127.0.0.1:4226`) is validated as a direct-connect endpoint the
+//! seccomp-notify enforcement layer lets the sandboxed session reach
+//! alongside its own domain proxy (`crates/horizon-sandbox-runtime/src/
+//! linux/network.rs`'s `NetworkEnforcement::ProxyOnly`); only IPv4 loopback
+//! (`127.0.0.0/8`) with a non-zero port is accepted this way, and anything
+//! else shaped like `ip:port` (IPv6, a non-loopback IPv4 address, port `0`)
+//! is refused with a warning suggesting a domain name instead. Everything
+//! that does NOT parse as a `SocketAddr` is treated as a domain name and
+//! pre-seeded into the session's `SessionDomainPolicy` at spawn
+//! (`horizon-agentd`'s `session::setup::configured_domains` /
+//! `session::run::run_session`), so a project-trusted domain never needs a
+//! judge/approval round trip through the session's network proxy -- the
+//! runtime approve-on-denial flow still applies on top for anything not
+//! listed here. Validation there is a light syntax check only (non-empty,
+//! no URL scheme, no `/`, no whitespace); the proxy itself is the real gate
+//! at connect time.
+//!
+//! Before this, the same request ("let this project reach X") lived on two
+//! asymmetric surfaces: loopback endpoints had this static `loopback_connect`
+//! key (added 2026-08-02, a few hours before this unification) while domains
+//! had no config surface at all, only the runtime judge/approval flow.
+//! `loopback_connect` is retired outright with no compatibility alias -- it
+//! shipped with zero users.
+//!
+//! Three further properties of this section are deliberate, not incidental:
 //!
 //! - **It lives in the user's own config file, never in the repository.**
 //!   A tracked project file would let a cloned repository widen its own
@@ -62,16 +90,14 @@ pub struct RawProjectGrant {
     /// Directories granted read-write, as whole trees, to every session of
     /// this project.
     pub trees: Vec<String>,
-    /// Loopback TCP endpoints (`ip:port`) a sandboxed session of this project
-    /// may connect to directly, alongside the session proxy. Each entry is
-    /// an exact `ip:port` pair -- the sandbox matches it by full `SocketAddr`
-    /// equality, never by a looser `is_loopback && port` rule (see the
-    /// enforcement module's doc comment for the decoy rationale). Only IPv4
-    /// loopback addresses (`127.0.0.0/8`) with a non-zero port are accepted;
-    /// IPv6 and non-loopback addresses are refused with a warning at parse
-    /// time and dropped. sccache on `127.0.0.1:4226` is the intended use
-    /// (owner decision 2026-08-02).
-    pub loopback_connect: Vec<String>,
+    /// Network destinations a sandboxed session of this project may reach
+    /// beyond the empty runtime-approval default, dispatched by shape (see
+    /// the module doc): an `ip:port` string is validated as a direct-connect
+    /// endpoint (sccache on `127.0.0.1:4226` is the intended use, owner
+    /// decision 2026-08-02), anything else as a domain name pre-seeded into
+    /// the session's network-proxy allowlist. Replaces the short-lived
+    /// `loopback_connect` key with no compatibility alias.
+    pub network: Vec<String>,
 }
 
 /// A validated `[[grants.project]]` entry: absolute paths, `~` already
@@ -81,8 +107,12 @@ pub struct RawProjectGrant {
 pub struct ProjectGrant {
     pub root: PathBuf,
     pub trees: Vec<PathBuf>,
-    /// Validated loopback endpoints, each an IPv4 loopback `ip:port`.
+    /// Validated direct-connect endpoints dispatched from `network`, each an
+    /// IPv4 loopback `ip:port`.
     pub loopback_connect: Vec<SocketAddr>,
+    /// Validated domain names dispatched from `network`, pre-seeded into a
+    /// spawned session's `SessionDomainPolicy`.
+    pub domains: Vec<String>,
 }
 
 /// Expands and validates every `[[grants.project]]` entry, returning the
@@ -134,19 +164,39 @@ pub fn resolve(
             }
         }
         let mut loopback_connect = Vec::new();
-        for endpoint in &entry.loopback_connect {
-            match validate_loopback_endpoint(endpoint) {
-                Ok(addr) => {
-                    if !loopback_connect.contains(&addr) {
-                        loopback_connect.push(addr);
+        let mut domains = Vec::new();
+        for value in &entry.network {
+            let trimmed = value.trim();
+            if trimmed.parse::<SocketAddr>().is_ok() {
+                match validate_loopback_endpoint(trimmed) {
+                    Ok(addr) => {
+                        if !loopback_connect.contains(&addr) {
+                            loopback_connect.push(addr);
+                        }
+                    }
+                    Err(reason) => {
+                        warnings.push(format!(
+                            "[[grants.project]] root {:?}: network entry {value:?} -- {reason}; an \
+                             external host should be written as a bare domain name instead, which \
+                             is routed through the session's network proxy, ignoring it",
+                            entry.root
+                        ));
                     }
                 }
-                Err(reason) => {
-                    warnings.push(format!(
-                        "[[grants.project]] root {:?}: loopback_connect entry {endpoint:?} -- {reason}, \
-                         ignoring it",
-                        entry.root
-                    ));
+            } else {
+                match validate_domain_entry(trimmed) {
+                    Ok(domain) => {
+                        if !domains.contains(&domain) {
+                            domains.push(domain);
+                        }
+                    }
+                    Err(reason) => {
+                        warnings.push(format!(
+                            "[[grants.project]] root {:?}: network entry {value:?} -- {reason}, \
+                             ignoring it",
+                            entry.root
+                        ));
+                    }
                 }
             }
         }
@@ -154,6 +204,7 @@ pub fn resolve(
             root,
             trees,
             loopback_connect,
+            domains,
         });
     }
 
@@ -202,6 +253,28 @@ pub fn loopback_connect_for_project(
     endpoints
 }
 
+/// The domain names granted to a session whose project root is
+/// `project_root`, dispatched from `network` entries that did not parse as
+/// an `ip:port` endpoint. Same exact-root matching as
+/// [`trees_for_project`]/[`loopback_connect_for_project`]; several entries
+/// naming the same root contribute all of their domains.
+/// `horizon-agentd`'s `session::setup::configured_domains` calls this at
+/// session spawn to pre-seed the session's `SessionDomainPolicy`.
+pub fn domains_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
+    let mut domains = Vec::new();
+    for entry in entries {
+        if entry.root != project_root {
+            continue;
+        }
+        for domain in &entry.domains {
+            if !domains.contains(domain) {
+                domains.push(domain.clone());
+            }
+        }
+    }
+    domains
+}
+
 /// Expands a leading `~`/`~/` against `home` and requires the result to be
 /// absolute -- the same rule the persistence-path overrides
 /// (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) already apply. A
@@ -223,14 +296,16 @@ fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
     expanded.is_absolute().then_some(expanded)
 }
 
-/// Parses and validates one `loopback_connect` entry. Accepts only an IPv4
-/// loopback address (`127.0.0.0/8`) with a non-zero port -- the shape the
-/// seccomp-notify enforcement layer can proxy-connect (it builds a
-/// `sockaddr_in` on a duplicated `AF_INET` socket). IPv6 loopback (`[::1]`)
-/// is refused here rather than silently failing at enforcement time, where
-/// the `AF_INET` socket-domain check would deny it. Returns a human-readable
-/// reason on failure so `resolve` can fold it into its warn-and-ignore
-/// warning, matching the over-broad-tree refusal pattern.
+/// Parses and validates one `network` entry that already parsed as a
+/// `SocketAddr` (the direct-connect dispatch branch, see the module doc).
+/// Accepts only an IPv4 loopback address (`127.0.0.0/8`) with a non-zero
+/// port -- the shape the seccomp-notify enforcement layer can proxy-connect
+/// (it builds a `sockaddr_in` on a duplicated `AF_INET` socket). IPv6
+/// loopback (`[::1]`) is refused here rather than silently failing at
+/// enforcement time, where the `AF_INET` socket-domain check would deny it.
+/// Returns a human-readable reason on failure so `resolve` can fold it into
+/// its warn-and-ignore warning, matching the over-broad-tree refusal
+/// pattern.
 fn validate_loopback_endpoint(value: &str) -> Result<SocketAddr, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -254,6 +329,35 @@ fn validate_loopback_endpoint(value: &str) -> Result<SocketAddr, String> {
     }
 }
 
+/// Parses and validates one `network` entry that did NOT parse as a
+/// `SocketAddr` -- the domain-name dispatch branch (see the module doc).
+/// Only a light syntax check: reject anything empty, carrying a URL scheme,
+/// a path separator, or whitespace, since none of those is a bare domain
+/// name a proxy `CONNECT` target could be. The proxy itself, not this
+/// function, is the real gate at connect time.
+fn validate_domain_entry(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("empty entry".to_string());
+    }
+    if trimmed.contains("://") {
+        return Err(format!(
+            "{trimmed:?} looks like a URL; write a bare domain name with no scheme"
+        ));
+    }
+    if trimmed.contains('/') {
+        return Err(format!(
+            "{trimmed:?} contains '/'; write a bare domain name"
+        ));
+    }
+    if trimmed.chars().any(char::is_whitespace) {
+        return Err(format!(
+            "{trimmed:?} contains whitespace; write a bare domain name"
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,7 +366,7 @@ mod tests {
         RawProjectGrant {
             root: root.to_string(),
             trees: trees.iter().map(|tree| tree.to_string()).collect(),
-            loopback_connect: Vec::new(),
+            network: Vec::new(),
         }
     }
 
@@ -278,6 +382,7 @@ mod tests {
                 root: PathBuf::from("/src/project"),
                 trees: vec![PathBuf::from("/home/someone/.cargo")],
                 loopback_connect: Vec::new(),
+                domains: Vec::new(),
             }]
         );
     }
@@ -403,20 +508,20 @@ mod tests {
         );
     }
 
-    // --- loopback_connect -------------------------------------------------
+    // --- network: direct-connect endpoints (ip:port-shaped entries) -------
 
-    fn entry_with_loopback(root: &str, loopback: &[&str]) -> RawProjectGrant {
+    fn entry_with_network(root: &str, network: &[&str]) -> RawProjectGrant {
         RawProjectGrant {
             root: root.to_string(),
             trees: Vec::new(),
-            loopback_connect: loopback.iter().map(|s| s.to_string()).collect(),
+            network: network.iter().map(|s| s.to_string()).collect(),
         }
     }
 
     #[test]
-    fn a_loopback_endpoint_is_parsed_into_a_socket_addr() {
+    fn an_ip_port_entry_is_parsed_into_a_direct_connect_socket_addr() {
         let (resolved, warnings) = resolve(
-            &[entry_with_loopback("/src/project", &["127.0.0.1:4226"])],
+            &[entry_with_network("/src/project", &["127.0.0.1:4226"])],
             None,
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
@@ -424,35 +529,34 @@ mod tests {
             resolved[0].loopback_connect,
             vec!["127.0.0.1:4226".parse().unwrap()]
         );
+        assert!(resolved[0].domains.is_empty());
     }
 
     #[test]
-    fn a_non_loopback_ipv4_is_refused_with_a_named_warning() {
+    fn a_non_loopback_ip_port_entry_is_refused_with_a_named_warning() {
         let (resolved, warnings) = resolve(
-            &[entry_with_loopback("/src/project", &["10.0.0.1:4226"])],
+            &[entry_with_network("/src/project", &["10.0.0.1:4226"])],
             None,
         );
         assert!(resolved[0].loopback_connect.is_empty());
         assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
         assert!(warnings[0].contains("not a loopback"));
-        assert!(warnings[0].contains("ignoring it"));
+        assert!(warnings[0].contains("bare domain name"));
     }
 
     #[test]
-    fn an_ipv6_loopback_is_refused_with_a_named_warning() {
-        let (resolved, warnings) = resolve(
-            &[entry_with_loopback("/src/project", &["[::1]:4226"])],
-            None,
-        );
+    fn an_ipv6_ip_port_entry_is_refused_with_a_named_warning() {
+        let (resolved, warnings) =
+            resolve(&[entry_with_network("/src/project", &["[::1]:4226"])], None);
         assert!(resolved[0].loopback_connect.is_empty());
         assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
         assert!(warnings[0].contains("IPv6"));
     }
 
     #[test]
-    fn a_zero_port_is_refused() {
+    fn a_zero_port_entry_is_refused() {
         let (resolved, warnings) = resolve(
-            &[entry_with_loopback("/src/project", &["127.0.0.1:0"])],
+            &[entry_with_network("/src/project", &["127.0.0.1:0"])],
             None,
         );
         assert!(resolved[0].loopback_connect.is_empty());
@@ -461,20 +565,9 @@ mod tests {
     }
 
     #[test]
-    fn an_unparseable_endpoint_is_refused() {
-        let (resolved, warnings) = resolve(
-            &[entry_with_loopback("/src/project", &["not-an-address"])],
-            None,
-        );
-        assert!(resolved[0].loopback_connect.is_empty());
-        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
-        assert!(warnings[0].contains("not a valid ip:port"));
-    }
-
-    #[test]
-    fn duplicate_loopback_endpoints_collapse() {
+    fn duplicate_direct_connect_entries_collapse() {
         let (resolved, _) = resolve(
-            &[entry_with_loopback(
+            &[entry_with_network(
                 "/src/project",
                 &["127.0.0.1:4226", "127.0.0.1:4226"],
             )],
@@ -484,12 +577,12 @@ mod tests {
     }
 
     #[test]
-    fn loopback_endpoints_are_looked_up_by_exact_project_root() {
+    fn direct_connect_endpoints_are_looked_up_by_exact_project_root() {
         let (resolved, _) = resolve(
             &[
-                entry_with_loopback("/src/project", &["127.0.0.1:4226"]),
-                entry_with_loopback("/src/other", &["127.0.0.1:9999"]),
-                entry_with_loopback("/src/project", &["127.0.0.2:4226"]),
+                entry_with_network("/src/project", &["127.0.0.1:4226"]),
+                entry_with_network("/src/other", &["127.0.0.1:9999"]),
+                entry_with_network("/src/project", &["127.0.0.2:4226"]),
             ],
             None,
         );
@@ -502,5 +595,121 @@ mod tests {
             "every entry naming this root contributes"
         );
         assert!(loopback_connect_for_project(&resolved, Path::new("/src/unlisted")).is_empty());
+    }
+
+    // --- network: domain names (anything that isn't ip:port-shaped) -------
+
+    #[test]
+    fn a_bare_domain_entry_is_dispatched_as_a_domain() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_network(
+                "/src/project",
+                &["build-cache.internal"],
+            )],
+            None,
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+        assert_eq!(
+            resolved[0].domains,
+            vec!["build-cache.internal".to_string()]
+        );
+        assert!(resolved[0].loopback_connect.is_empty());
+    }
+
+    #[test]
+    fn a_value_that_is_neither_ip_port_nor_a_real_domain_still_dispatches_as_one() {
+        // The dispatch rule is purely "does it parse as a `SocketAddr`" --
+        // this deliberately accepts domain-shaped strings that aren't valid
+        // DNS names either; the proxy is the real gate at connect time (see
+        // the module doc).
+        let (resolved, warnings) = resolve(
+            &[entry_with_network("/src/project", &["not-an-address"])],
+            None,
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+        assert_eq!(resolved[0].domains, vec!["not-an-address".to_string()]);
+    }
+
+    #[test]
+    fn a_domain_entry_with_a_url_scheme_is_refused() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_network("/src/project", &["https://example.com"])],
+            None,
+        );
+        assert!(resolved[0].domains.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("URL"));
+    }
+
+    #[test]
+    fn a_domain_entry_with_a_path_is_refused() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_network("/src/project", &["example.com/path"])],
+            None,
+        );
+        assert!(resolved[0].domains.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains('/'));
+    }
+
+    #[test]
+    fn a_domain_entry_with_whitespace_is_refused() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_network("/src/project", &["exa mple.com"])],
+            None,
+        );
+        assert!(resolved[0].domains.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("whitespace"));
+    }
+
+    #[test]
+    fn duplicate_domain_entries_collapse() {
+        let (resolved, _) = resolve(
+            &[entry_with_network(
+                "/src/project",
+                &["build-cache.internal", "build-cache.internal"],
+            )],
+            None,
+        );
+        assert_eq!(resolved[0].domains.len(), 1);
+    }
+
+    #[test]
+    fn domains_are_looked_up_by_exact_project_root() {
+        let (resolved, _) = resolve(
+            &[
+                entry_with_network("/src/project", &["a.internal"]),
+                entry_with_network("/src/other", &["b.internal"]),
+                entry_with_network("/src/project", &["c.internal"]),
+            ],
+            None,
+        );
+        assert_eq!(
+            domains_for_project(&resolved, Path::new("/src/project")),
+            vec!["a.internal".to_string(), "c.internal".to_string()],
+            "every entry naming this root contributes"
+        );
+        assert!(domains_for_project(&resolved, Path::new("/src/unlisted")).is_empty());
+    }
+
+    #[test]
+    fn a_mixed_network_list_dispatches_each_entry_by_its_own_shape() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_network(
+                "/src/project",
+                &["127.0.0.1:4226", "build-cache.internal"],
+            )],
+            None,
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+        assert_eq!(
+            resolved[0].loopback_connect,
+            vec!["127.0.0.1:4226".parse().unwrap()]
+        );
+        assert_eq!(
+            resolved[0].domains,
+            vec!["build-cache.internal".to_string()]
+        );
     }
 }
