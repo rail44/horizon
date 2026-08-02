@@ -29,8 +29,10 @@ pub enum ReadableScope {
 ///
 /// `Proxied` permits only the exact loopback TCP endpoint owned by the
 /// session's allowlist proxy, plus any additional loopback endpoints the
-/// project's `[grants]` names in `loopback_connect` (e.g. sccache on
-/// `127.0.0.1:4226`). The client still has to speak HTTP proxy protocol for
+/// project's `[grants]` `network` entries dispatch as direct-connect
+/// endpoints (e.g. sccache on `127.0.0.1:4226` -- see
+/// `horizon_config::grants`' module doc for the dispatch rule). The client
+/// still has to speak HTTP proxy protocol for
 /// ordinary egress; this policy enforces that ignoring proxy configuration
 /// cannot become direct egress. `loopback_connect` endpoints are matched
 /// by full `SocketAddr` equality -- never by a looser `is_loopback && port`

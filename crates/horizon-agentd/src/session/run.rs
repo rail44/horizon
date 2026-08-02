@@ -31,7 +31,7 @@ use super::panic::{
     SessionLoopPhase,
 };
 use super::setup::{
-    configured_filesystem_grants, configured_loopback_connect,
+    configured_domains, configured_filesystem_grants, configured_loopback_connect,
     resolve_and_create_isolated_worktree, skill_discovery_root, tool_session_state_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
@@ -150,7 +150,17 @@ pub(super) fn run_session(
     // proxy it will never use. A bind failure is non-fatal: this session
     // just falls back to `NetworkPolicy::Disabled` for tier-1 sandboxed
     // `bash`, exactly the pre-leg-4a behavior.
-    let domains = SessionDomainPolicy::default();
+    //
+    // Pre-seeded with the project's `[grants]` `network` domain entries
+    // (owner decision 2026-08-02, unifying what used to be a
+    // domain-only-at-runtime approval flow with the endpoint-only
+    // `loopback_connect` config key into one `network` key): a domain the
+    // project already trusts never needs a judge/approval round trip
+    // through the proxy below. The runtime grant flow (`tools::approval`'s
+    // domain-denial-retry path, `SessionDomainPolicy::allow`) still applies
+    // on top for anything not listed here.
+    let domains =
+        SessionDomainPolicy::with_allowed(configured_domains(state, workspace_root.as_deref()));
     let network = if isolated && horizon_sandbox::is_available() {
         match horizon_agent::tools::SessionNetworkProxy::start_with_policy(&domains) {
             Ok(proxy) => Some(Arc::new(proxy)),

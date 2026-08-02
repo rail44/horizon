@@ -85,9 +85,10 @@ pub struct RawConfig {
     pub keybindings: HashMap<String, String>,
     /// `[theme]`: the app's one color scheme. See [`RawThemeConfig`].
     pub theme: RawThemeConfig,
-    /// `[grants]`: per-project filesystem trees agent sessions may write
-    /// to. See the [`grants`] module doc for why this is user-owned config
-    /// rather than anything the repository or the approval flow can write.
+    /// `[grants]`: per-project filesystem trees and network destinations
+    /// agent sessions start with. See the [`grants`] module doc for why
+    /// this is user-owned config rather than anything the repository or
+    /// the approval flow can write.
     pub grants: RawGrantsConfig,
 }
 
