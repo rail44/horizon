@@ -58,6 +58,24 @@ pub(super) fn configured_filesystem_grants(
     grants_for_project(&state.project_grants, &project_root)
 }
 
+/// The `[grants]` `loopback_connect` endpoints this session's project entitles
+/// it to, resolved the same way [`configured_filesystem_grants`] resolves
+/// trees: look up the session's project root in the user's config and return
+/// every matching entry's endpoints. A session with no workspace root, no
+/// repository, or no matching `[[grants.project]]` entry gets nothing extra.
+/// These are threaded into the sandbox's `NetworkPolicy::Proxied` so the
+/// seccomp-notify enforcement layer allows direct connects to them alongside
+/// the session proxy (e.g. sccache on `127.0.0.1:4226`).
+pub(super) fn configured_loopback_connect(
+    state: &Arc<AgentdState>,
+    workspace_root: Option<&Path>,
+) -> Vec<std::net::SocketAddr> {
+    let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
+        return Vec::new();
+    };
+    horizon_config::grants::loopback_connect_for_project(&state.project_grants, &project_root)
+}
+
 /// The pure half of [`configured_filesystem_grants`], split out so the
 /// config-entry-to-sandbox-grant mapping is testable without a session,
 /// a daemon, or a config file.
@@ -234,6 +252,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec![canonical_tree.display().to_string()],
+                loopback_connect: Vec::new(),
             }],
             Some(std::path::Path::new("/home/someone")),
         );
@@ -255,6 +274,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec!["/src/cache".to_string()],
+                loopback_connect: Vec::new(),
             }],
             None,
         );
@@ -270,6 +290,7 @@ mod tests {
             &[horizon_config::RawProjectGrant {
                 root: "/src/project".to_string(),
                 trees: vec![path.display().to_string()],
+                loopback_connect: Vec::new(),
             }],
             None,
         );

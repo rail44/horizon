@@ -6,6 +6,7 @@
 //! [[grants.project]]
 //! root  = "/home/satoshi/src/github.com/rail44/horizon"
 //! trees = ["~/.cargo"]
+//! loopback_connect = ["127.0.0.1:4226"]
 //! ```
 //!
 //! Three properties of this section are deliberate, not incidental:
@@ -33,6 +34,7 @@
 //! allowed to name and the path the sandbox will actually accept can never
 //! drift apart.
 
+use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -60,6 +62,16 @@ pub struct RawProjectGrant {
     /// Directories granted read-write, as whole trees, to every session of
     /// this project.
     pub trees: Vec<String>,
+    /// Loopback TCP endpoints (`ip:port`) a sandboxed session of this project
+    /// may connect to directly, alongside the session proxy. Each entry is
+    /// an exact `ip:port` pair -- the sandbox matches it by full `SocketAddr`
+    /// equality, never by a looser `is_loopback && port` rule (see the
+    /// enforcement module's doc comment for the decoy rationale). Only IPv4
+    /// loopback addresses (`127.0.0.0/8`) with a non-zero port are accepted;
+    /// IPv6 and non-loopback addresses are refused with a warning at parse
+    /// time and dropped. sccache on `127.0.0.1:4226` is the intended use
+    /// (owner decision 2026-08-02).
+    pub loopback_connect: Vec<String>,
 }
 
 /// A validated `[[grants.project]]` entry: absolute paths, `~` already
@@ -69,6 +81,8 @@ pub struct RawProjectGrant {
 pub struct ProjectGrant {
     pub root: PathBuf,
     pub trees: Vec<PathBuf>,
+    /// Validated loopback endpoints, each an IPv4 loopback `ip:port`.
+    pub loopback_connect: Vec<SocketAddr>,
 }
 
 /// Expands and validates every `[[grants.project]]` entry, returning the
@@ -119,7 +133,28 @@ pub fn resolve(
                 trees.push(tree_path);
             }
         }
-        resolved.push(ProjectGrant { root, trees });
+        let mut loopback_connect = Vec::new();
+        for endpoint in &entry.loopback_connect {
+            match validate_loopback_endpoint(endpoint) {
+                Ok(addr) => {
+                    if !loopback_connect.contains(&addr) {
+                        loopback_connect.push(addr);
+                    }
+                }
+                Err(reason) => {
+                    warnings.push(format!(
+                        "[[grants.project]] root {:?}: loopback_connect entry {endpoint:?} -- {reason}, \
+                         ignoring it",
+                        entry.root
+                    ));
+                }
+            }
+        }
+        resolved.push(ProjectGrant {
+            root,
+            trees,
+            loopback_connect,
+        });
     }
 
     (resolved, warnings)
@@ -145,6 +180,28 @@ pub fn trees_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<P
     trees
 }
 
+/// The loopback endpoints granted to a session whose project root is
+/// `project_root`. Entries are matched by exact root path, same as
+/// [`trees_for_project`]. Several entries naming the same root contribute
+/// all of their endpoints.
+pub fn loopback_connect_for_project(
+    entries: &[ProjectGrant],
+    project_root: &Path,
+) -> Vec<SocketAddr> {
+    let mut endpoints = Vec::new();
+    for entry in entries {
+        if entry.root != project_root {
+            continue;
+        }
+        for addr in &entry.loopback_connect {
+            if !endpoints.contains(addr) {
+                endpoints.push(*addr);
+            }
+        }
+    }
+    endpoints
+}
+
 /// Expands a leading `~`/`~/` against `home` and requires the result to be
 /// absolute -- the same rule the persistence-path overrides
 /// (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) already apply. A
@@ -166,6 +223,37 @@ fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
     expanded.is_absolute().then_some(expanded)
 }
 
+/// Parses and validates one `loopback_connect` entry. Accepts only an IPv4
+/// loopback address (`127.0.0.0/8`) with a non-zero port -- the shape the
+/// seccomp-notify enforcement layer can proxy-connect (it builds a
+/// `sockaddr_in` on a duplicated `AF_INET` socket). IPv6 loopback (`[::1]`)
+/// is refused here rather than silently failing at enforcement time, where
+/// the `AF_INET` socket-domain check would deny it. Returns a human-readable
+/// reason on failure so `resolve` can fold it into its warn-and-ignore
+/// warning, matching the over-broad-tree refusal pattern.
+fn validate_loopback_endpoint(value: &str) -> Result<SocketAddr, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err("empty endpoint".to_string());
+    }
+    let addr: SocketAddr = trimmed
+        .parse()
+        .map_err(|_| format!("{trimmed:?} is not a valid ip:port"))?;
+    match addr {
+        SocketAddr::V4(v4) if v4.ip().is_loopback() && v4.port() != 0 => Ok(SocketAddr::V4(v4)),
+        SocketAddr::V4(v4) if v4.port() == 0 => {
+            Err(format!("{addr} has port 0; a non-zero port is required"))
+        }
+        SocketAddr::V4(_) => Err(format!(
+            "{addr} is not a loopback address (only 127.0.0.0/8 is accepted)"
+        )),
+        SocketAddr::V6(_) => Err(format!(
+            "{addr} is IPv6; only IPv4 loopback is supported (the enforcement layer \
+             proxy-connects on an AF_INET socket)"
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -174,6 +262,7 @@ mod tests {
         RawProjectGrant {
             root: root.to_string(),
             trees: trees.iter().map(|tree| tree.to_string()).collect(),
+            loopback_connect: Vec::new(),
         }
     }
 
@@ -188,6 +277,7 @@ mod tests {
             vec![ProjectGrant {
                 root: PathBuf::from("/src/project"),
                 trees: vec![PathBuf::from("/home/someone/.cargo")],
+                loopback_connect: Vec::new(),
             }]
         );
     }
@@ -311,5 +401,106 @@ mod tests {
             trees_for_project(&resolved, Path::new("/src/project/crates/inner")).is_empty(),
             "a grant is keyed by the project root itself, not by containment"
         );
+    }
+
+    // --- loopback_connect -------------------------------------------------
+
+    fn entry_with_loopback(root: &str, loopback: &[&str]) -> RawProjectGrant {
+        RawProjectGrant {
+            root: root.to_string(),
+            trees: Vec::new(),
+            loopback_connect: loopback.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn a_loopback_endpoint_is_parsed_into_a_socket_addr() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_loopback("/src/project", &["127.0.0.1:4226"])],
+            None,
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+        assert_eq!(
+            resolved[0].loopback_connect,
+            vec!["127.0.0.1:4226".parse().unwrap()]
+        );
+    }
+
+    #[test]
+    fn a_non_loopback_ipv4_is_refused_with_a_named_warning() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_loopback("/src/project", &["10.0.0.1:4226"])],
+            None,
+        );
+        assert!(resolved[0].loopback_connect.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("not a loopback"));
+        assert!(warnings[0].contains("ignoring it"));
+    }
+
+    #[test]
+    fn an_ipv6_loopback_is_refused_with_a_named_warning() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_loopback("/src/project", &["[::1]:4226"])],
+            None,
+        );
+        assert!(resolved[0].loopback_connect.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("IPv6"));
+    }
+
+    #[test]
+    fn a_zero_port_is_refused() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_loopback("/src/project", &["127.0.0.1:0"])],
+            None,
+        );
+        assert!(resolved[0].loopback_connect.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("port 0"));
+    }
+
+    #[test]
+    fn an_unparseable_endpoint_is_refused() {
+        let (resolved, warnings) = resolve(
+            &[entry_with_loopback("/src/project", &["not-an-address"])],
+            None,
+        );
+        assert!(resolved[0].loopback_connect.is_empty());
+        assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
+        assert!(warnings[0].contains("not a valid ip:port"));
+    }
+
+    #[test]
+    fn duplicate_loopback_endpoints_collapse() {
+        let (resolved, _) = resolve(
+            &[entry_with_loopback(
+                "/src/project",
+                &["127.0.0.1:4226", "127.0.0.1:4226"],
+            )],
+            None,
+        );
+        assert_eq!(resolved[0].loopback_connect.len(), 1);
+    }
+
+    #[test]
+    fn loopback_endpoints_are_looked_up_by_exact_project_root() {
+        let (resolved, _) = resolve(
+            &[
+                entry_with_loopback("/src/project", &["127.0.0.1:4226"]),
+                entry_with_loopback("/src/other", &["127.0.0.1:9999"]),
+                entry_with_loopback("/src/project", &["127.0.0.2:4226"]),
+            ],
+            None,
+        );
+        assert_eq!(
+            loopback_connect_for_project(&resolved, Path::new("/src/project")),
+            vec![
+                "127.0.0.1:4226".parse().unwrap(),
+                "127.0.0.2:4226".parse().unwrap()
+            ],
+            "every entry naming this root contributes"
+        );
+        assert!(loopback_connect_for_project(&resolved, Path::new("/src/unlisted")).is_empty());
     }
 }

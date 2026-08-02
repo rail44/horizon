@@ -499,12 +499,14 @@ fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToo
 /// provisioning under the first writable root -- `SCRATCH_DIR_NAME` -- which
 /// replaced the retired bwrap backend's private `--tmpfs /tmp`), so the host
 /// temp dir must never be a writable root.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn run_sandboxed(
     call_id: &ToolCallId,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
     network: Option<&SessionNetworkProxy>,
+    loopback_connect: &[std::net::SocketAddr],
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
     config: &BashToolConfig,
 ) -> BashCompletion {
@@ -569,7 +571,10 @@ pub(super) fn run_sandboxed(
     cmd.env("GIT_OPTIONAL_LOCKS", "0");
 
     let network_policy = match network.map(SessionNetworkProxy::proxy_addr) {
-        Some(proxy_addr) => horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },
+        Some(proxy_addr) => horizon_sandbox::NetworkPolicy::Proxied {
+            proxy_addr,
+            loopback_connect: loopback_connect.to_vec(),
+        },
         None => horizon_sandbox::NetworkPolicy::Disabled,
     };
     if let Some(network) = network {

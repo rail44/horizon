@@ -1,6 +1,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
+    net::SocketAddr,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{Arc, Mutex},
@@ -150,6 +151,16 @@ struct Inner {
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
     network: Option<Arc<SessionNetworkProxy>>,
+    /// Loopback TCP endpoints this session's sandbox may connect to
+    /// directly (e.g. sccache on `127.0.0.1:4226`), from the project's
+    /// `[grants]` `loopback_connect` entries. Threaded into the
+    /// `NetworkPolicy::Proxied` the sandbox spawn builds, alongside the
+    /// session proxy address -- the seccomp-notify enforcement matches each
+    /// by full `SocketAddr` equality. Empty at every construction site except
+    /// `horizon-agentd`'s `session::run_session`, which injects it via
+    /// [`Self::with_loopback_connect`] the same way filesystem grants are
+    /// injected via [`Self::with_filesystem_grants`].
+    loopback_connect: Vec<SocketAddr>,
     /// One domain-grant store shared by sandboxed proxy traffic and
     /// host-side web tools. It exists even when this session cannot start a
     /// sandbox proxy, so `web_fetch` never needs a separate policy model.
@@ -223,6 +234,7 @@ impl ToolSessionState {
                 config_path: None,
                 isolated_worktree: false,
                 network: None,
+                loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
                 judge: None,
                 exploration: None,
@@ -286,6 +298,16 @@ impl ToolSessionState {
         self
     }
 
+    /// Installs this session's granted loopback-connect endpoints after
+    /// construction -- see [`Inner::loopback_connect`]'s doc comment. Same
+    /// construction-time-only safety contract as [`Self::with_network_proxy`].
+    pub fn with_loopback_connect(mut self, endpoints: Vec<SocketAddr>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.loopback_connect = endpoints;
+        }
+        self
+    }
+
     /// Installs the domain store also passed to
     /// [`SessionNetworkProxy::start_with_policy`] by agentd.
     pub fn with_domain_policy(mut self, domains: SessionDomainPolicy) -> Self {
@@ -314,6 +336,14 @@ impl ToolSessionState {
     /// (`SessionNetworkProxy::allow_domain`) on approve.
     pub(crate) fn network_proxy(&self) -> Option<Arc<SessionNetworkProxy>> {
         self.inner.network.clone()
+    }
+
+    /// The loopback endpoints this session's sandbox may connect to directly
+    /// -- see [`Inner::loopback_connect`]'s doc comment. What
+    /// `tools::execution::execute_tier1_bash` passes into
+    /// `bash::spawn_sandboxed`.
+    pub(crate) fn loopback_connect(&self) -> Vec<SocketAddr> {
+        self.inner.loopback_connect.clone()
     }
 
     /// Installs this session's enforcing judge handle after construction

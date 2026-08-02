@@ -31,8 +31,8 @@ use super::panic::{
     SessionLoopPhase,
 };
 use super::setup::{
-    configured_filesystem_grants, resolve_and_create_isolated_worktree, skill_discovery_root,
-    tool_session_state_for,
+    configured_filesystem_grants, configured_loopback_connect,
+    resolve_and_create_isolated_worktree, skill_discovery_root, tool_session_state_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree::WorktreeInfo;
@@ -202,6 +202,7 @@ pub(super) fn run_session(
     // Runtime` picks changes up for new ones, same lifecycle as
     // `[provider]`.
     let filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
+    let loopback_connect = configured_loopback_connect(state, workspace_root.as_deref());
     let tool_state = tool_session_state_for(
         workspace_root,
         lock_unpoisoned(&state.agent_config).tools,
@@ -209,6 +210,7 @@ pub(super) fn run_session(
     )
     .with_isolated_worktree(isolated)
     .with_filesystem_grants(filesystem_grants.clone())
+    .with_loopback_connect(loopback_connect)
     .with_skills(SkillRegistry::discover(&skill_root))
     .with_config_path(state.config_path.clone())
     .with_domain_policy(domains)

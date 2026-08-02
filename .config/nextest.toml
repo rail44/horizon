@@ -108,6 +108,14 @@ max-threads = 1
 # `grants.len() >= 2` assertion then fails. The logic is right; the test needs
 # $TMPDIR to be /tmp (system-rooted), which containment cannot provide. Same
 # family as the `outside_a_*_repository` skips (needs a dir outside the repo).
+#
+# `loopback_connect` boundary tests -- `test(/^loopback_connect_grant_/)` in
+# `binary_id(horizon-sandbox::linux_supervised_helper)`. These spawn a real
+# sandboxed helper, bind real loopback TCP listeners, and assert the
+# seccomp-notify enforcement layer connects to the granted endpoint while
+# denying non-granted ports and all binds. Under containment the sandbox
+# cannot nest another sandbox (EBUSY) and the loopback binds are refused --
+# the integrator's full gate runs them outside containment.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -133,5 +141,6 @@ default-filter = '''
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
+        + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
     )
 '''

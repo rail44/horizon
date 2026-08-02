@@ -277,6 +277,7 @@ fn execute_tier1_bash(
         tool_state.bash_config(),
         workspace_root.to_path_buf(),
         network,
+        tool_state.loopback_connect(),
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
         tool_state.filesystem_grants_snapshot(),
         None,

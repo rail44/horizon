@@ -444,6 +444,7 @@ fn resolve_git_operation(
         runtime.tool_state.bash_config(),
         workspace_root.to_path_buf(),
         runtime.tool_state.network_proxy(),
+        runtime.tool_state.loopback_connect(),
         SandboxedApprovalOrigin::ManualGitOperation,
         runtime.tool_state.filesystem_grants_snapshot(),
         Some(writable_roots),
@@ -568,6 +569,7 @@ fn resolve_filesystem_denial_retry(
         runtime.tool_state.bash_config(),
         workspace_root.to_path_buf(),
         runtime.tool_state.network_proxy(),
+        runtime.tool_state.loopback_connect(),
         SandboxedApprovalOrigin::FilesystemGrant {
             source: approval_source,
             grants,
@@ -726,6 +728,7 @@ fn resolve_domain_denial_retry(
                 runtime.tool_state.bash_config(),
                 workspace_root.to_path_buf(),
                 Some(network),
+                runtime.tool_state.loopback_connect(),
                 SandboxedApprovalOrigin::ManualDomainRetry { domains },
                 runtime.tool_state.filesystem_grants_snapshot(),
                 git_metadata_roots,

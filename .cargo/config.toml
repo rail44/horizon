@@ -34,3 +34,17 @@
 # package). See AGENTS.md "Build setup".
 [build]
 rustc-wrapper = "sccache"
+
+# Keep the host's sccache server resident once auto-started by a build.
+# sccache's default idle timeout shuts the server down after 10 minutes of
+# inactivity; a sandboxed agent session that connects to it (via the
+# `loopback_connect` grant on `127.0.0.1:4226`, owner decision 2026-08-02)
+# would then lose its connection target and every subsequent build would
+# pay the cold-start cost or fail outright. `0` disables the idle shutdown
+# so the server stays up for the session's lifetime. The server is still
+# bounded by sccache's own LRU cache size (`~/.config/sccache/config`).
+# If no server is running when a sandboxed build starts, the connection is
+# refused -- run any `cargo build` on the host or `sccache --start-server`
+# to start one. See AGENTS.md "Build setup".
+[env]
+SCCACHE_IDLE_TIMEOUT = "0"

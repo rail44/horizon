@@ -313,6 +313,90 @@ fn proxy_policy_denies_pathname_unix_sockets() {
 }
 
 #[test]
+fn loopback_connect_grant_allows_the_granted_endpoint() {
+    let root = test_dir("loopback-grant");
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy endpoint");
+    let proxy_addr = proxy.local_addr().unwrap();
+    let sccache = TcpListener::bind("127.0.0.1:0").expect("bind granted endpoint");
+    let sccache_addr = sccache.local_addr().unwrap();
+
+    let allowed = run_network_probe_with_loopback(
+        &root,
+        proxy_addr,
+        &[sccache_addr],
+        "tcp",
+        &sccache_addr.to_string(),
+    );
+    assert_eq!(
+        allowed.0,
+        Some(0),
+        "granted loopback endpoint should connect: {allowed:?}"
+    );
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn loopback_connect_grant_denies_a_non_granted_port() {
+    let root = test_dir("loopback-deny");
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy endpoint");
+    let proxy_addr = proxy.local_addr().unwrap();
+    let sccache = TcpListener::bind("127.0.0.1:0").expect("bind granted endpoint");
+    let sccache_addr = sccache.local_addr().unwrap();
+    // A different loopback port that is NOT in the grant.
+    let other = TcpListener::bind("127.0.0.1:0").expect("bind non-granted endpoint");
+    let other_addr = other.local_addr().unwrap();
+
+    let denied = run_network_probe_with_loopback(
+        &root,
+        proxy_addr,
+        &[sccache_addr],
+        "tcp",
+        &other_addr.to_string(),
+    );
+    assert_eq!(
+        denied.0,
+        Some(23),
+        "non-granted loopback port must be denied: {denied:?}"
+    );
+    assert!(denied.2.ipc_denials.iter().any(|record| {
+        record.target == other_addr.to_string() && record.operation == "connect"
+    }));
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
+fn loopback_connect_grant_does_not_allow_bind() {
+    let root = test_dir("loopback-bind");
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy endpoint");
+    let proxy_addr = proxy.local_addr().unwrap();
+    let sccache = TcpListener::bind("127.0.0.1:0").expect("bind granted endpoint");
+    let sccache_addr = sccache.local_addr().unwrap();
+    drop(sccache);
+
+    let denied = run_network_probe_with_loopback(
+        &root,
+        proxy_addr,
+        &[sccache_addr],
+        "bind",
+        &sccache_addr.to_string(),
+    );
+    assert_eq!(
+        denied.0,
+        Some(23),
+        "bind must stay denied even with a loopback_connect grant: {denied:?}"
+    );
+    assert!(denied
+        .2
+        .ipc_denials
+        .iter()
+        .any(|record| { record.target == sccache_addr.to_string() && record.operation == "bind" }));
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
+#[test]
 fn one_report_contains_filesystem_and_network_denials() {
     let writable = test_dir("combined-writable");
     let outside = test_dir("combined-outside");
@@ -324,7 +408,10 @@ fn one_report_contains_filesystem_and_network_denials() {
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
-        network: horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },
+        network: horizon_sandbox::NetworkPolicy::Proxied {
+            proxy_addr,
+            loopback_connect: Vec::new(),
+        },
     };
     let mut command = Command::new("/bin/sh");
     command.arg("-c").arg(format!(
@@ -368,10 +455,27 @@ fn run_network_probe(
     String,
     horizon_sandbox_runtime::SupervisedOutcome,
 ) {
+    run_network_probe_with_loopback(root, proxy_addr, &[], mode, target)
+}
+
+fn run_network_probe_with_loopback(
+    root: &std::path::Path,
+    proxy_addr: std::net::SocketAddr,
+    loopback_connect: &[std::net::SocketAddr],
+    mode: &str,
+    target: &str,
+) -> (
+    Option<i32>,
+    String,
+    horizon_sandbox_runtime::SupervisedOutcome,
+) {
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![root.to_path_buf()],
         readable_scope: horizon_sandbox::ReadableScope::Full,
-        network: horizon_sandbox::NetworkPolicy::Proxied { proxy_addr },
+        network: horizon_sandbox::NetworkPolicy::Proxied {
+            proxy_addr,
+            loopback_connect: loopback_connect.to_vec(),
+        },
     };
     let mut command = Command::new(NETWORK_PROBE);
     command.arg(mode).arg(target);

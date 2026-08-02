@@ -7,6 +7,27 @@
 //! race. An allowed connect is performed on a duplicated child socket using
 //! the trusted fixed endpoint, then the original syscall is completed without
 //! dereferencing the child's pointer again.
+//!
+//! `loopback_connect` grants (owner decision 2026-08-02): in addition to the
+//! session proxy, a project's `[grants]` may name extra loopback TCP endpoints
+//! a sandboxed session may connect to directly -- sccache on `127.0.0.1:4226`
+//! is the motivating use, so a sandboxed `cargo build` can reach the host's
+//! sccache server through the `rustc-wrapper` the tracked `.cargo/config.toml`
+//! sets. Each granted endpoint is matched by full `SocketAddr` equality
+//! (never a looser `is_loopback && port` rule), so a same-port decoy on another
+//! loopback address stays denied -- the same exact-match discipline the proxy
+//! uses. The supervisor performs the connect itself on the duplicated child
+//! socket (the TOCTOU-safe pattern above), so the connect runs unsandboxed;
+//! the fact that a mistyped endpoint compiles against the *host's* sccache
+//! server is an accepted, explicit decision, not an accident.
+//!
+//! `bind` stays unconditionally denied even when `loopback_connect` grants
+//! exist: if the host's sccache server is down, a sandboxed session that
+//! could `bind` to `127.0.0.1:4226` would silently start its own server there,
+//! and every subsequent *host-side* build would connect to the sandbox's
+//! server instead of the real one -- reverse contamination. Refusing `bind`
+//! turns that into a clear build error (connection refused) rather than a
+//! silent hijack.
 
 use nono::sandbox::{
     continue_notif, deny_notif, notif_id_valid, read_mmsghdr_dests, read_msghdr_dest,
@@ -22,10 +43,17 @@ use std::path::PathBuf;
 const MAX_IPC_DENIALS: usize = 1_000;
 const SOCK_TYPE_MASK: u64 = 0x0f;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum NetworkEnforcement {
     Blocked,
-    ProxyOnly(SocketAddr),
+    ProxyOnly {
+        proxy: SocketAddr,
+        /// Additional loopback TCP endpoints (from `[grants]`'s
+        /// `loopback_connect`) the sandboxed session may connect to directly,
+        /// alongside the session proxy. Each is matched by full `SocketAddr`
+        /// equality in the `SYS_CONNECT` arm below.
+        loopback_connect: Vec<SocketAddr>,
+    },
 }
 
 #[derive(Debug)]
@@ -40,7 +68,7 @@ enum AttemptedAddress {
 pub(crate) fn handle_network_notification(
     notify_fd: RawFd,
     notification: SeccompNotif,
-    enforcement: NetworkEnforcement,
+    enforcement: &NetworkEnforcement,
     denials: &mut Vec<nono::IpcDenialRecord>,
 ) -> nono::Result<()> {
     let syscall = notification.data.nr;
@@ -98,11 +126,16 @@ pub(crate) fn handle_network_notification(
             if !notif_id_valid(notify_fd, notification.id)? {
                 return Ok(());
             }
-            if let (NetworkEnforcement::ProxyOnly(proxy), AttemptedAddress::Inet(attempted)) =
-                (enforcement, &attempted)
+            if let (
+                NetworkEnforcement::ProxyOnly {
+                    proxy,
+                    loopback_connect,
+                },
+                AttemptedAddress::Inet(attempted),
+            ) = (enforcement, &attempted)
             {
-                if *attempted == proxy {
-                    return connect_trusted_endpoint(notify_fd, &notification, proxy, denials);
+                if attempted == proxy || loopback_connect.contains(attempted) {
+                    return connect_trusted_endpoint(notify_fd, &notification, *attempted, denials);
                 }
             }
             record_denial(denials, &attempted, "connect");
@@ -157,7 +190,7 @@ pub(crate) fn handle_network_notification(
 fn connect_trusted_endpoint(
     notify_fd: RawFd,
     notification: &SeccompNotif,
-    proxy: SocketAddr,
+    endpoint: SocketAddr,
     denials: &mut Vec<nono::IpcDenialRecord>,
 ) -> nono::Result<()> {
     let socket_fd = match duplicate_child_fd(notification.pid, notification.data.args[0]) {
@@ -165,7 +198,7 @@ fn connect_trusted_endpoint(
         Err(error) => {
             record_raw_denial(
                 denials,
-                proxy.to_string(),
+                endpoint.to_string(),
                 "connect",
                 format!("could not inspect the child socket: {error}"),
             );
@@ -177,9 +210,9 @@ fn connect_trusted_endpoint(
     {
         record_raw_denial(
             denials,
-            proxy.to_string(),
+            endpoint.to_string(),
             "connect",
-            "only an IPv4 TCP stream may connect to the session proxy".to_string(),
+            "only an IPv4 TCP stream may connect to a trusted loopback endpoint".to_string(),
         );
         return respond_notif_errno(notify_fd, notification.id, libc::EACCES);
     }
@@ -187,14 +220,14 @@ fn connect_trusted_endpoint(
         return Ok(());
     }
 
-    let SocketAddr::V4(proxy) = proxy else {
+    let SocketAddr::V4(endpoint) = endpoint else {
         return respond_notif_errno(notify_fd, notification.id, libc::EACCES);
     };
     let address = libc::sockaddr_in {
         sin_family: libc::AF_INET as libc::sa_family_t,
-        sin_port: proxy.port().to_be(),
+        sin_port: endpoint.port().to_be(),
         sin_addr: libc::in_addr {
-            s_addr: u32::from_ne_bytes(proxy.ip().octets()),
+            s_addr: u32::from_ne_bytes(endpoint.ip().octets()),
         },
         sin_zero: [0; 8],
     };
@@ -359,7 +392,7 @@ fn record_denial(
         denials,
         target,
         operation,
-        "the route is outside the fixed session proxy boundary".to_string(),
+        "the route is outside the session proxy and any granted loopback endpoints".to_string(),
     );
 }
 
@@ -388,5 +421,29 @@ mod tests {
         let proxy: SocketAddr = "127.0.0.1:8080".parse().unwrap();
         let decoy: SocketAddr = "127.0.0.2:8080".parse().unwrap();
         assert_ne!(proxy, decoy);
+    }
+
+    #[test]
+    fn a_granted_loopback_endpoint_matches_only_itself() {
+        let granted: SocketAddr = "127.0.0.1:4226".parse().unwrap();
+        let same_port_decoy: SocketAddr = "127.0.0.2:4226".parse().unwrap();
+        let endpoints = [granted];
+        assert!(endpoints.contains(&granted));
+        assert!(!endpoints.contains(&same_port_decoy));
+    }
+
+    #[test]
+    fn the_proxy_and_a_granted_endpoint_can_coexist_without_collapsing() {
+        let proxy: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let granted: SocketAddr = "127.0.0.1:4226".parse().unwrap();
+        let loopback_connect = [granted];
+        // The proxy is checked separately from loopback_connect; neither
+        // subsumes the other.
+        let attempted_proxy = proxy;
+        let attempted_granted = granted;
+        let attempted_decoy: SocketAddr = "127.0.0.2:4226".parse().unwrap();
+        assert!(attempted_proxy == proxy || loopback_connect.contains(&attempted_proxy));
+        assert!(attempted_granted == proxy || loopback_connect.contains(&attempted_granted));
+        assert!(attempted_decoy != proxy && !loopback_connect.contains(&attempted_decoy));
     }
 }

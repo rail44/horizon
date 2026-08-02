@@ -133,10 +133,18 @@ pub(crate) fn build_with_grants(
 
     caps = match &policy.network {
         NetworkPolicy::Disabled => caps.set_network_mode(NetworkMode::Blocked),
-        NetworkPolicy::Proxied { proxy_addr } => caps.set_network_mode(NetworkMode::ProxyOnly {
-            port: validated_proxy_port(*proxy_addr)?,
-            bind_ports: Vec::new(),
-        }),
+        NetworkPolicy::Proxied {
+            proxy_addr,
+            loopback_connect,
+        } => {
+            for endpoint in loopback_connect {
+                validate_loopback_endpoint(*endpoint)?;
+            }
+            caps.set_network_mode(NetworkMode::ProxyOnly {
+                port: validated_proxy_port(*proxy_addr)?,
+                bind_ports: Vec::new(),
+            })
+        }
     };
 
     Ok(caps.set_signal_mode(SignalMode::AllowSameSandbox))
@@ -194,6 +202,20 @@ fn validated_proxy_port(proxy_addr: SocketAddr) -> Result<u16, SandboxError> {
             Ok(addr.port())
         }
         _ => Err(SandboxError::InvalidProxyEndpoint(proxy_addr)),
+    }
+}
+
+/// Validates one `loopback_connect` endpoint at sandbox-build time, the
+/// same defense-in-depth re-check `validated_proxy_port` gives the proxy:
+/// config already validated these, but a programmatic caller could bypass
+/// config. Accepts any IPv4 loopback address (`127.0.0.0/8`) with a non-zero
+/// port -- the enforcement layer's `connect_trusted_endpoint` builds a
+/// `sockaddr_in` on a duplicated `AF_INET` socket, so only IPv4 TCP can be
+/// proxy-connected.
+fn validate_loopback_endpoint(addr: SocketAddr) -> Result<(), SandboxError> {
+    match addr {
+        SocketAddr::V4(v4) if v4.ip().is_loopback() && v4.port() != 0 => Ok(()),
+        _ => Err(SandboxError::InvalidLoopbackEndpoint(addr)),
     }
 }
 
@@ -279,6 +301,7 @@ mod tests {
             vec![],
             NetworkPolicy::Proxied {
                 proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                loopback_connect: Vec::new(),
             },
         ))
         .unwrap();
@@ -296,10 +319,46 @@ mod tests {
         for addr in ["127.0.0.2:43123", "[::1]:43123", "127.0.0.1:0"] {
             let addr = addr.parse().unwrap();
             assert!(matches!(
-                build(&policy(vec![], NetworkPolicy::Proxied { proxy_addr: addr })),
+                build(&policy(vec![], NetworkPolicy::Proxied {
+                    proxy_addr: addr,
+                    loopback_connect: Vec::new(),
+                })),
                 Err(SandboxError::InvalidProxyEndpoint(rejected)) if rejected == addr
             ));
         }
+    }
+
+    #[test]
+    fn network_proxied_rejects_invalid_loopback_connect_entries() {
+        for addr in ["10.0.0.1:4226", "[::1]:4226", "127.0.0.1:0"] {
+            let addr = addr.parse().unwrap();
+            assert!(matches!(
+                build(&policy(vec![], NetworkPolicy::Proxied {
+                    proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                    loopback_connect: vec![addr],
+                })),
+                Err(SandboxError::InvalidLoopbackEndpoint(rejected)) if rejected == addr
+            ));
+        }
+    }
+
+    #[test]
+    fn network_proxied_accepts_valid_loopback_connect_entries() {
+        let caps = build(&policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                loopback_connect: vec!["127.0.0.1:4226".parse().unwrap()],
+            },
+        ))
+        .unwrap();
+        assert_eq!(
+            *caps.network_mode(),
+            NetworkMode::ProxyOnly {
+                port: 43123,
+                bind_ports: Vec::new(),
+            }
+        );
     }
 
     #[test]
