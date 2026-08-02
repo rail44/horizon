@@ -47,6 +47,7 @@ pub enum ExecuteError {
 pub fn execute(
     mut command: Command,
     mut capabilities: CapabilitySet,
+    loopback_connect: Vec<SocketAddr>,
     close_in_child: &[RawFd],
 ) -> Result<SupervisedOutcome, ExecuteError> {
     require_single_threaded()?;
@@ -58,9 +59,10 @@ pub fn execute(
     let network_enforcement = match capabilities.network_mode() {
         NetworkMode::AllowAll => None,
         NetworkMode::Blocked => Some(NetworkEnforcement::Blocked),
-        NetworkMode::ProxyOnly { port, .. } => Some(NetworkEnforcement::ProxyOnly(SocketAddr::V4(
-            SocketAddrV4::new(Ipv4Addr::LOCALHOST, *port),
-        ))),
+        NetworkMode::ProxyOnly { port, .. } => Some(NetworkEnforcement::ProxyOnly {
+            proxy: SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, *port)),
+            loopback_connect,
+        }),
     };
 
     // SAFETY: this function rejects a multi-threaded helper before forking.
@@ -340,7 +342,7 @@ fn supervise_process_tree(
                         },
                     )?;
                 }
-                _ => match network_enforcement {
+                _ => match &network_enforcement {
                     Some(enforcement) => handle_network_notification(
                         notify_fd,
                         notification,

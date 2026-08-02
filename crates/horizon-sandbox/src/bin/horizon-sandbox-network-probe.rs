@@ -1,7 +1,7 @@
 //! Dependency-free syscall probe used by Linux containment integration tests.
 
 use std::io::Write;
-use std::net::{TcpStream, UdpSocket};
+use std::net::{TcpListener, TcpStream, UdpSocket};
 use std::os::unix::net::UnixStream;
 
 fn main() {
@@ -15,6 +15,7 @@ fn main() {
 
     let result = match mode.as_str() {
         "tcp" => TcpStream::connect(&target).map(|_| ()),
+        "bind" => TcpListener::bind(&target).map(|_| ()),
         "udp" => UdpSocket::bind("127.0.0.1:0")
             .and_then(|socket| socket.send_to(b"HORIZON-UDP-PROBE", &target).map(|_| ())),
         "unix" => UnixStream::connect(&target).map(|_| ()),

@@ -297,6 +297,7 @@ pub(crate) fn spawn_sandboxed(
     config: BashToolConfig,
     workspace_root: PathBuf,
     network: Option<Arc<SessionNetworkProxy>>,
+    loopback_connect: Vec<std::net::SocketAddr>,
     origin: SandboxedApprovalOrigin,
     filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
     git_metadata_roots: Option<Vec<PathBuf>>,
@@ -334,6 +335,7 @@ pub(crate) fn spawn_sandboxed(
                                     &cwd,
                                     &workspace_root,
                                     network.as_deref(),
+                                    &loopback_connect,
                                     &effective_grants,
                                     &config,
                                 )
@@ -360,6 +362,7 @@ pub(crate) fn spawn_sandboxed(
                         &cwd,
                         &workspace_root,
                         network.as_deref(),
+                        &loopback_connect,
                         &effective_grants,
                         &config,
                     ),

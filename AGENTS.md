@@ -149,6 +149,30 @@ lives in `.cargo/config.toml`'s comment. If backlog 43-style phantom
 errors ever reappear, suspect artifact-level sharing having crept back
 in, not sccache — sccache never shares artifacts, only compilations.
 
+**Sandboxed sessions and sccache** (owner decision 2026-08-02): a
+sandboxed agent session's `cargo build` runs with the same
+`rustc-wrapper = sccache` from the tracked `.cargo/config.toml`, but the
+sccache client connects to `127.0.0.1:4226` — a loopback endpoint the
+sandbox denies by default. A project's `[[grants.project]]` entry can
+grant `loopback_connect = ["127.0.0.1:4226"]` so the sandboxed build
+reaches the host's sccache server directly (the supervisor performs the
+connect on a duplicated child socket, so it runs unsandboxed). The
+tracked `.cargo/config.toml` also sets `SCCACHE_IDLE_TIMEOUT = "0"` so
+the auto-started server stays resident rather than shutting down after
+10 minutes of inactivity and dropping the session's connection target.
+If no server is running when a sandboxed build starts, the connection is
+refused — run any `cargo build` on the host (which auto-starts one) or
+`sccache --start-server` to start one, then retry. The fact that a
+mistyped `loopback_connect` endpoint compiles against the host's sccache
+server is an accepted, explicit decision, not an accident.
+
+**Sandboxed agent session build constraint**: your own builds inside a
+sandboxed session cannot reach sccache yet (the `loopback_connect` grant
+must be configured in *your* config file for your project first). Until
+then, bypass sccache for session-internal builds by clearing the wrapper:
+`RUSTC_WRAPPER= cargo build ...`. This is a known limitation that the
+loopback-connect feature exists to remove.
+
 ## Configuration
 
 Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`

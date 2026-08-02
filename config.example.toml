@@ -224,10 +224,25 @@ cyan = "#56b6c2"
 #           parent directory does NOT cover the projects beneath it.
 #   trees — directories granted read-write, recursively. A leading "~/" is
 #           expanded against $HOME.
+#   loopback_connect — loopback TCP endpoints ("ip:port") a sandboxed
+#           session of this project may connect to directly, alongside the
+#           session proxy. Each is matched by full ip:port equality (never a
+#           looser is_loopback rule), so a same-port decoy on another loopback
+#           address stays denied. Only IPv4 loopback (127.0.0.0/8) with a
+#           non-zero port is accepted; IPv6 and non-loopback are refused.
+#           sccache on 127.0.0.1:4226 is the intended use: the tracked
+#           .cargo/config.toml sets rustc-wrapper = sccache, and this grant
+#           lets a sandboxed `cargo build` reach the host's server. The
+#           connect is performed by the unsandboxed supervisor on a duplicated
+#           child socket (TOCTOU-safe), so a mistyped endpoint that compiles
+#           against the host's sccache server is an accepted, explicit
+#           decision -- not an accident.
 #
 # Refused with a warning on stderr (and ignored): a tree that is $HOME
-# itself, "/", or a system directory such as /usr, /etc, /var, /tmp. Those
-# would put the sandbox's whole purpose inside the grant.
+# itself, "/", or a system directory such as /usr, /etc, /var, /tmp, or a
+# loopback_connect entry that is not an IPv4 loopback address with a
+# non-zero port. Those would put the sandbox's whole purpose inside the
+# grant.
 #
 # This lives here, in YOUR config file, and deliberately not in the
 # repository: a tracked project file would let a repository you cloned widen
@@ -246,6 +261,7 @@ cyan = "#56b6c2"
 # [[grants.project]]
 # root  = "/home/you/src/github.com/you/your-project"
 # trees = ["~/.cargo"]
+# loopback_connect = ["127.0.0.1:4226"]
 
 # ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these

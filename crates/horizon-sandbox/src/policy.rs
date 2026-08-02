@@ -28,13 +28,22 @@ pub enum ReadableScope {
 /// Network posture.
 ///
 /// `Proxied` permits only the exact loopback TCP endpoint owned by the
-/// session's allowlist proxy. The client still has to speak HTTP proxy
-/// protocol; this policy enforces that ignoring proxy configuration cannot
-/// become direct egress.
+/// session's allowlist proxy, plus any additional loopback endpoints the
+/// project's `[grants]` names in `loopback_connect` (e.g. sccache on
+/// `127.0.0.1:4226`). The client still has to speak HTTP proxy protocol for
+/// ordinary egress; this policy enforces that ignoring proxy configuration
+/// cannot become direct egress. `loopback_connect` endpoints are matched
+/// by full `SocketAddr` equality -- never by a looser `is_loopback && port`
+/// rule -- so a same-port decoy on another loopback address stays denied
+/// (see the enforcement layer's module doc for the rationale).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkPolicy {
     Disabled,
-    Proxied { proxy_addr: SocketAddr },
+    Proxied {
+        proxy_addr: SocketAddr,
+        #[serde(default)]
+        loopback_connect: Vec<SocketAddr>,
+    },
 }
 
 /// A command's sandbox policy: writable roots, readable scope, network

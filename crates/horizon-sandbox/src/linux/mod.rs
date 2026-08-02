@@ -43,11 +43,22 @@ pub fn execute_supervised_helper(
     let mut command = Command::new(program);
     command.args(args);
 
+    // Extract the granted loopback endpoints from the policy so they reach
+    // `execute` independently of `NetworkMode` (nono's type carries only the
+    // single proxy port; the extra endpoints are a Horizon-side concern).
+    let loopback_connect = match &helper_policy.sandbox.network {
+        crate::policy::NetworkPolicy::Proxied {
+            loopback_connect, ..
+        } => loopback_connect.clone(),
+        crate::policy::NetworkPolicy::Disabled => Vec::new(),
+    };
+
     // SAFETY: the helper receives ownership of this descriptor across exec;
     // no other Rust owner for it exists in the helper process.
     let writer = unsafe { horizon_sandbox_runtime::ReportWriter::from_raw_fd(report_fd) };
-    let outcome = horizon_sandbox_runtime::execute(command, caps, &[writer.as_raw_fd()])
-        .map_err(SandboxError::SupervisedRuntime)?;
+    let outcome =
+        horizon_sandbox_runtime::execute(command, caps, loopback_connect, &[writer.as_raw_fd()])
+            .map_err(SandboxError::SupervisedRuntime)?;
     let exit_code = outcome.exit_code;
     writer
         .write(outcome)
