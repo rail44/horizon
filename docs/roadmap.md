@@ -547,6 +547,21 @@ lands:
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
+### Per-session git clones (structural end-state for session isolation)
+
+Recorded 2026-08-03 during the git-approval redesign. Today an isolated
+session is a linked worktree sharing the main checkout's `.git`, which is
+why git metadata writes need mediation at all (grants, judge). The
+structural end-state — matching how other agent sandboxes avoid the
+problem entirely — is a per-session local clone: a private `.git` per
+session (btrfs reflink/hardlinked objects make this near-free), the whole
+workspace writable, branch handoff by the integrator *fetching from* the
+session's repo instead of the session writing shared refs. Dissolves the
+"which files does git touch" question permanently; git version drift
+becomes irrelevant. Touches agentd worktree lifecycle, derivation
+(issue 006 semantics), cleanup, and the handoff flow — a deliberate
+migration, not a patch.
+
 ## External gates
 
 - **Restored native GPUI path on macOS** — Linux build and isolated terminal
