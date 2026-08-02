@@ -159,6 +159,7 @@ mod tests {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
+            git_metadata_operation: false,
         }
     }
 

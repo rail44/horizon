@@ -138,6 +138,18 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
         content.push('\n');
     }
 
+    if input.git_metadata_operation {
+        content.push_str(
+            "[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]\n\
+             This is a Git command that updates repository metadata. The filesystem \
+             grants above cover Git's own metadata directories, not arbitrary \
+             workspace writes. Auto-approve if the command is a routine metadata \
+             operation — a plain commit, rebase, merge, cherry-pick, add, restore, \
+             stash, branch (within the horizon/ namespace), or tag on the current \
+             repository. Escalate if it does anything unexpected or suspicious.\n\n",
+        );
+    }
+
     if input.host_execution_requested {
         content.push_str("[APPROVAL EFFECT — trusted Horizon mediation]\n");
         content.push_str(
@@ -178,6 +190,7 @@ mod tests {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
             host_execution_requested: false,
+            git_metadata_operation: false,
         }
     }
 
@@ -328,5 +341,31 @@ mod tests {
         assert!(STAGE2_SYSTEM_PROMPT.contains("VERDICT: AUTO_APPROVE"));
         assert!(STAGE2_SYSTEM_PROMPT.contains("VERDICT: ESCALATE"));
         assert!(STAGE2_SYSTEM_PROMPT.contains("JSON object"));
+    }
+
+    #[test]
+    fn git_metadata_operation_adds_a_git_guidance_region() {
+        let mut input = input(
+            "call-git",
+            serde_json::json!({ "command": "git commit -m test" }),
+        );
+        input.git_metadata_operation = true;
+        let content = user_content(&input);
+
+        let context = content
+            .find("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]")
+            .unwrap();
+        let guidance = content.find("routine metadata operation").unwrap();
+        let untrusted = content.find("<<<UNTRUSTED_ARGS_call-git>>>").unwrap();
+        assert!(
+            context < guidance && guidance < untrusted,
+            "git guidance must sit in the trusted region before the untrusted args"
+        );
+    }
+
+    #[test]
+    fn non_git_operations_omit_the_git_guidance_region() {
+        let content = user_content(&input("call-nogit", serde_json::json!({})));
+        assert!(!content.contains("Git metadata operation"));
     }
 }

@@ -112,6 +112,7 @@ impl JudgeHandle {
             requested_filesystem_grants: context.requested_filesystem_grants,
             requested_domains: context.requested_domains,
             host_execution_requested: context.host_execution_requested,
+            git_metadata_operation: context.git_metadata_operation,
         };
         if !self.limiter.try_acquire() {
             record::write_skipped(
