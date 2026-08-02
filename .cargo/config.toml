@@ -1,70 +1,36 @@
-# Shared build-dir across every worktree of this repo (main checkout, `git
-# worktree` clones, `.claude/worktrees/agent-*` workers). This file is
-# tracked in git, so every worktree checks it out independently and gets
-# the same setting without per-shell exports or a global `~/.cargo/config.toml`
-# edit.
+# Compiler-level caching across every worktree of this repo (main checkout,
+# `git worktree` clones, `.claude/worktrees/*` workers, `.horizon/worktrees/*`
+# agent sessions). This file is tracked, so every worktree checks it out and
+# gets the same setting with no per-shell exports.
 #
-# `build.build-dir` (stable since cargo 1.91) separates *intermediate*
-# build artifacts (deps/, incremental/, build script output — the bulk of
-# a Rust workspace's disk footprint) from *final* artifacts (the actual
-# binaries), which stay in the default `target-dir` (still
-# `<workspace-root>/target`, left unset here). `{cargo-cache-home}`
-# resolves to `CARGO_HOME` (typically `~/.cargo`), a fixed machine-wide
-# path — unlike a relative path, it resolves to the SAME directory
-# regardless of which worktree's `.cargo/config.toml` is read (relative
-# paths in cargo config resolve relative to that config file's own parent
-# directory, which differs per worktree, so a relative path here would
-# defeat sharing rather than enable it).
+# Each worktree builds into its own default `target/` — nothing is shared
+# at the artifact level, so cross-worktree correctness is trivial: there is
+# no file two checkouts could both claim. What IS shared is the compiler
+# work, through sccache (`build.rustc-wrapper`): dependency crates compile
+# to identical inputs in every worktree, so after one worktree has built
+# them, every other worktree's build is cache hits plus its own workspace
+# members. sccache keys on compiler inputs (never mtimes), carries its own
+# size-bounded LRU cache (`~/.config/sccache/config`), and passes
+# incremental units through uncached — which lands exactly right here:
+# cargo compiles workspace members incrementally (worktree-local by nature)
+# and dependencies non-incrementally (the shareable part).
 #
-# Workspace members do NOT get per-worktree entries by SourceId — the
-# opposite of what an earlier revision of this comment claimed. Cargo
-# deliberately strips the workspace prefix from a path source's
-# `stable_hash` ("the same source will give the same hash in different
-# locations", cargo's source_id.rs), so every worktree computes identical
-# artifact filenames for all ~20 member units, the last writer wins, and
-# freshness is mtime-based — a sibling's just-written artifact reads as
-# fresh against a worktree's older checkout mtimes. That was backlog 43/66:
-# phantom E0599/E0432 on symbols that exist, flapping test counts, tests
-# silently running a sibling's binary, and clippy passing on code that
-# violates -D warnings (all four reproduced deterministically, 2026-07-30).
+# Garbage collection is automatic by construction: removing a worktree
+# removes its `target/`, and sccache's LRU bounds the shared cache.
 #
-# `rustc-workspace-wrapper` below is the isolation mechanism: cargo hashes
-# the wrapper's path into artifact metadata for WORKSPACE MEMBERS ONLY
-# (`compute_metadata`'s `ws.is_member` gate — the only member-gated hash
-# input cargo has). The value is config-relative, so each worktree's
-# checkout of this file resolves it to a distinct absolute path, giving
-# members per-worktree artifacts while crates.io/git dependencies (duckdb,
-# arrow, tokio, gpui, ...) keep identical hashes and stay genuinely shared.
+# History (2026-07-30 → 2026-08-02): the previous scheme shared one
+# `build.build-dir` across worktrees and keyed workspace-member artifacts
+# per worktree by hashing a tracked `rustc-workspace-wrapper` path into
+# their metadata (cargo's only member-gated hash input — an implementation
+# detail, not a documented guarantee). It fixed the last-writer-wins
+# corruption (backlog 43/66) but left ~260GB of unreclaimable orphans:
+# artifact hashes cannot be mapped back to worktrees, removed worktrees'
+# member sets and their per-worktree clippy build-dirs (needed because
+# `cargo clippy` overrides the workspace wrapper via env) accumulated
+# forever. Retired in favor of this scheme once merged-session worktrees
+# started being terminated (and thus cleaned) routinely.
 #
-# The shim itself (`.cargo/rustc-shim`) is a tracked SYMLINK to
-# `/usr/bin/env`, which execs rustc with the environment untouched. It
-# must NOT be a shell script: POSIX shells (dash, the /bin/sh on Void)
-# scrub environment entries whose names are not valid shell identifiers
-# when spawning children, and cargo's `CARGO_BIN_EXE_<bin>` vars keep the
-# bin name's dashes (`CARGO_BIN_EXE_horizon-sandbox-network-probe`) — a
-# `#!/bin/sh` shim silently ate them and every integration test using
-# `env!("CARGO_BIN_EXE_...")` failed to compile (reproduced 2026-07-30).
-# The symlink's *path* is what cargo hashes, so isolation is unaffected;
-# its *target* being machine-shared is irrelevant.
-#
-# Known hole: `cargo clippy` overrides the wrapper via env
-# (RUSTC_WORKSPACE_WRAPPER=clippy-driver, same sysroot path everywhere),
-# which would collapse members back to shared hashes for the lint step —
-# so the gate's clippy invocation carries its own per-worktree build-dir
-# via --config (see hooks/pre-commit and AGENTS.md "Build setup").
-#
-# Cargo's advisory lock on the build-dir means concurrent builds
-# serialize rather than corrupt; with the wrapper isolation above they
-# are also *correct* across worktrees, not merely non-corrupting.
-#
-# One caveat this sharing does NOT change: cargo's own final-artifact
-# uplift (`cargo-util`'s `paths::link_or_copy`, called by every unit's
-# `link_targets` step, even a "fresh" one) unlinks a unit's destination
-# path before relinking it -- non-atomic, and not specific to this
-# build-dir split. A baked-in `CARGO_BIN_EXE_*` path can therefore be
-# transiently missing at the exact instant a consumer spawns it; see
-# `docs/tasks/backlog.md` #36 for the confirmed mechanism, a local
-# repro, and the mitigation in `crates/horizon-agentd/tests/e2e.rs`.
+# Requires `sccache` on PATH (`cargo install sccache`, or a distro
+# package). See AGENTS.md "Build setup".
 [build]
-build-dir = "{cargo-cache-home}/horizon-build-dir"
-rustc-workspace-wrapper = ".cargo/rustc-shim"
+rustc-wrapper = "sccache"

@@ -123,28 +123,31 @@ Machines without a system libduckdb can build with
 compiles DuckDB from source instead (slow — it's the single largest
 compile unit in this workspace).
 
-Every worktree of this repo shares one build cache: the tracked
-`.cargo/config.toml` points `build.build-dir` at
-`{cargo-cache-home}/horizon-build-dir`, so crates.io/git dependencies —
-the bulk of a from-scratch build — are built once and reused everywhere.
-No manual setup; the config is checked in. Concurrent builds serialize on
-cargo's build-dir lock rather than corrupting each other.
+Every worktree builds into its own `target/`; what is shared across
+worktrees is the *compiler work*, through sccache: the tracked
+`.cargo/config.toml` sets `build.rustc-wrapper = "sccache"`, so
+dependency crates — the bulk of a from-scratch build — compile once
+machine-wide and every other worktree's build is cache hits plus its own
+workspace members. **`sccache` must be on PATH** (`cargo install
+sccache`, or a distro package); a missing binary fails the build with a
+clear error. The cache is content-keyed (never mtime-based) and
+size-bounded LRU (`~/.config/sccache/config`, machine-local); worktree
+removal cleans that worktree's artifacts by construction, so nothing
+accumulates.
 
-The workspace's own crates are keyed per worktree by
-`build.rustc-workspace-wrapper` (`.cargo/rustc-shim`, tracked): cargo
-hashes that config-relative wrapper path into every workspace member's
-artifact metadata — the only member-gated hash input cargo has — so each
-checkout owns its member artifacts while dependencies stay shared. This
-replaced the old touch-all-sources hook defense and the "no concurrent
-gates" rule (backlog 43/66, resolved 2026-07-30): before it, two
-checkouts produced identical member artifact filenames, the last writer
-won, and mtime-based freshness handed a worktree its sibling's build,
-test binaries, and even clippy results (a real `-D warnings` violation
-measured green). One residue: `cargo clippy` overrides the wrapper via
-env, so the gate's clippy step carries a `--config` flag giving the lint
-step a per-worktree build-dir — copy the exact invocation from
-`hooks/pre-commit` if you run it by hand; a bare `cargo clippy` against
-the shared dir can still reuse a sibling's lint artifacts.
+This replaced the 2026-07-30 shared-build-dir scheme (one
+`build.build-dir` for all worktrees, member artifacts keyed per worktree
+by hashing a tracked `rustc-workspace-wrapper` path — an undocumented,
+member-gated hash input — plus a clippy-only per-worktree build-dir
+side-channel because `cargo clippy` overrides that wrapper via env).
+That scheme fixed the last-writer-wins corruption of backlog 43/66
+(phantom E0432 on symbols that exist, a sibling's test binaries running
+as yours, a real `-D warnings` violation measured green) but its orphans
+were unreclaimable — artifact hashes cannot be mapped back to worktrees
+— and ~260GB accumulated in three days. Retired 2026-08-02; the history
+lives in `.cargo/config.toml`'s comment. If backlog 43-style phantom
+errors ever reappear, suspect artifact-level sharing having crept back
+in, not sccache — sccache never shares artifacts, only compilations.
 
 ## Configuration
 

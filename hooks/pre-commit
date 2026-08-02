@@ -5,23 +5,14 @@ set -e
 echo "pre-commit: cargo fmt --check"
 cargo fmt --all -- --check
 
-# The touch-all-sources defense that used to live here (backlog 43) is
-# gone: `.cargo/config.toml`'s `rustc-workspace-wrapper` now keys every
-# workspace member's artifacts per worktree, so a sibling checkout can no
-# longer overwrite this one's build/test artifacts inside the shared
-# build-dir. Dependencies stay shared; nothing needs discarding.
-
-# `cargo clippy` overrides the workspace wrapper via env
-# (RUSTC_WORKSPACE_WRAPPER=clippy-driver, the same sysroot path in every
-# worktree), which would collapse the per-worktree isolation for the lint
-# step and let a sibling's clean check artifacts satisfy this checkout's
-# lint — measured 2026-07-30: a real -D warnings violation passed green.
-# The --config flag gives the lint step its own per-worktree build-dir
-# instead ({workspace-path-hash} resolves per checkout). Costs one cold
-# dependency check per worktree the first time; correctness over warmth.
+# Every worktree owns its whole `target/` (sharing happens at the
+# compiler level through sccache — see `.cargo/config.toml`), so there is
+# no cross-worktree artifact state for this gate to defend against: the
+# touch-all-sources loop, the wrapper keying, and the clippy-only
+# build-dir side-channel that earlier revisions of this hook carried are
+# all gone with the shared build-dir that made them necessary.
 echo "pre-commit: cargo clippy --workspace --all-targets --locked -- -D warnings"
-cargo clippy --config 'build.build-dir="{cargo-cache-home}/horizon-clippy-bd/{workspace-path-hash}"' \
-  --workspace --all-targets --locked -- -D warnings
+cargo clippy --workspace --all-targets --locked -- -D warnings
 
 # Inside a Horizon sandboxed agent session the default nextest profile
 # cannot pass (AGENTS.md): tests that probe the host boundary are skipped
