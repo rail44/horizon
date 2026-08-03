@@ -2664,50 +2664,6 @@ fn terminal_wire_vocabulary_round_trips() {
     assert_serde_round_trip(test_frame(&["before"]));
 }
 
-/// The §4 skew catch-alls on this crate's own vocabularies
-/// (`docs/remoc-adoption-design.md`): an unknown *unit* variant decodes to
-/// `Unknown` under serde_json too (the on-disk event-log side of the
-/// guarantee). Payload-carrying unknown variants only degrade under the
-/// actual wire codec (Postbag) -- serde_json's `#[serde(other)]` insists on
-/// unit content -- so those cases are proven where the codec lives, in
-/// `crates/horizon-agent/tests/skew.rs`.
-#[test]
-fn unknown_unit_wire_variants_decode_to_the_catch_all() {
-    let command: TerminalCommand =
-        serde_json::from_value(serde_json::json!("FutureUnitCommand")).unwrap();
-    assert!(matches!(command, TerminalCommand::Unknown), "{command:?}");
-
-    let update: TerminalUpdate =
-        serde_json::from_value(serde_json::json!("FutureUnitUpdate")).unwrap();
-    assert!(matches!(update, TerminalUpdate::Unknown), "{update:?}");
-}
-
-/// `Unknown` is a plain unit variant under `#[serde(other)]` (the JSONL
-/// era's deserialize-only `UnknownPayload` wrapper relied on serde's
-/// untagged buffering, which the Postbag wire codec rejects). It therefore
-/// *can* be serialized -- as the literal tag `"Unknown"`, which any peer
-/// degrades right back to its own catch-all -- but no send path ever
-/// constructs it; this test just pins the encoding so a change is loud.
-#[test]
-fn serializing_the_unknown_catch_all_writes_its_literal_tag() {
-    let encoded = serde_json::to_string(&TerminalCommand::Unknown).unwrap();
-    assert_eq!(encoded, "\"Unknown\"");
-}
-
-/// A frame whose span carries an unknown *unit* color still decodes as a
-/// frame -- the degradation is per-cell (`TerminalColor::Unknown`), not
-/// per-frame, and it self-heals on the next full frame. The
-/// payload-carrying-unknown-color case is proven under the wire codec in
-/// `crates/horizon-agent/tests/skew.rs`.
-#[test]
-fn a_span_with_an_unknown_color_still_decodes_as_a_frame() {
-    let mut value = serde_json::to_value(TerminalFrame::from_text("hi".to_string())).unwrap();
-    value["lines"][0]["spans"][0]["fg"] = serde_json::json!("Oklch");
-    let frame: TerminalFrame = serde_json::from_value(value).unwrap();
-    assert!(matches!(frame.lines[0].spans[0].fg, TerminalColor::Unknown));
-    assert_eq!(frame.text(), "hi");
-}
-
 /// Associated text is emitted only when both REPORT_ALL_KEYS_AS_ESCAPE_CODES
 /// and REPORT_ASSOCIATED_TEXT are negotiated, only for press/repeat, and only
 /// for text that contains no control characters.

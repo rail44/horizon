@@ -655,12 +655,6 @@ fn run_writer(
                 let _ = killer.lock().unwrap().kill();
                 return;
             }
-            // Skew catch-all (`TerminalCommand::Unknown`'s doc): a command
-            // this build can't name is logged and dropped -- never written
-            // to the PTY, never guessed at.
-            TerminalCommand::Unknown => {
-                eprintln!("horizon-terminald: ignoring unknown terminal command from a newer peer");
-            }
         }
     }
 }

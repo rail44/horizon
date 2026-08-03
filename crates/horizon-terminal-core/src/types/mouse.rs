@@ -22,13 +22,6 @@ pub enum TerminalSelectionKind {
     Word,
     /// Whole-line selection (a triple click or beyond).
     Line,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. Treated as
-    /// [`TerminalSelectionKind::Simple`] (the least surprising selection).
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -44,13 +37,6 @@ pub enum TerminalMouseKind {
     Press,
     Release,
     Drag,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. An unknown
-    /// mouse event kind is dropped rather than guessed at.
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -58,13 +44,6 @@ pub enum TerminalMouseButton {
     Left,
     Middle,
     Right,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. An unknown
-    /// button is dropped rather than guessed at.
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]

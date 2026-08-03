@@ -71,11 +71,6 @@ pub enum AgentWireEvent {
     /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
     /// "the edge exists only via isolation").
     WorkspaceRootResolved(WorkspaceRootResolved),
-    /// Skew catch-all — `#[serde(other)]`: an event this build can't name
-    /// decodes to `Unknown` on the Postbag wire, payload discarded (the
-    /// receiver skips it; under serde_json only unit variants degrade). Keep last.
-    #[serde(other)]
-    Unknown,
 }
 
 /// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.
@@ -216,18 +211,6 @@ mod tests {
     // v1-v18 bump history those tests carried now lives), and
     // `scripts/check-wire-schema.sh` fails any non-additive change that
     // doesn't bump `AGENT_PROTOCOL_VERSION` alongside it.
-
-    /// An event variant from a future build decodes as
-    /// [`AgentWireEvent::Unknown`] -- the §4 skew catch-all. serde_json can
-    /// only prove the unit-variant case (`#[serde(other)]` insists on unit
-    /// content there); the payload-carrying case is proven under the wire
-    /// codec in this crate's `tests/skew.rs`.
-    #[test]
-    fn unknown_unit_event_variant_decodes_to_unknown_not_an_error() {
-        let event: AgentWireEvent = serde_json::from_value(serde_json::json!("SessionTeleport"))
-            .expect("an unknown unit variant should still parse");
-        assert_eq!(event, AgentWireEvent::Unknown);
-    }
 
     /// A `SessionNew` written by a peer built before `workspace_root`
     /// existed has no such key at all -- `#[serde(default)]` must still

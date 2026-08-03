@@ -23,7 +23,7 @@
 //! local: a send error latches on the local sender, so they end the channel
 //! instead of skipping.
 
-use horizon_agent::contract::{Command, Event, SessionId};
+use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
     agent_version_range, AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse,
@@ -189,21 +189,9 @@ impl SessionHub for Hub {
         self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
         let local_events = self.connection.subscribe_agent(session_id);
-        let mut skipped_unknown = 0_u64;
         for event in self.connection.replay_events(session_id).await {
-            if !replayable(&event) {
-                skipped_unknown += 1;
-                continue;
-            }
             self.connection
                 .send_session_event(session_id, AgentWireEvent::Event(event));
-        }
-        if skipped_unknown > 0 {
-            eprintln!(
-                "horizon-agentd: withheld {skipped_unknown} unknown event(s) from \
-                 {session_id:?}'s replay (log lines written by a newer build; see \
-                 `replayable`)"
-            );
         }
         if let Some(model) = self.connection.session_model(session_id) {
             self.connection
@@ -269,19 +257,6 @@ pub(crate) fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
             eprintln!("horizon-agentd: failed to flush event log before draining: {error}");
         }
     }
-}
-
-/// Whether a log-replayed event may be forwarded onto the wire.
-/// `Event::Unknown` is a *received* degradation — a log line written by a
-/// newer build that this one can only read as "something happened" — and
-/// re-serializing it would put the literal `Unknown` tag on the wire,
-/// which no peer is ever supposed to see (the §4 catch-alls exist for
-/// *receiving*, not sending). The live path can never produce one (a
-/// session thread only emits events this build constructed); replay is
-/// the one seam where log-borne `Unknown`s could leak out, so they are
-/// withheld here and counted in the caller's log line.
-fn replayable(event: &Event) -> bool {
-    !matches!(event, Event::Unknown)
 }
 
 #[cfg(test)]

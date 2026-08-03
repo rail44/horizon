@@ -122,18 +122,12 @@ pub enum TerminalCommand {
     /// reply carries its own `viewport_offset`/`above`/`below`, so no
     /// correlation id is needed. Serving it never moves the live
     /// `display_offset` (`TerminalCore::snapshot_window`), so the live-frame
-    /// watch keeps showing the tail throughout. Additive, appended before the
-    /// `Unknown` catch-all; phase 1 wires this end-to-end daemon-side, the
-    /// client does not send it yet (§7 phase 2).
+    /// watch keeps showing the tail throughout. Phase 1 wires this
+    /// end-to-end daemon-side, the client does not send it yet (§7 phase 2).
     RequestScrollWindow {
         anchor: usize,
         height: usize,
     },
-    /// Skew catch-all — `#[serde(other)]`: a command this build can't name
-    /// decodes to `Unknown` (its payload, if any, is discarded — "an
-    /// unknown command is ignored" is the intended semantic). Keep last.
-    #[serde(other)]
-    Unknown,
 }
 
 /// The non-frame terminal events, carried on the attachment's `events`
@@ -160,16 +154,9 @@ pub enum TerminalUpdate {
     /// is self-describing (`viewport_offset`/`above`/`below`), so it carries
     /// no correlation id, and its payload is a struct
     /// ([`TerminalScrollWindow`]) — no wire enum in element position, keeping
-    /// the postbag positional discipline. Additive, appended before the
-    /// `Unknown` catch-all; phase 1 produces it daemon-side, the client does
-    /// not consume it yet (§7 phase 2).
+    /// the postbag positional discipline. Phase 1 produces it daemon-side,
+    /// the client does not consume it yet (§7 phase 2).
     ScrollWindow(TerminalScrollWindow),
-    /// Skew catch-all — `#[serde(other)]`: an update this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last.
-    #[serde(other)]
-    Unknown,
 }
 
 /// Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.
@@ -182,10 +169,6 @@ pub enum TerminalUpdate {
 pub enum ClipboardDestination {
     Clipboard,
     Primary,
-    /// Skew catch-all — `#[serde(other)]`: a destination this build can't
-    /// name decodes to `Unknown`. Keep last.
-    #[serde(other)]
-    Unknown,
 }
 
 /// Demuxed selection sub-commands (`TerminalCommand::SelectionStart`/
