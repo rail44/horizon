@@ -171,11 +171,12 @@ paths, stream-flush cadence, history/instructions budgets — plus
 `[provider]` `temperature`/`max_tokens`, `[terminal]`
 `line_height`/`term`/`shell`/`shell_args`/`scrollback_lines`, `[ui]`
 `window_width`/`window_height`) is now a fixed built-in default or
-constant; a config file that still sets one of those retired keys gets a
-"no longer configurable" warning on stderr naming the key (an unrecognized
-key in a *known* section instead gets a "probable typo" warning) — both
-implemented once, in `crates/horizon-config`, so every process that loads
-the file gets them. `crates/horizon-agent`'s event log/DuckDB-projection
+constant; a config file that still sets one of those retired keys gets the
+same "probable typo" warning on stderr as any other unrecognized key in a
+*known* section (this project carries no separate retired-key compat
+warning — owner decision 2026-08-03) — implemented once, in
+`crates/horizon-config`, so every process that loads the file gets it.
+`crates/horizon-agent`'s event log/DuckDB-projection
 paths keep an environment-only override
 (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
 all; `HORIZON_AGENT_JUDGE_MODEL` (the enforcing judge's model id) and

@@ -75,7 +75,7 @@ Setting one of the retired role keys (`text_primary`, `text_muted`,
 `border_subtle`, `diff_added_surface`, `diff_added_text`,
 `diff_removed_surface`, `diff_removed_text`, `terminal_foreground`,
 `terminal_background`, `terminal_cursor`, `cursor_accent`) is warned about
-on stderr as no longer configurable and ignored -- it does not fail the
+on stderr as an unrecognized key and ignored -- it does not fail the
 write or crash Horizon, but double-check before writing one of these; the
 user's intent almost certainly needs the seed adjusted instead.
 
@@ -117,8 +117,9 @@ red, green, yellow, blue, magenta, cyan
 2026-07-16 (`black`/`white` track the resolved background/foreground;
 `bright_black` tracks `text_subtle`; the six colored `bright_*` hues and
 `bright_white` are a fixed lightness push off their normal counterpart).
-Setting any of them is warned about on stderr as no longer configurable
-and ignored, same as a retired `[theme]` role key above.
+`[theme.ansi]` is a typed struct with no unrecognized-key detection (unlike
+`[theme]` above), so setting one of these ten is silently ignored -- no
+stderr warning at all.
 
 ## `[keybindings]` -- chord string to command id
 

@@ -433,9 +433,8 @@ pub(super) fn scheme_from(raw: &RawConfig) -> Scheme {
     // polarity (black becomes a light color on a light scheme), not a
     // swap of which role gets which endpoint. Neither slot (nor any other
     // slot below) reads a `[theme.ansi]` override any more -- `black`/
-    // `white`/`bright_*` are derived-only since 2026-07-16
-    // (`REMOVED_ANSI_SLOTS`); only the six hue slots above stay
-    // configurable.
+    // `white`/`bright_*` are derived-only since 2026-07-16; only the six
+    // hue slots above stay configurable.
     let ansi_black = if seed_configured {
         background
     } else {
