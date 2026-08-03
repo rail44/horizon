@@ -489,15 +489,15 @@ fn tool_call_id(id: &str) -> ToolCallId {
 fn key_argument(arguments: &serde_json::Value) -> Option<String> {
     PLACEHOLDER_ARGUMENT_KEYS.iter().find_map(|key| {
         let value = arguments.get(key)?.as_str()?;
-        Some(format!("{key}=\"{}\"", truncate_chars(value)))
+        let (truncated, was_cut) =
+            crate::transcript::truncate_chars(value, PLACEHOLDER_ARGUMENT_CHARS);
+        let value = if was_cut {
+            format!("{truncated}…")
+        } else {
+            truncated
+        };
+        Some(format!("{key}=\"{value}\""))
     })
-}
-
-fn truncate_chars(value: &str) -> String {
-    match value.char_indices().nth(PLACEHOLDER_ARGUMENT_CHARS) {
-        Some((end, _)) => format!("{}…", &value[..end]),
-        None => value.to_string(),
-    }
 }
 
 fn tool_result_chars(result: &ToolResult) -> u64 {

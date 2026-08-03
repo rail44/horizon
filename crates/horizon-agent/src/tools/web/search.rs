@@ -127,7 +127,7 @@ impl SearchAdapter for ExaAdapter {
             let body = redact_secret(body.trim(), &self.api_key);
             return Err(format!(
                 "Exa search returned HTTP {status}: {}",
-                truncate_chars(&body, 2_000)
+                crate::transcript::truncate_chars(&body, 2_000).0
             ));
         }
         let response: ExaSearchResponse = serde_json::from_slice(&bytes)
@@ -145,23 +145,29 @@ impl SearchAdapter for ExaAdapter {
             };
             let content = redact_secret(&content, &self.api_key);
             let budget = remaining.min(request.max_characters);
-            let content = truncate_chars(&content, budget);
+            let content = crate::transcript::truncate_chars(&content, budget).0;
             remaining = remaining.saturating_sub(content.chars().count());
             results.push(SearchResult {
-                title: truncate_chars(
+                title: crate::transcript::truncate_chars(
                     &redact_secret(&result.title.unwrap_or_default(), &self.api_key),
                     MAX_TITLE_CHARACTERS,
-                ),
+                )
+                .0,
                 url,
                 content,
                 published_date: result.published_date.map(|value| {
-                    truncate_chars(
+                    crate::transcript::truncate_chars(
                         &redact_secret(&value, &self.api_key),
                         MAX_PUBLISHED_DATE_CHARACTERS,
                     )
+                    .0
                 }),
                 author: result.author.map(|value| {
-                    truncate_chars(&redact_secret(&value, &self.api_key), MAX_AUTHOR_CHARACTERS)
+                    crate::transcript::truncate_chars(
+                        &redact_secret(&value, &self.api_key),
+                        MAX_AUTHOR_CHARACTERS,
+                    )
+                    .0
                 }),
             });
             if remaining == 0 {
@@ -305,12 +311,6 @@ async fn read_capped(response: &mut reqwest::Response, limit: usize) -> Result<V
         body.extend_from_slice(&chunk);
     }
     Ok(body)
-}
-
-fn truncate_chars(text: &str, max: usize) -> String {
-    text.char_indices()
-        .nth(max)
-        .map_or_else(|| text.to_string(), |(end, _)| text[..end].to_string())
 }
 
 fn normalize_result_url(value: String) -> Option<String> {
