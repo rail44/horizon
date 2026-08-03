@@ -43,11 +43,38 @@ a different mechanism from 014's PTY frame wait and 015's overlap
 threshold, but the same operational signature: **only ever fails in a
 full-suite run, never in isolation.**
 
-Worth treating as one investigation rather than three: whatever
-per-test isolation or settling the suite is missing, it is now visible
-in three unrelated subsystems (terminal frames, bash scheduling, DuckDB
-projection). A fix that only patches one test's threshold leaves the
-other two.
+**Investigated 2026-08-03 — they are independent, not one cause.** Under
+one identical load window the three degraded at 19% / 1.0% / 0%, and the
+mechanisms differ in kind. Issue 014 turned out to be a production
+teardown bug (moved there, root-caused); what remains here is this
+timing test plus the recall failure, and both need their own treatment:
+
+- **This test's bound cannot simply be raised.** 96 samples under heavy
+  load put the internal elapsed at ~830ms p-max against the 900ms bound
+  — close, but the field's failing value was 1003ms, which for two 500ms
+  sleeps is *indistinguishable from full serialization*. A larger
+  constant would gut the contract being asserted. The fix direction is
+  to assert the contract directly: capture each call's start/finish
+  instants and assert the intervals overlap.
+- **The recall failure is not an empty result — the search errored.**
+  Reproduced 1/96. The panic lands at `recall/tests.rs:378` ("hits
+  array"), and `search()` returns either an object with a `hits` array
+  or `error_output(...)`, which has no `hits` key at all; an empty array
+  would still be an array and would fail later at line 383. So
+  `store.search_history(...)` returned `Err`. That also rules out the
+  projection-visibility guess: `append_event` inserts *and* projects
+  synchronously on the same connection the test then reads through —
+  there is no writer thread or flush cadence in between. **What the
+  error was is still unknown**, because the assertion discards `output`.
+  First step is to include `output` in that assertion's message so the
+  next occurrence names the DuckDB error; no behavioural fix until then.
+
+**Fourth load-sensitive test, found in the same pass:**
+`horizon-terminal-core session_loop::tests::mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification`
+(`session_loop.rs:597`) failed 2/10 loaded full-suite runs — a higher
+rate than any of the original three. It mixes fixed 500ms positive waits
+with a 100ms *negative* wait against a 16ms coalescing timer
+(`COALESCE_WINDOW`), so load can trip it in either direction.
 
 All the occurrences so far come from full-workspace runs — dogfood
 session gates and integrator gates alike — where a concurrent build or

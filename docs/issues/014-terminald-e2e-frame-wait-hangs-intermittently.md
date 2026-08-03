@@ -1,66 +1,85 @@
 ---
 id: 014
-title: terminald e2e frame wait hangs intermittently and burns the full 120s timeout
-status: open
-severity: medium
-area: terminald, tests
+title: A terminal session that tears down with unread PTY bytes never tells its client it exited
+status: triaged
+severity: high
+area: terminald
 ---
 
 ## Repro
-Intermittent — not reliably reproducible. Observed twice on 2026-07-31
-while gating a branch in a freshly created review worktree:
+Reproducible on demand at ~19% per attempt (2026-08-03 investigation).
+The essential ingredient is running the terminald e2e binary's tests
+*concurrently* — which `.config/nextest.toml`'s `daemon-e2e` group
+normally forbids, and which is why the gate only ever saw this by
+accident:
 
-1. `git worktree add --detach <path> origin/main`, merge a branch into it.
-2. Run the gate: `cargo fmt --check`, then `cargo clippy --config
-   'build.build-dir=…'  --workspace --all-targets`, then
-   `cargo nextest run --workspace --locked`.
-3. `horizon-terminald::e2e
-   terminal_create_frame_reconnect_attach_and_shutdown_over_the_real_socket`
-   fails after exactly `TERMINAL_UPDATE_TIMEOUT` (120s).
+```sh
+cargo nextest run --workspace --no-run              # warm build
+BIN=$(ls target/debug/deps/e2e-*)                   # horizon-terminald::e2e
+for c in 1 2 3 4; do (timeout 140 "$BIN" --test-threads=6) & done; wait
+```
+
+That alone reproduces at ~5%. Adding host CPU oversubscription (a
+`nproc`-wide busy loop plus a concurrent release build) raises it to
+~19% (3 of 16 test-instances). Every failure panics at
+`crates/horizon-terminald/tests/e2e.rs:167` — the post-`Shutdown` exit
+wait — at 120.4-120.8s, with `events seen meanwhile: []`.
 
 ## Observed
-The test writes `printf 'HORIZON_DIFF_MARKER\n'` into a real PTY and
-waits for a frame carrying the marker
-(`collect_terminal_frame_until`, `crates/horizon-terminald/tests/e2e.rs`).
-The wait exhausts the full 120s bound and the run fails, while the other
-~1660 tests in the same invocation complete in their usual ~20s — so it
-is one hung wait, not a uniformly slow run.
+The client waits out the full `TERMINAL_UPDATE_TIMEOUT` (120s) for a
+session that has already fully torn down. Live process capture during
+two hangs: the daemon is alive with idle tokio workers, the shell child
+is an unreaped zombie, the daemon holds **no PTY fds at all**, and every
+session thread has exited. The session is gone; only the client was
+never told.
 
 ## Expected
-Either the frame arrives (as it does in the overwhelming majority of
-runs — the same test passes in 0.5s in isolation), or the failure names
-something actionable. A 120s stall that only shows up occasionally makes
-every gate run a coin flip and costs two minutes each time it lands.
+A session that ends tells its client, on every teardown path. A pane
+whose session dies should never sit waiting forever — and in production
+that is exactly what this bug does to it, silently.
+
+## Root cause
+`crates/horizon-terminald/src/terminal.rs`, two early returns that skip
+the notification their sibling arms send:
+
+1. `Shutdown` makes `run_writer` kill the child and return, dropping the
+   `CoreSenders`.
+2. `run_terminal_core` sees the control channel disconnect and returns,
+   dropping `pty_rx`.
+3. `read_pty` is still blocked on the PTY master. **If bytes are in
+   flight** (the shell's post-`printf` prompt, delayed under load),
+   `read()` returns `Ok(n > 0)` and takes
+   `if pty_tx.send(...).is_err() { return; }` — returning **without
+   sending `Exited`**, unlike the `Ok(0)` and `Err(_)` arms which both
+   send it.
+4. `update_rx` then disconnects with no `Exited` ever queued, and
+   `forward_updates` takes `let Ok(update) = update else { return; }` —
+   returning **without removing the subscriber**, unlike the `Exited`
+   arm right below it which removes session and subscriber under one
+   lock.
+5. The subscriber stays in `host.subscribers` holding live senders, so
+   the hub's event-bridge task stays parked in `local_events.recv()`
+   forever. The client's channel is neither closed nor written to.
+
+When `read()` instead returns `Ok(0)`/`Err` — no bytes in flight, the
+common case on an idle machine — `Exited` is sent and everything
+finishes in 0.5s. That is the whole intermittency: load widens the
+window in which trailing bytes are still arriving.
 
 ## Notes
-Attribution attempts (2026-07-31), none conclusive:
+This issue was originally filed (2026-07-31) as a test-timing flake, on
+the assumption that the hang was in the marker wait
+(`collect_terminal_frame_until`). That was inference, not observation —
+no panic line was recorded at the time. All five reproductions in the
+2026-08-03 investigation panic at the *exit* wait instead, and the root
+cause above does not explain a stall at the marker wait, where the shell
+is still alive and emitting. **If a future occurrence panics at
+`e2e.rs:220`, treat it as a separate bug.**
 
-| condition | tree | result |
-|---|---|---|
-| gate sequence, fresh worktree, cold clippy (6m42s) | branch | FAIL |
-| gate sequence, warm clippy | branch | FAIL |
-| the single test alone | branch | PASS (0.5s) |
-| `nextest` alone, quiet machine | branch | PASS |
-| `nextest` alone, concurrent with a second full suite | branch | PASS |
-| gate sequence ×2, warm | branch | PASS, PASS |
-| `nextest` alone / forced rebuild / fresh worktree cold compile | main | PASS ×3 |
-| gate sequence, fresh worktree, cold clippy (7m43s) | main | PASS |
+Not the `portable-pty` fork-safety hazard (backlog #31): the daemon's
+stderr showed no "spawn attempt … did not report back" line in any
+reproduction.
 
-The branch under test (issue 013's CLI/shell lineage change) touches no
-`horizon-terminald` or `horizon-terminal-core` code at all, so there is
-no mechanism linking it to this test; it was merged after this
-investigation (`78d6276`), and the post-merge gate on `main` passed.
-Both failures happened in a worktree created minutes earlier, but a
-deliberately reproduced cold-worktree + cold-clippy run on `main` did
-not fail, so "cold worktree" is not established as the trigger either.
-
-`.config/nextest.toml` already serializes the `daemon-e2e` group
-(`max-threads = 1`) and its comment states that contention from
-*outside* the nextest invocation is beyond what that can address —
-machine load is the leading hypothesis but was not reproduced on demand.
-
-Worth considering when someone picks this up: the 120s bound is what
-makes an occasional stall expensive. A shorter per-`changed()` bound
-with a bounded retry, or dumping the last frame plus the daemon's
-stderr on timeout, would at least make the next occurrence diagnosable
-instead of costing two minutes and yielding no information.
+The sibling flakes tracked in `docs/issues/015` were investigated in the
+same pass and are **independent** of this one — under one identical load
+window they degraded at 19% / 1.0% / 0%, with different mechanisms.
