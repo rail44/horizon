@@ -434,6 +434,31 @@ fn approved_bash_calls_for_the_same_session_are_serialized() {
     let _ = std::fs::remove_file(&sentinel);
 }
 
+/// Extract the start/end timestamps (seconds since epoch, as `f64`) that the
+/// `date +%s.%N; sleep ...; date +%s.%N` probe command prints to stdout, so the
+/// caller can assert interval overlap directly instead of relying on a
+/// wall-clock total that cannot distinguish overlap from near-serialization
+/// under load (docs/issues/015).
+fn probe_interval(result: &ToolCallResult) -> (f64, f64) {
+    let stdout = result.output["output"]
+        .as_str()
+        .unwrap_or_else(|| panic!("expected stdout string in output, got: {:?}", result.output));
+    let mut lines = stdout.lines();
+    let start = lines
+        .next()
+        .unwrap_or_else(|| panic!("missing start timestamp in stdout: {stdout:?}"))
+        .trim()
+        .parse::<f64>()
+        .unwrap_or_else(|e| panic!("invalid start timestamp: {e} (stdout: {stdout:?})"));
+    let end = lines
+        .next()
+        .unwrap_or_else(|| panic!("missing end timestamp in stdout: {stdout:?}"))
+        .trim()
+        .parse::<f64>()
+        .unwrap_or_else(|e| panic!("invalid end timestamp: {e} (stdout: {stdout:?})"));
+    (start, end)
+}
+
 /// A different session's bash calls must not be held up by an unrelated
 /// session's FIFO -- serialization is per-session, not global.
 #[test]
@@ -441,11 +466,16 @@ fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
     let cwd = cwd_handle(std::env::temp_dir());
     let (tx, rx) = crossbeam_channel::unbounded();
 
-    let started = Instant::now();
+    // Each command prints its own start and end timestamps (seconds since
+    // epoch) to stdout, so the test can capture per-call intervals and assert
+    // they overlap directly. A wall-clock total cannot distinguish true
+    // overlap from near-serialization under load -- 1003 ms for two 500 ms
+    // calls is indistinguishable from full serialization (docs/issues/015).
+    let probe = "date +%s.%N; sleep 0.5; date +%s.%N";
     super::spawn(
         SessionId::new(),
         ToolCallId("other-session-1".to_string()),
-        json!({ "command": "sleep 0.5" }),
+        json!({ "command": probe }),
         cwd.clone(),
         config(),
         tx.clone(),
@@ -453,20 +483,40 @@ fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
     super::spawn(
         SessionId::new(),
         ToolCallId("other-session-2".to_string()),
-        json!({ "command": "sleep 0.5" }),
+        json!({ "command": probe }),
         cwd,
         config(),
         tx,
     );
 
-    let _ = rx.recv_timeout(Duration::from_secs(5)).expect("first call");
-    let _ = rx
-        .recv_timeout(Duration::from_secs(5))
+    // Generous hang-protection ceiling (each call should take ~0.5 s), kept
+    // separate from the overlap contract below.
+    let first = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("first call");
+    let second = rx
+        .recv_timeout(Duration::from_secs(10))
         .expect("second call");
+
+    let first = expect_finished(first);
+    let second = expect_finished(second);
+
+    // Completions may arrive in either order (the two sessions are truly
+    // concurrent) -- correlate by call_id.
+    let (a, b) = if first.call_id == ToolCallId("other-session-1".to_string()) {
+        (first, second)
+    } else {
+        (second, first)
+    };
+
+    let (start_a, end_a) = probe_interval(&a);
+    let (start_b, end_b) = probe_interval(&b);
+
     assert!(
-        started.elapsed() < Duration::from_millis(900),
-        "two different sessions' 0.5s calls should overlap, not serialize to ~1s: {:?}",
-        started.elapsed()
+        start_a < end_b && start_b < end_a,
+        "two different sessions' calls should overlap in time, not serialize: \
+         session-1 [{start_a:.6}, {end_a:.6}] s, \
+         session-2 [{start_b:.6}, {end_b:.6}] s"
     );
 }
 
