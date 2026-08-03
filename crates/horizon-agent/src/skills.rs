@@ -350,9 +350,7 @@ pub(crate) fn execute_read(
     }
 }
 
-fn error_output(message: impl Into<String>) -> serde_json::Value {
-    serde_json::json!({ "is_error": true, "message": message.into() })
-}
+use crate::tools::error_output;
 
 #[cfg(test)]
 mod tests {

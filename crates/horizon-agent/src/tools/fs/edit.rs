@@ -116,18 +116,18 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         }),
         Some((index, message)) => {
             let not_attempted = edits.len() - index - 1;
-            json!({
-                "is_error": true,
-                "message": format!(
-                    "edit at index {index} failed: {message}. {applied_count} earlier edit(s) \
-                     were applied and remain on disk; {not_attempted} later edit(s) were not \
-                     attempted — re-read the affected files and resend from index {index}."
-                ),
-                "failed_index": index,
-                "edits": outcomes,
-                "applied_count": applied_count,
-                "file_count": file_count,
-            })
+            let mut value = error_output(format!(
+                "edit at index {index} failed: {message}. {applied_count} earlier edit(s) \
+                 were applied and remain on disk; {not_attempted} later edit(s) were not \
+                 attempted — re-read the affected files and resend from index {index}."
+            ));
+            if let Some(map) = value.as_object_mut() {
+                map.insert("failed_index".to_string(), json!(index));
+                map.insert("edits".to_string(), json!(outcomes));
+                map.insert("applied_count".to_string(), json!(applied_count));
+                map.insert("file_count".to_string(), json!(file_count));
+            }
+            value
         }
     }
 }

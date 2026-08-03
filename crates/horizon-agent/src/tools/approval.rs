@@ -8,6 +8,7 @@ use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
 use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
+use crate::tools::error_output;
 use crate::tools::state::{session_runtime, SessionRuntime};
 use crate::transcript::SUPERSEDED_BY_RETRY;
 
@@ -229,10 +230,7 @@ fn resolve_web_fetch(
         return synchronous_result(
             runtime,
             &request.call_id,
-            json!({
-                "is_error": true,
-                "message": "web_fetch approval did not carry a supported domain grant"
-            }),
+            error_output("web_fetch approval did not carry a supported domain grant"),
             false,
         );
     };
@@ -241,7 +239,7 @@ fn resolve_web_fetch(
         return synchronous_result(
             runtime,
             &request.call_id,
-            json!({ "is_error": true, "message": "web_fetch domain grant was empty" }),
+            error_output("web_fetch domain grant was empty"),
             false,
         );
     }
@@ -254,7 +252,7 @@ fn resolve_web_fetch(
         return synchronous_result(
             runtime,
             &request.call_id,
-            json!({ "is_error": true, "message": "web_fetch domain grant failed revalidation" }),
+            error_output("web_fetch domain grant failed revalidation"),
             false,
         );
     };
@@ -356,19 +354,13 @@ fn resolve_bash(
         ApprovalKind::SandboxDenialRetry => synchronous_result(
             runtime,
             &request.call_id,
-            json!({
-                "is_error": true,
-                "message": "This containment denial does not name a safe narrow grant; retrying without the sandbox is disabled."
-            }),
+            error_output("This containment denial does not name a safe narrow grant; retrying without the sandbox is disabled."),
             false,
         ),
         ApprovalKind::DomainGrant { .. } => synchronous_result(
             runtime,
             &request.call_id,
-            json!({
-                "is_error": true,
-                "message": "A host-side domain grant cannot authorize a bash command."
-            }),
+            error_output("A host-side domain grant cannot authorize a bash command."),
             false,
         ),
         ApprovalKind::Standard => {
@@ -748,11 +740,7 @@ fn unstarted_error(
         .frame()
         .tool_call_request(call_id)
         .and_then(|request| request.occurrence_id.clone());
-    let result = ToolCallResult::new(
-        call_id.clone(),
-        occurrence_id,
-        json!({ "is_error": true, "message": message }),
-    );
+    let result = ToolCallResult::new(call_id.clone(), occurrence_id, error_output(message));
     let events = vec![Event::ToolCallFinished(result.clone())];
     let frame = runtime
         .live_state
@@ -765,7 +753,7 @@ fn unstarted_error(
 }
 
 fn denied_output() -> Value {
-    json!({ "is_error": true, "message": "denied by user" })
+    error_output("denied by user")
 }
 
 /// Folds a synchronous tool result into the session's live frame — the

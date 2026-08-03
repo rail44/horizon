@@ -95,5 +95,51 @@ pub(crate) fn execute_approved(
     }
 }
 
+/// Constructs the wire-visible tool error-output shape
+/// `{"is_error": true, "message": ...}`. `ToolCallResult::new`
+/// (`contract.rs`) and the DuckDB projection both read `output`'s
+/// `"is_error"` key to derive the typed `is_error` field, so every tool
+/// result that represents a failure must carry this shape in its `output`
+/// JSON. Callers that need additional fields (`output`, `truncated`, etc.)
+/// build on the returned base value by inserting into its object map.
+pub(crate) fn error_output(message: impl Into<String>) -> serde_json::Value {
+    serde_json::json!({ "is_error": true, "message": message.into() })
+}
+
+#[cfg(test)]
+mod error_output_tests {
+    use super::error_output;
+    use serde_json::json;
+
+    #[test]
+    fn base_shape_is_error_with_message() {
+        let value = error_output("something went wrong");
+        assert_eq!(
+            value,
+            json!({ "is_error": true, "message": "something went wrong" })
+        );
+    }
+
+    #[test]
+    fn extra_fields_on_top_of_base() {
+        let mut value = error_output("partial failure");
+        if let Some(map) = value.as_object_mut() {
+            map.insert("output".to_string(), json!("captured text"));
+            map.insert("truncated".to_string(), json!(true));
+            map.insert("output_file".to_string(), json!("/tmp/spill.txt"));
+        }
+        assert_eq!(
+            value,
+            json!({
+                "is_error": true,
+                "message": "partial failure",
+                "output": "captured text",
+                "truncated": true,
+                "output_file": "/tmp/spill.txt",
+            })
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -9,6 +9,7 @@ use crate::policy::{
     Classification,
 };
 use crate::tools::config;
+use crate::tools::error_output;
 use crate::tools::fs;
 use crate::tools::recall;
 use crate::tools::state::{session_runtime, ToolSessionState};
@@ -127,10 +128,10 @@ fn execute_boundary_tool(
         return Execution::Auto(vec![Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
             request.occurrence_id.clone(),
-            json!({
-                "is_error": true,
-                "message": format!("{} has no registered session runtime", request.tool_id),
-            }),
+            error_output(format!(
+                "{} has no registered session runtime",
+                request.tool_id
+            )),
         ))]);
     };
     let events = vec![
@@ -155,10 +156,7 @@ fn unknown_tool_output(tool_id: &str) -> serde_json::Value {
         .map(|definition| definition.id)
         .collect::<Vec<_>>()
         .join(", ");
-    json!({
-        "is_error": true,
-        "message": format!("Unknown tool `{tool_id}`; available: {available}."),
-    })
+    error_output(format!("Unknown tool `{tool_id}`; available: {available}."))
 }
 
 /// Auto-executes a tier-1-`Contained` `RequireApproval` call -- the
