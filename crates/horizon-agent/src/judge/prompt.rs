@@ -145,8 +145,9 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
              grants above cover Git's own metadata directories, not arbitrary \
              workspace writes. Auto-approve if the command is a routine metadata \
              operation — a plain commit, rebase, merge, cherry-pick, add, restore, \
-             stash, branch (within the horizon/ namespace), or tag on the current \
-             repository. Escalate if it does anything unexpected or suspicious.\n\n",
+             stash, branch (within the horizon/ namespace), tag, or a fetch or pull \
+             (specifying a remote name and a branch name) on the current repository. \
+             Escalate if it does anything unexpected or suspicious.\n\n",
         );
     }
 
@@ -356,10 +357,13 @@ mod tests {
             .find("[APPROVAL CONTEXT — Git metadata operation — trusted Horizon mediation]")
             .unwrap();
         let guidance = content.find("routine metadata operation").unwrap();
+        let fetch = content.find("fetch").unwrap();
+        let pull = content.find("pull").unwrap();
         let untrusted = content.find("<<<UNTRUSTED_ARGS_call-git>>>").unwrap();
         assert!(
-            context < guidance && guidance < untrusted,
-            "git guidance must sit in the trusted region before the untrusted args"
+            context < guidance && guidance < fetch && fetch < pull && pull < untrusted,
+            "git guidance must sit in the trusted region before the untrusted args, \
+             naming fetch and pull as routine metadata operations"
         );
     }
 

@@ -333,6 +333,14 @@ const PREFILTER_DANGEROUS_SUBCOMMANDS: &[&str] = &[
     "credential",
 ];
 
+/// URL-scheme prefixes that, when a token begins with one, mean a Git command
+/// names a remote by a raw URL (or `ext::`/`file::` transport) rather than a
+/// configured remote name. Such a URL can point at an attacker-controlled host,
+/// so the prefilter routes it to the human instead of letting the judge
+/// evaluate it.
+const PREFILTER_URL_SCHEMES: &[&str] =
+    &["ext::", "file::", "http://", "https://", "ssh://", "git://"];
+
 /// Determines whether a Git metadata operation may go to the enforcing judge
 /// or must be asked of a human directly.
 ///
@@ -382,6 +390,21 @@ pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
                 "a Git option that can redirect execution or configuration \
                  (-c, --config-env, --exec-path, --upload-pack, --receive-pack, \
                  --git-dir, or --work-tree)",
+            );
+        }
+    }
+    // A directly-specified URL (any supported scheme) names an
+    // attacker-controllable host instead of a configured remote; route to the
+    // human so the judge never evaluates a raw URL.
+    for arg in &words[git_index + 1..] {
+        if PREFILTER_URL_SCHEMES
+            .iter()
+            .any(|scheme| arg.starts_with(scheme))
+        {
+            return GitPrefilterVerdict::HumanDirect(
+                "a Git command with a directly-specified URL \
+                 (ext::, file::, http://, https://, ssh://, or git://) \
+                 instead of a configured remote name",
             );
         }
     }
@@ -698,6 +721,38 @@ mod tests {
             "git commit -m \"fix: handle x > y\"",
         ];
         for command in plain {
+            assert_eq!(
+                git_prefilter(command),
+                GitPrefilterVerdict::PassToJudge,
+                "expected PassToJudge for: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn prefilter_routes_schemed_urls_to_human_but_plain_fetch_to_judge() {
+        // A directly-specified URL (any scheme) names an attacker-controllable
+        // host and must go to the human; a fetch/pull naming a configured
+        // remote and branch passes to the judge.
+        let schemed = [
+            "git fetch http://example.com/repo main",
+            "git fetch https://example.com/repo main",
+            "git fetch ssh://example.com/repo main",
+            "git fetch git://example.com/repo main",
+            "git fetch file::/tmp/repo main",
+            "git fetch ext::cmd main",
+            "git pull http://example.com/repo main",
+            "git clone https://example.com/repo",
+            "git fetch origin http://evil.com/x",
+        ];
+        for command in schemed {
+            assert!(
+                matches!(git_prefilter(command), GitPrefilterVerdict::HumanDirect(_)),
+                "expected HumanDirect for: {command}"
+            );
+        }
+        // Normal form — remote name + branch name — passes to the judge.
+        for command in ["git fetch origin main", "git pull origin main"] {
             assert_eq!(
                 git_prefilter(command),
                 GitPrefilterVerdict::PassToJudge,
