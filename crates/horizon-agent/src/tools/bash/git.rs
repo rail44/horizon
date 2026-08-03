@@ -50,10 +50,29 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
     "whatchanged",
 ];
 
+/// A shell separator that [`tokenize`] surfaces between words. The
+/// sequential-execution variants (`And`, `Or`, `Semicolon`, `Newline`) split a
+/// command into independently-classifiable segments; the rest (`Pipe`,
+/// `Background`, `OpenParen`, `CloseParen`) are data-crossing or
+/// code-structuring and route to the human rather than being split on (owner
+/// decision 2026-08-03: a widened `.git` grant must never carry a non-git
+/// segment, and a pipe/subshell smuggles arbitrary code across that grant).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum Separator {
+    And,
+    Or,
+    Semicolon,
+    Newline,
+    Pipe,
+    Background,
+    OpenParen,
+    CloseParen,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ShellToken {
     Word(String),
-    Boundary,
+    Separator(Separator),
 }
 
 /// Whether a bash tool input contains a directly-recognizable Git invocation
@@ -87,7 +106,7 @@ fn command_requires_metadata_write(command: &str) -> bool {
     for token in tokenize(command) {
         match token {
             ShellToken::Word(word) => segment.push(word),
-            ShellToken::Boundary => {
+            ShellToken::Separator(_) => {
                 if segment_requires_metadata_write(&segment) {
                     return true;
                 }
@@ -257,17 +276,44 @@ pub(super) fn tokenize(command: &str) -> Vec<ShellToken> {
                     }
                 }
                 ' ' | '\t' | '\r' => push_word(&mut tokens, &mut word),
-                '\n' | ';' | '|' | '&' | '(' | ')' => {
+                '\n' => {
                     push_word(&mut tokens, &mut word);
-                    tokens.push(ShellToken::Boundary);
-                    if matches!(ch, '|' | '&') && chars.peek() == Some(&ch) {
+                    tokens.push(ShellToken::Separator(Separator::Newline));
+                }
+                ';' => {
+                    push_word(&mut tokens, &mut word);
+                    tokens.push(ShellToken::Separator(Separator::Semicolon));
+                }
+                '(' => {
+                    push_word(&mut tokens, &mut word);
+                    tokens.push(ShellToken::Separator(Separator::OpenParen));
+                }
+                ')' => {
+                    push_word(&mut tokens, &mut word);
+                    tokens.push(ShellToken::Separator(Separator::CloseParen));
+                }
+                '|' => {
+                    push_word(&mut tokens, &mut word);
+                    if chars.peek() == Some(&'|') {
                         chars.next();
+                        tokens.push(ShellToken::Separator(Separator::Or));
+                    } else {
+                        tokens.push(ShellToken::Separator(Separator::Pipe));
+                    }
+                }
+                '&' => {
+                    push_word(&mut tokens, &mut word);
+                    if chars.peek() == Some(&'&') {
+                        chars.next();
+                        tokens.push(ShellToken::Separator(Separator::And));
+                    } else {
+                        tokens.push(ShellToken::Separator(Separator::Background));
                     }
                 }
                 '#' if word.is_empty() => {
                     for next in chars.by_ref() {
                         if next == '\n' {
-                            tokens.push(ShellToken::Boundary);
+                            tokens.push(ShellToken::Separator(Separator::Newline));
                             break;
                         }
                     }
@@ -341,42 +387,46 @@ const PREFILTER_DANGEROUS_SUBCOMMANDS: &[&str] = &[
 const PREFILTER_URL_SCHEMES: &[&str] =
     &["ext::", "file::", "http://", "https://", "ssh://", "git://"];
 
-/// Determines whether a Git metadata operation may go to the enforcing judge
-/// or must be asked of a human directly.
+/// Per-segment classification used by [`git_prefilter`] (owner decision
+/// 2026-08-03: the prefilter analyzes commands segment-by-segment rather than
+/// rejecting every compound outright).
 ///
-/// This is a cheap, deterministic first stage in front of the LLM judge
-/// (owner decision 2026-08-03): the handful of shell and Git constructs that
-/// can redirect execution or smuggle in arbitrary code always go to the
-/// human, while a plain `git commit` / `rebase` / `merge` / etc. passes to
-/// the judge for a verdict. The function is pure — it tokenizes the command
-/// string with the existing [`tokenize`] lexer and inspects the result, with
-/// no I/O and no access to the judge or the sandbox.
-pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
-    // Shell redirects (`>` `<`) and command substitution (`$(` backtick) are
-    // not surfaced as `Boundary` by `tokenize`; detect them here, quote-aware.
-    if contains_shell_redirect_or_substitution(command) {
-        return GitPrefilterVerdict::HumanDirect(
-            "a shell pipe, redirect, command substitution, or compound command",
-        );
-    }
-    // A compound command (`;` `&&` `||` `|` newline `(` `)`) produces more
-    // than one segment.
-    let segments = segments_of(command);
-    if segments.len() > 1 {
-        return GitPrefilterVerdict::HumanDirect(
-            "a shell pipe, redirect, command substitution, or compound command",
-        );
-    }
-    let words = &segments[0];
+/// A GitOperation approval re-runs the **whole** command under a widened grant
+/// (`.git` + the worktree gitdir become writable). The safety invariant this
+/// design protects is: **no non-git segment may ride that widened grant** — a
+/// non-git command, or a git command carrying a dangerous construct, would
+/// run with `.git` write access it should never have (e.g. writing a hook for
+/// later host execution). The classification below encodes that invariant:
+///
+/// - `ReadOnly` — a read-only git command with no dangerous construct.
+/// - `MetadataWrite` — a metadata-writing git command with no dangerous
+///   construct (safe to run under the widened grant; the judge decides).
+/// - `Other` — anything else: a non-git command, an unrecognized shape, or a
+///   git command carrying a dangerous construct (dangerous options,
+///   dangerous subcommands, URL schemes, env-var prefix, unrecognized global
+///   options). Carries the static reason for the `HumanDirect` verdict.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SegmentClass {
+    ReadOnly,
+    MetadataWrite,
+    Other(&'static str),
+}
+
+/// Classifies a single command segment for [`git_prefilter`].
+///
+/// This is the per-segment extraction of the single-segment analysis the
+/// prefilter used to run on the whole command: env-var prefix, dangerous
+/// global options, URL schemes, dangerous subcommands, and unknown global
+/// flags all yield `Other`; a plain read-only or metadata-writing subcommand
+/// yields `ReadOnly` or `MetadataWrite` respectively.
+fn classify_segment(words: &[String]) -> SegmentClass {
     let Some(git_index) = git_executable_index(words) else {
-        return GitPrefilterVerdict::HumanDirect("an unrecognized command shape");
+        return SegmentClass::Other("an unrecognized command shape");
     };
     // Environment-variable assignment prefix before `git` (VAR=x git ...).
     for word in &words[..git_index] {
         if is_assignment(word) {
-            return GitPrefilterVerdict::HumanDirect(
-                "an environment-variable assignment prefix before `git`",
-            );
+            return SegmentClass::Other("an environment-variable assignment prefix before `git`");
         }
     }
     // Dangerous Git options anywhere after `git` (global or subcommand-level).
@@ -386,7 +436,7 @@ pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
                 .iter()
                 .any(|prefix| arg.starts_with(prefix))
         {
-            return GitPrefilterVerdict::HumanDirect(
+            return SegmentClass::Other(
                 "a Git option that can redirect execution or configuration \
                  (-c, --config-env, --exec-path, --upload-pack, --receive-pack, \
                  --git-dir, or --work-tree)",
@@ -394,14 +444,13 @@ pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
         }
     }
     // A directly-specified URL (any supported scheme) names an
-    // attacker-controllable host instead of a configured remote; route to the
-    // human so the judge never evaluates a raw URL.
+    // attacker-controllable host instead of a configured remote.
     for arg in &words[git_index + 1..] {
         if PREFILTER_URL_SCHEMES
             .iter()
             .any(|scheme| arg.starts_with(scheme))
         {
-            return GitPrefilterVerdict::HumanDirect(
+            return SegmentClass::Other(
                 "a Git command with a directly-specified URL \
                  (ext::, file::, http://, https://, ssh://, or git://) \
                  instead of a configured remote name",
@@ -427,44 +476,145 @@ pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
             | "--version"
             | "--help" => index += 1,
             value if value.starts_with('-') => {
-                return GitPrefilterVerdict::HumanDirect("an unrecognized Git global option");
+                return SegmentClass::Other("an unrecognized Git global option");
             }
             subcommand => {
                 if PREFILTER_DANGEROUS_SUBCOMMANDS.contains(&subcommand)
                     || subcommand.starts_with("filter-")
                 {
-                    return GitPrefilterVerdict::HumanDirect(
+                    return SegmentClass::Other(
                         "a Git subcommand that can execute arbitrary code or modify \
                          trust settings (config, hook, filter-branch, filter-repo, \
                          or credential)",
                     );
                 }
-                break;
+                return if READ_ONLY_SUBCOMMANDS.contains(&subcommand) {
+                    SegmentClass::ReadOnly
+                } else {
+                    SegmentClass::MetadataWrite
+                };
             }
         }
     }
-    GitPrefilterVerdict::PassToJudge
+    // `git` with no subcommand (e.g. bare `git` or `git --no-pager`). The
+    // detector treats this as read-only, so it only reaches the prefilter when
+    // another segment was metadata-writing; classify as metadata-writing so
+    // the judge sees it rather than silently treating it as harmless.
+    SegmentClass::MetadataWrite
 }
 
-/// Splits a command into shell segments separated by `tokenize`'s `Boundary`
-/// tokens, each segment a list of words.
-fn segments_of(command: &str) -> Vec<Vec<String>> {
-    let mut segments = Vec::new();
-    let mut segment = Vec::new();
+/// Whether `words` is a leading `cd <path>` — exactly `cd` followed by a
+/// single path argument, no options. The prefilter allows this as a no-op
+/// prefix on the **first** segment only (owner decision 2026-08-03): `cd`
+/// itself does nothing here, and even if it pointed at a different repository
+/// the widened grant stays pinned to the session's repository, so the sandbox
+/// fail-closed rejects any cross-repository write.
+fn is_leading_cd(words: &[String]) -> bool {
+    words.len() == 2 && words.first().is_some_and(|w| w == "cd")
+}
+
+/// Determines whether a Git metadata operation may go to the enforcing judge
+/// or must be asked of a human directly.
+///
+/// This is a cheap, deterministic first stage in front of the LLM judge
+/// (owner decision 2026-08-03): the handful of shell and Git constructs that
+/// can redirect execution or smuggle in arbitrary code always go to the
+/// human, while a plain `git commit` / `rebase` / `merge` / etc. passes to
+/// the judge for a verdict. The function is pure — it tokenizes the command
+/// string with the existing [`tokenize`] lexer and inspects the result, with
+/// no I/O and no access to the judge or the sandbox.
+///
+/// # Per-segment analysis (owner decision 2026-08-03)
+///
+/// The command is split on the **sequential** separators (`&&`, `||`, `;`,
+/// newline) into segments, each classified independently:
+///
+/// - `(a)` read-only git — [`SegmentClass::ReadOnly`]
+/// - `(b)` metadata-writing git with no dangerous construct —
+///   [`SegmentClass::MetadataWrite`]
+/// - `(c)` anything else (non-git, or git with a dangerous construct) —
+///   [`SegmentClass::Other`] carrying a static reason.
+///
+/// Pipe (`|`), background (`&`), and subshell parens (`(` `)`) are **data
+/// crossing or code structuring**, not sequential execution — they route to
+/// the human immediately rather than being split (a widened `.git` grant
+/// would carry whatever code sits on the far side of a pipe or inside a
+/// subshell). Shell redirects (`>` `<`) and command substitution (`$(`
+/// backtick) are likewise immediate-`HumanDirect`; `tokenize` does not surface
+/// them as separators, so they are detected by the quote-aware
+/// [`contains_shell_redirect_or_substitution`] scan first.
+///
+/// As an exception, the **first** segment may be `cd <path>` (see
+/// [`is_leading_cd`]): it is a no-op here, and the grant stays pinned to the
+/// session's repository so the sandbox fail-closed rejects cross-repo writes.
+///
+/// Overall verdict:
+/// - any `(c)` segment → `HumanDirect` (the invariant: no non-git code rides
+///   the widened `.git` grant);
+/// - all segments `(a)` (+ optional leading `cd`) → `PassToJudge` — a
+///   read-only-only compound reaches the judge rather than the human;
+/// - any `(b)` with the rest all `(a)`/`(b)` (+ optional leading `cd`) →
+///   `PassToJudge`; the judge sees the full command text.
+pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
+    // Shell redirects (`>` `<`) and command substitution (`$(` backtick) are
+    // not surfaced as separators by `tokenize`; detect them first, quote-aware.
+    // These are data crossing / code structuring — never split on them.
+    if contains_shell_redirect_or_substitution(command) {
+        return GitPrefilterVerdict::HumanDirect("a shell redirect or command substitution");
+    }
+
+    // Walk the typed tokens, splitting only on the sequential separators
+    // (&& || ; newline). Pipe, background, and subshell parens route to the
+    // human instead of splitting a segment.
+    let mut segments: Vec<Vec<String>> = Vec::new();
+    let mut segment: Vec<String> = Vec::new();
     for token in tokenize(command) {
         match token {
             ShellToken::Word(word) => segment.push(word),
-            ShellToken::Boundary => {
+            ShellToken::Separator(Separator::And)
+            | ShellToken::Separator(Separator::Or)
+            | ShellToken::Separator(Separator::Semicolon)
+            | ShellToken::Separator(Separator::Newline) => {
                 segments.push(std::mem::take(&mut segment));
+            }
+            ShellToken::Separator(Separator::Pipe)
+            | ShellToken::Separator(Separator::Background)
+            | ShellToken::Separator(Separator::OpenParen)
+            | ShellToken::Separator(Separator::CloseParen) => {
+                return GitPrefilterVerdict::HumanDirect(
+                    "a shell pipe, background job, or subshell",
+                );
             }
         }
     }
-    segments.push(segment);
-    segments
+    segments.push(std::mem::take(&mut segment));
+
+    let mut has_metadata_write = false;
+    for (index, words) in segments.iter().enumerate() {
+        // The first segment may be a leading `cd <path>` no-op.
+        if index == 0 && is_leading_cd(words) {
+            continue;
+        }
+        match classify_segment(words) {
+            SegmentClass::Other(reason) => {
+                return GitPrefilterVerdict::HumanDirect(reason);
+            }
+            SegmentClass::MetadataWrite => has_metadata_write = true,
+            SegmentClass::ReadOnly => {}
+        }
+    }
+    // `has_metadata_write` is true whenever the detector flagged this command
+    // as a GitOperation (that is why the prefilter runs at all); a read-only-only
+    // compound would not reach here because the detector returned false. The
+    // verdict is the same either way — `PassToJudge` — so the flag is only kept
+    // to make the intent legible: a metadata-writing segment is present and the
+    // judge should see the full command.
+    let _ = has_metadata_write;
+    GitPrefilterVerdict::PassToJudge
 }
 
 /// Detects shell redirects (`>`, `<`) and command substitution (`$(`,
-/// backtick) that `tokenize` does not surface as `Boundary`. Single-quoted
+/// backtick) that `tokenize` does not surface as separators. Single-quoted
 /// content is skipped (literal in the shell); double-quoted content is scanned
 /// for `$(` and backtick, which the shell still expands there.
 fn contains_shell_redirect_or_substitution(command: &str) -> bool {
@@ -663,6 +813,10 @@ mod tests {
             "echo 'git commit -m nope'",
             "printf '%s' git commit",
             "command -v git commit",
+            // A compound whose every segment is read-only is not a Git
+            // metadata operation at all: the detector returns false, so the
+            // command runs as ordinary contained bash (no approval, no judge).
+            "git rev-parse --show-toplevel && git status --short && git log --oneline -5",
         ] {
             assert!(!command_requires_metadata_write(command), "{command}");
         }
@@ -684,13 +838,18 @@ mod tests {
             "GIT_DIR=/tmp git commit -m x",
             "FOO=bar git commit -m x",
             "env FOO=bar git commit -m x",
-            // Shell metacharacters.
+            // Pipe, redirect, and command substitution are data crossing / code
+            // structuring, not sequential execution — route to the human.
             "git commit -m x | cat",
-            "git commit -m x && git push",
-            "git commit -m x; git push",
+            "git log | head",
             "git commit -m x > log",
+            "git log > f",
             "git commit -m \"$(whoami)\"",
-            // Dangerous subcommands.
+            // A non-git segment riding the widened .git grant.
+            "git commit -m x && cargo test",
+            // A dangerous subcommand in a later segment.
+            "git commit -m x && git config user.name x",
+            // Dangerous subcommands (single segment).
             "git config user.name x",
             "git hook run pre-commit",
             "git filter-branch --all",
@@ -706,6 +865,7 @@ mod tests {
     #[test]
     fn prefilter_passes_plain_git_metadata_operations_to_judge() {
         let plain = [
+            // Single-segment plain operations.
             "git commit -m test",
             "git rebase main",
             "git merge feature",
@@ -719,6 +879,18 @@ mod tests {
             "git --no-pager commit -m test",
             "git commit --amend",
             "git commit -m \"fix: handle x > y\"",
+            // Compound commands whose segments are all git (read-only or
+            // metadata-writing) pass to the judge — the invariant (no non-git
+            // code rides the widened .git grant) is satisfied.
+            "git commit -m x && git push",
+            "git commit -m x; git push",
+            "git add -A && git commit -m x",
+            // A leading `cd <path>` no-op is allowed on the first segment.
+            "cd /path && git add -A",
+            // A compound with a metadata-writing segment (branch is
+            // fail-closed: not in READ_ONLY_SUBCOMMANDS) among read-only ones
+            // still passes to the judge rather than the human.
+            "git rev-parse --show-toplevel && git branch --show-current && git status --short",
         ];
         for command in plain {
             assert_eq!(

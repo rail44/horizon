@@ -28,7 +28,7 @@ fn command_has_unscoped_clean(command: &str) -> bool {
     for token in tokenize(command) {
         match token {
             ShellToken::Word(word) => segment.push(word),
-            ShellToken::Boundary => {
+            ShellToken::Separator(_) => {
                 if segment_has_unscoped_clean(&segment) {
                     return true;
                 }

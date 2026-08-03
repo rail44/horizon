@@ -341,6 +341,23 @@ product-owned API. Decisions:
   complex spellings the classifier misses receive no proactive grant. Details
   and the accepted common-gitdir breadth are in
   `docs/containment-denial-narrow-grants-design.md`.
+- **Git prefilter is per-segment** (owner decision 2026-08-03): the
+  deterministic prefilter in front of the LLM judge no longer rejects every
+  compound command outright. It splits on the sequential separators (`&&`,
+  `||`, `;`, newline) and classifies each segment independently: read-only
+  git, metadata-writing git with no dangerous construct, or anything else
+  (non-git, or git carrying a dangerous construct). The safety invariant is
+  that no non-git segment may ride the widened `.git` grant a GitOperation
+  approval re-runs the whole command under — so a single `Other` segment routes
+  to the human. A compound of plain git operations (read-only or
+  metadata-writing) passes to the judge, which sees the full command text.
+  Pipe (`|`), background (`&`), subshell parens, redirects, and command
+  substitution still route to the human immediately (data crossing / code
+  structuring, not sequential execution). A leading `cd <path>` on the first
+  segment is allowed as a no-op (the grant stays pinned to the session's
+  repository). The judge prompt notes that a sequence of plain git operations
+  joined by `&&` or `;` is equally routine. The recognizer that decides whether
+  a command is a GitOperation at all was already per-segment and is unchanged.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests
