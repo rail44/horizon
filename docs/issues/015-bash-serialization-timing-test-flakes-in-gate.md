@@ -47,8 +47,10 @@ Worth treating as one investigation rather than three: whatever
 per-test isolation or settling the suite is missing, it is now visible
 in three unrelated subsystems (terminal frames, bash scheduling, DuckDB
 projection). A fix that only patches one test's threshold leaves the
-other two. Two
-occurrences are both from dogfood-session gates, where a concurrent
-integrator gate or build on the host is common — exactly the
-contention `.config/nextest.toml`'s daemon-e2e comment says per-binary
+other two.
+
+All the occurrences so far come from full-workspace runs — dogfood
+session gates and integrator gates alike — where a concurrent build or
+a second gate on the host is common: exactly the contention
+`.config/nextest.toml`'s daemon-e2e comment says per-binary
 serialization cannot protect against.
