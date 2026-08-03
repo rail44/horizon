@@ -363,6 +363,21 @@ impl TerminalHost {
         }
     }
 
+    /// Removes the session from `sessions` and its subscriber from
+    /// `subscribers`, delivering `Exited` to the subscriber's events bridge.
+    /// Ordering matters (see `install_subscriber`'s doc): the session
+    /// leaves `sessions` first, so a concurrent attach either sees it gone
+    /// or is already installed when the exit is delivered — and delivery +
+    /// removal happen under one `subscribers` guard so no install can slip
+    /// between them and lose the exit.
+    fn tear_down_session(&self, session_id: Uuid) {
+        self.sessions.lock().unwrap().remove(&session_id);
+        let mut subscribers = self.subscribers.lock().unwrap();
+        if let Some(subscriber) = subscribers.remove(&session_id) {
+            let _ = subscriber.events.send(TerminalUpdate::Exited);
+        }
+    }
+
     /// Fans the session loop's two output channels out to the current
     /// subscriber: full frames onto its `frames` bridge (and the retained
     /// latest frame), non-frame events onto its `events` bridge. Since wire
@@ -399,22 +414,19 @@ impl TerminalHost {
                     },
                     recv(update_rx) -> update => {
                         let Ok(update) = update else {
+                            // `update_rx` closed with no `Exited` — every
+                            // `update_tx` is gone (the reader thread dropped
+                            // its clone, the core thread dropped its own).
+                            // The session is dead all the same: tear it down
+                            // exactly as the `Exited` arm would, or the
+                            // subscriber keeps a live sender and the bridge
+                            // pump waits on a half-closed channel forever.
+                            host.tear_down_session(session_id);
                             return;
                         };
                         match update {
                             TerminalUpdate::Exited => {
-                                // Ordering matters (see `install_subscriber`'s
-                                // doc): the session leaves `sessions` first,
-                                // so a concurrent attach either sees it gone
-                                // or is already installed when the exit is
-                                // delivered — and delivery + removal happen
-                                // under one `subscribers` guard so no install
-                                // can slip between them and lose the exit.
-                                host.sessions.lock().unwrap().remove(&session_id);
-                                let mut subscribers = host.subscribers.lock().unwrap();
-                                if let Some(subscriber) = subscribers.remove(&session_id) {
-                                    let _ = subscriber.events.send(TerminalUpdate::Exited);
-                                }
+                                host.tear_down_session(session_id);
                                 return;
                             }
                             other => host.send_event(session_id, other),
@@ -548,6 +560,22 @@ fn spawn_terminal(
     ))
 }
 
+/// Pumps the PTY master's output into the session core, emitting
+/// [`TerminalUpdate::Exited`] on every exit path so
+/// [`TerminalHost::forward_updates`] can tear the session down.
+///
+/// All three `read` outcomes must deliver `Exited`: the clean EOF (`Ok(0)`)
+/// and the error arm already do, and the `Ok(n > 0)` arm must too. When the
+/// core loop owning `pty_rx` tears down first — a `Shutdown` reached
+/// `run_writer`, which killed the child and dropped the `CoreSenders`,
+/// ending `run_terminal_core` and thus `pty_rx` — the next read can still
+/// return bytes buffered in the PTY, so `pty_tx.send` fails. Without an
+/// `Exited` here that path returns silently; `update_rx` then closes with
+/// no `Exited` ever sent, leaving the subscriber on a live-but-silent
+/// channel forever (the pane never learns the session ended).
+/// [`TerminalHost::forward_updates`] mirrors the same teardown on its
+/// channel-close arm, so even a missed `Exited` still reaps the session
+/// and subscriber — hence both fixes.
 fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<TerminalUpdate>) {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
@@ -558,6 +586,12 @@ fn read_pty(reader: &mut dyn Read, pty_tx: Sender<Vec<u8>>, update_tx: Sender<Te
             }
             Ok(read) => {
                 if pty_tx.send(buffer[..read].to_vec()).is_err() {
+                    // The core loop (which owns `pty_rx`) is gone — the
+                    // session is tearing down. Emit `Exited` like the EOF
+                    // and error arms so `forward_updates` learns the
+                    // session ended instead of waiting on a half-closed
+                    // channel forever.
+                    let _ = update_tx.send(TerminalUpdate::Exited);
                     return;
                 }
             }
@@ -760,6 +794,87 @@ mod tests {
             loser_command_rx.try_recv(),
             Ok(TerminalCommand::Shutdown),
             "the losing session's background loop must be told to shut down"
+        );
+    }
+
+    /// The lost-`Exited` window: the core loop owning `pty_rx` is already
+    /// gone, but the PTY still has unread bytes, so `read` returns
+    /// `Ok(n > 0)` and `pty_tx.send` fails. The arm must still deliver
+    /// `Exited` before returning — otherwise `forward_updates` learns the
+    /// session ended only from the channel close, and the pane that
+    /// expected an `Exited` hangs.
+    #[test]
+    fn read_pty_emits_exited_when_pty_receiver_is_gone_mid_read() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded::<Vec<u8>>();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded::<TerminalUpdate>();
+        // The core loop that owns the receiving half is gone.
+        drop(pty_rx);
+
+        // One buffered byte makes the first `read` return `Ok(1)` (not the
+        // `Ok(0)` EOF arm), so the send-failure path is the one exercised.
+        let mut reader = std::io::Cursor::new(vec![b'x'; 1]);
+        read_pty(&mut reader, pty_tx, update_tx);
+
+        assert_eq!(update_rx.try_recv(), Ok(TerminalUpdate::Exited));
+        // Nothing else is queued, and the sender is gone.
+        assert!(update_rx.try_recv().is_err());
+    }
+
+    /// `update_rx` can close with no `Exited` ever sent (the reader arm
+    /// above is the fix that prevents it, but the close arm must still be
+    /// safe). When it does, the disconnect arm must reap the session and
+    /// the subscriber just like the explicit `Exited` arm — otherwise the
+    /// subscriber keeps a live sender and the bridge pump waits on a
+    /// half-closed channel forever.
+    #[tokio::test]
+    async fn forward_updates_reaps_session_and_subscriber_when_update_channel_closes() {
+        let host = TerminalHost::new();
+        let session_id = Uuid::new_v4();
+
+        let (session, _command_rx, _killed) = fake_session();
+        assert!(host.install_if_vacant(session_id, session));
+        let (exists, channels) = host.install_subscriber(session_id);
+        assert!(
+            exists,
+            "the session must be present for the subscriber to attach"
+        );
+        let mut events = channels.events;
+
+        // Empty, already-closed frame channel; the update channel is the
+        // one whose close drives the teardown arm.
+        let (_, frame_rx) = crossbeam_channel::unbounded::<TerminalFrame>();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded::<TerminalUpdate>();
+        host.forward_updates(session_id, frame_rx, update_rx);
+
+        // Close the update channel without ever sending `Exited`.
+        drop(update_tx);
+
+        // The forwarder thread reaps asynchronously; poll until both maps
+        // no longer carry the session (bounded so a regression fails
+        // instead of hanging the suite).
+        let mut reaped = false;
+        for _ in 0..200 {
+            if !host.sessions.lock().unwrap().contains_key(&session_id)
+                && !host.subscribers.lock().unwrap().contains_key(&session_id)
+            {
+                reaped = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            reaped,
+            "the session and subscriber must be removed when the update channel closes without Exited"
+        );
+
+        // The teardown also delivers `Exited` to the subscriber's events
+        // bridge, so a pane waiting on it sees the exit rather than
+        // hanging forever.
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), events.recv())
+                .await
+                .expect("Exited must be delivered promptly"),
+            Some(TerminalUpdate::Exited)
         );
     }
 }
