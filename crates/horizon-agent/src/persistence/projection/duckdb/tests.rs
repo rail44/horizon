@@ -629,214 +629,6 @@ fn rebuild_projects_real_event_timestamps_into_event_at_column() {
     );
 }
 
-/// A `.duckdb` file from before `event_at` existed has `agent_events`
-/// in its old shape (`created_at TIMESTAMP NOT NULL DEFAULT now()`, no
-/// `event_at`). `CREATE TABLE IF NOT EXISTS` alone would leave it
-/// exactly as-is; `Store::open` must detect the stale shape and
-/// migrate it before the store is usable.
-#[test]
-fn migrates_pre_event_at_agent_events_table_on_open() {
-    let path = std::env::temp_dir().join(format!(
-        "horizon-agent-legacy-schema-{}.duckdb",
-        Uuid::new_v4()
-    ));
-    let session_id = SessionId::new();
-    let session_id_text = session_id_text(session_id).expect("session id text");
-
-    {
-        // Hand-build the pre-`event_at` schema (see `schema.rs`'s
-        // comment for the shape it replaced) and seed it with a stale
-        // row, modeling a real leftover file from an older Horizon
-        // build.
-        let legacy = Connection::open(&path).expect("open legacy connection");
-        legacy
-            .execute_batch(
-                "CREATE TABLE agent_events (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    turn_id TEXT,
-                    sequence BIGINT NOT NULL,
-                    event_kind TEXT NOT NULL,
-                    horizon_event_json TEXT NOT NULL,
-                    provider_id TEXT,
-                    provider_payload_json TEXT,
-                    created_at TIMESTAMP NOT NULL DEFAULT now(),
-                    UNIQUE(session_id, sequence)
-                );",
-            )
-            .expect("create legacy table");
-        legacy
-            .execute(
-                "INSERT INTO agent_events (
-                    event_id, session_id, turn_id, sequence, event_kind, horizon_event_json
-                ) VALUES ('stale-event', ?, NULL, 0, 'state_changed', '\"stale\"')",
-                params![&session_id_text],
-            )
-            .expect("seed legacy row");
-    }
-
-    // `Store::open` runs the migration before `INITIALIZE_SCHEMA_SQL`.
-    let store = Store::open(&path).expect("open store over legacy file");
-
-    let has_event_at: i64 = store
-        .conn
-        .query_row(
-            "SELECT COUNT(*) FROM information_schema.columns
-             WHERE table_name = 'agent_events' AND column_name = 'event_at'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("check migrated column");
-    assert_eq!(has_event_at, 1, "migration must add the event_at column");
-
-    let stale_row_count: i64 = store
-        .conn
-        .query_row("SELECT COUNT(*) FROM agent_events", [], |row| row.get(0))
-        .expect("count rows after migration");
-    assert_eq!(
-        stale_row_count, 0,
-        "migration drops and recreates the stale table; the old row does not survive \
-         (the rebuild that always follows in production repopulates it from JSONL)"
-    );
-
-    // The store keeps working normally post-migration: a real rebuild
-    // still lands the JSONL record's real timestamp in `event_at`.
-    store
-        .replace_from_event_log_records([crate::persistence::event_log::Record {
-            schema: crate::persistence::event_log::AGENT_EVENT_LOG_SCHEMA.to_string(),
-            version: crate::persistence::event_log::AGENT_EVENT_LOG_VERSION,
-            event_id: "event-after-migration".to_string(),
-            sequence: 0,
-            session_id,
-            turn_id: None,
-            provider_id: None,
-            role_id: None,
-            session_context: None,
-            event_kind: "state_changed".to_string(),
-            event: Event::StateChanged(SessionState::Running),
-            provider_payload: None,
-            created_at_unix_ms: 1_700_000_000_000,
-        }])
-        .expect("replace from records after migration");
-
-    let event_at_ms: i64 = store
-        .conn
-        .query_row(
-            "SELECT epoch_ms(event_at) FROM agent_events WHERE event_id = 'event-after-migration'",
-            [],
-            |row| row.get(0),
-        )
-        .expect("query event_at after migration");
-    assert_eq!(event_at_ms, 1_700_000_000_000);
-
-    let _ = std::fs::remove_file(path);
-}
-
-/// A `.duckdb` file from before this task's label columns/table existed
-/// (`agent_events`/`agent_sessions` without `role_id`,
-/// `agent_tool_results` without `is_error`, `agent_approvals` without
-/// `outcome`, no `agent_turns` at all) must be detected and migrated on
-/// open, the same way as the pre-`event_at` case above -- see
-/// `Store::migrate_legacy_agent_events_schema`'s doc comment.
-#[test]
-fn migrates_a_pre_label_schema_missing_the_new_columns_and_table_on_open() {
-    let path = std::env::temp_dir().join(format!(
-        "horizon-agent-legacy-label-schema-{}.duckdb",
-        Uuid::new_v4()
-    ));
-    let session_id = SessionId::new();
-    let session_id_text = session_id_text(session_id).expect("session id text");
-
-    {
-        // Hand-build the pre-label-columns shape (this task's schema
-        // minus role_id/is_error/outcome/agent_turns) and seed a stale
-        // row, modeling a real leftover file from before this build.
-        let legacy = Connection::open(&path).expect("open legacy connection");
-        legacy
-            .execute_batch(
-                "CREATE TABLE agent_sessions (
-                    session_id TEXT PRIMARY KEY,
-                    provider_id TEXT,
-                    last_sequence BIGINT NOT NULL DEFAULT -1,
-                    updated_at TIMESTAMP NOT NULL DEFAULT now()
-                );
-                CREATE TABLE agent_events (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    turn_id TEXT,
-                    sequence BIGINT NOT NULL,
-                    event_kind TEXT NOT NULL,
-                    horizon_event_json TEXT NOT NULL,
-                    provider_id TEXT,
-                    provider_payload_json TEXT,
-                    event_at TIMESTAMP NOT NULL,
-                    UNIQUE(session_id, sequence)
-                );
-                CREATE TABLE agent_tool_results (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    sequence BIGINT NOT NULL,
-                    call_id TEXT NOT NULL,
-                    output_json TEXT NOT NULL
-                );
-                CREATE TABLE agent_approvals (
-                    event_id TEXT PRIMARY KEY,
-                    session_id TEXT NOT NULL,
-                    sequence BIGINT NOT NULL,
-                    call_id TEXT NOT NULL,
-                    reason TEXT NOT NULL
-                );",
-            )
-            .expect("create legacy tables");
-        legacy
-            .execute(
-                "INSERT INTO agent_events (
-                    event_id, session_id, turn_id, sequence, event_kind, horizon_event_json,
-                    event_at
-                ) VALUES ('stale-event', ?, NULL, 0, 'state_changed', '\"stale\"', now())",
-                params![&session_id_text],
-            )
-            .expect("seed legacy row");
-    }
-
-    let store = Store::open(&path).expect("open store over legacy label schema");
-    assert!(
-        store.migrated_legacy_schema(),
-        "a pre-label schema must be reported as migrated"
-    );
-
-    for (table, column) in [
-        ("agent_events", "role_id"),
-        ("agent_sessions", "role_id"),
-        ("agent_tool_results", "is_error"),
-        ("agent_approvals", "outcome"),
-        ("agent_tool_calls", "occurrence_id"),
-        ("agent_tool_results", "occurrence_id"),
-        ("agent_approvals", "occurrence_id"),
-    ] {
-        assert!(
-            column_exists(&store.conn, table, column).expect("check migrated column"),
-            "{table}.{column} must exist after migration"
-        );
-    }
-    assert!(
-        table_exists(&store.conn, "agent_turns").expect("check agent_turns table"),
-        "agent_turns must be created by migration"
-    );
-
-    let stale_row_count: i64 = store
-        .conn
-        .query_row("SELECT COUNT(*) FROM agent_events", [], |row| row.get(0))
-        .expect("count rows after migration");
-    assert_eq!(
-        stale_row_count, 0,
-        "migration drops and recreates the stale tables; the rebuild that always follows \
-         in production repopulates them from JSONL"
-    );
-
-    let _ = std::fs::remove_file(path);
-}
-
 /// Builds one `Record` with every label-relevant field filled in, to
 /// keep the label-projection tests below from repeating the same
 /// dozen-field struct literal for each event.
@@ -1189,27 +981,24 @@ fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
     }
 }
 
+/// This project carries no compatibility for a turn_id-less `TurnEnded`
+/// (owner decision 2026-08-03): `agent_turns.turn_id` is `NOT NULL`, so a
+/// `TurnEnded` with no `turn_id` now surfaces as a genuine insert error
+/// instead of a silently skipped projection.
 #[test]
-fn turn_ended_with_no_turn_id_is_skipped_without_panicking() {
+fn turn_ended_with_no_turn_id_errors() {
     let store = Store::open_in_memory().expect("store");
     let session_id = SessionId::new();
 
-    store
-        .append_event(AppendEvent {
-            session_id,
-            turn_id: None,
-            provider_id: None,
-            role_id: None,
-            event: Event::TurnEnded(TurnEndReason::Completed),
-            provider_payload: None,
-        })
-        .expect("a turn_id-less TurnEnded must not error, just skip its own projection");
-
-    let turns = store.turns_for_session(session_id).expect("turns");
-    assert!(
-        turns.is_empty(),
-        "a turn_id-less TurnEnded must not create an agent_turns row"
-    );
+    let result = store.append_event(AppendEvent {
+        session_id,
+        turn_id: None,
+        provider_id: None,
+        role_id: None,
+        event: Event::TurnEnded(TurnEndReason::Completed),
+        provider_payload: None,
+    });
+    assert!(result.is_err(), "expected an error, got {result:?}");
 }
 
 /// Both the full-rebuild path (`replace_from_event_log_records`) and the

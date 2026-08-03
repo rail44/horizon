@@ -471,8 +471,11 @@ enum Terminal {
     /// guard). Whatever report exists is still returned. For
     /// `HaltedByIterationCap` specifically, a report here means the rig turn
     /// loop's forced wrap-up completion succeeded (`RoleDefinition::
-    /// summarize_on_cap`) -- see [`Outcome::failure_message`].
-    TurnEnded(TurnEndReason),
+    /// summarize_on_cap`) -- see [`Outcome::failure_message`]. `None` when
+    /// the stream reached `WaitingForUser` with no report and no preceding
+    /// `TurnEnded` at all -- the turn ended some way this watcher never saw
+    /// named.
+    TurnEnded(Option<TurnEndReason>),
     /// The child parked on an approval. Unreachable by construction -- every
     /// tool in the explore role's allowlist is auto-allowed -- but if it
     /// ever happens the task fails immediately rather than waiting forever
@@ -518,7 +521,7 @@ impl Outcome {
         // "capped, still useful" apart from an ordinary completed report.
         let capped = matches!(
             self.terminal,
-            Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap)
+            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap))
         ) && self.has_usable_report();
         let failure = self.failure_message();
         if let Some(report) = self.report {
@@ -554,18 +557,21 @@ impl Outcome {
             Terminal::Completed => Some(detail(
                 "the task session ended its turn without producing a usable report",
             )),
-            Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap)
+            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap))
                 if self.has_usable_report() =>
             {
                 None
             }
-            Terminal::TurnEnded(TurnEndReason::HaltedByIterationCap) => {
+            Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap)) => {
                 Some(detail("the task session ran out of turns before finishing"))
             }
-            Terminal::TurnEnded(TurnEndReason::HaltedByDoomLoop) => {
+            Terminal::TurnEnded(Some(TurnEndReason::HaltedByDoomLoop)) => {
                 Some(detail("the task session repeated itself and was stopped"))
             }
-            Terminal::TurnEnded(reason) => Some(detail(&format!(
+            Terminal::TurnEnded(None) => {
+                Some(detail("the task session's turn ended before it finished"))
+            }
+            Terminal::TurnEnded(Some(reason)) => Some(detail(&format!(
                 "the task session's turn ended as {reason:?} before it finished"
             ))),
             Terminal::Approval => Some(
@@ -619,7 +625,7 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     Event::TurnEnded(reason) if turn_started => {
                         break match reason {
                             TurnEndReason::Completed => Terminal::Completed,
-                            other => Terminal::TurnEnded(other),
+                            other => Terminal::TurnEnded(Some(other)),
                         };
                     }
                     // Fallback end-of-turn signal for a provider that does
@@ -639,7 +645,7 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     Event::StateChanged(SessionState::WaitingForUser) if turn_started => {
                         break match report {
                             Some(_) => Terminal::Completed,
-                            None => Terminal::TurnEnded(TurnEndReason::Unknown),
+                            None => Terminal::TurnEnded(None),
                         };
                     }
                     Event::StateChanged(SessionState::Terminated) | Event::Exited(_) => {
@@ -680,10 +686,7 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     // terminal (and unreachable in a v1 task child -- approvals
                     // cannot occur there; see the note above).
                     | Event::ApprovalResolved(_)
-                    | Event::ContinueTurnRequested(_)
-                    // Skew catch-all (`Event::Unknown`'s doc): an event this
-                    // build can't name is not a terminal signal.
-                    | Event::Unknown => {}
+                    | Event::ContinueTurnRequested(_) => {}
                 }
             },
         }

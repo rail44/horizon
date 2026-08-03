@@ -244,8 +244,7 @@
         },
         "kind": {
           "$ref": "#/$defs/ApprovalKind",
-          "default": "Standard",
-          "description": "Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(\ndefault)]` so a `Record` persisted before this field existed still\ndeserializes, reading as the same [`ApprovalKind::Standard`] every\napproval request was before this leg."
+          "description": "Which kind of approval this is -- see [`ApprovalKind`]."
         },
         "occurrence_id": {
           "anyOf": [
@@ -256,7 +255,7 @@
               "type": "null"
             }
           ],
-          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the\nagentd on every approval it emits (initial + every reissue) so the\napproval attaches to the specific occurrence the user is deciding,\nnot just to a call_id that may have already been resolved by an\nearlier occurrence. See [`ToolCallRequest::occurrence_id`] for\nthe `serde` attribute rationale."
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the\nagentd on every approval it emits (initial + every reissue) so the\napproval attaches to the specific occurrence the user is deciding,\nnot just to a call_id that may have already been resolved by an\nearlier occurrence."
         },
         "reason": {
           "type": "string"
@@ -264,7 +263,8 @@
       },
       "required": [
         "call_id",
-        "reason"
+        "reason",
+        "kind"
       ],
       "type": "object"
     },
@@ -442,15 +442,19 @@
       ]
     },
     "ContinueTurnRequested": {
-      "description": "Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`\nof the most recent `TurnEnded` event in this session's frame at the\nmoment the human resumed, recovered via\n[`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows\nwhich guard's halt the operator overrode (`HaltedByIterationCap` /\n`HaltedByDoomLoop` / the legacy bare `Halted`). `Unknown` when no\npreceding `TurnEnded` exists — the no-op-replay / idle-session case\n(see the `Event::ContinueTurnRequested` doc comment for why that\ndistinction still matters operationally).",
+      "description": "Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`\nof the most recent `TurnEnded` event in this session's frame at the\nmoment the human resumed, recovered via\n[`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows\nwhich guard's halt the operator overrode (`HaltedByIterationCap` /\n`HaltedByDoomLoop` / the legacy bare `Halted`). `None` when no\npreceding `TurnEnded` exists — the no-op-replay / idle-session case\n(see the `Event::ContinueTurnRequested` doc comment for why that\ndistinction still matters operationally).",
       "properties": {
         "resumed_from": {
-          "$ref": "#/$defs/TurnEndReason"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TurnEndReason"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
-      "required": [
-        "resumed_from"
-      ],
       "type": "object"
     },
     "Error": {
@@ -650,7 +654,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A human resolved a pending `ApprovalRequested`. Emitted at the\nagentd seam where `Command::ApproveToolCall`/`DenyToolCall` lands\nin `dispatch_inbound_command` (`crates/horizon-agentd/src/session/\napproval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the\nresolution may then go on to produce — so the audit row exists\nregardless of which `ApprovalOutcome` variant `resolve_approval`\nreturns, including the `AlreadyResolved` duplicate-click case.\n\nThis is the **authoritative** record of who resolved a pending\napproval and how (the existing `agent_approvals.outcome` column\nstays populated by the order-derived `ToolCallStarted`/`Tool\nCallFinished` path for backward compatibility, but it is a derived\nbest-effort projection — collapsed rows and reused `call_id`s can\nmis-stamp it; this event is what analysis reads first).\n`Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the\n`requested -> resolved` interval an analyst wants for wait-time\nnumbers; `ApprovalResolved::occurrence_id` carries the same\n`OccurrenceId` the matching `ApprovalRequested` was minted with\n(sandbox-denial-retry always has one; older logs may not — see\n`ApprovalRequest::occurrence_id` for the `serde` rationale).\n\nDeliberately carries only the *human* decision: judge-issued\napprovals (`tools::approval::resolve_auto_approval`, the enforcing\njudge's auto-resolve path) do not produce this event, because the\nwhole point is to surface what the operator did, not what the\nbackground model decided. Auto-approvals are still visible via\n`agent_approvals.outcome` and the `judge_*` event log records\n(`docs/agent-approval-design.md`'s \"Judge design\").\n\nAudit-only: no frame item, no projection table row. The transcript\nalready shows the resolution as the approval-row state changing\n(approve → `ToolCallStarted` / `ToolCallFinished`; deny →\n`ToolCallFinished` with `denied: true`); adding a row here would\nduplicate that signal for the user while doing nothing for SQL\nanalytics that read `agent_events` directly.",
+          "description": "A human resolved a pending `ApprovalRequested`. Emitted at the\nagentd seam where `Command::ApproveToolCall`/`DenyToolCall` lands\nin `dispatch_inbound_command` (`crates/horizon-agentd/src/session/\napproval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the\nresolution may then go on to produce — so the audit row exists\nregardless of which `ApprovalOutcome` variant `resolve_approval`\nreturns, including the `AlreadyResolved` duplicate-click case.\n\nThis is the **authoritative** record of who resolved a pending\napproval and how (the existing `agent_approvals.outcome` column\nstays populated by the order-derived `ToolCallStarted`/`Tool\nCallFinished` path for backward compatibility, but it is a derived\nbest-effort projection — collapsed rows and reused `call_id`s can\nmis-stamp it; this event is what analysis reads first).\n`Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the\n`requested -> resolved` interval an analyst wants for wait-time\nnumbers; `ApprovalResolved::occurrence_id` carries the same\n`OccurrenceId` the matching `ApprovalRequested` was minted with.\n\nDeliberately carries only the *human* decision: judge-issued\napprovals (`tools::approval::resolve_auto_approval`, the enforcing\njudge's auto-resolve path) do not produce this event, because the\nwhole point is to surface what the operator did, not what the\nbackground model decided. Auto-approvals are still visible via\n`agent_approvals.outcome` and the `judge_*` event log records\n(`docs/agent-approval-design.md`'s \"Judge design\").\n\nAudit-only: no frame item, no projection table row. The transcript\nalready shows the resolution as the approval-row state changing\n(approve → `ToolCallStarted` / `ToolCallFinished`; deny →\n`ToolCallFinished` with `denied: true`); adding a row here would\nduplicate that signal for the user while doing nothing for SQL\nanalytics that read `agent_events` directly.",
           "properties": {
             "ApprovalResolved": {
               "$ref": "#/$defs/ApprovalResolved"
@@ -663,7 +667,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A human resumed a turn the turn-loop guard halted via\n`Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-\nhalts-real-work.md`'s decision 3 — \"Continue is one action\").\nEmitted at the same agentd seam as `ApprovalResolved`.\n`resumed_from` carries the `TurnEndReason` of the most recent\n`TurnEnded` event in this session's frame at the moment of\ndispatch — `AgentFrame::last_turn_end_reason` is the accessor —\nso an analyst can read \"human resumed after an iteration-cap\nhalt\" / \"...after a doom-loop halt\" from this row alone. A\n`ContinueTurn` arriving for a session with nothing halted (a\nno-op replay, or one sent to an idle session) still emits this\nevent with `resumed_from = Unknown`, so analytics can count\nattempted-but-idle continue-turns without a separate missing-\ndata signal: that count is itself a useful operator-behavior\nnumber (a non-zero one likely means a UI keybinding race).\n\nAudit-only: same as `ApprovalResolved`. The transcript already\nshows the resumed turn's `TurnEnded` receipt and the next turn's\nevents; the audit row sits in the event log alongside them.",
+          "description": "A human resumed a turn the turn-loop guard halted via\n`Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-\nhalts-real-work.md`'s decision 3 — \"Continue is one action\").\nEmitted at the same agentd seam as `ApprovalResolved`.\n`resumed_from` carries the `TurnEndReason` of the most recent\n`TurnEnded` event in this session's frame at the moment of\ndispatch — `AgentFrame::last_turn_end_reason` is the accessor —\nso an analyst can read \"human resumed after an iteration-cap\nhalt\" / \"...after a doom-loop halt\" from this row alone. A\n`ContinueTurn` arriving for a session with nothing halted (a\nno-op replay, or one sent to an idle session) still emits this\nevent with `resumed_from = None`, so analytics can count\nattempted-but-idle continue-turns without a separate missing-\ndata signal: that count is itself a useful operator-behavior\nnumber (a non-zero one likely means a UI keybinding race).\n\nAudit-only: same as `ApprovalResolved`. The transcript already\nshows the resumed turn's `TurnEnded` receipt and the next turn's\nevents; the audit row sits in the event log alongside them.",
           "properties": {
             "ContinueTurnRequested": {
               "$ref": "#/$defs/ContinueTurnRequested"
@@ -1051,8 +1055,7 @@
       "description": "Per `docs/agent-runtime-split-design.md` guardrail 5, spawning a fresh\nsession (`SessionHub::new_agent`) is distinct from attaching to an\nexisting one (`attach_agent`) and carries per-session overrides.",
       "properties": {
         "isolate": {
-          "default": false,
-          "description": "Whether `horizon-agentd` should give this session its own git\nworktree, branched from `spawn_source_session_id`'s directory,\ninstead of confining it to `workspace_root` directly -- decision 3's\nper-spawn isolation knob. The origin-based default (palette: shared;\nCLI/control-plane: isolated) plus any explicit per-spawn override are\nboth resolved client-side before this ever reaches the wire;\n`horizon-agentd` just executes whatever concrete choice arrives\nhere (see `docs/session-relationship-design.md` decision 3). `false`\n(via `#[serde(default)]`) reproduces today's shared-directory\nbehavior for a peer built before this field existed.",
+          "description": "Whether `horizon-agentd` should give this session its own git\nworktree, branched from `spawn_source_session_id`'s directory,\ninstead of confining it to `workspace_root` directly -- decision 3's\nper-spawn isolation knob. The origin-based default (palette: shared;\nCLI/control-plane: isolated) plus any explicit per-spawn override are\nboth resolved client-side before this ever reaches the wire;\n`horizon-agentd` just executes whatever concrete choice arrives\nhere (see `docs/session-relationship-design.md` decision 3).",
           "type": "boolean"
         },
         "provider_id": {
@@ -1066,8 +1069,7 @@
             {
               "type": "null"
             }
-          ],
-          "default": null
+          ]
         },
         "session_id": {
           "$ref": "#/$defs/SessionId"
@@ -1081,12 +1083,10 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "The pane/session this spawn was invoked \"from\" -- e.g. the split\ntarget, or whatever pane was active/named at spawn time. Independent\nof `isolate` (decision 3's two knobs): carried even for a\nshared-directory spawn, but only turns into a recorded\n`SessionSummary.parent_session_id` lineage edge when `isolate` is\nalso true (decision 2: \"the edge exists only via isolation\"). `None`\nfor a spawn with no source pane at all (e.g. a fresh tab with\nnothing active). Additive, like `workspace_root` above."
+          "description": "The pane/session this spawn was invoked \"from\" -- e.g. the split\ntarget, or whatever pane was active/named at spawn time. Independent\nof `isolate` (decision 3's two knobs): carried even for a\nshared-directory spawn, but only turns into a recorded\n`SessionSummary.parent_session_id` lineage edge when `isolate` is\nalso true (decision 2: \"the edge exists only via isolation\"). `None`\nfor a spawn with no source pane at all (e.g. a fresh tab with\nnothing active)."
         },
         "workspace_root": {
-          "default": null,
-          "description": "The directory `horizon-agentd`'s file tools should confine this\nsession to (`tools::state::ToolSessionState::workspace_root`).\n`None` keeps today's behavior -- the session falls back to\n`horizon-agentd`'s own process cwd (`session::run_session`'s\n`ToolSessionState::for_current_dir` call). Unlike `role_id` above,\nthis is a brand-new field, not a reshape of an existing one, so it's\npurely additive: `#[serde(default)]` lets a peer's `SessionNew`\nwritten before this field existed still parse (as `None`), mirroring\n`persistence::event_log::Record::role_id`'s own additive-field\nprecedent. Passed into `AgentdHandle::start_session` by the\nworkspace layer (`WorkspaceShell::reconcile`), which computes the\nHorizon process's own cwd once per session (falling back to `None`\nonly if that cwd can't be read) and records the same value on the\nsession's `WorkspaceSession::workspace_root` -- so a session's\nworkspace root tracks whichever Horizon window spawned it, not\n`horizon-agentd`'s own cwd (one shared, long-lived daemon per\nuser, started from whatever directory happened to be current the\nfirst time it was launched).",
+          "description": "The directory `horizon-agentd`'s file tools should confine this\nsession to (`tools::state::ToolSessionState::workspace_root`).\n`None` keeps today's behavior -- the session falls back to\n`horizon-agentd`'s own process cwd (`session::run_session`'s\n`ToolSessionState::for_current_dir` call). Passed into\n`AgentdHandle::start_session` by the workspace layer\n(`WorkspaceShell::reconcile`), which computes the Horizon process's\nown cwd once per session (falling back to `None` only if that cwd\ncan't be read) and records the same value on the session's\n`WorkspaceSession::workspace_root` -- so a session's workspace root\ntracks whichever Horizon window spawned it, not `horizon-agentd`'s\nown cwd (one shared, long-lived daemon per user, started from\nwhatever directory happened to be current the first time it was\nlaunched).",
           "type": [
             "string",
             "null"
@@ -1095,27 +1095,24 @@
       },
       "required": [
         "session_id",
-        "provider_id"
+        "provider_id",
+        "isolate"
       ],
       "type": "object"
     },
     "SessionState": {
-      "oneOf": [
-        {
-          "enum": [
-            "Created",
-            "Running",
-            "WaitingForUser",
-            "WaitingForApproval",
-            "ToolRunning",
-            "Cancelled",
-            "Completed",
-            "Failed",
-            "Terminated"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Created",
+        "Running",
+        "WaitingForUser",
+        "WaitingForApproval",
+        "ToolRunning",
+        "Cancelled",
+        "Completed",
+        "Failed",
+        "Terminated"
+      ],
+      "type": "string"
     },
     "SessionSummary": {
       "description": "One entry of a `SessionHub::list_agents` reply.",
@@ -1129,8 +1126,7 @@
               "type": "null"
             }
           ],
-          "default": null,
-          "description": "The session this one derives from, per\n`docs/session-relationship-design.md` decisions 1-3: set only when\nthis session was actually spawned isolated (its own git worktree\nbranched from the source session's directory) -- a shared-directory\nspawn creates no edge, so this stays `None` even if a spawn source\nwas given. `#[serde(default)]`, purely additive like `SessionNew.\nworkspace_root` below -- no version bump. New event-log records\npersist this edge with the authoritative root/isolation context, so\na resumed isolated session reports it again after its linked\nworktree has been revalidated."
+          "description": "The session this one derives from, per\n`docs/session-relationship-design.md` decisions 1-3: set only when\nthis session was actually spawned isolated (its own git worktree\nbranched from the source session's directory) -- a shared-directory\nspawn creates no edge, so this stays `None` even if a spawn source\nwas given. New event-log records persist this edge with the\nauthoritative root/isolation context, so a resumed isolated session\nreports it again after its linked worktree has been revalidated."
         },
         "provider_id": {
           "$ref": "#/$defs/ProviderId"
@@ -1144,15 +1140,13 @@
               "type": "null"
             }
           ],
-          "default": null,
           "description": "So a (re)connecting client can label a resumed/live session by its\nrole without a separate round trip -- mirrors `provider_id` above."
         },
         "session_id": {
           "$ref": "#/$defs/SessionId"
         },
         "workspace_root": {
-          "default": null,
-          "description": "This session's *actual* confinement directory, as `horizon-agentd`\nitself resolved it -- the authoritative counterpart to `SessionNew.\nworkspace_root` (that field is only ever the caller's pre-spawn\nvalue; for an isolated session, `horizon-agentd` overrides it with\nthe worktree path it creates, which the caller cannot know in\nadvance since worktree creation finishes asynchronously, after\n`new_agent` already returned -- see\n`session::resolve_and_create_isolated_worktree`). Additive, like\n`parent_session_id` above; populated from the same `SessionEntry.\nworkspace_root` a resumed session's summary reads too. New event-log\nrecords persist this authoritative value, and isolated roots are\nrevalidated against Git before resume. Read by `WorkspaceShell::\nspawn_agent_resume`/`spawn_workspace_restore` to correct the\nworkspace model's stored root for a session it adopts.",
+          "description": "This session's *actual* confinement directory, as `horizon-agentd`\nitself resolved it -- the authoritative counterpart to `SessionNew.\nworkspace_root` (that field is only ever the caller's pre-spawn\nvalue; for an isolated session, `horizon-agentd` overrides it with\nthe worktree path it creates, which the caller cannot know in\nadvance since worktree creation finishes asynchronously, after\n`new_agent` already returned -- see\n`session::resolve_and_create_isolated_worktree`). Populated from the\nsame `SessionEntry.workspace_root` a resumed session's summary reads\ntoo. New event-log records persist this authoritative value, and\nisolated roots are revalidated against Git before resume. Read by\n`WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore` to\ncorrect the workspace model's stored root for a session it adopts.",
           "type": [
             "string",
             "null"
@@ -1213,7 +1207,7 @@
               "type": "null"
             }
           ],
-          "description": "Per-occurrence identity -- see [`OccurrenceId`]. `#[serde(default,\nskip_serializing_if = \"Option::is_none\")]`: `default` so a request\npersisted before this field existed still deserializes (reads back\nwith `None`), and consumers fall back to `call_id` + positional\n`.rev()` scanning in that case; `skip_serializing_if` keeps the\non-disk JSON shape byte-identical to what a build without this\nfield wrote whenever it is `None`, so existing log analyzers that\npattern-match on `tool_call_request` keys don't break. The field\nis purely additive on the wire -- it landed inside\n`SESSION_PROTOCOL_VERSION` 15 and needed no bump of its own."
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. `None` when the\noriginating request is not in scope (synthetic results); consumers\nfall back to `call_id` + positional `.rev()` scanning in that case."
         },
         "tool_id": {
           "type": "string"
@@ -1232,13 +1226,11 @@
           "$ref": "#/$defs/ToolCallId"
         },
         "denied": {
-          "default": false,
-          "description": "Explicit marker for a user's tool-call denial, set only by\n[`Self::denied`] (used by `tools::approval::synchronous_result`'s\n`ran = false` path -- the deny arms of `resolve_synchronous_tool`/\n`resolve_bash` in `crates/horizon-agent/src/tools/approval.rs`).\nReplaces the old convention of a consumer sniffing `output` for\n`denied_output`'s exact `{\"is_error\": true, \"message\": \"denied by\nuser\"}` shape -- documented as brittle when that convention shipped\n(`docs/agent-output-ui-amendment.md`'s round 3 note) since it\ncouldn't distinguish \"the field happens to read that way\" from \"this\nis contractually a denial\". `#[serde(default)]` (false) so a\n`Record` persisted before this field existed still deserializes --\n`src/agent/turns.rs`'s `is_denied` falls back to the old message-text\ncheck specifically to keep classifying those old records correctly.",
+          "description": "Explicit marker for a user's tool-call denial, set only by\n[`Self::denied`] (used by `tools::approval::synchronous_result`'s\n`ran = false` path -- the deny arms of `resolve_synchronous_tool`/\n`resolve_bash` in `crates/horizon-agent/src/tools/approval.rs`).\nReplaces the old convention of a consumer sniffing `output` for\n`denied_output`'s exact `{\"is_error\": true, \"message\": \"denied by\nuser\"}` shape -- documented as brittle when that convention shipped\n(`docs/agent-output-ui-amendment.md`'s round 3 note) since it\ncouldn't distinguish \"the field happens to read that way\" from \"this\nis contractually a denial\".",
           "type": "boolean"
         },
         "is_error": {
-          "default": false,
-          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically. `#[serde(default)]` (false, i.e. success) so\na `Record` written before this field existed still deserializes --\nmatching the same convention's \"absence means success\" reading.",
+          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically.",
           "type": "boolean"
         },
         "occurrence_id": {
@@ -1250,7 +1242,7 @@
               "type": "null"
             }
           ],
-          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the\n`ToolCallRequest` field it answers to. See [`ToolCallRequest`]\nfor the `serde` attribute rationale."
+          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the\n`ToolCallRequest` field it answers to."
         },
         "output": {
           "$ref": "#/$defs/JsonValue"
@@ -1258,7 +1250,9 @@
       },
       "required": [
         "call_id",
-        "output"
+        "output",
+        "is_error",
+        "denied"
       ],
       "type": "object"
     },
@@ -1413,5 +1407,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 18
+  "x-session-protocol-version": 19
 }

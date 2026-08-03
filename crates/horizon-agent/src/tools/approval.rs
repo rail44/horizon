@@ -362,15 +362,6 @@ fn resolve_bash(
             }),
             false,
         ),
-        ApprovalKind::Unknown => synchronous_result(
-            runtime,
-            &request.call_id,
-            json!({
-                "is_error": true,
-                "message": "This approval kind is not supported by this Horizon build."
-            }),
-            false,
-        ),
         ApprovalKind::DomainGrant { .. } => synchronous_result(
             runtime,
             &request.call_id,

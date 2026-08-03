@@ -666,29 +666,10 @@ fn tool_call_result_new_derives_is_error_from_the_output_convention() {
     }
 }
 
-/// `ToolCallResult::denied` (the explicit denial marker replacing the old
-/// message-text convention -- see `src/agent/turns.rs`'s `is_denied`) is
-/// additive with `#[serde(default)]`, exactly like `is_error` was when it
-/// was added: a JSON record persisted before the `denied` field existed
-/// (no `"denied"` key at all) must still deserialize, reading `false`
-/// regardless of the record's real outcome -- that's precisely the gap
-/// `is_denied`'s message-text fallback exists to cover on replay.
+/// A fresh record built via the marker-setting constructor round-trips
+/// with `denied: true` intact.
 #[test]
-fn tool_call_result_denied_field_defaults_to_false_for_a_pre_marker_record() {
-    let pre_marker_json = serde_json::json!({
-        "call_id": "call-1",
-        "output": { "is_error": true, "message": "denied by user" },
-        "is_error": true
-        // no "denied" key: this is what a record persisted before the
-        // marker field existed looks like on disk.
-    });
-
-    let result: agent::ToolCallResult = serde_json::from_value(pre_marker_json).unwrap();
-    assert!(!result.denied);
-    assert!(result.is_error);
-
-    // A fresh record built via the marker-setting constructor round-trips
-    // with `denied: true` intact.
+fn tool_call_result_denied_marker_round_trips() {
     let denied = agent::ToolCallResult::denied(
         agent::ToolCallId("call-2".to_string()),
         None,
@@ -697,31 +678,6 @@ fn tool_call_result_denied_field_defaults_to_false_for_a_pre_marker_record() {
     let round_tripped: agent::ToolCallResult =
         serde_json::from_str(&serde_json::to_string(&denied).unwrap()).unwrap();
     assert!(round_tripped.denied);
-}
-
-/// Compatibility: a `ToolCallResult` persisted before `is_error` existed as
-/// a field has no such key in its JSON at all -- `#[serde(default)]` must
-/// still deserialize it (as `false`, i.e. success), not treat the record as
-/// corrupt. Mirrors `persistence::event_log`'s own
-/// `reads_a_pre_role_record_with_no_role_id_key` regression guard for the
-/// same additive-field shape.
-#[test]
-fn tool_call_result_deserializes_a_pre_is_error_record_as_success() {
-    let pre_field_json = serde_json::json!({
-        "call_id": "call-1",
-        "output": { "is_error": true, "message": "written before is_error existed" }
-    });
-
-    let result: agent::ToolCallResult =
-        serde_json::from_value(pre_field_json).expect("deserialize pre-is_error record");
-
-    assert_eq!(result.call_id, agent::ToolCallId("call-1".to_string()));
-    assert!(
-        !result.is_error,
-        "a pre-existing record with no is_error key must default to false, \
-         even though its own output JSON says otherwise -- old records simply \
-         don't get the new field's benefit until re-derived"
-    );
 }
 
 #[test]
@@ -1450,9 +1406,7 @@ fn provider_registry_starts_builtin_provider() {
 /// row, and what `wire_schema.rs`'s generator indexes by -- a stable string
 /// per variant is the only way SQL filters (`WHERE event_kind = 'approval_resolved'`)
 /// survive across builds. The two new variants must round-trip through
-/// serde_json with these discriminators and the same struct shape, so
-/// v11↔v16 decoders that surface `Event::Unknown` for unknown payloads
-/// degrade gracefully (skipped: no frame item, no projection table).
+/// serde_json with these discriminators and the same struct shape.
 #[test]
 fn operator_intervention_event_kind_discriminators_are_stable() {
     use agent::event_kind;
@@ -1467,7 +1421,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
     assert_eq!(event_kind(&approval), "approval_resolved");
 
     let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-        resumed_from: agent::TurnEndReason::HaltedByIterationCap,
+        resumed_from: Some(agent::TurnEndReason::HaltedByIterationCap),
     });
     assert_eq!(event_kind(&continue_turn), "continue_turn_requested");
 }
@@ -1505,8 +1459,9 @@ fn operator_intervention_events_round_trip_through_serde_json() {
         serde_json::from_value(json).expect("deserialize ApprovalResolved");
     assert_eq!(round_tripped, approve);
 
-    // ApprovalResolved: Deny with no reason -> reason omitted via
-    // `skip_serializing_if = "Option::is_none"`.
+    // ApprovalResolved: Deny with no reason -> a `null` reason field (the
+    // key itself is required now that this project carries no decode
+    // compat -- see `ApprovalDecisionPayload::Deny`).
     let deny_no_reason = agent::Event::ApprovalResolved(agent::ApprovalResolved {
         call_id: agent::ToolCallId("call-deny".to_string()),
         occurrence_id: None,
@@ -1519,15 +1474,15 @@ fn operator_intervention_events_round_trip_through_serde_json() {
         "Option::is_none serializes as JSON null under the default behavior"
     );
     assert!(
-        payload["decision"].get("reason").is_none(),
-        "Deny {{ reason: None }} must not carry a reason field"
+        payload["decision"]["reason"].is_null(),
+        "Deny {{ reason: None }} must carry a null reason field"
     );
     let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
     assert_eq!(round_tripped, deny_no_reason);
 
     // ContinueTurnRequested: full payload.
     let continue_turn = agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-        resumed_from: agent::TurnEndReason::HaltedByDoomLoop,
+        resumed_from: Some(agent::TurnEndReason::HaltedByDoomLoop),
     });
     let json = serde_json::to_value(&continue_turn).expect("serialize ContinueTurnRequested");
     assert_eq!(
@@ -1561,7 +1516,7 @@ fn operator_intervention_events_fold_into_no_frame_item() {
     apply_agent_event_to_frame(
         &mut frame,
         &agent::Event::ContinueTurnRequested(agent::ContinueTurnRequested {
-            resumed_from: agent::TurnEndReason::HaltedByIterationCap,
+            resumed_from: Some(agent::TurnEndReason::HaltedByIterationCap),
         }),
         &mut turn,
     );
@@ -1578,8 +1533,8 @@ fn operator_intervention_events_fold_into_no_frame_item() {
 /// halt* the human resumed from. The `.rev()` walk must (a) find the
 /// latest `TurnEnded` regardless of what other items sit between it and
 /// the head, and (b) return `None` for a frame that has never ended a
-/// turn, so the emit site promotes that to `TurnEndReason::Unknown` per
-/// the Event doc comment.
+/// turn, so the emit site carries that through as `resumed_from: None`
+/// per the Event doc comment.
 #[test]
 fn last_turn_end_reason_finds_the_latest_turn_ended() {
     let mut frame = AgentFrame::empty();

@@ -58,7 +58,6 @@ belong in review.
 | `HistoryCleared` | consume (divider item) | ignore — provider-view decision, no row | ignore — projection, replayed separately | consume (cleared call-ids) | ignore — not terminal |
 | `ApprovalResolved` | ignore — audit-only, no item | ignore — audit-only, no row | ignore — audit-only | ignore — no clearing record | ignore — audit-only, not terminal |
 | `ContinueTurnRequested` | ignore — audit-only, no item | ignore — audit-only, no row | ignore — audit-only | ignore — no clearing record | ignore — audit-only, not terminal |
-| `Unknown` | ignore — skew catch-all, no item | ignore — skew catch-all, no row | ignore — skew catch-all | ignore — skew catch-all | ignore — skew catch-all |
 
 ### Sub-state-dependent cells (reader 5, explore)
 
@@ -67,7 +66,7 @@ variants, so three cells are conditional:
 
 - **§ `StateChanged`**: `WaitingForApproval` → break `Approval`; `Terminated`
   → break `Terminated`; `WaitingForUser` after turn-start → break (`Completed`
-  if a report was captured, else `TurnEnded(Unknown)`); all other session
+  if a report was captured, else `TurnEnded(None)`); all other session
   states, and `WaitingForUser` before turn-start → ignored.
 - **† `MessageCommitted`**: `User` role opens the turn (sets `turn_started`,
   clears `report`); a non-`User` role after turn-start captures its text as the
@@ -82,25 +81,14 @@ wildcard); the conditionality lives in a guard or an inner match on the
 payload, with an unguarded `Event::StateChanged(_)` / `Event::TurnEnded(_)`
 fallback in the no-op chain that absorbs the guard-fail cases.
 
-## Relationship to the wire-skew discipline
+## No decode compatibility
 
-The `Unknown` row is the in-build manifestation of the forward-compatibility
-rule recorded in `crates/horizon-agent/src/wire/hub.rs`'s `AGENT_PROTOCOL_VERSION`
-history (the v14–v18 bump notes) and `docs/remoc-adoption-design.md` §4: every
-wire enum carries a `#[serde(other)] Unknown` catch-all, and a receiver skips an
-unknown event (`Event::Unknown`'s own doc in `src/contract.rs` states it "folds
-into no frame item and projects into no row").
-
-Because all five readers ignore `Unknown` (the last row), a future-build
-variant an older build cannot name decodes to `Unknown` and is skipped by every
-reader — so the older build's UI frame, DuckDB projection, provider history,
-clearing set, and child-task watcher are all unaffected by the addition. What
-the older peer loses is only the new variant's intended effect (an audit row, a
-divider, a clearing boundary), never anything the existing transcript relies
-on — the same conclusion the v14 / v15 / v16 bump notes reach: "an older peer
-decodes the new events as `Unknown` and skips them, costing the audit row but
-nothing the user-facing transcript relies on" (`wire/hub.rs`, v16 note; the v15
-note in `docs/agent-compaction-design.md` makes the parallel claim for the
-`HistoryCleared` divider). The raw record still lands in `agent_events` (the
-durable source) regardless of who understands the variant, so a build that does
-understand it can project it later.
+This project carries no cross-build decode compatibility (owner decision
+2026-08-03): `Event` no longer has an `Unknown` catch-all variant, so a log
+line or wire item this build cannot name is not silently degraded -- it is a
+decode error, handled as corruption-robustness (skip the item, keep the
+channel/read going; see `persistence::event_log::mod::decode_record_tolerantly`
+and `docs/remoc-adoption-design.md` §4), not as forward compatibility. Adding a
+new `Event` variant is therefore purely additive from this doc's perspective:
+it forces a new row in the matrix above and a new arm at all five fold sites,
+with no separate "what does an older reader do with it" question to answer.

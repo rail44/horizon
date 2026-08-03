@@ -143,8 +143,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // view* comes out identical either way.
             | Event::HistoryCleared(_)
             | Event::Exited(_)
-            | Event::TurnEnded(_)
-            | Event::Unknown => None,
+            | Event::TurnEnded(_) => None,
         })
         .collect();
     repair_replayed_message_pairing(messages)

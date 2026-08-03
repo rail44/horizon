@@ -37,12 +37,12 @@ impl Store {
     /// appended a record while a hard `SIGKILL` landed nearby. Wrapping
     /// this one record's several statements in a transaction makes them
     /// atomic: either both tables see it, or neither does.
-    pub(crate) fn append_record(&self, record: &Record) -> Result<bool> {
+    pub(crate) fn append_record(&self, record: &Record) -> Result<()> {
         self.conn.execute_batch("BEGIN TRANSACTION")?;
         match self.append_record_uncommitted(record) {
-            Ok(turn_id_missing) => {
+            Ok(()) => {
                 self.conn.execute_batch("COMMIT")?;
-                Ok(turn_id_missing)
+                Ok(())
             }
             Err(error) => {
                 let _ = self.conn.execute_batch("ROLLBACK");
@@ -65,19 +65,14 @@ impl Store {
     ///
     /// `agent_events`/`agent_sessions` are always updated here regardless of
     /// what [`Store::project_event`] does with the event -- a projection
-    /// that deliberately ignores an event (no dedicated table wants it, or
-    /// it's a legacy event missing a field a newer projection needs) has
+    /// that deliberately ignores an event (no dedicated table wants it) has
     /// still *processed* it, so the session's `last_sequence` high-water
     /// mark advances either way. This is why `event_log::writer::
     /// duckdb_projection_currency` (the freshness check `rebuild_and_open_
     /// duckdb_projection` runs at startup) does not need any special-casing
     /// for skipped records: `agent_sessions.last_sequence` already reflects
     /// every record this function was ever called with, projected or not.
-    ///
-    /// Returns `Ok(true)` when [`Store::project_event`] skipped a legacy
-    /// no-`turn_id` `TurnEnded` projection for this record -- see that
-    /// method's doc comment for why, and who reports it.
-    pub(super) fn append_record_uncommitted(&self, record: &Record) -> Result<bool> {
+    pub(super) fn append_record_uncommitted(&self, record: &Record) -> Result<()> {
         let session_id_text = session_id_text(record.session_id)?;
         let sequence = i64::try_from(record.sequence).context("agent event sequence overflow")?;
         let event_json = serde_json::to_string(&record.event).context("serialize agent event")?;
@@ -125,14 +120,13 @@ impl Store {
             role_id_text.as_deref(),
             sequence,
         )?;
-        let turn_id_missing = self.project_event(EventRecordRef {
+        self.project_event(EventRecordRef {
             event_id: &record.event_id,
             session_id: &session_id_text,
             turn_id: record.turn_id.as_deref(),
             sequence,
             event: &record.event,
-        })?;
-        Ok(turn_id_missing)
+        })
     }
 
     /// Test-only single-event append that models a single live append with

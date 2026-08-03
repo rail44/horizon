@@ -24,9 +24,9 @@ pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 1;
 /// Host-resolved session placement needed to restore the same confinement
 /// after `horizon-agentd` restarts. This is deliberately event-log
 /// metadata rather than a conversational [`Event`]: every newly appended
-/// record carries the latest authoritative value, while old records decode
-/// with `Record::session_context == None` and retain their legacy resume
-/// behavior.
+/// record carries the latest authoritative value. `Record::session_context`
+/// is `None` only for the narrow panic-recording path that runs before a
+/// session's `LiveState` exists -- see that field's own doc comment.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
 pub struct PersistedSessionContext {
     pub workspace_root: Option<PathBuf>,
@@ -38,11 +38,6 @@ pub struct PersistedSessionContext {
     /// anything approved since. Every later record carries the current
     /// value, so the log states what a session could reach at the point
     /// each event was written rather than only what it started with.
-    ///
-    /// `#[serde(default)]` for the same reason the whole context is: a
-    /// record written before this field existed reads back with an empty
-    /// list, which is exactly what such a session had.
-    #[serde(default)]
     pub filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
 }
 
@@ -55,17 +50,13 @@ pub struct Record {
     pub session_id: SessionId,
     pub turn_id: Option<String>,
     pub provider_id: Option<ProviderId>,
-    /// Mirrors `provider_id` exactly: `None` for a role-less session, and
-    /// `#[serde(default)]` so a log record written before this field
-    /// existed (schema/version unchanged -- this is additive, unlike the
-    /// wire's breaking `SessionNew` change) still parses, reading back as
-    /// `None` -- a resumed pre-existing session simply resumes role-less.
-    #[serde(default)]
+    /// Mirrors `provider_id` exactly: `None` for a role-less session.
     pub role_id: Option<RoleId>,
-    /// Added without changing the JSONL schema version: old records simply
-    /// lack the host-only confinement metadata and resume through the legacy
-    /// compatibility path.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Host-resolved placement/confinement metadata. `None` only for the
+    /// narrow last-resort panic-recording path that runs before a
+    /// session's `LiveState` exists
+    /// (`horizon_agentd::session::panic::record_uncaught_session_panic`);
+    /// every normal session spawn always supplies it.
     pub session_context: Option<PersistedSessionContext>,
     pub event_kind: String,
     pub event: Event,
@@ -75,9 +66,11 @@ pub struct Record {
 
 /// [`Record`] with the `event` payload left raw — the first stage of
 /// [`decode_record_tolerantly`]'s two-stage decode. Field-for-field the
-/// same envelope as [`Record`], so a line whose *envelope* is intact is
-/// never lost just because its `event` is from a newer build.
+/// same envelope as [`Record`] (minus `event`), so a line whose *envelope*
+/// is intact is never mistaken for full corruption just because its
+/// `event` key holds something this build can't decode.
 #[derive(Deserialize)]
+#[allow(dead_code)] // Only `schema`/`version`/`sequence` are read back out; the rest are a validity gate on the envelope's other keys.
 struct RecordEnvelope {
     schema: String,
     version: u32,
@@ -86,50 +79,50 @@ struct RecordEnvelope {
     session_id: SessionId,
     turn_id: Option<String>,
     provider_id: Option<ProviderId>,
-    #[serde(default)]
     role_id: Option<RoleId>,
-    #[serde(default)]
     session_context: Option<PersistedSessionContext>,
     event_kind: String,
-    #[allow(dead_code)]
     event: serde_json::Value,
     provider_payload: Option<serde_json::Value>,
     created_at_unix_ms: u64,
 }
 
-/// Decodes one log line, degrading only as far as the damage goes:
-///
-/// 1. A fully decodable line is a plain [`Record`].
-/// 2. A line whose envelope (schema, `sequence`, session, ...) is intact
-///    but whose `event` this build can't decode — a payload-carrying
-///    variant appended by a newer build, which serde_json's
-///    `#[serde(other)]` cannot degrade on its own (it insists on unit
-///    content) — becomes a [`Record`] carrying [`Event::Unknown`]. The
-///    envelope is preserved, so `sequence` stays monotonic: the writer's
-///    `next_sequence` counts this line, and a later resume can never
-///    re-issue its sequence number (the rewind/duplication hazard the
-///    review found).
-/// 3. Only a line whose envelope itself is broken counts as corrupt.
-fn decode_record_tolerantly(line: &str) -> Option<Record> {
+/// One log line's decode outcome, at whatever granularity the damage goes.
+/// `Record` dwarfs the other variants (`clippy::large_enum_variant`), but
+/// this enum is constructed and consumed once per line, immediately, inside
+/// [`read`] -- not stored or passed around -- so boxing it would only add an
+/// allocation per line for no benefit.
+#[allow(clippy::large_enum_variant)]
+enum DecodedLine {
+    /// A fully decodable line.
+    Record(Record),
+    /// The envelope (schema, `sequence`, session, ...) is intact but
+    /// `event` this build can't decode -- this project carries no
+    /// cross-build event-payload compatibility (owner decision
+    /// 2026-08-03), so the line contributes no event, but its `sequence`
+    /// still needs to be accounted for: see [`read`]'s `skipped_event_count`
+    /// bookkeeping and the rewind/duplication hazard it guards against.
+    SkippedEvent {
+        schema: String,
+        version: u32,
+        sequence: u64,
+    },
+    /// The envelope itself is broken -- genuine corruption.
+    Corrupt,
+}
+
+fn decode_record_tolerantly(line: &str) -> DecodedLine {
     if let Ok(record) = serde_json::from_str::<Record>(line) {
-        return Some(record);
+        return DecodedLine::Record(record);
     }
-    let envelope = serde_json::from_str::<RecordEnvelope>(line).ok()?;
-    Some(Record {
-        schema: envelope.schema,
-        version: envelope.version,
-        event_id: envelope.event_id,
-        sequence: envelope.sequence,
-        session_id: envelope.session_id,
-        turn_id: envelope.turn_id,
-        provider_id: envelope.provider_id,
-        role_id: envelope.role_id,
-        session_context: envelope.session_context,
-        event_kind: envelope.event_kind,
-        event: Event::Unknown,
-        provider_payload: envelope.provider_payload,
-        created_at_unix_ms: envelope.created_at_unix_ms,
-    })
+    match serde_json::from_str::<RecordEnvelope>(line) {
+        Ok(envelope) => DecodedLine::SkippedEvent {
+            schema: envelope.schema,
+            version: envelope.version,
+            sequence: envelope.sequence,
+        },
+        Err(_) => DecodedLine::Corrupt,
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -137,6 +130,18 @@ pub struct ReadReport {
     pub records: Vec<Record>,
     pub corrupt_line_count: usize,
     pub ignored_partial_line: bool,
+    /// Lines whose envelope parsed but whose `event` this build couldn't
+    /// decode -- not corruption (the envelope is intact), so they never
+    /// count toward `corrupt_line_count` and contribute no [`Record`], but
+    /// they are not silently dropped either: see [`Self::max_known_sequence`].
+    pub skipped_event_count: usize,
+    /// The highest `sequence` seen across every structurally valid
+    /// envelope, including [`Self::skipped_event_count`] lines -- `None`
+    /// only when the file had no valid envelope lines at all. Feeds
+    /// `event_log::writer::start_up`'s `next_sequence` directly, instead of
+    /// `records.iter().map(sequence).max()`, which would skip back over a
+    /// skipped-event line's number and let the writer re-issue it.
+    pub max_known_sequence: Option<u64>,
 }
 
 impl ReadReport {
@@ -145,9 +150,12 @@ impl ReadReport {
     /// (the writer's own startup re-read in `event_log::writer`, the DuckDB
     /// rebuild `open_silently` drives, and `horizon-agentd`'s
     /// `open_persistence`) reports this instead of silently discarding
-    /// evidence that the file has corrupt or torn lines.
+    /// evidence that the file has corrupt, torn, or undecodable lines.
     pub fn skipped_summary(&self) -> Option<String> {
-        if self.corrupt_line_count == 0 && !self.ignored_partial_line {
+        if self.corrupt_line_count == 0
+            && !self.ignored_partial_line
+            && self.skipped_event_count == 0
+        {
             return None;
         }
         let mut parts = Vec::new();
@@ -156,6 +164,17 @@ impl ReadReport {
                 "{} corrupt line{}",
                 self.corrupt_line_count,
                 if self.corrupt_line_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ));
+        }
+        if self.skipped_event_count > 0 {
+            parts.push(format!(
+                "{} line{} with an undecodable event",
+                self.skipped_event_count,
+                if self.skipped_event_count == 1 {
                     ""
                 } else {
                     "s"
@@ -189,16 +208,30 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
 
     let mut records = Vec::new();
     let mut corrupt_line_count = 0;
+    let mut skipped_event_count = 0;
+    let mut max_known_sequence: Option<u64> = None;
+    let note_sequence = |sequence: u64, max: &mut Option<u64>| {
+        *max = Some(max.map_or(sequence, |seen| seen.max(sequence)));
+    };
     for line in lines {
         if line.trim().is_empty() {
             continue;
         }
         match decode_record_tolerantly(line) {
-            Some(record)
+            DecodedLine::Record(record)
                 if record.schema == AGENT_EVENT_LOG_SCHEMA
                     && record.version == AGENT_EVENT_LOG_VERSION =>
             {
+                note_sequence(record.sequence, &mut max_known_sequence);
                 records.push(record);
+            }
+            DecodedLine::SkippedEvent {
+                schema,
+                version,
+                sequence,
+            } if schema == AGENT_EVENT_LOG_SCHEMA && version == AGENT_EVENT_LOG_VERSION => {
+                note_sequence(sequence, &mut max_known_sequence);
+                skipped_event_count += 1;
             }
             _ => corrupt_line_count += 1,
         }
@@ -209,6 +242,8 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
         records,
         corrupt_line_count,
         ignored_partial_line,
+        skipped_event_count,
+        max_known_sequence,
     })
 }
 
@@ -218,12 +253,14 @@ mod tolerant_read_tests {
     use crate::contract::{Event, ProviderEvent, SessionState};
     use uuid::Uuid;
 
-    /// A log line whose `event` names a variant this build doesn't know
-    /// (with a payload — the case serde_json's `#[serde(other)]` cannot
-    /// degrade by itself) must read back as a full record carrying
-    /// `Event::Unknown`, envelope preserved — never as a corrupt line.
+    /// A log line whose `event` names a variant this build doesn't
+    /// recognize at all -- this project carries no cross-build event
+    /// compatibility, so it is not decodable as an `Event` -- must still
+    /// read back with its envelope intact: skipped as an event (no
+    /// `Record`), never counted as corruption, and its `sequence`
+    /// accounted for in `max_known_sequence`.
     #[test]
-    fn a_future_event_variant_reads_back_as_an_unknown_record_with_its_envelope() {
+    fn an_undecodable_event_is_skipped_but_its_envelope_sequence_is_preserved() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
         let parent_session_id = SessionId::new();
@@ -235,13 +272,15 @@ mod tolerant_read_tests {
             "session_id": session_id,
             "turn_id": "turn-1",
             "provider_id": "future.provider",
+            "role_id": null,
             "session_context": {
                 "workspace_root": "/tmp/future-worktree",
                 "isolated_worktree": true,
                 "parent_session_id": parent_session_id,
+                "filesystem_grants": [],
             },
-            "event_kind": "future_variant",
-            "event": {"FutureVariant": {"x": 1}},
+            "event_kind": "unrecognized_variant",
+            "event": {"NotARealVariant": {"x": 1}},
             "provider_payload": null,
             "created_at_unix_ms": 1,
         });
@@ -252,31 +291,25 @@ mod tolerant_read_tests {
             report.corrupt_line_count, 0,
             "an intact envelope must not count as corruption: {report:?}"
         );
-        assert_eq!(report.records.len(), 1);
-        let record = &report.records[0];
-        assert_eq!(record.event, Event::Unknown);
-        assert_eq!(record.sequence, 42, "the envelope must be preserved");
-        assert_eq!(record.session_id, session_id);
-        assert_eq!(record.event_kind, "future_variant");
+        assert!(
+            report.records.is_empty(),
+            "an undecodable event contributes no record: {report:?}"
+        );
+        assert_eq!(report.skipped_event_count, 1);
         assert_eq!(
-            record.session_context,
-            Some(PersistedSessionContext {
-                workspace_root: Some(PathBuf::from("/tmp/future-worktree")),
-                isolated_worktree: true,
-                parent_session_id: Some(parent_session_id),
-                filesystem_grants: Vec::new(),
-            }),
-            "tolerant event decoding must preserve host placement metadata"
+            report.max_known_sequence,
+            Some(42),
+            "the envelope's sequence must still be accounted for"
         );
 
         let _ = std::fs::remove_file(&path);
     }
 
-    /// The writer's `next_sequence` counts an unknown-event line: appends
+    /// The writer's `next_sequence` counts a skipped-event line: appends
     /// after it continue *past* its sequence instead of rewinding onto it
-    /// (the duplicate-sequence hazard the intolerant read had).
+    /// (the duplicate-sequence hazard an envelope-blind read would have).
     #[test]
-    fn next_sequence_counts_an_unknown_event_line() {
+    fn next_sequence_counts_a_skipped_event_line() {
         let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
         let session_id = SessionId::new();
         let line = serde_json::json!({
@@ -287,8 +320,10 @@ mod tolerant_read_tests {
             "session_id": session_id,
             "turn_id": null,
             "provider_id": null,
-            "event_kind": "future_variant",
-            "event": {"FutureVariant": {"x": 1}},
+            "role_id": null,
+            "session_context": null,
+            "event_kind": "unrecognized_variant",
+            "event": {"NotARealVariant": {"x": 1}},
             "provider_payload": null,
             "created_at_unix_ms": 1,
         });
@@ -297,11 +332,11 @@ mod tolerant_read_tests {
         let (writer, init_rx) = WriterHandle::open(&path);
         match init_rx.recv().unwrap() {
             WriterInit::Ready(report) => {
-                assert_eq!(report.records.len(), 1, "the unknown line must be read");
-                assert_eq!(
-                    report.records[0].session_context, None,
-                    "records predating session_context must keep decoding"
+                assert!(
+                    report.records.is_empty(),
+                    "the undecodable line must contribute no record"
                 );
+                assert_eq!(report.skipped_event_count, 1);
             }
             WriterInit::Failed(error) => panic!("writer startup failed: {error}"),
         }
@@ -317,9 +352,10 @@ mod tolerant_read_tests {
         let sequences: Vec<u64> = report.records.iter().map(|r| r.sequence).collect();
         assert_eq!(
             sequences,
-            vec![7, 8],
-            "the fresh append must continue past the unknown line's sequence"
+            vec![8],
+            "the fresh append must continue past the skipped-event line's sequence, not reuse it"
         );
+        assert_eq!(report.skipped_event_count, 1);
 
         let _ = std::fs::remove_file(&path);
     }
@@ -466,41 +502,6 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// A record written before this field existed reads back with no
-    /// grants -- which is exactly the authority such a session had.
-    #[test]
-    fn a_pre_grants_session_context_decodes_with_no_filesystem_grants() {
-        let session_id = SessionId::new();
-        let line = serde_json::json!({
-            "schema": AGENT_EVENT_LOG_SCHEMA,
-            "version": AGENT_EVENT_LOG_VERSION,
-            "event_id": Uuid::new_v4().to_string(),
-            "sequence": 7,
-            "session_id": session_id,
-            "turn_id": null,
-            "provider_id": null,
-            "session_context": {
-                "workspace_root": "/tmp/legacy-worktree",
-                "isolated_worktree": true,
-                "parent_session_id": null,
-            },
-            "event_kind": "message_committed",
-            "event": { "message_committed": { "role": "user", "text": "hi" } },
-            "provider_payload": null,
-            "created_at_unix_ms": 0,
-        })
-        .to_string();
-
-        let record = decode_record_tolerantly(&line).expect("legacy record must decode");
-        assert_eq!(
-            record
-                .session_context
-                .expect("legacy context")
-                .filesystem_grants,
-            Vec::new()
-        );
-    }
-
     /// Round-trips the provider-request lifecycle markers
     /// (`Event::ProviderRequestSent`/`ProviderRequestFirstToken`/
     /// `ProviderRequestFinished`) through the JSONL log: correct
@@ -602,38 +603,6 @@ mod tests {
         assert_eq!(report.records, vec![record]);
         assert_eq!(report.corrupt_line_count, 1);
         assert!(report.ignored_partial_line);
-
-        let _ = std::fs::remove_file(path);
-    }
-
-    /// A record written before `role_id` existed has no such key in its
-    /// JSON at all -- `#[serde(default)]` must still parse it (as `None`),
-    /// not treat it as corrupt. Regression guard for resuming a log written
-    /// by a pre-role build of `horizon-agentd`.
-    #[test]
-    fn reads_a_pre_role_record_with_no_role_id_key() {
-        let path = std::env::temp_dir().join(format!("horizon-agent-log-{}.jsonl", Uuid::new_v4()));
-        let session_id = SessionId::new();
-        let line = serde_json::json!({
-            "schema": AGENT_EVENT_LOG_SCHEMA,
-            "version": AGENT_EVENT_LOG_VERSION,
-            "event_id": "event-pre-role",
-            "sequence": 0,
-            "session_id": session_id,
-            "turn_id": null,
-            "provider_id": null,
-            "event_kind": "state_changed",
-            "event": Event::StateChanged(SessionState::Running),
-            "provider_payload": null,
-            "created_at_unix_ms": 1,
-        })
-        .to_string();
-        std::fs::write(&path, format!("{line}\n")).expect("write pre-role fixture");
-
-        let report = read(&path).expect("read");
-        assert_eq!(report.records.len(), 1);
-        assert_eq!(report.records[0].role_id, None);
-        assert_eq!(report.corrupt_line_count, 0);
 
         let _ = std::fs::remove_file(path);
     }

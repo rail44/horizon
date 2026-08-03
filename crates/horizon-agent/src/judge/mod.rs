@@ -282,14 +282,11 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
                 host_execution_requested: false,
             }
         }
-        ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry | ApprovalKind::Unknown => {
-            JudgeApprovalContext {
-                requested_filesystem_grants: Vec::new(),
-                requested_domains: Vec::new(),
-                host_execution_requested: matches!(kind, ApprovalKind::Standard)
-                    && tool_id == "bash",
-            }
-        }
+        ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry => JudgeApprovalContext {
+            requested_filesystem_grants: Vec::new(),
+            requested_domains: Vec::new(),
+            host_execution_requested: matches!(kind, ApprovalKind::Standard) && tool_id == "bash",
+        },
     }
 }
 
@@ -781,7 +778,7 @@ mod tests {
     #[test]
     fn missing_judge_preserves_the_human_candidate_immediately() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let expected = candidate(ApprovalKind::Unknown);
+        let expected = candidate(ApprovalKind::Standard);
         let (tx, _rx) = crossbeam_channel::unbounded();
         assert_eq!(
             start_approval_gate(&tool_state, SessionId::new(), expected.clone(), tx,),

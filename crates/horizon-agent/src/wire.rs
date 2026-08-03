@@ -91,19 +91,15 @@ pub struct SessionSummary {
     pub provider_id: ProviderId,
     /// So a (re)connecting client can label a resumed/live session by its
     /// role without a separate round trip -- mirrors `provider_id` above.
-    #[serde(default)]
     pub role_id: Option<RoleId>,
     /// The session this one derives from, per
     /// `docs/session-relationship-design.md` decisions 1-3: set only when
     /// this session was actually spawned isolated (its own git worktree
     /// branched from the source session's directory) -- a shared-directory
     /// spawn creates no edge, so this stays `None` even if a spawn source
-    /// was given. `#[serde(default)]`, purely additive like `SessionNew.
-    /// workspace_root` below -- no version bump. New event-log records
-    /// persist this edge with the authoritative root/isolation context, so
-    /// a resumed isolated session reports it again after its linked
-    /// worktree has been revalidated.
-    #[serde(default)]
+    /// was given. New event-log records persist this edge with the
+    /// authoritative root/isolation context, so a resumed isolated session
+    /// reports it again after its linked worktree has been revalidated.
     pub parent_session_id: Option<SessionId>,
     /// This session's *actual* confinement directory, as `horizon-agentd`
     /// itself resolved it -- the authoritative counterpart to `SessionNew.
@@ -112,14 +108,12 @@ pub struct SessionSummary {
     /// the worktree path it creates, which the caller cannot know in
     /// advance since worktree creation finishes asynchronously, after
     /// `new_agent` already returned -- see
-    /// `session::resolve_and_create_isolated_worktree`). Additive, like
-    /// `parent_session_id` above; populated from the same `SessionEntry.
-    /// workspace_root` a resumed session's summary reads too. New event-log
-    /// records persist this authoritative value, and isolated roots are
-    /// revalidated against Git before resume. Read by `WorkspaceShell::
-    /// spawn_agent_resume`/`spawn_workspace_restore` to correct the
-    /// workspace model's stored root for a session it adopts.
-    #[serde(default)]
+    /// `session::resolve_and_create_isolated_worktree`). Populated from the
+    /// same `SessionEntry.workspace_root` a resumed session's summary reads
+    /// too. New event-log records persist this authoritative value, and
+    /// isolated roots are revalidated against Git before resume. Read by
+    /// `WorkspaceShell::spawn_agent_resume`/`spawn_workspace_restore` to
+    /// correct the workspace model's stored root for a session it adopts.
     pub workspace_root: Option<PathBuf>,
 }
 
@@ -130,27 +124,21 @@ pub struct SessionSummary {
 pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
-    #[serde(default)]
     pub role_id: Option<RoleId>,
     /// The directory `horizon-agentd`'s file tools should confine this
     /// session to (`tools::state::ToolSessionState::workspace_root`).
     /// `None` keeps today's behavior -- the session falls back to
     /// `horizon-agentd`'s own process cwd (`session::run_session`'s
-    /// `ToolSessionState::for_current_dir` call). Unlike `role_id` above,
-    /// this is a brand-new field, not a reshape of an existing one, so it's
-    /// purely additive: `#[serde(default)]` lets a peer's `SessionNew`
-    /// written before this field existed still parse (as `None`), mirroring
-    /// `persistence::event_log::Record::role_id`'s own additive-field
-    /// precedent. Passed into `AgentdHandle::start_session` by the
-    /// workspace layer (`WorkspaceShell::reconcile`), which computes the
-    /// Horizon process's own cwd once per session (falling back to `None`
-    /// only if that cwd can't be read) and records the same value on the
-    /// session's `WorkspaceSession::workspace_root` -- so a session's
-    /// workspace root tracks whichever Horizon window spawned it, not
-    /// `horizon-agentd`'s own cwd (one shared, long-lived daemon per
-    /// user, started from whatever directory happened to be current the
-    /// first time it was launched).
-    #[serde(default)]
+    /// `ToolSessionState::for_current_dir` call). Passed into
+    /// `AgentdHandle::start_session` by the workspace layer
+    /// (`WorkspaceShell::reconcile`), which computes the Horizon process's
+    /// own cwd once per session (falling back to `None` only if that cwd
+    /// can't be read) and records the same value on the session's
+    /// `WorkspaceSession::workspace_root` -- so a session's workspace root
+    /// tracks whichever Horizon window spawned it, not `horizon-agentd`'s
+    /// own cwd (one shared, long-lived daemon per user, started from
+    /// whatever directory happened to be current the first time it was
+    /// launched).
     pub workspace_root: Option<PathBuf>,
     /// The pane/session this spawn was invoked "from" -- e.g. the split
     /// target, or whatever pane was active/named at spawn time. Independent
@@ -159,8 +147,7 @@ pub struct SessionNew {
     /// `SessionSummary.parent_session_id` lineage edge when `isolate` is
     /// also true (decision 2: "the edge exists only via isolation"). `None`
     /// for a spawn with no source pane at all (e.g. a fresh tab with
-    /// nothing active). Additive, like `workspace_root` above.
-    #[serde(default)]
+    /// nothing active).
     pub spawn_source_session_id: Option<SessionId>,
     /// Whether `horizon-agentd` should give this session its own git
     /// worktree, branched from `spawn_source_session_id`'s directory,
@@ -169,10 +156,7 @@ pub struct SessionNew {
     /// CLI/control-plane: isolated) plus any explicit per-spawn override are
     /// both resolved client-side before this ever reaches the wire;
     /// `horizon-agentd` just executes whatever concrete choice arrives
-    /// here (see `docs/session-relationship-design.md` decision 3). `false`
-    /// (via `#[serde(default)]`) reproduces today's shared-directory
-    /// behavior for a peer built before this field existed.
-    #[serde(default)]
+    /// here (see `docs/session-relationship-design.md` decision 3).
     pub isolate: bool,
 }
 
@@ -211,39 +195,6 @@ mod tests {
     // v1-v18 bump history those tests carried now lives), and
     // `scripts/check-wire-schema.sh` fails any non-additive change that
     // doesn't bump `AGENT_PROTOCOL_VERSION` alongside it.
-
-    /// A `SessionNew` written by a peer built before `workspace_root`
-    /// existed has no such key at all -- `#[serde(default)]` must still
-    /// parse it (as `None`), not reject the payload. Mirrors
-    /// `persistence::event_log::Record`'s
-    /// `reads_a_pre_role_record_with_no_role_id_key` regression guard.
-    #[test]
-    fn session_new_without_optional_keys_takes_the_defaults() {
-        let session_id = SessionId::new();
-        let new: SessionNew = serde_json::from_value(serde_json::json!({
-            "session_id": session_id,
-            "provider_id": "builtin.agent.rig",
-            "role_id": null,
-        }))
-        .expect("payload should parse despite the missing optional keys");
-        assert_eq!(new.workspace_root, None);
-        assert_eq!(new.spawn_source_session_id, None);
-        assert!(!new.isolate);
-    }
-
-    /// Same for `SessionSummary`'s additive fields on the reply side.
-    #[test]
-    fn session_summary_without_optional_keys_takes_the_defaults() {
-        let session_id = SessionId::new();
-        let summary: SessionSummary = serde_json::from_value(serde_json::json!({
-            "session_id": session_id,
-            "provider_id": "builtin.agent.rig",
-            "role_id": null,
-        }))
-        .expect("summary should parse despite the missing optional keys");
-        assert_eq!(summary.parent_session_id, None);
-        assert_eq!(summary.workspace_root, None);
-    }
 
     #[test]
     fn agent_wire_event_round_trips_each_variant() {

@@ -219,9 +219,7 @@ pub enum Event {
     /// `Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the
     /// `requested -> resolved` interval an analyst wants for wait-time
     /// numbers; `ApprovalResolved::occurrence_id` carries the same
-    /// `OccurrenceId` the matching `ApprovalRequested` was minted with
-    /// (sandbox-denial-retry always has one; older logs may not — see
-    /// `ApprovalRequest::occurrence_id` for the `serde` rationale).
+    /// `OccurrenceId` the matching `ApprovalRequested` was minted with.
     ///
     /// Deliberately carries only the *human* decision: judge-issued
     /// approvals (`tools::approval::resolve_auto_approval`, the enforcing
@@ -249,7 +247,7 @@ pub enum Event {
     /// halt" / "...after a doom-loop halt" from this row alone. A
     /// `ContinueTurn` arriving for a session with nothing halted (a
     /// no-op replay, or one sent to an idle session) still emits this
-    /// event with `resumed_from = Unknown`, so analytics can count
+    /// event with `resumed_from = None`, so analytics can count
     /// attempted-but-idle continue-turns without a separate missing-
     /// data signal: that count is itself a useful operator-behavior
     /// number (a non-zero one likely means a UI keybinding race).
@@ -258,13 +256,6 @@ pub enum Event {
     /// shows the resumed turn's `TurnEnded` receipt and the next turn's
     /// events; the audit row sits in the event log alongside them.
     ContinueTurnRequested(ContinueTurnRequested),
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. A receiver skips an
-    /// unknown event: it folds into no frame item and projects into no row.
-    #[serde(other)]
-    Unknown,
 }
 
 /// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
@@ -310,14 +301,6 @@ pub enum TurnEndReason {
     /// detector stopped the turn (`TurnLoopGuard::record_fingerprint`).
     /// Same section of the design doc.
     HaltedByDoomLoop,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. Rendered like the
-    /// legacy bare [`TurnEndReason::Halted`]: a calm "paused" receipt with
-    /// no guard-specific sentence.
-    #[serde(other)]
-    Unknown,
 }
 
 pub fn event_kind(event: &Event) -> &'static str {
@@ -340,7 +323,6 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
-        Event::Unknown => "unknown",
     }
 }
 
@@ -455,12 +437,6 @@ pub enum SessionState {
     Completed,
     Failed,
     Terminated,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last.
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -503,14 +479,6 @@ pub enum MessageRole {
     /// `frame`'s turn clock, and the transcript view all treat it as
     /// system-authored.
     AutoContinue,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. Treated as
-    /// assistant-authored wherever a side must be picked (a transcript can
-    /// misattribute a skewed message; it must never invent user words).
-    #[serde(other)]
-    Unknown,
 }
 
 /// Which side of a provider conversation a [`MessageRole`] replays as.
@@ -524,17 +492,14 @@ pub(crate) enum ProviderSide {
 
 impl MessageRole {
     /// Short human-readable tag for logs and the text projection
-    /// (`frame::render_agent_transcript`). `Unknown` renders as
-    /// assistant-authored -- see [`MessageRole::Unknown`]'s doc.
+    /// (`frame::render_agent_transcript`).
     #[cfg(test)]
     pub(crate) fn log_label(self) -> &'static str {
         match self {
             Self::User => "user",
             Self::TaskNotification => "task",
             Self::AutoContinue => "continue",
-            // Unknown renders as assistant-authored -- see
-            // `MessageRole::Unknown`'s doc (never invent user words).
-            Self::Assistant | Self::Unknown => "assistant",
+            Self::Assistant => "assistant",
         }
     }
 
@@ -554,9 +519,6 @@ impl MessageRole {
             // the provider truncated tool calls mid-stream -- never a human
             // turn, so it is projected as its own label.
             Self::AutoContinue => "auto_continue",
-            // Skew catch-all: projected honestly; readers already fall back
-            // to assistant for unrecognized labels (`query::parse_role`).
-            Self::Unknown => "unknown",
         }
     }
 
@@ -567,13 +529,10 @@ impl MessageRole {
     /// that disagreed with the sent one would change the model's view of its
     /// own past. The distinct role exists for persistence and the transcript,
     /// not for the provider -- see [`MessageRole::TaskNotification`].
-    /// `Unknown` replays as assistant-authored (never invent user words).
     pub(crate) fn provider_side(self) -> ProviderSide {
         match self {
             Self::User | Self::TaskNotification | Self::AutoContinue => ProviderSide::User,
-            // Unknown replays as assistant-authored -- see
-            // `MessageRole::Unknown`'s doc (never invent user words).
-            Self::Assistant | Self::Unknown => ProviderSide::Assistant,
+            Self::Assistant => ProviderSide::Assistant,
         }
     }
 
@@ -588,9 +547,7 @@ impl MessageRole {
             // A system-authored auto-continuation after truncation: same
             // muted treatment as a task notification.
             Self::AutoContinue => "continue",
-            // Unknown renders as agent-authored -- see
-            // `MessageRole::Unknown`'s doc (never invent user words).
-            Self::Assistant | Self::Unknown => "agent",
+            Self::Assistant => "agent",
         }
     }
 }
@@ -717,17 +674,9 @@ pub struct ToolCallRequest {
     pub call_id: ToolCallId,
     pub tool_id: String,
     pub input: JsonValue,
-    /// Per-occurrence identity -- see [`OccurrenceId`]. `#[serde(default,
-    /// skip_serializing_if = "Option::is_none")]`: `default` so a request
-    /// persisted before this field existed still deserializes (reads back
-    /// with `None`), and consumers fall back to `call_id` + positional
-    /// `.rev()` scanning in that case; `skip_serializing_if` keeps the
-    /// on-disk JSON shape byte-identical to what a build without this
-    /// field wrote whenever it is `None`, so existing log analyzers that
-    /// pattern-match on `tool_call_request` keys don't break. The field
-    /// is purely additive on the wire -- it landed inside
-    /// `SESSION_PROTOCOL_VERSION` 15 and needed no bump of its own.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Per-occurrence identity -- see [`OccurrenceId`]. `None` when the
+    /// originating request is not in scope (synthetic results); consumers
+    /// fall back to `call_id` + positional `.rev()` scanning in that case.
     pub occurrence_id: Option<OccurrenceId>,
 }
 
@@ -735,9 +684,7 @@ pub struct ToolCallRequest {
 pub struct ToolCallResult {
     pub call_id: ToolCallId,
     /// Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the
-    /// `ToolCallRequest` field it answers to. See [`ToolCallRequest`]
-    /// for the `serde` attribute rationale.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `ToolCallRequest` field it answers to.
     pub occurrence_id: Option<OccurrenceId>,
     pub output: JsonValue,
     /// Explicit success/failure outcome, lifted out of `output`'s
@@ -748,10 +695,7 @@ pub struct ToolCallResult {
     /// turn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12
     /// addendum) has a typed field instead of having to sniff `output`
     /// itself. Use [`Self::new`] rather than a struct literal to keep this
-    /// derived automatically. `#[serde(default)]` (false, i.e. success) so
-    /// a `Record` written before this field existed still deserializes --
-    /// matching the same convention's "absence means success" reading.
-    #[serde(default)]
+    /// derived automatically.
     pub is_error: bool,
     /// Explicit marker for a user's tool-call denial, set only by
     /// [`Self::denied`] (used by `tools::approval::synchronous_result`'s
@@ -762,11 +706,7 @@ pub struct ToolCallResult {
     /// user"}` shape -- documented as brittle when that convention shipped
     /// (`docs/agent-output-ui-amendment.md`'s round 3 note) since it
     /// couldn't distinguish "the field happens to read that way" from "this
-    /// is contractually a denial". `#[serde(default)]` (false) so a
-    /// `Record` persisted before this field existed still deserializes --
-    /// `src/agent/turns.rs`'s `is_denied` falls back to the old message-text
-    /// check specifically to keep classifying those old records correctly.
-    #[serde(default)]
+    /// is contractually a denial".
     pub denied: bool,
 }
 
@@ -828,16 +768,10 @@ pub struct ApprovalRequest {
     /// agentd on every approval it emits (initial + every reissue) so the
     /// approval attaches to the specific occurrence the user is deciding,
     /// not just to a call_id that may have already been resolved by an
-    /// earlier occurrence. See [`ToolCallRequest::occurrence_id`] for
-    /// the `serde` attribute rationale.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// earlier occurrence.
     pub occurrence_id: Option<OccurrenceId>,
     pub reason: String,
-    /// Which kind of approval this is -- see [`ApprovalKind`]. `#[serde(
-    /// default)]` so a `Record` persisted before this field existed still
-    /// deserializes, reading as the same [`ApprovalKind::Standard`] every
-    /// approval request was before this leg.
-    #[serde(default)]
+    /// Which kind of approval this is -- see [`ApprovalKind`].
     pub kind: ApprovalKind,
 }
 
@@ -853,10 +787,7 @@ pub struct ApprovalRequest {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum ApprovalDecisionPayload {
     Approve,
-    Deny {
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-    },
+    Deny { reason: Option<String> },
 }
 
 /// Payload for [`Event::ApprovalResolved`]. Pairs with the preceding
@@ -868,7 +799,6 @@ pub enum ApprovalDecisionPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalResolved {
     pub call_id: ToolCallId,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub occurrence_id: Option<OccurrenceId>,
     pub decision: ApprovalDecisionPayload,
 }
@@ -878,13 +808,13 @@ pub struct ApprovalResolved {
 /// moment the human resumed, recovered via
 /// [`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows
 /// which guard's halt the operator overrode (`HaltedByIterationCap` /
-/// `HaltedByDoomLoop` / the legacy bare `Halted`). `Unknown` when no
+/// `HaltedByDoomLoop` / the legacy bare `Halted`). `None` when no
 /// preceding `TurnEnded` exists — the no-op-replay / idle-session case
 /// (see the `Event::ContinueTurnRequested` doc comment for why that
 /// distinction still matters operationally).
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ContinueTurnRequested {
-    pub resumed_from: TurnEndReason,
+    pub resumed_from: Option<TurnEndReason>,
 }
 
 /// Distinguishes the shape of a pending [`ApprovalRequest`] -- what
@@ -965,14 +895,6 @@ pub enum ApprovalKind {
     /// them only to this call (including any chained containment retry), and
     /// keeps the command inside the sandbox.
     GitOperation { writable_roots: Vec<PathBuf> },
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last.
-    /// Resolution fails closed because a newer approval kind may carry
-    /// narrower semantics that this build cannot safely reproduce.
-    #[serde(other)]
-    Unknown,
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was
@@ -1057,6 +979,7 @@ mod json_value_tests {
                 "call_id": "call-1",
                 "tool_id": "fs.read",
                 "input": {"path": "a.txt"},
+                "occurrence_id": null,
             })
         );
         let decoded: ToolCallRequest = serde_json::from_value(encoded).unwrap();
@@ -1106,7 +1029,6 @@ mod message_role_tests {
         assert_eq!(MessageRole::Assistant.log_label(), "assistant");
         assert_eq!(MessageRole::TaskNotification.log_label(), "task");
         assert_eq!(MessageRole::AutoContinue.log_label(), "continue");
-        assert_eq!(MessageRole::Unknown.log_label(), "assistant");
     }
 
     #[test]
@@ -1115,7 +1037,6 @@ mod message_role_tests {
         assert_eq!(MessageRole::Assistant.db_key(), "assistant");
         assert_eq!(MessageRole::TaskNotification.db_key(), "task_notification");
         assert_eq!(MessageRole::AutoContinue.db_key(), "auto_continue");
-        assert_eq!(MessageRole::Unknown.db_key(), "unknown");
     }
 
     #[test]
@@ -1133,10 +1054,6 @@ mod message_role_tests {
             MessageRole::Assistant.provider_side(),
             ProviderSide::Assistant
         );
-        assert_eq!(
-            MessageRole::Unknown.provider_side(),
-            ProviderSide::Assistant
-        );
     }
 
     #[test]
@@ -1145,6 +1062,5 @@ mod message_role_tests {
         assert_eq!(MessageRole::Assistant.display_label(), "agent");
         assert_eq!(MessageRole::TaskNotification.display_label(), "task");
         assert_eq!(MessageRole::AutoContinue.display_label(), "continue");
-        assert_eq!(MessageRole::Unknown.display_label(), "agent");
     }
 }
