@@ -323,10 +323,12 @@ where
 /// dominating agentd's stderr.
 fn truncate_for_log(message: &str) -> String {
     const LIMIT: usize = 300;
-    if message.chars().count() <= LIMIT {
-        return message.to_string();
+    let (head, truncated) = crate::transcript::truncate_chars(message, LIMIT);
+    if truncated {
+        format!("{head}…")
+    } else {
+        head
     }
-    message.chars().take(LIMIT).chain("…".chars()).collect()
 }
 
 /// Guarantees a matching `ProviderRequestFinished` marker for every path

@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 
 use super::ssrf::{remote_addr_is_safe, validate_url, SafeResolver};
 
+use crate::transcript::truncate_chars;
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
@@ -299,13 +301,6 @@ fn supported_content_type(content_type: &str) -> bool {
         || matches!(content_type, "application/json" | "application/xml")
         || content_type.ends_with("+json")
         || content_type.ends_with("+xml")
-}
-
-fn truncate_chars(text: &str, max: usize) -> (String, bool) {
-    match text.char_indices().nth(max) {
-        Some((end, _)) => (text[..end].to_string(), true),
-        None => (text.to_string(), false),
-    }
 }
 
 fn error_output(message: String) -> Value {

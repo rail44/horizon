@@ -684,15 +684,33 @@ pub fn str_field<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
 /// First line of `command`, truncated to a display-friendly length.
 fn command_head(command: &str) -> String {
     let first_line = command.lines().next().unwrap_or("");
-    truncate_chars(first_line, 32)
+    let (head, truncated) = truncate_chars(first_line, 32);
+    if truncated {
+        // Preserve the prior output shape: 31 chars + "…" (32 total).
+        // `head` already holds 32 chars; trim one more, then append the ellipsis.
+        let (head, _) = truncate_chars(&head, 31);
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
-fn truncate_chars(text: &str, max_chars: usize) -> String {
-    if text.chars().count() <= max_chars {
-        text.to_string()
-    } else {
-        let head: String = text.chars().take(max_chars.saturating_sub(1)).collect();
-        format!("{head}…")
+/// Truncate `text` to at most `max` characters, cutting at a UTF-8 boundary
+/// (never mid-code-point). Returns the (possibly truncated) string and
+/// whether truncation occurred. Does not append an ellipsis — that is the
+/// caller's responsibility.
+///
+/// Single shared helper for every call site that caps a string to a
+/// character budget. Previously six independent copies lived across
+/// `providers::rig::clearing`, `tools::web::{fetch,search}`,
+/// `tools::explore::notify`, `providers::rig::completion`, and here;
+/// they differed only in whether they appended `…` and whether they
+/// reported the truncation flag, so this function returns the flag and
+/// leaves the ellipsis to the caller.
+pub fn truncate_chars(text: &str, max: usize) -> (String, bool) {
+    match text.char_indices().nth(max) {
+        Some((end, _)) => (text[..end].to_string(), true),
+        None => (text.to_string(), false),
     }
 }
 
@@ -1510,5 +1528,37 @@ mod tests {
             assert!(last_kept_lines <= THINKING_TAIL_LINES);
         }
         assert_eq!(last_kept_lines, THINKING_TAIL_LINES);
+    }
+
+    #[test]
+    fn truncate_chars_cuts_at_a_multibyte_boundary() {
+        // "aé日" is 3 chars; cutting at 2 must land between é and 日,
+        // not mid-code-point.
+        assert_eq!(truncate_chars("aé日", 2), ("aé".to_string(), true));
+    }
+
+    #[test]
+    fn truncate_chars_returns_original_at_exactly_cap() {
+        // 3 chars, cap 3: no truncation, original returned.
+        assert_eq!(truncate_chars("aé日", 3), ("aé日".to_string(), false));
+    }
+
+    #[test]
+    fn truncate_chars_returns_original_below_cap() {
+        assert_eq!(truncate_chars("abc", 10), ("abc".to_string(), false));
+    }
+
+    #[test]
+    fn truncate_chars_handles_empty_string() {
+        assert_eq!(truncate_chars("", 10), ("".to_string(), false));
+    }
+
+    #[test]
+    fn truncate_chars_truncates_long_ascii() {
+        let long = "z".repeat(400);
+        let (head, truncated) = truncate_chars(&long, 120);
+        assert!(truncated);
+        assert_eq!(head.chars().count(), 120);
+        assert_eq!(head, "z".repeat(120));
     }
 }

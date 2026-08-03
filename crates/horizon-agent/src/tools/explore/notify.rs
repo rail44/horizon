@@ -116,10 +116,7 @@ fn entry(position: usize, completion: &Completion) -> String {
 /// Cuts `report` to [`INLINE_REPORT_CAP_CHARS`] *characters* (never bytes --
 /// a report can hold any UTF-8), reporting whether anything was dropped.
 fn truncate_report(report: &str) -> (String, bool) {
-    if report.chars().count() <= INLINE_REPORT_CAP_CHARS {
-        return (report.to_string(), false);
-    }
-    (report.chars().take(INLINE_REPORT_CAP_CHARS).collect(), true)
+    crate::transcript::truncate_chars(report, INLINE_REPORT_CAP_CHARS)
 }
 
 /// The wake half of the subscription seam: a session loop registers here at
