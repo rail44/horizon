@@ -37,6 +37,17 @@ alone, `Reload Terminal Runtime` restarts the terminal daemon and is
 explicitly destructive (every terminal session, and whatever is running in
 it, ends).
 
+**A protocol bump needs a full Horizon restart, not a runtime reload.**
+Both hubs run lockstep (`MIN_SUPPORTED == current`), so a shell built
+before the bump and a daemon built after it have no overlapping range:
+`hello` rejects the pairing, and the auto-drain-and-respawn recovery
+just respawns the same mismatched daemon. The shell reports sessions it
+created while nothing reaches the daemon — no events, no transcript,
+silent. `Reload Agent Runtime` cannot fix this because it only replaces
+the daemon side. Rebuild, then restart the app itself (hit 2026-08-03
+merging the v19 bump; diagnosed only after a standalone `horizon-agentd`
+proved the writer was healthy).
+
 There is no CI. The local quality gate below is mandatory before finishing
 any work — run it yourself and make sure all four are clean:
 
