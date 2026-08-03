@@ -201,19 +201,23 @@ the first rtc call on top of the established remoc connection:
   ranges (which feeds the same auto-drain recovery as today's
   `HandshakeRejected`, §6).
 
-`SESSION_PROTOCOL_VERSION` survives with its meaning shifted:
-
-- **The remoc cutover is v10.** v10's "wire shape" is the hub trait +
-  Postbag-encoded vocabularies; a v10 peer cannot talk to a v≤9 JSONL
-  peer at all (detected and recovered per §6, not negotiated).
-- **From v10 on, the version bumps only on a deliberate semantic break,
-  which the skew discipline (§4) makes rare-to-never.** Additive
-  evolution — new fields with defaults, new `Unknown`-guarded variants,
-  new trait methods — needs no bump: old and new peers already tolerate
-  each other. The negotiated version exists to gate *behavior* ("may I
-  rely on the peer honoring X?"), not decodability; `min_supported` rises
-  only when carrying compatibility code for ancient peers stops being
-  worth it.
+`SESSION_PROTOCOL_VERSION` survives with its meaning shifted, then
+narrowed further by the standing **lockstep, no per-feature gates**
+policy (owner, 2026-07-30; hardened 2026-08-03 — this project carries no
+wire decode compatibility by default): `min_supported` always equals
+`current` for both hubs now (`AGENT_PROTOCOL_VERSION`/
+`MIN_SUPPORTED_AGENT_PROTOCOL_VERSION` in
+`crates/horizon-agent/src/wire/hub.rs`, the terminal pair in
+`crates/horizon-terminal-core/src/wire.rs`). A same-machine self-spawned
+daemon and its UI are always the same build, so a mismatched `hello` — a
+stale daemon that hasn't picked up a rebuild yet — is rejected and
+recovered by auto-drain-and-respawn (§6) rather than bridged by a
+tolerated range. The version still bumps only on a deliberate wire
+reshape (§4's checker still tells additive from reshape, for exactly this
+reason): a purely additive change needs no bump, so a stale-but-current
+daemon can keep serving right through it without an unnecessary
+drain — the property `horizon-terminald`'s rarely-restarted PTYs
+particularly depend on.
 
 This replaces a regime of nine bumps in two weeks (v1–v9, each a hard
 "reload required") with one where a routine vocabulary addition ships
@@ -230,9 +234,11 @@ by accident. Rules, then enforcement:
    bump (§3) and an owner decision — the expectation is that this
    essentially never happens again (v5's color-vocabulary reshape was the
    kind of change that now lands as a parallel additive field instead).
-2. **`#[serde(other)] Unknown` on every wire enum**, receive loops skip
-   undecodable items (adoption condition 2).
-3. **The schema is a committed artifact, checked mechanically.** Every
+   Under the lockstep policy (§3) this is no longer about tolerating a
+   *foreign* peer — there is no other build to tolerate — it is about not
+   forcing a stale-but-current daemon through an unnecessary
+   drain-and-respawn for a change it can already decode.
+2. **The schema is a committed artifact, checked mechanically.** Every
    wire-visible type derives `schemars::JsonSchema`; a generator writes
    one canonical schema file per runtime
    (`crates/horizon-agent/schema/agent-wire.json`,
@@ -252,28 +258,31 @@ by accident. Rules, then enforcement:
    the idea; Horizon needs the comparison at *merge* time, not connect
    time, so a repo artifact plus a merge-base diff is the same guarantee
    applied earlier.
-4. This checker **replaces the four `CONTRACT_VERSION` pin tests** in
-   `crates/horizon-agent/src/wire.rs` (`contract_version_*`): their job —
-   forcing a human decision on every wire-shape change — is exactly what
-   the artifact diff does, with structure instead of a hand-maintained
-   integer assertion.
-5. **Postbag positional discipline** (added 2026-07-21, from the v10
+3. This checker **replaces the four `CONTRACT_VERSION` pin tests** that
+   used to live in `crates/horizon-agent/src/wire.rs` (`contract_version_*`):
+   their job — forcing a human decision on every wire-shape change — is
+   exactly what the artifact diff does, with structure instead of a
+   hand-maintained integer assertion.
+4. **Postbag positional discipline** (added 2026-07-21, from the v10
    review's measurements). Postbag is not self-describing, which makes
    enum placement wire-meaningful:
    - Wire enums may appear only in **struct-field, top-level, or newtype
-     positions** — never as `Vec`/tuple/array *element* types. In element
-     position a skewed peer's unknown variant cannot be skipped
-     item-by-item (the whole collection is one item), and a misaligned
-     read can silently misdecode neighbouring elements.
-   - The degrade-vs-error boundary is exactly the **variant identifier
-     byte(s)**: an unknown identifier degrades to the `#[serde(other)]`
-     catch-all (payload read and discarded); a *known* identifier with a
-     structurally broken payload (missing required field) is a per-item
-     decode error the receive loops skip. **Corruption detection must not
-     be expected beyond that**: a type-level mismatch can silently
-     misdecode (measured: a `String` payload read into a `u16` field as
-     the string's length varint) — which is why retyping a wire field is
-     a version-bump reshape, never an in-place change.
+     positions** — never as `Vec`/tuple/array *element* types. A
+     misaligned read in element position can silently misdecode
+     neighbouring elements.
+   - The receive-side floor is a **per-item decode error, never a panic
+     or a torn channel**: an unrecognized identifier and a *known*
+     identifier with a structurally broken payload (missing required
+     field) both surface as the same non-final `recv` error, which every
+     receive loop skips (this project carries no wire decode
+     compatibility by default — owner decision 2026-08-03 — so there is
+     no `Unknown` catch-all left to degrade an unrecognized identifier
+     into; it is corruption to skip past, not a peer to tolerate).
+     **Corruption detection must not be expected beyond that**: a
+     type-level mismatch can silently misdecode (measured: a `String`
+     payload read into a `u16` field as the string's length varint) —
+     which is why retyping a wire field is a version-bump reshape, never
+     an in-place change.
 
 ## 5. Frame delivery — the owner decision (resolved 2026-07-20)
 
@@ -366,73 +375,15 @@ terminal frames.
 
 ## 6. Migration plan (completed)
 
-Hard cutover, no dual-stack daemon: this is a pre-release, single-owner
-project (the same posture as the `agentd`→`sessiond` rename — 
-`docs/session-daemon-design.md`, "Hard rename, no migration compatibility
-layer"). The daemon speaks only remoc from v10 on; what needs care is the
-*transition moment*, where a v10 UI meets a still-running v≤9 daemon.
-
-**The legacy JSONL drain prober outlived JSONL — until 2026-08-01.** PR
-#18's contract-mismatch auto-recovery (drain the stale daemon at *its own*
-envelope version, probing v9 down to v3 when it never revealed one, then
-let `connect_or_spawn_agentd_retrying` start a fresh binary) was retained after
-the cutover as the **only** path by which a remoc-generation UI could
-automatically clear a JSONL-generation daemon: a v10 client's chmux
-handshake gets no valid reply from a JSONL daemon (detected by a bounded
-timeout wrapped around the connect — never the raw 60 s chmux timeout),
-which triggered the same probe-drain-respawn sequence, once per runtime,
-fatal-with-rebuild-hint on the second failure exactly as #18 decided. To
-serve it, a small legacy JSONL *encoder* (versioned `session_control`
-envelope + line framing) survived, quarantined in one module whose only
-caller was the prober.
-
-**Retired 2026-08-01 (owner decision).** The prober and its quarantined
-encoder (`horizon_agent::wire::legacy`) are deleted. The only daemon they
-could still stop was a binary built before the 2026-07-21 cutover and left
-running for months, and the detection half was never the part that carried
-its weight: the shell keeps its bounded-timeout silence detection and its
-once-per-runtime recovery, which now dials remoc and sends the
-version-stable rtc `drain` (`src/runtime/agent.rs`'s `drain_stale_agentd`).
-A peer too old to answer *that* is reported with "stop it manually" — the
-same answer this wire already gives at the v16→v17 boundary, where the
-method-index shift likewise leaves no drain the stale daemon can decode
-(see `AGENT_PROTOCOL_VERSION`'s v17 note).
-
-**The reverse direction does not auto-recover either.** A *v≤9 (JSONL) UI*
-meeting a *v10 daemon* cannot clear it automatically: the old UI's
-recovery only knows JSONL probes, which the remoc daemon reads as chmux
-garbage (its length-prefix decode fails instantly) and drops, so the old
-UI retries until its own budget goes fatal. The user kills the stale
-process manually and restarts — accepted as a one-time migration cost
-(added 2026-07-21; the forward direction, which is the one the upgrade
-flow actually produces, is the auto-recovery path above).
-
-**Out of scope: the event log's on-disk format.** It is independent of
-the wire (a daemon-local persistence concern), already carries its own
-forward-compatibility guard, and does not change in this migration.
-
-Staged PR sequence, each independently green — **all four landed 2026-07-21**:
-
-1. **Skew groundwork on the live JSONL wire (no v-bump).** *(Landed — PR #22.)* Add
-   `#[serde(other)] Unknown` variants and the `#[serde(default)]` audit
-   across the wire vocabularies, `schemars` derives, the committed schema
-   artifact, and the §4 checker (retiring the four pin tests). All
-   additive on v9; lands value even before remoc does.
-2. **The cutover (v10).** *(Landed — PR #23.)* The hub trait in `horizon-session-protocol`,
-   remoc pinned (exact version, explicit Postbag codec, default features
-   off), daemon serves the hub, `src/runtime/` client rebuilt on rtc
-   calls + channel bridges, envelope/kind-dispatch/correlation code
-   deleted, `hello` range negotiation, the legacy prober rewired behind
-   the chmux-timeout detection. Frame delivery ships **unchanged in
-   semantics** here — Snapshot/FrameDiff updates travel verbatim over the
-   attachment's mpsc channel — so this PR is a transport swap, reviewable
-   as such. e2e suite ported (§7).
-3. **Frame path (Option A, ratified 2026-07-20).** *(Landed — PR #25, protocol v11.)* Swap the frame channel to
-   `rch::watch`, delete the diff/baseline machinery, move row-change
-   detection client-side. Separated from PR 2 so the semantic change is
-   reviewed on its own.
-4. **Cleanup.** *(This PR.)* JSONL reduced to the prober's legacy module, stale doc
-   sweep, roadmap update.
+Hard cutover in four PRs, all landed 2026-07-21, no dual-stack daemon
+(pre-release, single-owner project): skew groundwork on the live JSONL
+wire, the remoc cutover itself (v10, hub trait + Postbag, `hello` range
+negotiation), the frame path (Option A, §5, protocol v11), then cleanup.
+The one transition hazard — a v10 UI meeting a still-running pre-remoc
+JSONL daemon, or the reverse — was bridged by a quarantined legacy JSONL
+prober/encoder, itself retired once no such daemon could plausibly still
+be running. The event log's on-disk format was out of scope throughout —
+independent of the wire, a daemon-local persistence concern.
 
 ## 7. Test strategy
 
@@ -442,14 +393,14 @@ Staged PR sequence, each independently green — **all four landed 2026-07-21**:
   clients and remains the proof for attach/reconnect, PTY survival, cwd
   resolution, and drain. The `Connect::io` both-ends rule (adoption
   condition 3) applies to any in-process harness.
-- **Cross-version skew tests become permanent residents.** The spike's
-  V1/V2 type-pair method (`remoc-spike:spike/remoc/tests/skew.rs`: a frozen copy of
-  a vocabulary type beside its evolved twin, exercised through live
-  channels in both directions) was promoted from spike code to a standing
-  test module in `horizon-session-protocol`: every rule in §4 gets a
-  pair proving it (field added, field missing with default, unknown
-  variant to `Unknown`, one poisoned item not killing the channel). The
-  frozen types are the *executable* form of the schema artifact.
+- **Wire-decode robustness tests are permanent residents.** The spike's
+  V1/V2 type-pair method (`remoc-spike:spike/remoc/tests/skew.rs`) was
+  promoted from spike code to a standing test module,
+  `crates/horizon-agent/tests/skew.rs`; since the 2026-08-03 compat sweep
+  removed cross-build decode compatibility, what it proves narrowed to
+  corruption robustness alone — a structurally broken item is a per-item
+  decode error, never a panic or a torn channel, over the actual wire
+  codec.
 - **Mismatch recovery keeps its e2e coverage** across the generation gap:
   a v10 client against a real JSONL-daemon fixture must probe, drain,
   respawn, and connect — the #18 scenarios re-anchored on the new
