@@ -147,7 +147,9 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
              operation — a plain commit, rebase, merge, cherry-pick, add, restore, \
              stash, branch (within the horizon/ namespace), tag, or a fetch or pull \
              (specifying a remote name and a branch name) on the current repository. \
-             Escalate if it does anything unexpected or suspicious.\n\n",
+             A sequence of such plain git operations joined by `&&` or `;` (or a \
+             leading `cd` followed by one) is equally routine. Escalate if it does \
+             anything unexpected or suspicious.\n\n",
         );
     }
 
