@@ -1,7 +1,7 @@
 ---
 id: 014
 title: A terminal session that tears down with unread PTY bytes never tells its client it exited
-status: triaged
+status: resolved
 severity: high
 area: terminald
 ---
@@ -83,3 +83,26 @@ reproduction.
 The sibling flakes tracked in `docs/issues/015` were investigated in the
 same pass and are **independent** of this one — under one identical load
 window they degraded at 19% / 1.0% / 0%, with different mechanisms.
+
+## Resolution
+Fixed in `97e9d74` (merged as `44ced2f`). Both early returns now do what
+their sibling arms do, through a shared `Host::tear_down_session` that
+carries the ordering requirement in one place: `read_pty`'s
+send-failure arm sends `Exited` before returning, and
+`forward_updates`' `update_rx`-disconnect arm removes the session and
+its subscriber (delivering `Exited` to the bridge) instead of returning
+silently. Either alone closes the observed hang; both together make the
+teardown watertight regardless of which channel drops first.
+
+Tests: `read_pty_emits_exited_when_pty_receiver_is_gone_mid_read` (drop
+`pty_rx`, have the reader return `Ok(n > 0)`, assert `Exited` reaches
+`update_rx`) and
+`forward_updates_reaps_session_and_subscriber_when_update_channel_closes`
+(close `update_tx` with no `Exited`, assert both maps are reaped and the
+bridge receives the exit).
+
+The reproduction recipe above was not re-run against the fix: it
+requires oversubscribing the host CPU, which is not an acceptable thing
+to do on the owner's working machine for a confirmation the gate
+already covers. If it is ever needed, run it without the artificial
+load (~5% per attempt) rather than with it.
