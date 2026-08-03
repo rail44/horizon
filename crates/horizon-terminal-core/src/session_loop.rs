@@ -648,8 +648,26 @@ mod tests {
         // window with no ESU in this chunk: fully absorbed by the sync
         // buffer, nothing reaches the grid yet.
         pty_tx.send(b"\x1b[H\x1b[K".to_vec()).unwrap();
+        // The wait must exceed COALESCE_WINDOW so a spurious coalescing
+        // flush-timer (armed at <= COALESCE_WINDOW under the old buggy code
+        // that notified on every chunk) has time to fire and surface a frame
+        // -- but it must stay under vte::ansi's SYNC_UPDATE_TIMEOUT (150 ms,
+        // per `core.rs` line 50; not re-exported, so hardcoded here) so the
+        // *correct* code's failsafe does not flush the buffered erase
+        // mid-wait and make this assertion pass for the wrong reason.
+        // 5x the coalesce window (80 ms) leaves balanced margins: ~64 ms
+        // above the lower bound, ~70 ms below the upper. An order-based
+        // rewrite is not feasible -- buffering is silent (no observable
+        // event), and coalescing hides the bug when the mid-sync chunk and
+        // the close are sent back-to-back (docs/issues/015).
+        const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
+        let no_notify_wait = COALESCE_WINDOW * 5;
+        debug_assert!(
+            no_notify_wait > COALESCE_WINDOW && no_notify_wait < SYNC_UPDATE_TIMEOUT,
+            "no_notify_wait must sit between COALESCE_WINDOW and SYNC_UPDATE_TIMEOUT"
+        );
         assert!(
-            frame_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            frame_rx.recv_timeout(no_notify_wait).is_err(),
             "a chunk fully buffered inside an open sync window must not notify"
         );
 

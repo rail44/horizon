@@ -375,19 +375,30 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
 
     let output = execute_auto(&tool_state, "recall.search", &json!({ "query": "widget" }))
         .expect("recall.search handled");
-    let hits = output["hits"].as_array().expect("hits array");
+    // When `store.search_history` returns `Err`, `recall.search` yields
+    // `error_output(...)` (an object with no `hits` key) rather than an empty
+    // array, so this `as_array()` is the point that trips under load. Include
+    // the full `output` JSON in the panic so the next occurrence names the
+    // underlying DuckDB error instead of swallowing it.
+    let hits = output["hits"].as_array().unwrap_or_else(|| {
+        panic!("expected a `hits` array in recall.search output but got: {output}")
+    });
 
     let tool_result_hit = hits
         .iter()
         .find(|hit| hit["kind"] == "tool_result")
-        .expect("tool_result hit present");
+        .unwrap_or_else(|| {
+            panic!("expected a tool_result hit in recall.search output but got: {output}")
+        });
     assert_eq!(tool_result_hit["is_error"], true);
     assert_eq!(tool_result_hit["turn_outcome"], "failed");
 
     let tool_call_hit = hits
         .iter()
         .find(|hit| hit["kind"] == "tool_call")
-        .expect("tool_call hit present");
+        .unwrap_or_else(|| {
+            panic!("expected a tool_call hit in recall.search output but got: {output}")
+        });
     assert_eq!(
         tool_call_hit["is_error"],
         Value::Null,
