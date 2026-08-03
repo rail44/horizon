@@ -305,9 +305,7 @@ impl AgentTranscript {
                 } else {
                     theme::info()
                 };
-                // Unknown renders as agent-authored -- see `MessageRole::
-                // Unknown`'s doc (never invent user words).
-                if matches!(message.role, MessageRole::Assistant | MessageRole::Unknown) {
+                if message.role == MessageRole::Assistant {
                     Some(markdown_block(
                         label,
                         color,

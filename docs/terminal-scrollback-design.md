@@ -311,15 +311,14 @@ Additive, under `docs/remoc-adoption-design.md` §4:
   the local window state machine carries no legacy fallback mode.
 - The new surface is additive by the §4 classifier's own rules
   (`crates/horizon-wire/src/schema_check.rs`): **appended enum variants**
-  (`RequestScrollWindow`, `ScrollWindow`) are additive provided
-  they precede the trailing `#[serde(other)] Unknown` and nothing is
+  (`RequestScrollWindow`, `ScrollWindow`) are additive provided nothing is
   reordered/retyped; a **new rtc method** (delivery option i, §9) is
   additive; the new **scrollback-availability frame flag** (§2.3) is a new
   field carrying `#[serde(default)]`. Every new wire type derives
   `JsonSchema`; the committed artifact for this (terminal) wire slice
-  (`crates/horizon-terminal-core/schema/terminal-wire.json`, which strips
-  `Unknown` catch-alls and documents only what a peer may legally *send*)
-  regenerates in `crates/horizon-terminal-core/tests/wire_schema.rs`
+  (`crates/horizon-terminal-core/schema/terminal-wire.json`, which
+  documents only what a peer may legally *send*) regenerates in
+  `crates/horizon-terminal-core/tests/wire_schema.rs`
   (`HORIZON_BLESS_WIRE_SCHEMA=1` to bless) and shows as reviewable diff text,
   waved through by the `x-session-protocol-version` bump. A new hub method
   would also land in the artifact's `hub` section (and must update the
@@ -327,10 +326,9 @@ Additive, under `docs/remoc-adoption-design.md` §4:
   `terminal_hub_request_enum_matches_the_documented_method_surface`,
   `crates/horizon-terminal-core/src/wire.rs`); a new streamed channel
   in its `channels` section.
-- **Postbag positional discipline** (§4 rule 5): `ScrollWindow.lines` is a
+- **Postbag positional discipline** (§4 rule 4): `ScrollWindow.lines` is a
   `Vec<TerminalLine>` — `TerminalLine`/`TerminalSpan` are structs, not wire
-  enums, so the "no enums in element position" rule holds. Both new enum
-  variants keep the trailing `Unknown`.
+  enums, so the "no enums in element position" rule holds.
 
 ## 5. Hard-case design
 
@@ -400,7 +398,11 @@ phase and the cache/eviction phase are gone entirely:
    alt-screen / mouse-mode passthrough gating on the availability flag.
 4. **`SESSION_PROTOCOL_VERSION` → 12** and the negotiation gate (negotiate 11
    ⇒ today's round-trip `Scroll`). May fold into phase 1 or ride last, as
-   long as the feature is version-gated throughout.
+   long as the feature is version-gated throughout. **Implemented, then
+   retired**: the gate constant (`SCROLLBACK_WINDOW_MIN_VERSION`) became
+   dead code once the minimum floor rose to 17+ under the terminald-split
+   lockstep policy (its `>=` comparison could never be false) and was
+   deleted with the phase-2 split.
 
 ## 8. Test strategy
 
@@ -423,9 +425,11 @@ phase and the cache/eviction phase are gone entirely:
   drops the window and resumes the live watch.
 - **Scrollbar jump.** A jump beyond the held window issues exactly one window
   fetch (not per-tick), landing at the requested position.
-- **Cross-version.** A v12 client negotiating 11 uses the round-trip `Scroll`
-  path unchanged; a v11 client against a v12 daemon ignores
-  `RequestScrollWindow`/`ScrollWindow` (both decode to `Unknown`).
+- **Cross-version.** Historical: under the negotiation gate this shipped
+  with, a v12 client negotiating 11 used the round-trip `Scroll` path
+  unchanged. That gate (and the `MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION`
+  ≥ 17 lockstep floor it became dead under) means there is no cross-version
+  pairing to test any more — see phase 4's retirement note above.
 
 ## 9. Owner decisions (branches this design leaves open)
 

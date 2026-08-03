@@ -42,7 +42,6 @@ fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> Sta
         Some(SessionState::Completed) => "completed",
         Some(SessionState::Failed) => "failed",
         Some(SessionState::Terminated) => "terminated",
-        Some(SessionState::Unknown) => "",
     };
     StatusProjection {
         text,
@@ -124,11 +123,7 @@ mod tests {
         );
         assert!(projection.turn_in_flight);
 
-        for state in [
-            None,
-            Some(SessionState::Created),
-            Some(SessionState::Unknown),
-        ] {
+        for state in [None, Some(SessionState::Created)] {
             let projection = project_status(state, false);
             assert_eq!(projection.text, "");
             assert!(!projection.turn_in_flight);

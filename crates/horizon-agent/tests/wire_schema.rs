@@ -45,24 +45,18 @@
 //!   data — they appear here as opaque markers.
 //! - `channels`: the vocabularies those channels carry
 //!   (`AgentWireEvent`/agent `Command`, `HostToolRequest`/
-//!   `HostToolResponse`, the startup `skipped_lines` diagnostic). This is
-//!   where every `#[serde(other)] Unknown`-guarded command/event lives.
+//!   `HostToolResponse`, the startup `skipped_lines` diagnostic).
 //!
 //! `horizon-terminald`'s `terminal_hub` section and its terminal channels
 //! are `crates/horizon-terminal-core/schema/terminal-wire.json`.
 //!
 //! ## Version history, inherited from the retired pin tests
 //!
-//! This check replaces the four `contract_version_*` pin tests of
-//! `crates/horizon-agent/src/wire.rs`. The v4–v18 bump narrative lives on in
-//! `AGENT_PROTOCOL_VERSION`'s own doc comment (terminal discovery/attach,
-//! owned colors, dropped `Hello.capabilities`, frame styles/selection/
-//! cursor shape, `SetColorScheme`, dropped `TerminalFrame.text`, the remoc
-//! cutover, the terminald split, the config-only provider reload). From
-//! here on the version stays put for additive changes — the checker
-//! enforces exactly that — and a reshape demands an
-//! `AGENT_PROTOCOL_VERSION` bump in the same change, which the artifact
-//! carries as `x-session-protocol-version`.
+//! This check replaces the four `contract_version_*` pin tests that used to
+//! live in `crates/horizon-agent/src/wire.rs`. The bump narrative lives on
+//! in `AGENT_PROTOCOL_VERSION`'s own doc comment; the version stays put for
+//! additive changes and a reshape demands a bump in the same change, which
+//! the artifact carries as `x-session-protocol-version`.
 
 use std::path::Path;
 
@@ -74,9 +68,7 @@ use horizon_agent::wire::{
     AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse, HubHello, SessionNew,
     SessionSummary, AGENT_PROTOCOL_VERSION,
 };
-use horizon_wire::schema_check::{
-    sort_object_keys, strip_unknown_catch_alls, PROTOCOL_VERSION_KEY,
-};
+use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
 use horizon_wire::{ClientHello, HubError};
 
 const ARTIFACT_RELATIVE_PATH: &str = "schema/agent-wire.json";
@@ -132,8 +124,7 @@ fn generate_wire_schema() -> Value {
         "skipped_lines": generator.subschema_for::<String>().to_value(),
     });
 
-    let mut defs = Value::Object(generator.take_definitions(true));
-    strip_unknown_catch_alls(&mut defs);
+    let defs = Value::Object(generator.take_definitions(true));
 
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -183,18 +174,6 @@ fn committed_wire_schema_artifact_is_current() {
          regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
          -p horizon-terminal-core wire_schema` and commit the artifact diff alongside the \
          change (scripts/check-wire-schema.sh classifies it as additive or reshape)."
-    );
-}
-
-/// The artifact never advertises the deserialize-only catch-all: no
-/// `{"const": "Unknown"}` branch survives generation.
-#[test]
-fn generated_schema_contains_no_unknown_catch_all() {
-    let schema = generate_wire_schema();
-    let text = serde_json::to_string(&schema).unwrap();
-    assert!(
-        !text.contains("\"const\":\"Unknown\""),
-        "an Unknown catch-all branch leaked into the artifact: {text}"
     );
 }
 

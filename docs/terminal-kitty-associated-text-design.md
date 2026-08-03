@@ -86,6 +86,12 @@ an older daemon does not understand. Bump `SESSION_PROTOCOL_VERSION` to 13 and
 add a named `TERMINAL_STRUCTURED_INPUT_VERSION` constant. Keep
 `MIN_SUPPORTED_PROTOCOL_VERSION` at 11.
 
+(`TERMINAL_STRUCTURED_INPUT_VERSION` and this gate were retired in the
+runtime-crate-alignment phase 2 split, once the minimum floor rose to 17+
+and its `>=` comparison could never be false — see
+`crates/horizon-terminal-core/src/wire.rs`'s `MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION`
+doc. `KeyInput` is sent unconditionally now, no gate at all.)
+
 The UI sends `KeyInput`/`TextInput` only when the negotiated version is at least
 13. Below 13 it sends the existing `Key`/raw UTF-8 `Input` forms. A v13 daemon
 continues accepting old forms from a v11/v12 UI. This gives restart skew a

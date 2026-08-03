@@ -32,10 +32,9 @@
 //!
 //! The negotiation half (`ClientHello`, `VersionRange`, `HubError`) is
 //! `horizon-wire`'s and appears in the agent artifact too — identically, by
-//! construction: both generators share
-//! `horizon_wire::schema_check`'s strip/sort helpers, so the shared `$defs`
-//! stay byte-comparable and the two documents still reassemble into the
-//! pre-split union.
+//! construction: both generators share `horizon_wire::schema_check`'s
+//! sort helper, so the shared `$defs` stay byte-comparable and the two
+//! documents still reassemble into the pre-split union.
 
 use std::path::Path;
 
@@ -48,9 +47,7 @@ use horizon_terminal_core::wire::{
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-use horizon_wire::schema_check::{
-    sort_object_keys, strip_unknown_catch_alls, PROTOCOL_VERSION_KEY,
-};
+use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
 use horizon_wire::{ClientHello, HubError};
 
 const ARTIFACT_RELATIVE_PATH: &str = "schema/terminal-wire.json";
@@ -101,8 +98,7 @@ fn generate_wire_schema() -> Value {
         "terminal_commands": generator.subschema_for::<TerminalCommand>().to_value(),
     });
 
-    let mut defs = Value::Object(generator.take_definitions(true));
-    strip_unknown_catch_alls(&mut defs);
+    let defs = Value::Object(generator.take_definitions(true));
 
     let mut schema = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -154,18 +150,6 @@ fn committed_wire_schema_artifact_is_current() {
          change (scripts/check-wire-schema.sh classifies it as additive or reshape). \
          Remember that this slice is append-only (docs/terminald-split-design.md \
          decision 5): a reshape here kills every live PTY on the next reload."
-    );
-}
-
-/// The artifact never advertises the deserialize-only catch-all: no
-/// `{"const": "Unknown"}` branch survives generation.
-#[test]
-fn generated_schema_contains_no_unknown_catch_all() {
-    let schema = generate_wire_schema();
-    let text = serde_json::to_string(&schema).unwrap();
-    assert!(
-        !text.contains("\"const\":\"Unknown\""),
-        "an Unknown catch-all branch leaked into the artifact: {text}"
     );
 }
 

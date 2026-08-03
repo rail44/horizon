@@ -100,99 +100,36 @@ impl Store {
         self.migrated_legacy_schema
     }
 
-    /// Migrates a table shape from an older Horizon build so the `CREATE
-    /// TABLE IF NOT EXISTS` in [`INITIALIZE_SCHEMA_SQL`] can lay down the
-    /// current schema. `CREATE TABLE IF NOT EXISTS` is additive-only and
-    /// never alters an existing table, and DuckDB (confirmed against the
-    /// bundled 1.10504.0) rejects `ALTER TABLE ... ADD COLUMN` with an
-    /// inline `NOT NULL` constraint ("Adding columns with constraints not
-    /// yet supported"), so a plain `ADD COLUMN IF NOT EXISTS` can't get us
-    /// to e.g. `agent_tool_results.is_error BOOLEAN NOT NULL` either.
-    /// Dropping a stale table and letting `CREATE TABLE IF NOT EXISTS`
-    /// recreate it is cheap and correct specifically *because* the whole
-    /// projection is rebuildable-by-construction from the JSONL log: every
-    /// caller of this method immediately runs `INITIALIZE_SCHEMA_SQL` and
-    /// then, if this returned `true`, a full `replace_from_event_log_records`
-    /// (see [`Self::migrated_legacy_schema`]'s callers) that repopulates
-    /// every dropped table's rows from the source of truth. Extend this
-    /// function -- one check + one drop per outdated shape -- whenever a
-    /// future column/table is added, rather than writing an in-place
-    /// `ALTER TABLE` migration.
+    /// Extension point for a future schema change that `CREATE TABLE IF
+    /// NOT EXISTS` in [`INITIALIZE_SCHEMA_SQL`] cannot express on its own:
+    /// that statement is additive-only and never alters an existing table,
+    /// and DuckDB (confirmed against the bundled 1.10504.0) rejects `ALTER
+    /// TABLE ... ADD COLUMN` with an inline `NOT NULL` constraint ("Adding
+    /// columns with constraints not yet supported"), so a plain `ADD
+    /// COLUMN IF NOT EXISTS` cannot get us to e.g. a new `NOT NULL` column
+    /// either. Dropping a stale table and letting `CREATE TABLE IF NOT
+    /// EXISTS` recreate it is cheap and correct specifically *because* the
+    /// whole projection is rebuildable-by-construction from the JSONL log:
+    /// every caller of this method immediately runs `INITIALIZE_SCHEMA_SQL`
+    /// and then, if this returns `true`, a full
+    /// `replace_from_event_log_records` (see [`Self::migrated_legacy_schema`]'s
+    /// callers) that repopulates every dropped table's rows from the source
+    /// of truth. Extend this function -- a shape check (e.g. querying
+    /// `information_schema.columns`/`.tables`) plus one `DROP TABLE IF
+    /// EXISTS` per outdated shape -- whenever a future column/table needs
+    /// the same treatment, rather than writing an in-place `ALTER TABLE`
+    /// migration.
     ///
-    /// Returns whether *any* migration ran -- `true` both for a genuine
-    /// legacy file and for a brand-new one (where these tables don't exist
-    /// yet either), which is harmless: [`Self::migrated_legacy_schema`]'s
-    /// one caller only uses `true` to skip an optimization (trusting a
-    /// freshness check), never to skip correctness work.
-    fn migrate_legacy_agent_events_schema(conn: &Connection) -> Result<bool> {
-        let mut migrated = false;
-
-        if !column_exists(conn, "agent_events", "event_at")?
-            || !column_exists(conn, "agent_events", "role_id")?
-        {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_events;")?;
-            migrated = true;
-        }
-        if !column_exists(conn, "agent_sessions", "role_id")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_sessions;")?;
-            migrated = true;
-        }
-        if !column_exists(conn, "agent_tool_results", "is_error")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_tool_results;")?;
-            migrated = true;
-        }
-        if !column_exists(conn, "agent_approvals", "outcome")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_approvals;")?;
-            migrated = true;
-        }
-        // `occurrence_id` was added in the same leg as
-        // `SESSION_PROTOCOL_VERSION = 15` (still v15 -- the wire change
-        // is additive, see `backlog 42 / 55`). A pre-existing DB won't
-        // have the column; same drop-and-rebuild pattern as the rows
-        // above, so the next `CREATE TABLE IF NOT EXISTS` lays down the
-        // new shape and `replace_from_event_log_records` repopulates it
-        // from the JSONL log.
-        if !column_exists(conn, "agent_tool_calls", "occurrence_id")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_tool_calls;")?;
-            migrated = true;
-        }
-        if !column_exists(conn, "agent_tool_results", "occurrence_id")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_tool_results;")?;
-            migrated = true;
-        }
-        if !column_exists(conn, "agent_approvals", "occurrence_id")? {
-            conn.execute_batch("DROP TABLE IF EXISTS agent_approvals;")?;
-            migrated = true;
-        }
-        if !table_exists(conn, "agent_turns")? {
-            // Nothing to drop -- a missing table is simply laid down fresh
-            // by `INITIALIZE_SCHEMA_SQL` -- but a brand-new `agent_turns`
-            // still needs the forced full rebuild `migrated = true` triggers
-            // to backfill it from the existing JSONL log.
-            migrated = true;
-        }
-
-        Ok(migrated)
+    /// This project carries no on-disk schema compatibility by default
+    /// (owner decision 2026-08-03): the shape checks this function used to
+    /// run for the pre-`event_at`/pre-label/pre-`occurrence_id` DuckDB
+    /// projections were retired with the rest of the compat sweep, since a
+    /// stale `.duckdb` file is expected to be rotated rather than migrated
+    /// forward. The function stays as the seam the *next* genuine schema
+    /// change reaches for.
+    fn migrate_legacy_agent_events_schema(_conn: &Connection) -> Result<bool> {
+        Ok(false)
     }
-}
-
-fn column_exists(conn: &Connection, table: &str, column: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM information_schema.columns
-         WHERE table_name = ? AND column_name = ?",
-        duckdb::params![table, column],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
-}
-
-fn table_exists(conn: &Connection, table: &str) -> Result<bool> {
-    let count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = ?",
-        duckdb::params![table],
-        |row| row.get(0),
-    )?;
-    Ok(count > 0)
 }
 
 fn session_id_text(session_id: SessionId) -> Result<String> {

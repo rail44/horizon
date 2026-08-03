@@ -223,8 +223,8 @@ impl AgentFrame {
     /// Backed by [`last_turn_end_reason_in`] so a caller holding only a
     /// slice of `items` can reuse the same logic without cloning the whole
     /// frame. Returns `None` for a frame that never halted; the emit site
-    /// for [`Event::ContinueTurnRequested`] promotes that to
-    /// [`TurnEndReason::Unknown`] (the documented "no-op replay" shape).
+    /// for [`Event::ContinueTurnRequested`] carries that through directly
+    /// as `resumed_from: None` (the documented "no-op replay" shape).
     pub fn last_turn_end_reason(&self) -> Option<TurnEndReason> {
         last_turn_end_reason_in(&self.items)
     }
@@ -461,8 +461,8 @@ pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
 /// halt that has since been superseded by new turn activity does not leak
 /// into the read; for a session whose last item is *not* a `TurnEnded` (no
 /// turn has ended, or a later tool-call or message has arrived), returns
-/// `None` and the emit site promotes that to `TurnEndReason::Unknown`. The
-/// reason is returned **regardless** of whether it's a halt or a normal
+/// `None` and the emit site carries that through as `resumed_from: None`.
+/// The reason is returned **regardless** of whether it's a halt or a normal
 /// completion: a non-halt reason is itself useful audit context (it marks
 /// a `ContinueTurn` sent to a non-halted session as a no-op replay).
 pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
@@ -491,7 +491,6 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
 
     for event in events {
         match event {
-            Event::Unknown => lines.push("unknown event (skipped)".to_string()),
             Event::StateChanged(state) => lines.push(format!("state: {state:?}")),
             Event::ReasoningDelta(delta) => {
                 lines.push(format!("{}: {}", delta.role.log_label(), delta.text));
@@ -595,10 +594,6 @@ pub(crate) fn apply_agent_event_to_frame(
     turn: &mut TurnClock,
 ) {
     match event {
-        // Skew catch-all (`Event::Unknown`'s doc): an event this build
-        // can't name folds into no frame item at all -- the surrounding
-        // items still render, and nothing invents content for it.
-        Event::Unknown => {}
         Event::StateChanged(state) => frame.state = Some(*state),
         Event::ReasoningDelta(delta) => {
             if let Some(AgentFrameItem::ReasoningDelta(existing)) =

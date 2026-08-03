@@ -30,13 +30,11 @@ const APPLY_CHUNK_RECORDS: usize = 1024;
 /// catch_up_from_event_log_records`]'s incremental tail) -- lets the caller
 /// (`event_log::writer::rebuild_and_open_duckdb_projection`) print one
 /// summary line instead of the per-record noise the individual pieces used
-/// to print themselves. See [`super::projection::Store::project_event`]'s
-/// doc comment for what `turn_id_missing` counts.
+/// to print themselves.
 #[derive(Default)]
 pub(crate) struct ApplyRecordsReport {
     /// Records that actually landed in the projection.
     pub applied: usize,
-    pub turn_id_missing: usize,
     /// Records that failed to project even on their own and were skipped
     /// (see [`Store::apply_chunk`]); `first_skip_error` carries the first
     /// one's message so the caller's one-line summary can name a cause.
@@ -156,9 +154,8 @@ impl Store {
             return;
         }
         let error = match self.apply_chunk_in_one_transaction(chunk) {
-            Ok(turn_id_missing) => {
+            Ok(()) => {
                 report.applied += chunk.len();
-                report.turn_id_missing += turn_id_missing;
                 return;
             }
             Err(error) => error,
@@ -175,23 +172,17 @@ impl Store {
     }
 
     /// The fast path of [`Self::apply_chunk`]: the whole chunk in one
-    /// transaction, rolled back in full on the first error. Returns how
-    /// many of its records skipped an `agent_turns` projection for want of
-    /// a `turn_id`.
-    fn apply_chunk_in_one_transaction(&self, chunk: &[Record]) -> Result<usize> {
+    /// transaction, rolled back in full on the first error.
+    fn apply_chunk_in_one_transaction(&self, chunk: &[Record]) -> Result<()> {
         self.conn.execute_batch("BEGIN TRANSACTION")?;
-        let mut turn_id_missing = 0usize;
         for record in chunk {
-            match self.append_record_uncommitted(record) {
-                Ok(missing) => turn_id_missing += usize::from(missing),
-                Err(error) => {
-                    let _ = self.conn.execute_batch("ROLLBACK");
-                    return Err(error);
-                }
+            if let Err(error) = self.append_record_uncommitted(record) {
+                let _ = self.conn.execute_batch("ROLLBACK");
+                return Err(error);
             }
         }
         self.conn.execute_batch("COMMIT")?;
-        Ok(turn_id_missing)
+        Ok(())
     }
 
     fn clear_all_agent_state(&self) -> Result<()> {

@@ -60,10 +60,6 @@ pub enum HubError {
     /// an older client never triggers it (it always hellos first).
     #[error("hello has not completed on this connection")]
     HelloRequired,
-    /// Skew catch-all: an error variant from a newer peer. Keep last.
-    #[serde(other)]
-    #[error("unknown hub error from a newer peer")]
-    Unknown,
 }
 
 impl From<rtc::CallError> for HubError {
@@ -135,33 +131,5 @@ pub fn negotiate_hello(
             );
             Err(reason)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::codec::WireCodec;
-
-    /// An unknown `HubError` variant from a newer peer degrades to
-    /// `Unknown` under the wire codec (Postbag), instead of failing the
-    /// reply — the §4 catch-all, proven on the one enum this crate owns.
-    #[test]
-    fn unknown_hub_error_variant_degrades_to_unknown_under_postbag() {
-        #[derive(Serialize)]
-        enum FutureHubError {
-            SomethingNew { detail: String },
-        }
-        let mut bytes = Vec::new();
-        <WireCodec as remoc::codec::Codec>::serialize(
-            &mut bytes,
-            &FutureHubError::SomethingNew {
-                detail: "later".into(),
-            },
-        )
-        .unwrap();
-        let decoded: HubError =
-            <WireCodec as remoc::codec::Codec>::deserialize(&bytes[..]).unwrap();
-        assert_eq!(decoded, HubError::Unknown);
     }
 }

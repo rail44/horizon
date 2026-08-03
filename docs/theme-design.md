@@ -400,17 +400,23 @@ have complicated that surface for comparatively little ongoing benefit,
 since the owner's own usage had already converged on seed-only.
 
 A config that still sets one of the retired keys does not fail or crash:
-`theme_color_warnings`/`theme_ansi_warnings` (`src/theme.rs`) now
-classify a retired key as a distinct case from a genuinely-unrecognized
-one -- "no longer configurable; derived from the seed since 2026-07-16" on
-stderr, rather than the generic "unrecognized key" message a typo would
-get -- and the entry is still ignored, resolving that one role through the
-derivation exactly as if the key had never been set. `RawThemeConfig`'s
-flattened `colors: HashMap<String, String>` and `RawThemeAnsiConfig`'s
-ten now-derived-only fields are both left exactly as they were in
-`crates/horizon-config` -- the loader still accepts arbitrary keys (so it
-can name the offending one for the warning above), only recognition and
-derivation in `src/theme.rs` changed.
+the entry is ignored, resolving that one role through the derivation
+exactly as if the key had never been set. From 2026-07-16 through
+2026-08-03, `theme_color_warnings` (`src/theme/warnings.rs`) classified a
+retired `[theme]` key as a distinct case from a genuinely-unrecognized
+one -- a "no longer configurable; derived from the seed since 2026-07-16"
+message on stderr, naming the ten now-dead `RawThemeAnsiConfig` fields
+`theme_ansi_warnings` kept parsed purely to support the equivalent
+`[theme.ansi]` case. The compat sweep (owner decision 2026-08-03, this
+project carries no retired-key compatibility warnings by default) retired
+that distinct message: a retired `[theme]` key now gets the same
+"unrecognized key" warning a typo would, and the ten dead
+`RawThemeAnsiConfig` fields are gone, so a retired `[theme.ansi]` slot is
+silently ignored with no warning at all (that section has no
+unrecognized-key detection to fall back to). `RawThemeConfig`'s flattened
+`colors: HashMap<String, String>` is otherwise unchanged -- the loader
+still accepts arbitrary `[theme]` keys, only recognition and derivation
+in `scheme.rs` care about them.
 
 The ten derived `[theme.ansi]` slots deserve one more note: the owner's
 own historical preference of setting every `bright_*` slot equal to its

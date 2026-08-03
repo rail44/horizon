@@ -938,7 +938,6 @@ impl TerminalSession {
                         cx.write_to_clipboard(ClipboardItem::new_string(text));
                     }
                     ClipboardDestination::Primary => write_to_primary(cx, text),
-                    ClipboardDestination::Unknown => {}
                 }
                 true
             }
@@ -953,7 +952,6 @@ impl TerminalSession {
                 }
                 true
             }
-            Incoming::Event(TerminalUpdate::Unknown) => false,
         };
         if notify {
             cx.notify();

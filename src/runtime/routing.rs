@@ -126,9 +126,6 @@ impl AgentRoutes {
             AgentWireEvent::WorkspaceRootResolved(resolved) => {
                 let _ = self.workspace_roots.send((session_id, resolved));
             }
-            // Skew catch-all: an event this build can't name is skipped;
-            // the channel stays up (adoption condition 2).
-            AgentWireEvent::Unknown => {}
         }
     }
 

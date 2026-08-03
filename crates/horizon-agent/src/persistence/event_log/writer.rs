@@ -294,10 +294,7 @@ fn start_up(
         }
     }
     let next_sequence = report
-        .records
-        .iter()
-        .map(|record| record.sequence)
-        .max()
+        .max_known_sequence
         .map(|sequence| sequence + 1)
         .unwrap_or(0);
 
@@ -338,11 +335,6 @@ fn start_up(
 ///   line, kept unchanged so operators (and `horizon-agentd`'s own e2e
 ///   tests, which poll for these exact strings) see the same signal for
 ///   this case.
-///
-/// Either apply path can also skip a legacy `TurnEnded` event with no
-/// `turn_id` (see [`Store::project_event`]'s doc comment); rather than one
-/// stderr line per such event, [`log_turn_id_missing_summary`] prints one
-/// combined count after the apply.
 ///
 /// Failure (creating the parent directory, opening the store, or the
 /// rebuild itself) is reported to stderr and returns `None`: a rebuildable,
@@ -411,7 +403,6 @@ fn rebuild_and_open_duckdb_projection(
                     .cloned();
                 match store.catch_up_from_event_log_records(tail) {
                     Ok(report) => {
-                        log_turn_id_missing_summary(report.turn_id_missing);
                         log_skipped_record_summary(&report);
                         eprintln!(
                             "horizon-agentd: DuckDB projection caught up incrementally \
@@ -435,7 +426,6 @@ fn rebuild_and_open_duckdb_projection(
 
     match store.replace_from_event_log_records(records.iter().cloned()) {
         Ok(report) => {
-            log_turn_id_missing_summary(report.turn_id_missing);
             log_skipped_record_summary(&report);
             eprintln!(
                 "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
@@ -453,25 +443,9 @@ fn rebuild_and_open_duckdb_projection(
     }
 }
 
-/// One combined stderr line for however many legacy no-`turn_id`
-/// `TurnEnded` events a rebuild or incremental catch-up skipped -- a no-op
-/// when `count` is zero. Replaces what used to be one
-/// "TurnEnded ... has no turn_id; skipping agent_turns projection" line per
-/// event (see [`Store::project_event`]'s doc comment), which drowned out
-/// everything else in stderr against a real archived log with thousands of
-/// pre-`turn_id` events.
-fn log_turn_id_missing_summary(count: usize) {
-    if count > 0 {
-        eprintln!(
-            "horizon-agent: skipped agent_turns projection for {count} legacy TurnEnded \
-             event(s) with no turn_id"
-        );
-    }
-}
-
-/// One combined stderr line -- same shape as [`log_turn_id_missing_summary`],
-/// a no-op when nothing was skipped -- for records a rebuild or incremental
-/// catch-up could not project at all and dropped
+/// One combined stderr line -- a no-op when nothing was skipped -- for
+/// records a rebuild or incremental catch-up could not project at all and
+/// dropped
 /// (`import::Store::apply_chunk`). Naming the first failure's message is
 /// what distinguishes "one odd record in a long log" from a store-level
 /// problem that skipped everything; either way the rest of the projection
@@ -568,7 +542,6 @@ fn run_writer(
 ) {
     let mut writer = BufWriter::new(file);
     let mut warned_duckdb_append_failure = false;
-    let mut warned_duckdb_turn_id_missing = false;
 
     while let Ok(command) = rx.recv() {
         match command {
@@ -601,20 +574,7 @@ fn run_writer(
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
                         match store.append_record(&record) {
-                            Ok(true) if !warned_duckdb_turn_id_missing => {
-                                // A live TurnEnded with no turn_id should not
-                                // happen for a current provider (see
-                                // `Store::project_event`'s doc comment) --
-                                // rare enough that a warn-once latch, not a
-                                // batched summary, is the right shape here.
-                                eprintln!(
-                                    "horizon-agent: a live TurnEnded event had no turn_id; its \
-                                     agent_turns projection was skipped -- further occurrences \
-                                     in this run won't be logged individually"
-                                );
-                                warned_duckdb_turn_id_missing = true;
-                            }
-                            Ok(_) => {}
+                            Ok(()) => {}
                             Err(error) => {
                                 if !warned_duckdb_append_failure {
                                     eprintln!(
@@ -667,21 +627,6 @@ mod tests {
             event: Event::StateChanged(SessionState::Running),
             provider_payload: None,
             created_at_unix_ms: sequence + 1,
-        }
-    }
-
-    /// A legacy pre-`turn_id` `TurnEnded` record -- the shape a real
-    /// archived event log carries for sessions created before `turn_id`
-    /// existed. Its `agent_turns` projection is always skipped (see
-    /// `projection::Store::insert_turn`'s doc comment); this is the record
-    /// this module's own currency/incremental tests use to prove that skip
-    /// still advances the projection's high-water mark.
-    fn legacy_turn_ended_record(session_id: SessionId, sequence: u64) -> Record {
-        Record {
-            turn_id: None,
-            event_kind: "turn_ended".to_string(),
-            event: Event::TurnEnded(crate::contract::TurnEndReason::Completed),
-            ..record_at(session_id, sequence)
         }
     }
 
@@ -840,27 +785,21 @@ mod tests {
 
     /// The bug this guards: `duckdb_projection_currency` must find the
     /// projection current even when the log it was built from contains a
-    /// record whose own projection is deliberately skipped (a legacy
-    /// no-`turn_id` `TurnEnded`) -- `agent_events`/`agent_sessions` are
-    /// still updated for that record (see `append::Store::append_record`'s
-    /// doc comment), so the high-water mark advances past it exactly like
-    /// any other record.
+    /// record whose own projection is a no-op (no dedicated table wants a
+    /// bare `StateChanged`, see `projection::Store::project_event`'s doc
+    /// comment) -- `agent_events`/`agent_sessions` are still updated for
+    /// that record (see `append::Store::append_record`'s doc comment), so
+    /// the high-water mark advances past it exactly like any other record.
     #[test]
     fn currency_check_is_current_after_seeding_with_a_skipped_record() {
         let store = Store::open_in_memory().expect("open in-memory store");
         let session_id = SessionId::new();
-        let records = vec![
-            record_at(session_id, 0),
-            legacy_turn_ended_record(session_id, 1),
-        ];
+        let records = vec![record_at(session_id, 0), record_at(session_id, 1)];
 
         let report = store
             .replace_from_event_log_records(records.clone())
             .expect("seed store");
-        assert_eq!(
-            report.turn_id_missing, 1,
-            "the legacy TurnEnded's own projection must be skipped"
-        );
+        assert_eq!(report.applied, 2, "both records must be applied");
 
         match duckdb_projection_currency(&store, &records).expect("currency check") {
             ProjectionCurrency::Current => {}
@@ -883,10 +822,7 @@ mod tests {
     fn already_current_on_second_boot_after_a_skip_containing_log() {
         let duckdb_path = temp_duckdb_path("already-current");
         let session_id = SessionId::new();
-        let records = vec![
-            record_at(session_id, 0),
-            legacy_turn_ended_record(session_id, 1),
-        ];
+        let records = vec![record_at(session_id, 0), record_at(session_id, 1)];
 
         let first_boot =
             rebuild_and_open_duckdb_projection(&duckdb_path, &records).expect("first boot store");

@@ -18,9 +18,11 @@
 //! is now a fixed built-in default or constant in the crate that owns it
 //! (`horizon-agent`'s `config` module for the former `[agent]` knobs; the
 //! shell crate's `terminal`/`main` modules for the rest) — this crate no
-//! longer parses any of them into a field at all. [`warnings::warn`] still
-//! recognizes their *names*, so a config file that still sets one gets a
-//! "no longer configurable" warning instead of silently doing nothing.
+//! longer parses any of them into a field at all, and carries no separate
+//! retired-key compatibility warning either (owner decision 2026-08-03): a
+//! config file that still sets one of those names gets
+//! [`warnings::warn`]'s ordinary "probable typo" treatment, the same as
+//! any other unrecognized key.
 //!
 //! Design choices:
 //! - **One location, no layered merging.** Unlike tools that merge a
@@ -170,28 +172,21 @@ where
     }))
 }
 
-/// `[theme.ansi]`: the 16 base ANSI color slots, each an optional
-/// `#rrggbb`/`#rgb` hex string. See `ui::theme::ansi` for the built-in
-/// defaults each falls back to when unset here.
+/// `[theme.ansi]`: the six normal-hue ANSI color slots, each an optional
+/// `#rrggbb`/`#rgb` hex string -- the seed's own hue set
+/// (`docs/theme-design.md`'s 2026-07-16 "config surface narrowed to the
+/// seed" decision; the ten bright/black/white slots are derived-only and no
+/// longer configurable). See `ui::theme::ansi` for the built-in defaults
+/// each falls back to when unset here.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawThemeAnsiConfig {
-    pub black: Option<String>,
     pub red: Option<String>,
     pub green: Option<String>,
     pub yellow: Option<String>,
     pub blue: Option<String>,
     pub magenta: Option<String>,
     pub cyan: Option<String>,
-    pub white: Option<String>,
-    pub bright_black: Option<String>,
-    pub bright_red: Option<String>,
-    pub bright_green: Option<String>,
-    pub bright_yellow: Option<String>,
-    pub bright_blue: Option<String>,
-    pub bright_magenta: Option<String>,
-    pub bright_cyan: Option<String>,
-    pub bright_white: Option<String>,
 }
 
 /// `[ui]`: the app-wide font family, shared by the terminal, agent

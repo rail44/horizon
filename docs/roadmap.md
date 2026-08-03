@@ -528,7 +528,9 @@ lands:
   absolute-id synthesis, epochs, and reflow cache-invalidation are all
   dropped. Retrieval via `iter_from` needs no engine change; alt-screen has
   no scrollback (primary-screen-only, passthrough elsewhere). Additive wire
-  (v12, `MIN_SUPPORTED` stays 11 → old peers fall back to round-trip).
+  (v12; the negotiation gate this shipped with was later deleted as dead
+  code once the lockstep floor rose past it — see
+  `docs/terminal-scrollback-design.md` §7 phase 4).
   Tradeoffs accepted: scrollbar jump beyond the window is a round-trip; no
   instant revisit of already-seen history. Delivery rides the existing
   `events` channel; the initial policy is a three-viewport immutable window

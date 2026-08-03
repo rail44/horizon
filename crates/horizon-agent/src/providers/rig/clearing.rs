@@ -348,10 +348,7 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
             // Turn/exit/error signals carry no clearing record.
             | Event::Error(_)
             | Event::Exited(_)
-            | Event::TurnEnded(_)
-            // Skew catch-all (`Event::Unknown`'s doc): an event this build
-            // can't name carries no clearing record.
-            | Event::Unknown => None,
+            | Event::TurnEnded(_) => None,
         })
         .flatten()
         .collect()

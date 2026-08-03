@@ -239,7 +239,6 @@ impl Seed {
                     blue: Some(hex(self.hue(HueSlot::Blue))),
                     magenta: Some(hex(self.hue(HueSlot::Magenta))),
                     cyan: Some(hex(self.hue(HueSlot::Cyan))),
-                    ..Default::default()
                 },
                 text_contrast: Some(self.text_contrast),
                 colors,

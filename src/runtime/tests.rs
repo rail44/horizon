@@ -242,7 +242,7 @@ impl TerminalHub for FakeTerminalHub {
         let _ = self.calls.send(TerminalCall::ListTerminals);
         let mut behavior = self.behavior.lock().unwrap();
         if behavior.fail_after_hello {
-            return Err(HubError::Unknown);
+            return Err(HubError::Call("simulated failure after hello".into()));
         }
         if behavior.terminal_lists.is_empty() {
             Ok(Vec::new())

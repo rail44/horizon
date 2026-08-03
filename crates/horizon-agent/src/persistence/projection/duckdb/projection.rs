@@ -57,18 +57,9 @@ impl Store {
     }
 
     /// Projects `record` into its dedicated transcript/tool/approval table.
-    /// Returns `Ok(true)` when this was a legacy `TurnEnded` event with no
-    /// `turn_id` whose `agent_turns` projection was skipped as a result --
-    /// see [`Self::insert_turn`]'s doc comment. Every other event returns
-    /// `Ok(false)`, including the no-dedicated-table markers below. Callers
-    /// that process many records in one pass (a rebuild, an incremental
-    /// catch-up) sum this flag across the batch and print one combined
-    /// summary instead of one line per event -- see
-    /// `import::apply_records`'s doc comment. The rare *live* case (a
-    /// same-run event genuinely missing a `turn_id`, which should not
-    /// happen for a current provider) is handled by
-    /// `event_log::writer::run_writer`'s own warn-once latch.
-    pub(super) fn project_event(&self, record: EventRecordRef) -> Result<bool> {
+    /// Several variants below have no dedicated table and are a no-op here
+    /// (see the comments on that arm for why, per variant).
+    pub(super) fn project_event(&self, record: EventRecordRef) -> Result<()> {
         let EventRecordRef {
             event_id,
             session_id,
@@ -78,16 +69,13 @@ impl Store {
         } = record;
         match event {
             Event::MessageCommitted(message) => {
-                self.insert_message(event_id, session_id, sequence, message, false)?;
-                Ok(false)
+                self.insert_message(event_id, session_id, sequence, message, false)
             }
             Event::ReasoningDelta(delta) | Event::AssistantTextDelta(delta) => {
-                self.insert_delta(event_id, session_id, sequence, delta)?;
-                Ok(false)
+                self.insert_delta(event_id, session_id, sequence, delta)
             }
             Event::ToolCallRequested(request) => {
-                self.insert_tool_call(event_id, session_id, sequence, request)?;
-                Ok(false)
+                self.insert_tool_call(event_id, session_id, sequence, request)
             }
             // A human approved this call -- the order-derived counterpart to
             // the deny short-circuit handled in `insert_tool_result` below
@@ -106,16 +94,13 @@ impl Store {
             // approval for the same `call_id` is also still pending and
             // comes after this one's approval row by `sequence`.
             Event::ToolCallStarted(call_id) => {
-                self.mark_approval_outcome(session_id, &call_id.0, None, "approved")?;
-                Ok(false)
+                self.mark_approval_outcome(session_id, &call_id.0, None, "approved")
             }
             Event::ToolCallFinished(result) => {
-                self.insert_tool_result(event_id, session_id, sequence, result)?;
-                Ok(false)
+                self.insert_tool_result(event_id, session_id, sequence, result)
             }
             Event::ApprovalRequested(request) => {
-                self.insert_approval(event_id, session_id, sequence, request)?;
-                Ok(false)
+                self.insert_approval(event_id, session_id, sequence, request)
             }
             Event::TurnEnded(reason) => self.insert_turn(event_id, session_id, turn_id, *reason),
             // No projection table wants these yet: they're timing markers
@@ -148,12 +133,7 @@ impl Store {
             | Event::ApprovalResolved(_)
             | Event::ContinueTurnRequested(_)
             | Event::Error(_)
-            | Event::Exited(_) => Ok(false),
-            // Skew catch-all (`Event::Unknown`'s doc): an event this build
-            // can't name projects into no row. Its raw record still landed
-            // in `agent_events` via the caller's insert, so nothing is
-            // lost for a future build that does understand it.
-            Event::Unknown => Ok(false),
+            | Event::Exited(_) => Ok(()),
         }
     }
 
@@ -422,26 +402,19 @@ impl Store {
     /// Turn-level bookkeeping row for a `TurnEnded` event -- see
     /// `agent_turns`'s doc comment in `schema.rs` (decision 2: schema
     /// mirrors the existing per-tool-call granularity, no derived
-    /// durations). `turn_id` should always be `Some` for a real
-    /// `TurnEnded` (see `Event::TurnEnded`'s doc comment); if it's ever
-    /// `None` (a legacy pre-turn_id event, the common real-world case
-    /// against an archived log), this skips the projection and returns
-    /// `Ok(true)` rather than panicking or printing here -- this is a
-    /// rebuildable, non-authoritative projection, so a bad event here must
-    /// not take down the writer thread or the rebuild, and a caller
-    /// replaying thousands of legacy records at once must not print one
-    /// line per skip (see [`Self::project_event`]'s doc comment for who
-    /// reports this and how).
+    /// durations). `turn_id` is `Some` for a real `TurnEnded` (see
+    /// `Event::TurnEnded`'s doc comment and `event_log::turn::TurnTracker`);
+    /// if it's ever `None`, `agent_turns.turn_id`'s `NOT NULL` constraint
+    /// surfaces that as a genuine insert error rather than a silently
+    /// skipped projection -- this project carries no compatibility with an
+    /// archived pre-`turn_id` log.
     fn insert_turn(
         &self,
         event_id: &str,
         session_id: &str,
         turn_id: Option<&str>,
         reason: TurnEndReason,
-    ) -> Result<bool> {
-        let Some(turn_id) = turn_id else {
-            return Ok(true);
-        };
+    ) -> Result<()> {
         self.conn.execute(
             "INSERT INTO agent_turns (session_id, turn_id, end_reason, ended_event_id)
              VALUES (?, ?, ?, ?)
@@ -450,7 +423,7 @@ impl Store {
                 ended_event_id = excluded.ended_event_id",
             params![session_id, turn_id, turn_end_reason_text(reason), event_id],
         )?;
-        Ok(false)
+        Ok(())
     }
 }
 
@@ -466,8 +439,5 @@ fn turn_end_reason_text(reason: TurnEndReason) -> &'static str {
         TurnEndReason::Halted
         | TurnEndReason::HaltedByIterationCap
         | TurnEndReason::HaltedByDoomLoop => "halted",
-        // Skew catch-all: projected honestly rather than guessed into one
-        // of the four design-doc labels.
-        TurnEndReason::Unknown => "unknown",
     }
 }

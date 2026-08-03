@@ -327,12 +327,6 @@ async fn run_session_loop(
                 let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                 let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
-            // Skew catch-all (`Command::Unknown`'s doc): a command this
-            // build can't name is logged and dropped -- never acked, never
-            // half-executed.
-            Command::Unknown => {
-                tracing::warn!("ignoring unknown agent command from a newer peer");
-            }
             Command::UserMessage { text } => {
                 // A user message starts a new interaction rather than joining
                 // the previous turn's tool batch. This command can arrive

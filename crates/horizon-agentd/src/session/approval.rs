@@ -8,7 +8,7 @@ use crossbeam_channel::Sender;
 
 use horizon_agent::contract::{
     ApprovalDecisionPayload, ApprovalRequest, Command, ContinueTurnRequested, Event, OccurrenceId,
-    ProviderEvent, SessionId, SessionState, ToolCallId, TurnEndReason,
+    ProviderEvent, SessionId, SessionState, ToolCallId,
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
@@ -164,14 +164,11 @@ pub(super) fn dispatch_inbound_command(
             // a 3-Continue-turns run from a 0-Continue-turns one without
             // reading the rig session loop's code. `resumed_from` carries
             // the most recent `TurnEnded`'s reason when there is one (the
-            // real halt case); the no-op replay / idle-session case
-            // promotes `None` to `Unknown` per
-            // `Event::ContinueTurnRequested`'s doc comment, so a non-zero
-            // `Unknown` count from analytics still surfaces UI races.
-            let resumed_from = live_state
-                .frame()
-                .last_turn_end_reason()
-                .unwrap_or(TurnEndReason::Unknown);
+            // real halt case); the no-op replay / idle-session case leaves
+            // it `None` per `Event::ContinueTurnRequested`'s doc comment,
+            // so a non-zero no-reason count from analytics still surfaces
+            // UI races.
+            let resumed_from = live_state.frame().last_turn_end_reason();
             let event = Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from });
             let _ = live_state.extend_provider_events(std::iter::once(event.clone().into()));
             send_session_event(state, session_id, AgentWireEvent::Event(event));
@@ -283,7 +280,7 @@ mod tests {
     use crate::session::test_support::{drain_events, judge_candidate, judge_test_state};
     use horizon_agent::contract::{
         ApprovalDecisionPayload, ApprovalKind, ApprovalRequest, ApprovalResolved,
-        ContinueTurnRequested, OccurrenceId, ProviderEvent, ToolCallRequest,
+        ContinueTurnRequested, OccurrenceId, ProviderEvent, ToolCallRequest, TurnEndReason,
     };
     use horizon_agent::live::LiveState;
 
@@ -354,7 +351,7 @@ mod tests {
                 _ => None,
             })
             .expect("a ContinueTurnRequested event recorded in the live state");
-        assert_eq!(resolved, TurnEndReason::HaltedByIterationCap);
+        assert_eq!(resolved, Some(TurnEndReason::HaltedByIterationCap));
 
         // The original command is forwarded to the provider unchanged so
         // the resume itself still happens.
@@ -366,10 +363,11 @@ mod tests {
 
     /// The no-op replay case documented on
     /// `Event::ContinueTurnRequested::resumed_from`: a `ContinueTurn` sent
-    /// to a session whose frame has no `TurnEnded` records `Unknown`, not
-    /// a panic and not a silent skip, so analytics can count the attempt.
+    /// to a session whose frame has no `TurnEnded` records `resumed_from:
+    /// None`, not a panic and not a silent skip, so analytics can count
+    /// the attempt.
     #[test]
-    fn continue_turn_records_unknown_when_no_halt_exists() {
+    fn continue_turn_records_none_when_no_halt_exists() {
         let state = judge_test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
@@ -389,7 +387,7 @@ mod tests {
             }
             _ => None,
         });
-        assert_eq!(resumed_from, Some(TurnEndReason::Unknown));
+        assert_eq!(resumed_from, Some(None));
         assert!(commands_rx.try_recv().is_ok(), "command still forwarded");
     }
 
@@ -426,7 +424,7 @@ mod tests {
             }
             _ => None,
         });
-        assert_eq!(resumed_from, Some(TurnEndReason::Completed));
+        assert_eq!(resumed_from, Some(Some(TurnEndReason::Completed)));
     }
 
     /// `SESSION_PROTOCOL_VERSION` v16's `Event::ApprovalResolved`:

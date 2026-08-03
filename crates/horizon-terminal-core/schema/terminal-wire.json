@@ -19,15 +19,11 @@
     },
     "ClipboardDestination": {
       "description": "Which OS clipboard buffer a [`TerminalUpdate::Clipboard`] targets.\n`Clipboard` is the explicit-copy path (Cmd/Ctrl+C, OSC 52 writes);\n`Primary` is the X11/Wayland middle-click-paste buffer, written\nautomatically as selection completes/updates (Linux convention -- select\n= copy to primary). One update type with a destination discriminator,\nrather than a second full clipboard pathway.",
-      "oneOf": [
-        {
-          "enum": [
-            "Clipboard",
-            "Primary"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Clipboard",
+        "Primary"
+      ],
+      "type": "string"
     },
     "HubError": {
       "description": "The hub's error vocabulary. One enum for every method: domain errors\nand transport errors share it, per remoc's own rtc pattern (the\n`From<rtc::CallError>` impl is what lets a lost connection surface as\nan `Err` from any pending call).",
@@ -97,55 +93,47 @@
     },
     "KeyEventKind": {
       "description": "Classifies a key event per the Kitty keyboard protocol's \"event types\"\n(<https://sw.kovidgoyal.net/kitty/keyboard-protocol/>, gated on the\n`REPORT_EVENT_TYPES` progressive-enhancement flag): an initial press, an\nOS/winit-synthesized repeat while the key is held, or a release.\n\nThreaded from `src/terminal/mod.rs`'s key handling (where gpui's\n`KeyDownEvent`/`KeyUpEvent` and its `is_held` repeat flag are classified)\ndown through `TerminalCommand::Key` to\n`terminal::core::TerminalCore::encode_key` and\n`terminal::protocol::kitty_keyboard`, which is the only place a\nnon-`Press` kind changes the bytes actually sent — see that module's doc\nfor how (and when) it does.",
-      "oneOf": [
-        {
-          "enum": [
-            "Press",
-            "Repeat",
-            "Release"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Press",
+        "Repeat",
+        "Release"
+      ],
+      "type": "string"
     },
     "NamedColor": {
       "description": "One of the fixed named color roles a cell can carry. This set was\nderived by reading exactly what `core::render::snapshot_frame` (via\n`cell_fg`/`cell_bg`) can produce from a live `alacritty_terminal::Term`,\nnot assumed:\n\n- The 8 base ANSI hues (`Black`..`White`) and their bright forms\n  (`BrightBlack`..`BrightWhite`) reach frames directly from SGR\n  30-37/90-97, or as the bold-promoted form of a base hue (`cell_fg`\n  applies `NamedColor::to_bright` under the `BOLD` flag).\n- Dim forms (`DimBlack`..`DimWhite`) are *not* a normal SGR target —\n  they only ever appear as the dim-promoted form of a base hue\n  (`cell_fg` applies `NamedColor::to_dim` under the `DIM` flag).\n- `Foreground`/`Background`/`Cursor` are the default-role slots; only\n  `Foreground` is ever bold/dim-promoted this way too, producing\n  `BrightForeground`/`DimForeground` (`Background`/`Cursor` cells never\n  carry `BOLD`/`DIM` promotion — `cell_bg` only reads the *default*\n  foreground's promoted form when swapping colors under `INVERSE`).",
-      "oneOf": [
-        {
-          "enum": [
-            "Black",
-            "Red",
-            "Green",
-            "Yellow",
-            "Blue",
-            "Magenta",
-            "Cyan",
-            "White",
-            "BrightBlack",
-            "BrightRed",
-            "BrightGreen",
-            "BrightYellow",
-            "BrightBlue",
-            "BrightMagenta",
-            "BrightCyan",
-            "BrightWhite",
-            "DimBlack",
-            "DimRed",
-            "DimGreen",
-            "DimYellow",
-            "DimBlue",
-            "DimMagenta",
-            "DimCyan",
-            "DimWhite",
-            "Foreground",
-            "Background",
-            "Cursor",
-            "BrightForeground",
-            "DimForeground"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Black",
+        "Red",
+        "Green",
+        "Yellow",
+        "Blue",
+        "Magenta",
+        "Cyan",
+        "White",
+        "BrightBlack",
+        "BrightRed",
+        "BrightGreen",
+        "BrightYellow",
+        "BrightBlue",
+        "BrightMagenta",
+        "BrightCyan",
+        "BrightWhite",
+        "DimBlack",
+        "DimRed",
+        "DimGreen",
+        "DimYellow",
+        "DimBlue",
+        "DimMagenta",
+        "DimCyan",
+        "DimWhite",
+        "Foreground",
+        "Background",
+        "Cursor",
+        "BrightForeground",
+        "DimForeground"
+      ],
+      "type": "string"
     },
     "Rgb": {
       "description": "Schema stand-in for `alacritty_terminal::vte::ansi::Rgb`, which\n(de)serializes as a plain `{r, g, b}` u8 struct but is external and\ncannot derive `JsonSchema` itself. Kept byte-for-byte in sync with that\nserde shape; the wire-schema artifact sees this in its place.",
@@ -536,7 +524,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Client → daemon: request a scrollback *window* — a contiguous block of\nhistory `height` rows tall, positioned `anchor` rows above the live\nbottom (a hypothetical `display_offset`). The daemon answers on the\nevents channel with [`TerminalUpdate::ScrollWindow`], a self-describing\nwindow (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the\nreply carries its own `viewport_offset`/`above`/`below`, so no\ncorrelation id is needed. Serving it never moves the live\n`display_offset` (`TerminalCore::snapshot_window`), so the live-frame\nwatch keeps showing the tail throughout. Additive, appended before the\n`Unknown` catch-all; phase 1 wires this end-to-end daemon-side, the\nclient does not send it yet (§7 phase 2).",
+          "description": "Client → daemon: request a scrollback *window* — a contiguous block of\nhistory `height` rows tall, positioned `anchor` rows above the live\nbottom (a hypothetical `display_offset`). The daemon answers on the\nevents channel with [`TerminalUpdate::ScrollWindow`], a self-describing\nwindow (`docs/terminal-scrollback-design.md` §3.2, §9 option ii): the\nreply carries its own `viewport_offset`/`above`/`below`, so no\ncorrelation id is needed. Serving it never moves the live\n`display_offset` (`TerminalCore::snapshot_window`), so the live-frame\nwatch keeps showing the tail throughout. Phase 1 wires this\nend-to-end daemon-side, the client does not send it yet (§7 phase 2).",
           "properties": {
             "RequestScrollWindow": {
               "properties": {
@@ -591,17 +579,13 @@
     },
     "TerminalCursorShape": {
       "description": "Mirrors `alacritty_terminal`'s `CursorShape` minus `Hidden` (a hidden\ncursor never reaches the wire — see [`TerminalCursor::shape`]).",
-      "oneOf": [
-        {
-          "enum": [
-            "Block",
-            "Underline",
-            "Beam",
-            "HollowBlock"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Block",
+        "Underline",
+        "Beam",
+        "HollowBlock"
+      ],
+      "type": "string"
     },
     "TerminalFrame": {
       "properties": {
@@ -744,28 +728,20 @@
       "type": "object"
     },
     "TerminalMouseButton": {
-      "oneOf": [
-        {
-          "enum": [
-            "Left",
-            "Middle",
-            "Right"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Left",
+        "Middle",
+        "Right"
+      ],
+      "type": "string"
     },
     "TerminalMouseKind": {
-      "oneOf": [
-        {
-          "enum": [
-            "Press",
-            "Release",
-            "Drag"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "Press",
+        "Release",
+        "Drag"
+      ],
+      "type": "string"
     },
     "TerminalMouseModifiers": {
       "properties": {
@@ -1072,19 +1048,15 @@
     },
     "TerminalUnderline": {
       "description": "The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),\nHorizon-owned like every frame type (`TerminalColor`'s doc has the\nrationale). Maps 1:1 from `alacritty_terminal`'s cell flags\n(`UNDERLINE`/`DOUBLE_UNDERLINE`/`UNDERCURL`/`DOTTED_UNDERLINE`/\n`DASHED_UNDERLINE`).",
-      "oneOf": [
-        {
-          "enum": [
-            "None",
-            "Single",
-            "Double",
-            "Curl",
-            "Dotted",
-            "Dashed"
-          ],
-          "type": "string"
-        }
-      ]
+      "enum": [
+        "None",
+        "Single",
+        "Double",
+        "Curl",
+        "Dotted",
+        "Dashed"
+      ],
+      "type": "string"
     },
     "TerminalUpdate": {
       "description": "The non-frame terminal events, carried on the attachment's `events`\nmpsc channel (`TerminalAttachment::events`). Since wire v11 the frame\nsnapshots that used to be a `Snapshot`/`FrameDiff` variant here travel\non their own `rch::watch<TerminalFrame>` channel instead\n(`docs/remoc-adoption-design.md` §5 Option A): a full frame per delivery,\nwith the diff machinery deleted wholesale and row-change detection moved\nto the client. What remains here is everything that is *not* a frame.",
@@ -1149,7 +1121,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Daemon → client: a served scrollback window, the reply to\n[`TerminalCommand::RequestScrollWindow`]\n(`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides\nthis existing events mpsc rather than a dedicated channel). The window\nis self-describing (`viewport_offset`/`above`/`below`), so it carries\nno correlation id, and its payload is a struct\n([`TerminalScrollWindow`]) — no wire enum in element position, keeping\nthe postbag positional discipline. Additive, appended before the\n`Unknown` catch-all; phase 1 produces it daemon-side, the client does\nnot consume it yet (§7 phase 2).",
+          "description": "Daemon → client: a served scrollback window, the reply to\n[`TerminalCommand::RequestScrollWindow`]\n(`docs/terminal-scrollback-design.md` §3.2, §9 option ii — it rides\nthis existing events mpsc rather than a dedicated channel). The window\nis self-describing (`viewport_offset`/`above`/`below`), so it carries\nno correlation id, and its payload is a struct\n([`TerminalScrollWindow`]) — no wire enum in element position, keeping\nthe postbag positional discipline. Phase 1 produces it daemon-side,\nthe client does not consume it yet (§7 phase 2).",
           "properties": {
             "ScrollWindow": {
               "$ref": "#/$defs/TerminalScrollWindow"
@@ -1251,5 +1223,5 @@
     }
   },
   "title": "horizon-terminal-wire",
-  "x-session-protocol-version": 18
+  "x-session-protocol-version": 19
 }

@@ -79,11 +79,9 @@ pub(crate) fn receipt_status(end: &TurnEnd) -> ReceiptStatus {
             ),
             is_error: false,
         },
-        // The legacy bare variant and the skew catch-all render the same
-        // calm pause with no guard-specific sentence (`TurnEndReason::
-        // Unknown`'s doc): a reason this build can't name must not read as
-        // an error.
-        TurnEndReason::Halted | TurnEndReason::Unknown => ReceiptStatus {
+        // The legacy bare variant renders a calm pause with no
+        // guard-specific sentence (it never recorded which guard fired).
+        TurnEndReason::Halted => ReceiptStatus {
             text: format!("paused · {elapsed}"),
             is_error: false,
         },

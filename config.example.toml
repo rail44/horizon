@@ -36,12 +36,12 @@
 # Secrets never go here. OPENAI_API_KEY and the web-search adapter's
 # EXA_API_KEY are environment-only; there is no field for either in this file.
 #
-# Setting a key this file used to support (a "retired" key) is warned about
-# on stderr, naming the key, and ignored -- it never crashes startup.
-# Likewise, an unrecognized key in a known section is likely a typo and is
-# also warned about and ignored. The same "never fail startup" policy
-# applies to this whole file: if it fails to parse, Horizon logs a warning
-# and falls back to built-in defaults everywhere.
+# Setting a key this file used to support (a "retired" key) gets the same
+# "probable typo" treatment as any other unrecognized key in a known
+# section: warned about on stderr, naming the key, and ignored -- it never
+# crashes startup. The same "never fail startup" policy applies to this
+# whole file: if it fails to parse, Horizon logs a warning and falls back
+# to built-in defaults everywhere.
 
 # ---------------------------------------------------------------------------
 # [provider] — the built-in rig/OpenAI provider's model and base URL.
@@ -161,7 +161,7 @@ font_size = 13.0
 # border_default, border_subtle, diff_added_surface, diff_added_text,
 # diff_removed_surface, diff_removed_text, terminal_foreground,
 # terminal_background, terminal_cursor, cursor_accent) is warned about on
-# stderr as no longer configurable and ignored -- same for any other
+# stderr as an unrecognized key and ignored -- same for any other
 # unrecognized name or an unparsable hex value, which fall back to the
 # built-in/derived default as before.
 # ---------------------------------------------------------------------------

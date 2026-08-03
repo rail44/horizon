@@ -130,15 +130,6 @@ pub enum TerminalUnderline {
     Curl,
     Dotted,
     Dashed,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. A client
-    /// paints an unknown underline style as [`TerminalUnderline::Single`]
-    /// (better a wrong underline than none: the app asked for *some*
-    /// underline).
-    #[serde(other)]
-    Unknown,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -161,13 +152,6 @@ pub enum TerminalCursorShape {
     Underline,
     Beam,
     HollowBlock,
-    /// Skew catch-all — `#[serde(other)]`: a variant this build can't name
-    /// decodes to `Unknown` on the Postbag wire (its payload, if any, is
-    /// discarded there; under serde_json only *unit* variants degrade —
-    /// a payload-carrying one is a per-item decode error instead). Keep last. A client
-    /// paints an unknown shape as the default [`TerminalCursorShape::Block`].
-    #[serde(other)]
-    Unknown,
 }
 
 /// A selection's two inclusive endpoints in viewport coordinates — see

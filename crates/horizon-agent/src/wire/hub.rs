@@ -34,9 +34,12 @@
 //!    [`crate::contract::JsonValue`] — their JSON text in one string —
 //!    rather than `serde_json::Value`, whose `Deserialize` needs
 //!    `deserialize_any`.
-//! 2. **Every wire enum carries a `#[serde(other)] Unknown` catch-all**,
-//!    and receive loops treat a non-final deserialization error as "skip
-//!    this item", never "tear down the channel".
+//! 2. **A non-final deserialization error is "skip this item," never "tear
+//!    down the channel."** This project carries no cross-build wire
+//!    compatibility (owner decision 2026-08-03): no wire enum has an
+//!    `Unknown` catch-all left, so an unrecognized identifier and a
+//!    structurally broken payload both surface as the same per-item decode
+//!    error -- corruption to skip past, not a peer to tolerate.
 //! 3. **`Connect::io` is polled on both ends concurrently** — in-process
 //!    harnesses hosting both endpoints must `join!` the two handshakes
 //!    (sequentially awaiting one side deadlocks and presents as a 60 s
@@ -64,249 +67,56 @@ use crate::contract::{Command, SessionId};
 /// bumps only this one, and a running `horizon-terminald` keeps its PTYs
 /// across it.
 ///
-/// The numbered history below is the *shared* v4–v18 history of the single
-/// pre-split version, kept whole here rather than duplicated or divided:
-/// several bumps (v5, v7, v8, v9, v11) were terminal-side changes that
-/// nonetheless moved this number, so splitting the narrative by domain
-/// would rewrite what actually happened.
-/// `horizon_terminal_core::wire::TERMINAL_PROTOCOL_VERSION` points back
-/// here for it.
+/// v4–v9 predate this: they versioned the old JSONL envelope wire, which
+/// the v10 remoc cutover deleted wholesale, so no trace of that mechanism
+/// survives to explain. From v10 on, one line each:
 ///
-/// Version 4 adds correlated terminal discovery and attach controls; attach
-/// changed shape, so older peers cannot safely decode the terminal vocabulary.
-///
-/// Version 5: `TerminalSpan`'s `fg`/`bg` now carry `horizon-terminal-core`'s
-/// own `TerminalColor`/`NamedColor` enums instead of a re-exported
-/// `alacritty_terminal::vte::ansi::Color`/`NamedColor` — same role, different
-/// wire shape (variant names/order changed, `Spec(Rgb)` became `Rgb([u8;
-/// 3])`), so a stale daemon/UI pair must fail the handshake rather than
-/// misdecode a frame's colors.
-///
-/// Version 6: `Hello` drops the dead `capabilities` field (owner decision,
-/// 2026-07-18) -- every sender hardcoded `["agent", "terminal"]` and the
-/// only reader was a test assertion, so it was forward-compat weight with
-/// no actual use. Removing a field changes the wire shape, so a stale
-/// peer sending the old shape must fail the handshake rather than
-/// misdecode.
-///
-/// Version 7: one frame-vocabulary bump carrying three extensions together
-/// (resolving `docs/terminal-protocol-goals.md`'s open question of whether
-/// they land as one bump or two):
-/// - `TerminalSpan` gains text-style attributes -- `italic`,
-///   `strikethrough`, `underline` (single/double/curl/dotted/dashed), and
-///   the SGR 58 `underline_color` (backlog #44).
-/// - Selection becomes semantic frame metadata: `TerminalFrame::selection`
-///   (viewport-space, inclusive endpoints, window-clamped) with the
-///   cursor's nested-`Option` diff idiom, replacing the literal RGB
-///   highlight previously baked into selected spans' `fg`/`bg` (goal 2).
-/// - `TerminalCursor` gains its DECSCUSR `shape`
-///   (block/underline/beam/hollow-block); a DECTCEM-hidden cursor is now
-///   `cursor: None` on the wire instead of a stale always-visible block.
-///
-/// Version 8: `TerminalCommand` gains `SetColorScheme`, re-pushing the
-/// host's live theme-derived color scheme into an already-running
-/// session (a live `Reload Config`/theme-settings apply) so OSC 10/11/12
-/// query replies stop reflecting a stale spawn-time snapshot. A new
-/// command variant on an already-versioned vocabulary, same bump
-/// discipline as every other wire-shape addition here.
-///
-/// Version 9: `TerminalFrame.text` removed -- it was fully derivable from
-/// `lines`, and its only production reader was the `HORIZON_GPUI_DUMP`
-/// debug dump (copy goes through the daemon's `selected_text`, paint never
-/// read it). Dropping it removes a per-snapshot and per-diff-apply String
-/// rebuild plus its share of every snapshot's wire weight; the derivation
-/// survives as the debug/test helper `TerminalFrame::text()`. Removing a
-/// field changes the wire shape, so a stale peer must fail the handshake.
-///
-/// Version 10: **the remoc cutover** (`docs/remoc-adoption-design.md`
-/// §§2–3, 6). The wire is no longer JSONL envelopes at all: v10's shape is
-/// the [`SessionHub`] rtc trait plus Postbag-encoded vocabularies over one
-/// remoc connection, with [`SessionHub::hello`] as the first call. The
-/// wire-enum catch-alls also change encoding with the codec: the JSONL
-/// era's trailing `#[serde(untagged)] Unknown(UnknownPayload)` variants
-/// relied on serde's `deserialize_any` buffering, which Postbag rejects
-/// outright (`DeserializeAnyUnsupported` — even *known* variants stop
-/// decoding), so every wire enum now carries the spike-validated
-/// `#[serde(other)] Unknown` unit variant instead. A v10 peer cannot talk
-/// to a v≤9 JSONL peer at all; that transition is detected by a bounded
-/// connect timeout, never negotiated, and it was recovered by a quarantined
-/// JSONL drain prober until that prober was deleted on 2026-08-01 — a
-/// still-running pre-remoc daemon is stopped by hand now, the same answer
-/// this wire gives at the v17 boundary below. From here on the version bumps
-/// only on a deliberate semantic break: additive evolution (new
-/// `#[serde(default)]` fields, new `Unknown`-guarded variants, new hub
-/// methods) ships with no version event, and [`SessionHub::hello`]'s
-/// `[min_supported, current]` range negotiation gates *behavior*, not
-/// decodability.
-///
-/// Version 11: **the frame path becomes a snapshot-valued signal**
-/// (`docs/remoc-adoption-design.md` §5 Option A, ratified 2026-07-20). The
-/// terminal attachment's single `updates` mpsc channel splits into a
-/// `frames: rch::watch<TerminalFrame>` (every delivery a full frame; a slow
-/// reader skips to the latest) and an `events: rch::mpsc<TerminalUpdate>`
-/// (the non-frame updates). The wire diff machinery is deleted wholesale:
-/// `TerminalFrameDiff`/`TerminalRowDiff`, `compute_frame_diff`/
-/// `apply_frame_diff`, the daemon's per-connection baseline, and the
-/// `TerminalUpdate::Snapshot`/`FrameDiff` variants all go — row-change
-/// detection (the ShapedLine cache's invalidation signal) moves to the
-/// client as a `TerminalLine` comparison of consecutive frames. A breaking
-/// reshape of the terminal channel vocabulary, hence the bump; the schema
-/// artifact carries it as `x-session-protocol-version`.
-///
-/// Version 12: **scrollback windowed overscan is negotiable**
-/// (`docs/terminal-scrollback-design.md` §4, §7 phase 4). The wire surface
-/// itself is *additive* and landed in v11 without a bump — the
-/// `RequestScrollWindow`/`ScrollWindow` enum variants (both before their
-/// `#[serde(other)] Unknown`), the `TerminalScrollWindow` payload, and the
-/// `scrollback_available` `#[serde(default)]` frame flag all decode cleanly
-/// on a v11 peer. This bump carries **no type change**; it is purely a
-/// *feature-negotiation signal* (§3 "gates behavior, not decodability"). The
-/// client sent `RequestScrollWindow` and scrolled within the served window
-/// locally only when the negotiated version was ≥ 12, falling back to the
-/// round-trip `Scroll` command below it. That gate constant
-/// (`SCROLLBACK_WINDOW_MIN_VERSION`) and its fallback are gone since the
-/// v17/v18 lockstep floor made them unreachable
-/// (`docs/runtime-granularity-design.md` Q4). Because the surface was
-/// additive, the minimum stayed 11 at the time: v12↔v11 negotiated 11 and
-/// interoperated (tolerant evolution), rather than being rejected. The
-/// schema artifact carries the bump as `x-session-protocol-version` even
-/// though no wire type moved.
-///
-/// Version 13: **structured terminal input**
-/// (`docs/terminal-kitty-associated-text-design.md` §3). `TerminalCommand`
-/// gains `KeyInput`/`TextInput`, carrying the platform's associated text so
-/// the daemon encodes it per the live Kitty keyboard mode instead of
-/// re-deriving it. Additive (new variants before the `#[serde(other)]`
-/// catch-all), so the minimum stayed 11 and the client fell back to legacy
-/// `Key`/`Input` below the gate — that gate
-/// (`TERMINAL_STRUCTURED_INPUT_VERSION`) is retired with v12's, same
-/// reason.
-///
-/// Version 14: **`MessageRole::TaskNotification`**
-/// (`docs/agent-async-task-design.md` decision 2). A background `task`
-/// child's completion is delivered to its requester as a message, and the
-/// event log must not record that system notification as words the human
-/// typed — so [`crate::contract::MessageRole`] gained a third named
-/// variant. The variant is *placed before* the enum's `#[serde(other)]
-/// Unknown` catch-all, per this workspace's standing "keep `Unknown` last"
-/// convention, which under an index-based codec (Postbag) shifts
-/// `Unknown`'s index: the schema checker classifies that as a reordering
-/// reshape rather than an appended value, and this bump is its required
-/// version marker. Decodability is nonetheless preserved in the direction
-/// that matters — an older peer decodes the new variant as `Unknown`,
-/// which it already renders as assistant-authored rather than inventing
-/// user words — so [`MIN_SUPPORTED_AGENT_PROTOCOL_VERSION`] stayed 11 and
-/// v14↔v11 still negotiated 11 and interoperated. Nothing else in the wire
-/// surface moved: the whole async-`task` mechanism (launch receipt,
-/// notification queue, wake, `task_output`) is in-process inside the agent
-/// daemon and crosses no channel.
-/// Version 15: **`Event::HistoryCleared`**
-/// (`docs/agent-compaction-design.md` Tier 1). A compaction pass freezes
-/// which old tool results stop being sent to the provider verbatim, and
-/// that decision has to survive a resume -- so it is a persisted, replayed
-/// event rather than in-memory session state, and
-/// [`crate::contract::Event`] gained a variant for it. Exactly the
-/// same mechanical situation as v14: the variant is *placed before* the
-/// enum's `#[serde(other)] Unknown` catch-all, per this workspace's standing
-/// "keep `Unknown` last" convention, which under an index-based codec
-/// (Postbag) shifts `Unknown`'s index; the schema checker classifies that as
-/// a reordering reshape rather than an appended value, and this bump is its
-/// required version marker. Decodability is preserved in the direction that
-/// matters -- an older peer reads the new event as `Unknown` and skips it
-/// (no frame item, no projection row) -- so
-/// [`MIN_SUPPORTED_AGENT_PROTOCOL_VERSION`] stayed 11 and v15↔v11 still
-/// negotiated 11 and interoperated. Nothing else moved: the `/models`
-/// lookup, the provider-view projection, and the cleared set itself all
-/// live inside the agent daemon and cross no channel.
-/// Version 16: **operator-intervention audit events**
-/// (`Event::ApprovalResolved`, `Event::ContinueTurnRequested`). The event
-/// log is this project's primary post-hoc analysis surface (the
-/// `docs/research/` reports, the 2026-07-28 session aa95e066 dogfooding
-/// retrospective), and the pre-v16 log left two operator-action shapes
-/// recoverable only by inference from surrounding events: a human's
-/// approve/deny on a pending `ApprovalRequested` (only the order-derived
-/// `ToolCallStarted`/`ToolCallFinished` carried the resolution, and only
-/// by sequence position -- itself fragile under reused `call_id` or
-/// sandbox-denial retries), and a human's `ContinueTurn` after a guard
-/// halt (`docs/issues/002-agent-iteration-cap-halts-real-work.md` decision
-/// 3 -- the resume itself left no event at all, so an analyst couldn't
-/// tell a 3-Continue-turns run from a 0-Continue-turns one without reading
-/// the rig session loop's code). Both gaps close by adding two new
-/// variants before the enum's `#[serde(other)] Unknown` catch-all, per
-/// the same "keep `Unknown` last" convention v14/v15 introduced. The
-/// Postbag-index shift that follows is the bump's mechanical reason (the
-/// schema checker classifies it as a reordering reshape); decodability
-/// stays preserved in the same direction as v14/v15 -- an older peer
-/// decodes the new events as `Unknown` and skips them, costing the audit
-/// row but nothing the user-facing transcript relies on (both events are
-/// audit-only: no frame item, no projection table row, so an older peer's
-/// UI is byte-identical to a same-build replay that simply never got
-/// them). [`MIN_SUPPORTED_AGENT_PROTOCOL_VERSION`] stayed 11 and v16↔v11
-/// still negotiated 11 and interoperated. The events are emitted at the
-/// daemon seam where `Command::ApproveToolCall`/`DenyToolCall`/
-/// `ContinueTurn` land in `dispatch_inbound_command`
-/// (`crates/horizon-agentd/src/session/approval.rs`); the actual outbound
-/// `Command::ContinueTurn` it forwards is unchanged, so an old daemon
-/// running against a v16 client handles it exactly as before.
-///
-/// Version 17: **the terminald split** (`docs/terminald-split-design.md`).
-/// The single [`SessionHub`] becomes two hubs on two sockets:
-/// `horizon-agentd` keeps `hello`/`list_agents`/`new_agent`/
-/// `attach_agent`/`drain`, and the three terminal methods move verbatim
-/// onto the new `TerminalHub` that `horizon-terminald` serves. Removing
-/// methods from an rtc trait is the bluntest reshape this wire has: the
-/// macro's request enum is index-encoded under Postbag, so every surviving
-/// agent method shifts index and a v16 daemon cannot decode a v17 client's
-/// requests at all (nor vice versa). The minimum therefore rose to 17 with
-/// it -- the second time this has happened (v11's frame-path reshape was
-/// the first), and for the same reason: there is no compatibility code that
-/// could make the pairing work, so `hello` rejects it and the
-/// auto-drain-and-respawn path (§6) recovers.
-///
-/// One transition wart, deliberately accepted rather than papered over: the
-/// drain that recovery sends is itself index-shifted, so a *still-running
-/// v16 agent daemon* decodes it as one of its own other methods and
-/// keeps running. The client reports that honestly ("kept accepting
-/// connections after the drain call; stop it manually") instead of looping.
-/// One `kill` of the stale daemon, once, at this version boundary; every
-/// later version pairing keeps the drain aligned because `drain` stays put.
-///
-/// Version 18: **config-only `[provider]` reload** (`docs/terminald-split-
-/// design.md` phase 1). A new `reload_provider_config` method is appended to
-/// [`SessionHub`], letting `Reload Config` push a model/base-URL change to a
-/// running `horizon-agentd` without a respawn. This is additive in wire
-/// shape (an appended request-enum variant, appended *after* `drain` so
-/// `drain`'s index is stable), but the schema checker classifies a new key
-/// in the artifact's `hub` object as a reshape and therefore demands a bump.
-/// Rather than special-case the checker, the bump is accepted: `current` and
-/// [`MIN_SUPPORTED_AGENT_PROTOCOL_VERSION`] rise together (lockstep) because
-/// the checker's conservative judgment acts as the guardrail here. A v18↔v17
-/// pairing has no overlapping range, so `hello` rejects it and the existing
-/// auto-drain-and-respawn path (§6) recovers — no feature-gate constant is
-/// introduced. `drain`'s index is unchanged (the new variant is appended
-/// after it), so the respawn recovery's drain call reaches a v17 daemon
-/// normally.
-pub const AGENT_PROTOCOL_VERSION: u32 = 18;
+/// - **v10 — the remoc cutover** (`docs/remoc-adoption-design.md` §§2–3,
+///   6): JSONL envelopes replaced by the [`SessionHub`] rtc trait plus
+///   Postbag-encoded vocabularies over one remoc connection, `hello` first.
+/// - **v11 — snapshot-valued frame path** (§5 Option A): the terminal
+///   attachment's single updates channel split into a frame `rch::watch`
+///   (full frame per delivery) and an events `rch::mpsc`; the wire diff
+///   machinery was deleted wholesale.
+/// - **v12 — scrollback windowed overscan negotiable**
+///   (`docs/terminal-scrollback-design.md` §4): a pure feature-negotiation
+///   signal — the wire surface itself landed additively in v11, no bump.
+/// - **v13 — structured terminal input**
+///   (`docs/terminal-kitty-associated-text-design.md` §3): `TerminalCommand`
+///   gained `KeyInput`/`TextInput`, carrying the platform's associated text.
+/// - **v14 — `MessageRole::TaskNotification`**
+///   (`docs/agent-async-task-design.md` decision 2): a background `task`
+///   child's completion is delivered as a message under its own role, so
+///   the event log never records it as human-typed.
+/// - **v15 — `Event::HistoryCleared`** (`docs/agent-compaction-design.md`
+///   Tier 1): a compaction pass's frozen cleared-tool-result set became a
+///   persisted, replayed event.
+/// - **v16 — operator-intervention audit events** (`Event::
+///   ApprovalResolved`, `Event::ContinueTurnRequested`): explicit event-log
+///   records of a human's approve/deny and post-halt `ContinueTurn`,
+///   closing gaps the 2026-07-28 dogfooding session aa95e066 surfaced.
+/// - **v17 — the terminald split** (`docs/terminald-split-design.md`): the
+///   single [`SessionHub`] became two hubs on two sockets; every surviving
+///   agent method shifted index under Postbag, so the minimum floor rose
+///   with it (the second such rise, after v11).
+/// - **v18 — config-only `[provider]` reload**: `reload_provider_config`
+///   appended to [`SessionHub`], letting `Reload Config` push a
+///   model/base-URL change to a running `horizon-agentd` without a
+///   respawn.
+/// - **v19 — wire-only `Unknown` catch-alls removed; no decode compat**
+///   (owner decision 2026-08-03 — this is a personal project, so backward
+///   compatibility is not carried by default).
+pub const AGENT_PROTOCOL_VERSION: u32 = 19;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
-/// `[min_supported, current]` range. Rises when a version carries a
-/// breaking wire reshape that leaves no compatibility code behind
-/// (`docs/remoc-adoption-design.md` §3).
-///
-/// The full v11–v18 rationale for each floor movement rides on
-/// [`AGENT_PROTOCOL_VERSION`]'s history above; the short form is that v11
-/// (the frame-path reshape) and v17 (the terminald split) each left no
-/// compatibility code behind and raised it, the additive versions
-/// (v12–v16) did not, and v18 raised it in lockstep because the schema
-/// checker's conservative reshape verdict on the new `hub` key is itself
-/// the guardrail. Since v18 this is the standing policy: **lockstep, no
-/// per-feature gates** (owner, 2026-07-30 — same-machine self-spawned
-/// daemons need honest restart, not cross-version interop), which is why
-/// this constant and [`AGENT_PROTOCOL_VERSION`] are equal and why the
-/// per-feature gate constants that v12/v13 introduced were deleted with
-/// the phase-2 split.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 18;
+/// `[min_supported, current]` range. Equal to [`AGENT_PROTOCOL_VERSION`]
+/// under the standing **lockstep, no per-feature gates** policy (owner,
+/// 2026-07-30): same-machine self-spawned daemons do not need cross-version
+/// interop, they need honest restart, so a mismatched `hello` is rejected
+/// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
+/// adoption-design.md` §3/§6) rather than bridged by gate constants.
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 19;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -441,16 +251,16 @@ mod tests {
         );
     }
 
-    /// The two hubs' version pairs are independent constants but start
-    /// equal, because the phase-2 split is a crate reorganization and not a
-    /// wire event: a v18 shell↔daemon pairing must exchange exactly the
-    /// bytes it did before the split. (The terminal side pins the mirror
+    /// The two hubs' version pairs are independent constants but stay
+    /// equal in practice: the phase-2 split started them equal (a crate
+    /// reorganization, not a wire event), and the v19 `Unknown`-removal
+    /// bump moved both in lockstep too. (The terminal side pins the mirror
     /// image of this assertion; neither crate may name the other, so the
-    /// property is checked from both ends against the literal 18.)
+    /// property is checked from both ends against the literal 19.)
     #[test]
     fn the_split_started_at_the_pre_split_version() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 18);
-        assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, 18);
+        assert_eq!(AGENT_PROTOCOL_VERSION, 19);
+        assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, 19);
     }
 
     /// The hub *method surface*, snapshotted mechanically from the serde
