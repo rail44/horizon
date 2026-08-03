@@ -10,6 +10,7 @@ use reqwest::{redirect, Client, StatusCode, Url};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
+use super::error_output;
 use super::ssrf::{remote_addr_is_safe, validate_url, SafeResolver};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
@@ -306,10 +307,6 @@ fn truncate_chars(text: &str, max: usize) -> (String, bool) {
         Some((end, _)) => (text[..end].to_string(), true),
         None => (text.to_string(), false),
     }
-}
-
-fn error_output(message: String) -> Value {
-    json!({ "is_error": true, "message": message })
 }
 
 #[cfg(test)]

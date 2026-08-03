@@ -390,9 +390,7 @@ fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
     ])
 }
 
-fn error_output(message: String) -> Value {
-    json!({ "is_error": true, "message": message })
-}
+use super::error_output;
 
 /// The over-cap refusal (decision 5, as amended 2026-07-28). It names every
 /// running child -- id and description -- so the model can decide whether to

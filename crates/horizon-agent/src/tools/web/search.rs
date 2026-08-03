@@ -329,9 +329,7 @@ fn redact_secret(value: &str, secret: &str) -> String {
     }
 }
 
-fn error_output(message: String) -> Value {
-    json!({ "is_error": true, "message": message })
-}
+use super::error_output;
 
 #[cfg(test)]
 mod tests {

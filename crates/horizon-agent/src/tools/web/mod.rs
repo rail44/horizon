@@ -11,11 +11,12 @@ use crossbeam_channel::Sender;
 use futures_util::FutureExt;
 use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
-use serde_json::{json, Value};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
 use crate::policy::{annotate_auto_approval, annotate_domain_approval};
+use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
 use crate::tools::ToolCompletion;
 
@@ -113,10 +114,7 @@ pub(crate) fn spawn(
                 Err(payload) => ToolCompletion::Finished(ToolCallResult::new(
                     call_id.clone(),
                     None,
-                    json!({
-                        "is_error": true,
-                        "message": format!("{tool_id} worker panicked: {}", panic_message(&*payload)),
-                    }),
+                    error_output(format!("{tool_id} worker panicked: {}", panic_message(&*payload))),
                 )),
             }),
         };
@@ -147,10 +145,9 @@ async fn run(
                 WebOutcome::DomainGrantRequired(domains)
             }
         },
-        _ => WebOutcome::Finished(json!({
-            "is_error": true,
-            "message": format!("unknown asynchronous web tool `{tool_id}`"),
-        })),
+        _ => WebOutcome::Finished(error_output(format!(
+            "unknown asynchronous web tool `{tool_id}`"
+        ))),
     };
     with_call_id(call_id, outcome, tool_id, origin)
 }

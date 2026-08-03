@@ -10,6 +10,7 @@ use tokio::process::Command as TokioCommand;
 use crate::config::BashToolConfig;
 use crate::contract::{ToolCallId, ToolCallResult};
 use crate::policy::{annotate_denied_domains, annotate_sandboxed};
+use crate::tools::error_output;
 use crate::tools::network::SessionNetworkProxy;
 
 use super::output::{self, Capped};
@@ -69,10 +70,10 @@ fn run_inner(
     config: &BashToolConfig,
 ) -> Value {
     let Some(command) = input.get("command").and_then(Value::as_str) else {
-        return error_output("bash requires a `command` string argument", None, config);
+        return failed_output("bash requires a `command` string argument", None, config);
     };
     if command.trim().is_empty() {
-        return error_output("bash requires a non-empty `command` string", None, config);
+        return failed_output("bash requires a non-empty `command` string", None, config);
     }
 
     let timeout = resolve_timeout(input, config);
@@ -85,7 +86,7 @@ fn run_inner(
         .enable_all()
         .build()
     else {
-        return error_output(
+        return failed_output(
             "failed to start bash: could not create an async runtime",
             None,
             config,
@@ -172,7 +173,7 @@ async fn run_async(
     let mut child = match cmd.spawn() {
         Ok(child) => child,
         Err(error) => {
-            return error_output(&format!("failed to start bash: {error}"), None, config);
+            return failed_output(&format!("failed to start bash: {error}"), None, config);
         }
     };
 
@@ -185,7 +186,7 @@ async fn run_async(
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         let _ = child.kill().await;
         let _ = child.wait().await;
-        return error_output(
+        return failed_output(
             "failed to start bash: stdout/stderr pipe was not available",
             None,
             config,
@@ -261,7 +262,7 @@ async fn run_async(
                 success_output(status, raw_stdout, raw_stderr, cwd_handle, config)
             }
             Ok(Ok(status)) => terminated_output(status, raw_stdout, config),
-            Ok(Err(wait_error)) => error_output(
+            Ok(Err(wait_error)) => failed_output(
                 &format!("failed to wait for bash: {wait_error}"),
                 Some(raw_stdout),
                 config,
@@ -378,7 +379,7 @@ fn apply_cwd_report(
 }
 
 fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
-    error_output(
+    failed_output(
         &format!(
             "bash command timed out after {}s and was killed",
             timeout.as_secs()
@@ -395,7 +396,7 @@ fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfi
 /// and the process-group kill it performs, called for a still-running
 /// call whose turn was cancelled).
 fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
-    error_output(
+    failed_output(
         &format!("bash command was terminated{}", signal_suffix(status)),
         Some(raw_stdout),
         config,
@@ -416,32 +417,34 @@ fn signal_suffix(_status: ExitStatus) -> String {
     String::new()
 }
 
-/// Builds the same `{ is_error, message }` shape as `error_output`'s
-/// no-partial-output case, for `bash::spawn` (`mod.rs`) to use when the work
-/// function itself panics (caught via `catch_unwind`, never reaching this
-/// module's normal error paths at all) -- see that module's panic-safety
-/// notes. A separate, `config`-free constructor rather than reusing
-/// `error_output` directly: there's no partial output to cap/spill in the
-/// panic case, so there's nothing for a `BashToolConfig` to do.
+/// Delegates to the unified `tools::error_output` for the base error shape,
+/// for `bash::spawn` (`mod.rs`) to use when the work function itself panics
+/// (caught via `catch_unwind`, never reaching this module's normal error
+/// paths at all) -- see that module's panic-safety notes.
 pub(super) fn panic_output(message: &str) -> Value {
-    json!({ "is_error": true, "message": message })
+    error_output(message)
 }
 
-fn error_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToolConfig) -> Value {
+fn failed_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToolConfig) -> Value {
     match partial_output {
-        None => json!({ "is_error": true, "message": message }),
+        None => error_output(message),
         Some(raw) => {
             let source = String::from_utf8_lossy(&raw).into_owned();
             let output_file = output::spill(&source);
             let Capped { shown, truncated } =
                 output::cap(&source, config.output_cap_chars, output_file.as_deref());
-            json!({
-                "is_error": true,
-                "message": message,
-                "output": shown,
-                "truncated": truncated,
-                "output_file": output_file.map(|path| path.display().to_string()),
-            })
+            let mut value = error_output(message);
+            if let Some(map) = value.as_object_mut() {
+                map.insert("output".to_string(), Value::String(shown));
+                map.insert("truncated".to_string(), Value::Bool(truncated));
+                map.insert(
+                    "output_file".to_string(),
+                    output_file
+                        .map(|path| Value::String(path.display().to_string()))
+                        .unwrap_or(Value::Null),
+                );
+            }
+            value
         }
     }
 }
@@ -513,17 +516,17 @@ pub(super) fn run_sandboxed(
     let Some(command) = input.get("command").and_then(Value::as_str) else {
         return finished(
             call_id,
-            error_output("bash requires a `command` string argument", None, config),
+            failed_output("bash requires a `command` string argument", None, config),
         );
     };
     if command.trim().is_empty() {
         return finished(
             call_id,
-            error_output("bash requires a non-empty `command` string", None, config),
+            failed_output("bash requires a non-empty `command` string", None, config),
         );
     }
     if let Some(message) = super::cargo::shared_cache_clean_refusal(command, workspace_root) {
-        return finished(call_id, error_output(message, None, config));
+        return finished(call_id, failed_output(message, None, config));
     }
 
     let timeout = resolve_timeout(input, config);
@@ -596,7 +599,7 @@ pub(super) fn run_sandboxed(
         Err(error) => {
             return finished(
                 call_id,
-                error_output(
+                failed_output(
                     &format!("failed to start sandboxed bash: {error}"),
                     None,
                     config,
@@ -616,7 +619,7 @@ pub(super) fn run_sandboxed(
         let _ = child.wait();
         return finished(
             call_id,
-            error_output(
+            failed_output(
                 "failed to start bash: stdout/stderr pipe was not available",
                 None,
                 config,
@@ -654,7 +657,7 @@ pub(super) fn run_sandboxed(
             Some(handle) => match handle.join() {
                 Ok(Ok(denials)) => denials,
                 Ok(Err(error)) => {
-                    let mut value = error_output(
+                    let mut value = failed_output(
                         &format!("sandbox supervisor report failed: {error}"),
                         Some(raw_stdout),
                         config,
@@ -663,7 +666,7 @@ pub(super) fn run_sandboxed(
                     return finished(call_id, value);
                 }
                 Err(_) => {
-                    let mut value = error_output(
+                    let mut value = failed_output(
                         "sandbox supervisor report reader panicked",
                         Some(raw_stdout),
                         config,
@@ -673,7 +676,7 @@ pub(super) fn run_sandboxed(
                 }
             },
             None => {
-                let mut value = error_output(
+                let mut value = failed_output(
                     "sandbox supervisor did not provide a structured report channel",
                     Some(raw_stdout),
                     config,
@@ -716,7 +719,7 @@ pub(super) fn run_sandboxed(
     }
 
     let Some(status) = status else {
-        let mut value = error_output(
+        let mut value = failed_output(
             "failed to wait for sandboxed bash",
             Some(raw_stdout),
             config,

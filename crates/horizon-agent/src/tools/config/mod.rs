@@ -108,9 +108,7 @@ fn read_at(tool_state: &ToolSessionState, path: Option<&Path>) -> Value {
     }
 }
 
-fn error_output(message: impl Into<String>) -> Value {
-    json!({ "is_error": true, "message": message.into() })
-}
+use super::error_output;
 
 #[cfg(test)]
 mod tests {

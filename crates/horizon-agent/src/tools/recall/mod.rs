@@ -328,9 +328,7 @@ fn snippet_head(text: &str) -> String {
     snippet
 }
 
-fn error_output(message: impl Into<String>) -> Value {
-    json!({ "is_error": true, "message": message.into() })
-}
+use super::error_output;
 
 #[cfg(test)]
 mod tests;

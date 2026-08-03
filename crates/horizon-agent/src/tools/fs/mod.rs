@@ -45,6 +45,4 @@ pub(crate) fn execute_approved(
     }
 }
 
-fn error_output(message: impl Into<String>) -> Value {
-    serde_json::json!({ "is_error": true, "message": message.into() })
-}
+use super::error_output;

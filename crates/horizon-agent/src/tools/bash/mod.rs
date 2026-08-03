@@ -33,7 +33,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use crossbeam_channel::Sender;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallId, ToolCallResult};
@@ -42,6 +42,7 @@ use crate::policy::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
 };
+use crate::tools::error_output;
 use crate::tools::network::SessionNetworkProxy;
 
 pub(crate) use git::{
@@ -344,12 +345,9 @@ pub(crate) fn spawn_sandboxed(
                                 )
                             }
                             Err(error) => {
-                                let mut output = json!({
-                                    "is_error": true,
-                                    "message": format!(
-                                        "Git metadata grant validation failed before execution: {error}"
-                                    ),
-                                });
+                                let mut output = error_output(format!(
+                                    "Git metadata grant validation failed before execution: {error}"
+                                ));
                                 annotate_sandboxed(&mut output, false);
                                 BashCompletion::Finished(ToolCallResult::new(
                                     run_call_id.clone(),
