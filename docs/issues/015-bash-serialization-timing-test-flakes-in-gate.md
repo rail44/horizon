@@ -30,7 +30,24 @@ interference source via a nextest test-group, or both.
 ## Notes
 Distinct from issue 014 (terminald e2e frame-wait hang): different
 test, different failure mode (threshold trip vs 120s stall), but the
-same product cost — gate red on timing, not on correctness. Two
+same product cost — gate red on timing, not on correctness.
+
+**Third instance, different test, same shape (2026-08-03):**
+`tools::recall::tests::search_hits_carry_is_error_and_turn_outcome_labels`
+failed once in a full-workspace run (`recall/tests.rs:378`, "hits array"
+— the search returned no rows), then passed three times in a row when
+run alone (0.05-0.11s each), and the full suite passed on the very next
+run. That test reads through the DuckDB projection, so the suspicion is
+projection visibility racing the test's own write under parallel load —
+a different mechanism from 014's PTY frame wait and 015's overlap
+threshold, but the same operational signature: **only ever fails in a
+full-suite run, never in isolation.**
+
+Worth treating as one investigation rather than three: whatever
+per-test isolation or settling the suite is missing, it is now visible
+in three unrelated subsystems (terminal frames, bash scheduling, DuckDB
+projection). A fix that only patches one test's threshold leaves the
+other two. Two
 occurrences are both from dogfood-session gates, where a concurrent
 integrator gate or build on the host is common — exactly the
 contention `.config/nextest.toml`'s daemon-e2e comment says per-binary
