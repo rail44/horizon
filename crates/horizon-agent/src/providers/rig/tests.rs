@@ -2,11 +2,11 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::Duration;
 
 use super::completion::{
-    await_provider_phase, openai_turn_additional_params, partial_assistant_message,
-    provider_request_usage_event_from_openai_final, retry_backoff, retryable_rejection,
-    rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
-    ProviderRequestSpan, ProviderWait, Retried, TurnCompletion, MULTI_TOOL_TEST_BATCH_SIZE,
-    PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
+    await_provider_phase, openai_turn_additional_params, output_cap_truncated,
+    partial_assistant_message, provider_request_usage_event_from_openai_final, retry_backoff,
+    retryable_rejection, rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry,
+    Attempt, ProviderRequestSpan, ProviderWait, Retried, TurnCompletion,
+    MULTI_TOOL_TEST_BATCH_SIZE, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
 use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
 use super::mapping::{
@@ -18,7 +18,7 @@ use super::mapping::{
 };
 use super::session::{
     append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
-    halt_turn_loop, BatchStep,
+    halt_turn_loop, handle_truncation_recovery, BatchStep,
 };
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
@@ -1553,6 +1553,144 @@ fn turn_loop_guard_reset_truncation_counter_breaks_the_streak() {
     assert!(
         !guard.record_truncation_continue(),
         "fourth after reset must stop"
+    );
+}
+
+// --- Output-cap truncation detection (issue 016) -----------------------
+//
+// The provider can hit its output-token ceiling (`max_output_tokens`,
+// `config.rs`) without leaving any structural trace — no started tool calls,
+// just reasoning that ate the whole budget. The turn ends as `Completed`
+// with zero artifacts, indistinguishable from a normal empty reply. The
+// detector below infers truncation from `output_tokens == cap` and routes
+// it through the same error + auto-continue path as tool-call truncation.
+
+/// The detector fires exactly when the reported output token count matches
+/// the configured ceiling — the signal the provider truncated at the output
+/// limit. Measurement: cap-exact appeared only twice in ~6,700 requests.
+#[test]
+fn output_cap_truncated_detects_when_output_matches_the_cap() {
+    assert!(output_cap_truncated(Some(32_768), 32_768, false));
+}
+
+/// One token below the cap is not a truncation — the boundary is exact-match
+/// only.
+#[test]
+fn output_cap_truncated_does_not_detect_below_the_cap() {
+    assert!(!output_cap_truncated(Some(32_767), 32_768, false));
+}
+
+/// No usage event (no `Final` chunk arrived) means `None` — the detector
+/// cannot fire, avoiding a false positive on a stream that ended without
+/// reporting usage.
+#[test]
+fn output_cap_truncated_does_not_false_positive_when_usage_is_absent() {
+    assert!(!output_cap_truncated(None, 32_768, false));
+}
+
+/// A cancelled turn's usage is not a cap-truncation, mirroring the `!cancelled`
+/// guard on tool-call truncation (`outcome.truncated`).
+#[test]
+fn output_cap_truncated_ignores_a_cancelled_turn() {
+    assert!(!output_cap_truncated(Some(32_768), 32_768, true));
+}
+
+/// A cap-truncated turn enters the same recovery loop as a tool-call
+/// truncation: the harness emits an `Error` naming the output limit, closes
+/// the turn as `Failed`, and auto-continues with a synthetic prompt — reusing
+/// the same consecutive-continue guard (`record_truncation_continue`), not a
+/// new one. The fallback turn (non-truncated) lets the loop exit and the
+/// function return `None`.
+#[tokio::test]
+async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
+    let cap = RigAgentConfig::default().max_output_tokens;
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let (_commands_tx, mut commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
+    let mut inbox: VecDeque<Command> = VecDeque::new();
+    let config = RigAgentConfig::default();
+    let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
+    let extra_sections: Vec<String> = Vec::new();
+    let mut rig_history = Vec::new();
+    let mut clearing = ClearingState::disabled();
+    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
+    let mut pending_tool_calls = HashMap::new();
+    let mut cancelled_call_ids = HashSet::new();
+
+    let outcome = TurnCompletion {
+        output_tokens: Some(cap),
+        cap_truncated: true,
+        ..TurnCompletion::default()
+    };
+
+    let result = handle_truncation_recovery(
+        outcome,
+        &mut commands,
+        &mut inbox,
+        &config,
+        &environment,
+        &extra_sections,
+        &mut rig_history,
+        &tx,
+        &mut clearing,
+        &mut guard,
+        &mut pending_tool_calls,
+        &mut cancelled_call_ids,
+    )
+    .await;
+
+    assert!(
+        result.is_none(),
+        "a cap-truncated turn should be fully handled"
+    );
+
+    let events: Vec<_> = rx.try_iter().collect();
+
+    // The first event is the cap-truncation error, naming the output limit
+    // and the token count that hit it.
+    match &events[0].event {
+        Event::Error(error) => {
+            assert!(
+                error.message.contains("output limit"),
+                "error must mention the output limit: {}",
+                error.message
+            );
+            assert!(
+                error.message.contains(&cap.to_string()),
+                "error must include the cap value ({}): {}",
+                cap,
+                error.message
+            );
+        }
+        other => panic!("first event should be an Error, got {other:?}"),
+    }
+
+    // The turn is closed as Failed, not Completed.
+    assert_eq!(events[1].event, Event::TurnEnded(TurnEndReason::Failed));
+
+    // The harness auto-continues: signals Running and injects an
+    // AutoContinue prompt, same as tool-call truncation recovery.
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(&e.event, Event::StateChanged(SessionState::Running))),
+        "must signal Running for the auto-continue"
+    );
+    assert!(
+        events.iter().any(|e| matches!(
+            &e.event,
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::AutoContinue,
+                ..
+            })
+        )),
+        "must inject an AutoContinue prompt"
+    );
+
+    // The guard's consecutive-truncation counter was bumped once (the
+    // auto-continue ran) then reset (the follow-up turn was not truncated).
+    assert!(
+        guard.record_truncation_continue(),
+        "counter should have reset after the follow-up turn completed"
     );
 }
 

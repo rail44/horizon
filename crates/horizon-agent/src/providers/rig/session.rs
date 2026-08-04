@@ -791,17 +791,60 @@ fn truncation_continuation_prompt(truncated_count: usize) -> String {
     )
 }
 
+/// The error message for a truncated turn, distinguishing the two truncation
+/// modes the harness recovers from. Tool-call truncation names how many calls
+/// were cut mid-stream; output-cap truncation names the ceiling and the token
+/// count that hit it.
+fn truncation_error_message(outcome: &TurnCompletion, cap: u64) -> String {
+    if outcome.truncated {
+        format!(
+            "Provider truncated {count} tool call(s) mid-stream — \
+             the call(s) started streaming but were never finalized.",
+            count = outcome.truncated_tool_call_count,
+        )
+    } else {
+        format!(
+            "Provider truncated the response at the {cap}-token output limit — \
+             {output_tokens} tokens were generated and the turn did not complete \
+             (the output budget was exhausted before a tool call or text reply).",
+            output_tokens = outcome.output_tokens.unwrap_or(0),
+        )
+    }
+}
+
+/// The synthetic continuation prompt for a truncated turn, tailored to the
+/// truncation mode. Tool-call truncation asks the model to re-issue the cut
+/// calls; output-cap truncation asks it to be more concise so the next turn
+/// does not exhaust the budget the same way.
+fn truncation_continuation_prompt_for(outcome: &TurnCompletion, cap: u64) -> String {
+    if outcome.truncated {
+        truncation_continuation_prompt(outcome.truncated_tool_call_count)
+    } else {
+        format!(
+            "The provider cut your previous response short at the output-token \
+             limit ({cap} tokens generated) — you used the entire output budget \
+             without producing a tool call or text reply. Continue the work you \
+             described in your reasoning, but be more concise: go straight to the \
+             action instead of re-deriving it."
+        )
+    }
+}
+
 /// Handles a turn outcome that may be truncated: if the provider started
-/// streaming tool calls but never finalized them (`outcome.truncated`), the
-/// turn is closed as `Failed` and the harness automatically continues with a
-/// synthetic prompt, up to [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times
-/// before falling back to `WaitingForUser`.
+/// streaming tool calls but never finalized them (`outcome.truncated`), or
+/// if the turn's output hit the configured token ceiling
+/// (`outcome.cap_truncated`), the turn is closed as `Failed` and the
+/// harness automatically continues with a synthetic prompt, up to
+/// [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times before falling back to
+/// `WaitingForUser`. Both truncation modes share the same
+/// consecutive-continue cap (one counter, not two) per the issue's
+/// instruction to reuse the existing guard rather than mint a new one.
 ///
 /// Returns `None` when the truncation was fully handled (the caller should
 /// do nothing further), or `Some(outcome)` when the turn was not truncated
 /// (the caller should pass it to `apply_turn_outcome`).
 #[allow(clippy::too_many_arguments)]
-async fn handle_truncation_recovery(
+pub(super) async fn handle_truncation_recovery(
     mut outcome: TurnCompletion,
     commands: &mut UnboundedReceiver<Command>,
     inbox: &mut VecDeque<Command>,
@@ -815,14 +858,12 @@ async fn handle_truncation_recovery(
     pending_tool_calls: &mut HashMap<ToolCallId, ToolCallDescriptor>,
     cancelled_call_ids: &mut HashSet<ToolCallId>,
 ) -> Option<TurnCompletion> {
-    if !outcome.truncated {
+    if !outcome.truncated && !outcome.cap_truncated {
         guard.reset_truncation_counter();
         return Some(outcome);
     }
 
     loop {
-        let count = outcome.truncated_tool_call_count;
-
         // Cancel any finalized tool calls from the truncated turn — the
         // turn is ending as Failed, so they must not hang as pending.
         if !outcome.requested_tool_call_ids.is_empty() {
@@ -836,13 +877,12 @@ async fn handle_truncation_recovery(
         }
 
         // The event log must tell the truth: this was not a normal
-        // completion. The turn is Failed, not Completed.
+        // completion. The turn is Failed, not Completed. The message
+        // distinguishes the two truncation modes (tool calls cut mid-stream
+        // vs. output budget exhausted).
         let _ = events_tx.send(
             Event::Error(Error {
-                message: format!(
-                    "Provider truncated {count} tool call(s) mid-stream — \
-                     the call(s) started streaming but were never finalized."
-                ),
+                message: truncation_error_message(&outcome, config.max_output_tokens),
             })
             .into(),
         );
@@ -857,7 +897,7 @@ async fn handle_truncation_recovery(
 
         // Auto-continue: inject the synthetic continuation prompt and run
         // the next turn, mirroring the TaskWake auto-start seam.
-        let text = truncation_continuation_prompt(count);
+        let text = truncation_continuation_prompt_for(&outcome, config.max_output_tokens);
         let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
         let _ = events_tx.send(
             Event::MessageCommitted(AgentMessage {
@@ -880,7 +920,7 @@ async fn handle_truncation_recovery(
         )
         .await;
 
-        if !outcome.truncated {
+        if !outcome.truncated && !outcome.cap_truncated {
             guard.reset_truncation_counter();
             apply_turn_outcome(
                 outcome,
