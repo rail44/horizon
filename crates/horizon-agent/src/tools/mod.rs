@@ -5,6 +5,7 @@ mod config;
 mod execution;
 pub(crate) mod explore;
 mod fs;
+mod knowledge;
 mod network;
 mod processing;
 mod recall;

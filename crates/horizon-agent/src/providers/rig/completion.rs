@@ -587,7 +587,10 @@ async fn rig_openai_turn_streaming(
     let stream_request = model
         .completion_request(prompt)
         .messages(history)
-        .tools(rig_tool_definitions(config.allowed_tool_ids.as_deref()))
+        .tools(rig_tool_definitions(
+            config.allowed_tool_ids.as_deref(),
+            config.trusted_project,
+        ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
         .additional_params(openai_turn_additional_params())
@@ -1059,7 +1062,7 @@ fn multi_tool_call_message(count: usize) -> Message {
 /// unrestricted behavior: every tool in `tools::definitions()` is advertised
 /// to the provider, unchanged from before this parameter existed.
 ///
-/// Two tools are filtered beyond the allowlist. `task_output` is advertised
+/// Three tools are filtered beyond the allowlist. `task_output` is advertised
 /// only when `task` itself is (`docs/agent-async-task-design.md` decision
 /// 3, "advertise it only alongside `task`"). It is the same conditional
 /// seam `prompt::DELEGATION_ROUTING_SECTION` rides on
@@ -1069,8 +1072,14 @@ fn multi_tool_call_message(count: usize) -> Message {
 /// is advertised only when `EXA_API_KEY` is set in the process environment:
 /// without the key the Exa adapter can only return a "not configured" error,
 /// so advertising it buys a round that cannot succeed (`web_fetch` needs no
-/// key and stays advertised).
-pub(super) fn rig_tool_definitions(allowed_tool_ids: Option<&[String]>) -> Vec<ToolDefinition> {
+/// key and stays advertised). `knowledge.read`/`knowledge.write` are
+/// advertised only when `trusted_project` is true — an untrusted session
+/// gets no project-knowledge index in its prompt and no way to call
+/// through to the user-side store (see `knowledge`'s module doc).
+pub(super) fn rig_tool_definitions(
+    allowed_tool_ids: Option<&[String]>,
+    trusted_project: bool,
+) -> Vec<ToolDefinition> {
     let allows = |id: &str| match allowed_tool_ids {
         Some(allowed) => allowed.iter().any(|allowed| allowed == id),
         None => true,
@@ -1085,6 +1094,7 @@ pub(super) fn rig_tool_definitions(allowed_tool_ids: Option<&[String]>) -> Vec<T
             allows(&definition.id)
                 && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
                 && (exa_configured || definition.id != "web_search")
+                && (trusted_project || !is_knowledge_tool(&definition.id))
         })
         .map(rig_tool_definition_from_horizon)
         .collect()
@@ -1096,6 +1106,13 @@ fn rig_tool_definition_from_horizon(definition: Definition) -> ToolDefinition {
         description: definition.description,
         parameters: definition.input_schema,
     }
+}
+
+/// Whether `tool_id` is one of the two knowledge tools that are
+/// withheld from untrusted sessions — see `rig_tool_definitions`'s
+/// filter.
+fn is_knowledge_tool(tool_id: &str) -> bool {
+    tool_id == "knowledge.read" || tool_id == "knowledge.write"
 }
 
 fn tool_call_requests_from_events(

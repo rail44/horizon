@@ -88,6 +88,17 @@ pub(super) fn session_extra_sections(
                 .to_string(),
         );
     }
+    // Project knowledge index (trusted projects only — same gate as
+    // skills/instructions above). A 5th section, appended after
+    // repository instructions, listing `id: description` for every
+    // `status: active` entry in the user-side knowledge store keyed by
+    // this session's project main root. `None` (and thus no section)
+    // when the store doesn't exist or has no active entries.
+    if trusted_project {
+        if let Some(knowledge_section) = crate::knowledge::prompt_section(&environment.cwd) {
+            sections.push(knowledge_section);
+        }
+    }
     sections
 }
 

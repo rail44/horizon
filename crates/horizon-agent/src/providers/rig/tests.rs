@@ -2738,7 +2738,7 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
     std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
     let all = crate::tools::definitions();
 
-    let definitions = rig_tool_definitions(None);
+    let definitions = rig_tool_definitions(None, true);
 
     assert_eq!(definitions.len(), all.len());
     for definition in &all {
@@ -2754,7 +2754,7 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
 fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
     let allowed = vec!["fs.read".to_string(), "fs.glob".to_string()];
 
-    let definitions = rig_tool_definitions(Some(&allowed));
+    let definitions = rig_tool_definitions(Some(&allowed), true);
 
     assert_eq!(definitions.len(), 2);
     let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
@@ -2769,7 +2769,7 @@ fn rig_tool_definitions_with_an_allow_list_is_restricted_to_it() {
 fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
     let allowed: Vec<String> = Vec::new();
 
-    let definitions = rig_tool_definitions(Some(&allowed));
+    let definitions = rig_tool_definitions(Some(&allowed), true);
 
     assert!(definitions.is_empty());
 }
@@ -2785,7 +2785,7 @@ fn rig_tool_definitions_with_an_empty_allow_list_returns_no_tools() {
 fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
     std::env::remove_var(crate::config::EXA_API_KEY_VAR);
 
-    let definitions = rig_tool_definitions(None);
+    let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2804,7 +2804,7 @@ fn web_search_is_not_advertised_when_exa_api_key_is_unset() {
 fn web_search_is_advertised_when_exa_api_key_is_set() {
     std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
 
-    let definitions = rig_tool_definitions(None);
+    let definitions = rig_tool_definitions(None, true);
     let names: HashSet<&str> = definitions
         .iter()
         .map(|definition| definition.name.as_str())
@@ -2861,7 +2861,7 @@ fn role_adjusted_config_restricts_allowed_tool_ids_to_the_roles_list() {
         .allowed_tool_ids
         .expect("config role must set an allow list");
     assert_eq!(allowed, vec!["skill.read", "config.read", "config.write"]);
-    let definitions = rig_tool_definitions(Some(&allowed));
+    let definitions = rig_tool_definitions(Some(&allowed), true);
     assert_eq!(definitions.len(), 3);
 }
 
@@ -2881,7 +2881,7 @@ fn an_exploration_session_advertises_exactly_the_read_only_toolset() {
     let allowed = config
         .allowed_tool_ids
         .expect("the explore role must set an allow list");
-    let advertised = rig_tool_definitions(Some(&allowed))
+    let advertised = rig_tool_definitions(Some(&allowed), true)
         .into_iter()
         .map(|definition| definition.name)
         .collect::<Vec<_>>();
@@ -3025,6 +3025,13 @@ fn git_repo_with_agents_md(label: &str) -> std::path::PathBuf {
     ));
     std::fs::create_dir_all(dir.join(".git")).unwrap();
     std::fs::write(dir.join("AGENTS.md"), "REPO_MARKER").unwrap();
+    // Prevent `knowledge::main_root`'s `git rev-parse` from walking up
+    // past this directory's parent — the sandbox may place TMPDIR inside
+    // a worktree, which would make `knowledge::prompt_section` resolve
+    // to the real project's store and inject real entries into these
+    // tests' section assertions. `scrub_git_env` preserves
+    // `GIT_CEILING_DIRECTORIES`, so the ceiling stays in effect.
+    std::env::set_var("GIT_CEILING_DIRECTORIES", dir.parent().unwrap());
     dir
 }
 
@@ -3267,7 +3274,7 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
 #[test]
 fn task_output_is_advertised_only_alongside_task() {
     let names = |allowed: Option<&[String]>| {
-        rig_tool_definitions(allowed)
+        rig_tool_definitions(allowed, true)
             .into_iter()
             .map(|definition| definition.name)
             .collect::<Vec<_>>()
@@ -3294,6 +3301,47 @@ fn task_output_is_advertised_only_alongside_task() {
     // neither -- the rule is about ownership, not about spelling.
     let inconsistent = names(Some(&["fs.read".to_string(), "task_output".to_string()]));
     assert_eq!(inconsistent, vec!["fs.read".to_string()]);
+}
+
+// --- knowledge tool advertise gating on trusted_project ------------------
+//
+// `knowledge.read`/`knowledge.write` are withheld from the advertised
+// catalog for untrusted sessions — the same trust gate that suppresses
+// the project-knowledge prompt index (`session_extra_sections`).
+
+#[test]
+fn knowledge_tools_are_advertised_for_a_trusted_session() {
+    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    let definitions = rig_tool_definitions(None, true);
+    let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        names.contains("knowledge.read"),
+        "knowledge.read must be advertised for a trusted session: {names:?}"
+    );
+    assert!(
+        names.contains("knowledge.write"),
+        "knowledge.write must be advertised for a trusted session: {names:?}"
+    );
+}
+
+#[test]
+fn knowledge_tools_are_not_advertised_for_an_untrusted_session() {
+    std::env::set_var(crate::config::EXA_API_KEY_VAR, "test-key");
+    let definitions = rig_tool_definitions(None, false);
+    let names: HashSet<&str> = definitions.iter().map(|d| d.name.as_str()).collect();
+    assert!(
+        !names.contains("knowledge.read"),
+        "knowledge.read must not be advertised for an untrusted session: {names:?}"
+    );
+    assert!(
+        !names.contains("knowledge.write"),
+        "knowledge.write must not be advertised for an untrusted session: {names:?}"
+    );
+    // Other tools (e.g. skill.read) must still be present.
+    assert!(
+        names.contains("skill.read"),
+        "skill.read must remain advertised regardless of trust: {names:?}"
+    );
 }
 
 // --- Background `task` delivery (docs/agent-async-task-design.md) ---------
