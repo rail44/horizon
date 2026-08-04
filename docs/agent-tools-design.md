@@ -154,10 +154,20 @@ user-visible `batch` tool.
   use a shorter value only for an intentional quick probe; builds, tests,
   hooks, and Git commands commonly outlive the old 60/120-second budgets.
 - Output capped in-context (~30k chars, head+tail preserved); the full output
-  spills to a temp file whose path is included in the result so the agent can
-  re-read selectively. (Truncate-in-context + spill-to-file is the shipping
+  spills to a temp file under `$TMPDIR` (`/tmp` on Linux), outside the
+  workspace root, and the path is returned in the result. `fs.read`/`fs.grep`
+  are workspace-confined and reject that path as "escapes the workspace
+  root", so a selective re-read of the spill must go through `bash`
+  (`cat`/`grep`) — and under the sandbox even `bash` cannot reach the host's
+  `/tmp` (issue 010). (Truncate-in-context + spill-to-file is the shipping
   standard across Claude Code, goose, Cline, Codex.)
-- Cancelling a turn kills the process group of any in-flight command.
+- Timeout and turn-cancellation both kill the in-flight command's process
+  group (`libc::kill(-pgid, SIGKILL)`), but this reaches only processes still
+  in that group — a descendant that escaped via `setsid`/daemonization
+  survives, and a `git commit`'s `hooks/pre-commit` child can outlive the
+  kill too. The bounded-drain comment in `tools/bash/exec.rs` already
+  acknowledges the `setsid`-grandchild escape; see issue 017 for the observed
+  "killed but landed" failure.
 
 ## Bash Containment
 

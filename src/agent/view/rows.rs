@@ -422,7 +422,7 @@ impl AgentTranscript {
                         .xsmall()
                         .label("Deny")
                         .on_click(cx.listener(move |view, _, _, cx| {
-                            view.session.read(cx).deny(deny_id.clone());
+                            view.session.read(cx).deny(deny_id.clone(), None);
                         })),
                 );
             // Row-centric approval v2 (owner decision 2026-07-13): only

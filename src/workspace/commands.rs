@@ -123,7 +123,7 @@ impl WorkspaceShell {
                 if let Some(session) = self.active_agent_session() {
                     let pending = session.read(cx).pending_approval_call_ids();
                     if let Some(call_id) = pending.first() {
-                        session.read(cx).deny(call_id.clone());
+                        session.read(cx).deny(call_id.clone(), None);
                     }
                 }
             }
@@ -319,13 +319,14 @@ impl WorkspaceShell {
         &mut self,
         session_id: SessionId,
         call_id: horizon_agent::contract::ToolCallId,
+        reason: Option<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let session = self
             .agent_sessions
             .get(&session_id)
             .ok_or_else(|| "unknown session".to_string())?;
-        session.read(cx).deny(call_id);
+        session.read(cx).deny(call_id, reason);
         Ok(())
     }
 

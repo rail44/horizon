@@ -84,6 +84,11 @@ pub enum Subcommand {
     Deny {
         session_id: String,
         call_id: String,
+        /// Optional human-supplied deny reason, forwarded to the wire
+        /// `Command::DenyToolCall.reason` and recorded on the resulting
+        /// `Event::ApprovalResolved`. `None` (the `--reason` flag omitted) is
+        /// the no-reason case.
+        reason: Option<String>,
     },
     CancelTurn {
         session_id: String,
@@ -144,7 +149,7 @@ Subcommands:\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
   approve <session-id> <call-id>\n  \
-  deny <session-id> <call-id>\n  \
+  deny <session-id> <call-id> [--reason <text>]\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
   send <session-id> [text]\n  \
@@ -177,6 +182,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
     let mut split: Option<SplitFlag> = None;
     let mut active = false;
     let mut share = false;
+    let mut reason: Option<String> = None;
     let mut positionals: Vec<String> = Vec::new();
 
     let mut iter = args.iter().peekable();
@@ -196,6 +202,13 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             active = true;
         } else if arg == "--share" {
             share = true;
+        } else if arg == "--reason" {
+            let value = iter
+                .next()
+                .ok_or_else(|| UsageError("--reason requires a value".to_string()))?;
+            reason = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--reason=") {
+            reason = Some(value.to_string());
         } else if arg == "--prompt" {
             let value = iter
                 .next()
@@ -284,6 +297,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             Subcommand::Deny {
                 session_id,
                 call_id,
+                reason: reason.take(),
             }
         }
         "cancel-turn" => {
@@ -671,7 +685,31 @@ mod tests {
             parse(&args(&["deny", "s-1", "c-1"])).unwrap().subcommand,
             Subcommand::Deny {
                 session_id: "s-1".to_string(),
-                call_id: "c-1".to_string()
+                call_id: "c-1".to_string(),
+                reason: None,
+            }
+        );
+        // `--reason <text>` (and the `--reason=<text>` form) ride as the
+        // optional deny reason; the flag is recognized anywhere in the
+        // argument list, like the other global flags.
+        assert_eq!(
+            parse(&args(&["deny", "s-1", "c-1", "--reason", "too risky"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::Deny {
+                session_id: "s-1".to_string(),
+                call_id: "c-1".to_string(),
+                reason: Some("too risky".to_string()),
+            }
+        );
+        assert_eq!(
+            parse(&args(&["deny", "--reason=too risky", "s-1", "c-1"]))
+                .unwrap()
+                .subcommand,
+            Subcommand::Deny {
+                session_id: "s-1".to_string(),
+                call_id: "c-1".to_string(),
+                reason: Some("too risky".to_string()),
             }
         );
     }

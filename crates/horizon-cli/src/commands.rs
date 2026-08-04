@@ -131,10 +131,21 @@ pub fn to_request(
         Subcommand::Deny {
             session_id,
             call_id,
-        } => invoke(
-            "deny",
-            serde_json::json!({ "session_id": session_id, "call_id": call_id }),
-        ),
+            reason,
+        } => match reason {
+            // Omit the key when no reason was supplied -- the server's
+            // `Command::DenyToolCall.reason` carries `#[serde(default)]`, so
+            // absence decodes as `None` (mirrors the `send` arm's text
+            // omission).
+            Some(reason) => invoke(
+                "deny",
+                serde_json::json!({ "session_id": session_id, "call_id": call_id, "reason": reason }),
+            ),
+            None => invoke(
+                "deny",
+                serde_json::json!({ "session_id": session_id, "call_id": call_id }),
+            ),
+        },
         Subcommand::CancelTurn { session_id } => invoke(
             "cancel-turn",
             serde_json::json!({ "session_id": session_id }),
@@ -515,6 +526,7 @@ mod tests {
             &Subcommand::Deny {
                 session_id: "s-1".to_string(),
                 call_id: "c-1".to_string(),
+                reason: None,
             },
             None,
             None,
@@ -522,6 +534,28 @@ mod tests {
             panic!("expected an Invoke request");
         };
         assert_eq!(deny.command, "deny");
+        assert_eq!(
+            deny.args,
+            serde_json::json!({ "session_id": "s-1", "call_id": "c-1" })
+        );
+
+        // `--reason` rides as a `reason` string on the invoke args; omitted
+        // when `None` so the server's `#[serde(default)]` defaults it.
+        let Request::Invoke(deny_reason) = to_request(
+            &Subcommand::Deny {
+                session_id: "s-1".to_string(),
+                call_id: "c-1".to_string(),
+                reason: Some("too risky".to_string()),
+            },
+            None,
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(
+            deny_reason.args,
+            serde_json::json!({ "session_id": "s-1", "call_id": "c-1", "reason": "too risky" })
+        );
     }
 
     #[test]
