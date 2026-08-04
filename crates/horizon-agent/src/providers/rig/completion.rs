@@ -408,6 +408,18 @@ pub(super) struct TurnCompletion {
     /// How many tool calls the provider started but never finalized, when
     /// `truncated` is true. Zero otherwise.
     pub(super) truncated_tool_call_count: usize,
+    /// Output tokens the provider reported for this turn's request, when it
+    /// reported usage at all. `None` when no `Final` chunk arrived (the
+    /// stream ended without usage — see [`output_cap_truncated`]'s doc
+    /// comment for why that matters).
+    pub(super) output_tokens: Option<u64>,
+    /// The provider generated exactly `max_output_tokens` of output — the
+    /// response was almost certainly truncated at the output ceiling (see
+    /// [`output_cap_truncated`]). Distinct from `truncated` (tool calls cut
+    /// mid-stream): a cap-truncated turn may have no started tool calls at
+    /// all (e.g. reasoning consumed the entire budget). Like `truncated`,
+    /// this is suppressed for a cancelled turn.
+    pub(super) cap_truncated: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -485,8 +497,10 @@ pub(super) async fn complete_rig_turn(
         cancelled: false,
         failed: false,
         input_tokens: None,
+        output_tokens: None,
         truncated: false,
         truncated_tool_call_count: 0,
+        cap_truncated: false,
     }
 }
 
@@ -605,6 +619,7 @@ async fn rig_openai_turn_streaming(
     let mut tool_calls: Vec<ToolCall> = Vec::new();
     let mut cancelled = false;
     let mut input_tokens = None;
+    let mut output_tokens: Option<u64> = None;
     let mut text_buffer = StreamDeltaBuffer::new(
         events_tx.clone(),
         StreamDeltaKind::AssistantText,
@@ -724,6 +739,7 @@ async fn rig_openai_turn_streaming(
                 let usage = provider_request_usage_event_from_openai_final(&response);
                 if let Event::ProviderRequestUsage(usage) = &usage {
                     input_tokens = Some(usage.input_tokens);
+                    output_tokens = Some(usage.output_tokens);
                 }
                 let _ = events_tx.send(usage.into());
             }
@@ -782,6 +798,7 @@ async fn rig_openai_turn_streaming(
 
     let truncated_ids = tool_call_progress.truncated_ids();
     let truncated = !cancelled && !truncated_ids.is_empty();
+    let cap_truncated = output_cap_truncated(output_tokens, config.max_output_tokens, cancelled);
 
     Ok((
         assistant_message,
@@ -791,8 +808,10 @@ async fn rig_openai_turn_streaming(
             cancelled,
             failed: false,
             input_tokens,
+            output_tokens,
             truncated,
             truncated_tool_call_count: truncated_ids.len(),
+            cap_truncated,
         },
     ))
 }
@@ -813,6 +832,37 @@ pub(super) fn provider_request_usage_event_from_openai_final(
             .map(|details| saturating_u64(details.cached_tokens))
             .unwrap_or_default(),
     })
+}
+
+/// Detects output-cap truncation by comparing the provider-reported output
+/// token count against the configured ceiling (`config.max_output_tokens`).
+///
+/// `stop_reason`/`finish_reason` is not available: rig 0.39 parses
+/// `finish_reason` (including `Length`) internally but discards it after
+/// using it only for tool-call detection, and the streaming terminal element
+/// (`StreamingCompletionResponse`) carries only `usage`. So truncation must
+/// be *inferred* from the token count.
+///
+/// The heuristic is `output_tokens == Some(cap)`: the turn produced exactly
+/// as many tokens as the ceiling allowed. Measurement backs this up — across
+/// ~6,700 provider requests the cap-exact count appeared only twice (both
+/// genuine truncations) and the 28,000–32,767 band was empty (next-highest
+/// was 25,674), so a false positive is very unlikely.
+///
+/// Two holes remain, both inherent to the approach:
+///
+/// 1. **No usage event may arrive.** When the stream ends on an error or
+///    cancellation before the `Final` chunk, `FinalResponse` is never
+///    delivered and `output_tokens` stays `None` — this detector cannot
+///    fire (syn:large:text saw this in 2.3% = 60/2,591 of requests).
+///
+/// 2. **Zero-usage responses are indistinguishable from small turns.** If
+///    the provider omits usage entirely, rig substitutes `Usage::default()`,
+///    yielding `output_tokens: 0`, which this detector correctly treats as
+///    "not truncated" — but a genuinely truncated turn that also reported
+///    zero usage would be missed the same way.
+pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancelled: bool) -> bool {
+    !cancelled && output_tokens == Some(cap)
 }
 
 fn saturating_u64(value: usize) -> u64 {
