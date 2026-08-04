@@ -549,6 +549,21 @@ lands:
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
+### Deferred: session-attention surface and non-interrupting sends
+
+Recorded on owner request 2026-08-05; to be designed together with the
+Claude-Code-side notification mechanism, not standalone. Not scheduled.
+
+Two UX gaps observed while running parallel dogfood sessions (2026-08-04):
+a session waiting on approval or input in an unfocused tab is invisible
+at the workspace level (a stuck session went unnoticed until the owner
+spotted it by hand), and there is no way to hand a running session a
+message without cancelling its in-flight turn — `horizon send` and the
+composer both cancel, so guidance waits for the next stop. Both are
+about how attention flows between the owner, the integrator session,
+and Horizon sessions, which is why they belong in one design with the
+external notification path.
+
 ## External gates
 
 - **Restored native GPUI path on macOS** — Linux build and isolated terminal
