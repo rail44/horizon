@@ -147,11 +147,9 @@ impl AgentSession {
         self.link.dispatch(Command::ApproveToolCall { call_id });
     }
 
-    pub(crate) fn deny(&self, call_id: ToolCallId) {
-        self.link.dispatch(Command::DenyToolCall {
-            call_id,
-            reason: None,
-        });
+    pub(crate) fn deny(&self, call_id: ToolCallId, reason: Option<String>) {
+        self.link
+            .dispatch(Command::DenyToolCall { call_id, reason });
     }
 
     pub(crate) fn cancel(&self) {

@@ -224,7 +224,11 @@ fn dispatch_invoke(
                 Ok(id) => id,
                 Err(message) => return error_body(message),
             };
-            match shell.external_deny(session_id, call_id, cx) {
+            let reason = match optional_string_arg(args, "reason") {
+                Ok(reason) => reason,
+                Err(message) => return error_body(message),
+            };
+            match shell.external_deny(session_id, call_id, reason, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -379,6 +383,18 @@ fn activate_arg(args: &serde_json::Value) -> Result<bool, String> {
     }
 }
 
+/// Parses an optional plain-string argument -- `deny`'s `reason`, when the
+/// CLI supplied `--reason`. `None` (the key omitted, or explicit `null`) means
+/// "no reason supplied"; a string is taken verbatim. Mirrors [`isolate_arg`]'s
+/// omitted-means-default shape.
+fn optional_string_arg(args: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
+    match args.get(key) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(serde_json::Value::String(raw)) => Ok(Some(raw.clone())),
+        Some(_) => Err(format!("`{key}` must be a string")),
+    }
+}
+
 /// `docs/session-relationship-design.md` decision 3's per-spawn isolation
 /// override: `None` (the key omitted, or explicit `null`) means "apply the
 /// origin default" (control-plane origin: isolated -- see
@@ -431,7 +447,7 @@ mod tests {
     // (raised for `theme.rs`'s large `json!` macro) then can't absorb the
     // `#[test]` expansion on top, hitting the limit before the test body
     // even compiles. Narrowing the import sidesteps that.
-    use super::{required_string_arg, session_id_arg};
+    use super::{optional_string_arg, required_string_arg, session_id_arg};
 
     fn json_object(pairs: &[(&str, serde_json::Value)]) -> serde_json::Value {
         let mut map = serde_json::Map::new();
@@ -471,6 +487,36 @@ mod tests {
         assert_eq!(
             session_id_arg(&args, "session_id").unwrap_err(),
             "`session_id` is required".to_string()
+        );
+    }
+
+    #[test]
+    fn optional_string_arg_returns_none_when_omitted() {
+        let args = json_object(&[]);
+        assert_eq!(optional_string_arg(&args, "reason"), Ok(None));
+    }
+
+    #[test]
+    fn optional_string_arg_returns_none_for_explicit_null() {
+        let args = json_object(&[("reason", serde_json::Value::Null)]);
+        assert_eq!(optional_string_arg(&args, "reason"), Ok(None));
+    }
+
+    #[test]
+    fn optional_string_arg_returns_the_string_when_present() {
+        let args = json_object(&[("reason", serde_json::Value::String("too risky".to_string()))]);
+        assert_eq!(
+            optional_string_arg(&args, "reason"),
+            Ok(Some("too risky".to_string()))
+        );
+    }
+
+    #[test]
+    fn optional_string_arg_rejects_a_non_string_value() {
+        let args = json_object(&[("reason", serde_json::Value::Number(42.into()))]);
+        assert_eq!(
+            optional_string_arg(&args, "reason").unwrap_err(),
+            "`reason` must be a string".to_string()
         );
     }
 }

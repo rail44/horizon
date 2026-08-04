@@ -158,7 +158,7 @@ impl AgentComposer {
     /// Approval mode consumes it as Deny; normal mode keeps propagating.
     fn on_escape(&mut self, _: &Escape, _window: &mut Window, cx: &mut Context<Self>) {
         if let turns::ComposerMode::Approval { call_id } = self.mode.clone() {
-            self.session.read(cx).deny(call_id);
+            self.session.read(cx).deny(call_id, None);
         } else {
             cx.propagate();
         }
