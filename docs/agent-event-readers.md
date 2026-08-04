@@ -19,7 +19,7 @@ The five fold entry points (all in `crates/horizon-agent/`):
 
 | # | Reader | File | Fold entry |
 |---|---|---|---|
-| 1 | UI frame | `src/frame.rs` | `apply_agent_event_to_frame` |
+| 1 | UI frame | `src/frame/fold.rs` | `apply_agent_event_to_frame` |
 | 2 | DuckDB projection | `src/persistence/projection/duckdb/projection.rs` | `project_event` |
 | 3 | Provider history | `src/providers/rig/mapping.rs` | `rig_messages_from_horizon_events` |
 | 4 | Tier 1 clearing set | `src/providers/rig/clearing.rs` | `cleared_call_ids_from_events` |
