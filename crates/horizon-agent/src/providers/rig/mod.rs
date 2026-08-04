@@ -9,12 +9,11 @@ mod session_prompt;
 mod stream;
 
 use clearing::ClearingState;
-use completion::{
-    complete_rig_turn, deterministic_rig_response, deterministic_tool_result_response,
-    ToolCallDescriptor, TurnCompletion,
-};
+#[allow(unused_imports)]
+use completion::{complete_rig_turn, ToolCallDescriptor, TurnCompletion};
+#[allow(unused_imports)]
 use history::load_rig_session_history;
-use mapping::{rig_tool_result_message, rig_workspace_snapshot_call};
+use mapping::rig_workspace_snapshot_call;
 use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 

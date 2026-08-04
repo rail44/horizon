@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use super::completion::{
@@ -17,8 +17,7 @@ use super::mapping::{
     RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION,
 };
 use super::session::{
-    append_cancelled_tool_results_to_history, apply_turn_outcome, fold_batched_tool_result,
-    halt_turn_loop, handle_truncation_recovery, BatchStep,
+    append_cancelled_tool_results_to_history, fold_batched_tool_result, BatchStep, SessionLoopState,
 };
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
@@ -1605,16 +1604,20 @@ fn output_cap_truncated_ignores_a_cancelled_turn() {
 async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
     let cap = RigAgentConfig::default().max_output_tokens;
     let (tx, rx) = crossbeam_channel::unbounded();
-    let (_commands_tx, mut commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
-    let mut inbox: VecDeque<Command> = VecDeque::new();
+    let (_commands_tx, commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
     let config = RigAgentConfig::default();
     let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
     let extra_sections: Vec<String> = Vec::new();
-    let mut rig_history = Vec::new();
-    let mut clearing = ClearingState::disabled();
-    let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
-    let mut pending_tool_calls = HashMap::new();
-    let mut cancelled_call_ids = HashSet::new();
+
+    let mut state = SessionLoopState {
+        commands,
+        config,
+        environment,
+        extra_sections,
+        events_tx: tx,
+        guard: TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW),
+        ..SessionLoopState::default()
+    };
 
     let outcome = TurnCompletion {
         output_tokens: Some(cap),
@@ -1622,21 +1625,7 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
         ..TurnCompletion::default()
     };
 
-    let result = handle_truncation_recovery(
-        outcome,
-        &mut commands,
-        &mut inbox,
-        &config,
-        &environment,
-        &extra_sections,
-        &mut rig_history,
-        &tx,
-        &mut clearing,
-        &mut guard,
-        &mut pending_tool_calls,
-        &mut cancelled_call_ids,
-    )
-    .await;
+    let result = state.handle_truncation_recovery(outcome).await;
 
     assert!(
         result.is_none(),
@@ -1689,7 +1678,7 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
     // The guard's consecutive-truncation counter was bumped once (the
     // auto-continue ran) then reset (the follow-up turn was not truncated).
     assert!(
-        guard.record_truncation_continue(),
+        state.guard.record_truncation_continue(),
         "counter should have reset after the follow-up turn completed"
     );
 }
@@ -1705,7 +1694,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     );
     let id_a = ToolCallId(call_a.id.clone());
     let id_b = ToolCallId(call_b.id.clone());
-    let mut history = vec![
+    let history = vec![
         RigMessage::user("snapshot please"),
         RigMessage::Assistant {
             id: None,
@@ -1718,15 +1707,15 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     ];
     // The session loop removes the arrived call from pending (to look up
     // its descriptor) before halting; only B is still pending here.
-    let mut pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
+    let pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
         id_b.clone(),
         ToolCallDescriptor {
             tool_id: "fs.read".to_string(),
             args: serde_json::json!({ "path": "/x" }),
         },
     )]);
-    let mut cancelled: HashSet<ToolCallId> = HashSet::new();
-    let mut pending_halt_result: Option<ToolCallResult> = None;
+    let cancelled: HashSet<ToolCallId> = HashSet::new();
+    let pending_halt_result: Option<ToolCallResult> = None;
     let arrived = ToolCallResult::new(id_a.clone(), None, serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
@@ -1735,30 +1724,28 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     let (tx, rx) = crossbeam_channel::unbounded();
     // Unused by this test: `role` is `None`, so `halt_turn_loop` never
     // reaches the code that would actually run a turn on these.
-    let (_commands_tx, mut commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
-    let mut inbox: VecDeque<Command> = VecDeque::new();
+    let (_commands_tx, commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
     let config = RigAgentConfig::default();
     let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
     let extra_sections: Vec<String> = Vec::new();
 
-    halt_turn_loop(
-        GuardHalt::IterationCapExceeded,
-        &mut guard,
-        &mut commands,
-        &mut inbox,
-        &config,
-        &environment,
-        &extra_sections,
-        None,
-        &tx,
-        &mut pending_halt_result,
-        &mut history,
-        &mut ClearingState::disabled(),
-        &arrived,
-        &mut pending,
-        &mut cancelled,
-    )
-    .await;
+    let mut state = SessionLoopState {
+        commands,
+        config,
+        environment,
+        extra_sections,
+        events_tx: tx,
+        guard,
+        rig_history: history,
+        pending_tool_calls: pending,
+        cancelled_call_ids: cancelled,
+        pending_halt_result,
+        ..SessionLoopState::default()
+    };
+
+    state
+        .halt_turn_loop(GuardHalt::IterationCapExceeded, &arrived)
+        .await;
 
     // The arrived result is *not* folded into history here -- it's stashed
     // for `Command::ContinueTurn`/a later `Command::UserMessage` to fold in
@@ -1766,21 +1753,21 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     // `halt_turn_loop`'s doc comment). Only B's synthesized cancellation is
     // appended immediately, since it never gets a second chance to land.
     assert_eq!(
-        pending_halt_result,
+        state.pending_halt_result,
         Some(arrived.clone()),
         "the real, already-executed result must be stashed for Continue/a new user message"
     );
-    assert_eq!(history.len(), 3);
-    assert!(matches!(&history[2], RigMessage::User { content }
+    assert_eq!(state.rig_history.len(), 3);
+    assert!(matches!(&state.rig_history[2], RigMessage::User { content }
         if matches!(content.first_ref(), UserContent::ToolResult(result)
             if result.id == id_b.0
                 && matches!(result.content.first_ref(), ToolResultContent::Text(text)
                     if text.text.contains("cancelled")))));
 
-    assert!(pending.is_empty());
-    assert!(cancelled.contains(&id_b));
+    assert!(state.pending_tool_calls.is_empty());
+    assert!(state.cancelled_call_ids.contains(&id_b));
     assert!(
-        !cancelled.contains(&id_a),
+        !state.cancelled_call_ids.contains(&id_a),
         "the real, already-executed result must not be marked cancelled"
     );
 
@@ -1810,7 +1797,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
 
     // The guard was reset: a fresh allowance of tool turns is available.
     for _ in 0..TEST_ITERATION_CAP {
-        assert_eq!(guard.record_tool_turn(), None);
+        assert_eq!(state.guard.record_tool_turn(), None);
     }
 }
 
@@ -1827,20 +1814,16 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
 #[test]
 fn apply_turn_outcome_emits_turn_ended_failed_for_a_failed_provider_request() {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let mut rig_history = Vec::new();
-    let mut pending_tool_calls = HashMap::new();
-    let mut cancelled_call_ids = HashSet::new();
 
-    apply_turn_outcome(
-        TurnCompletion {
-            failed: true,
-            ..TurnCompletion::default()
-        },
-        &tx,
-        &mut rig_history,
-        &mut pending_tool_calls,
-        &mut cancelled_call_ids,
-    );
+    let mut state = SessionLoopState {
+        events_tx: tx,
+        ..SessionLoopState::default()
+    };
+
+    state.apply_turn_outcome(TurnCompletion {
+        failed: true,
+        ..TurnCompletion::default()
+    });
 
     assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Failed));
     assert_eq!(
