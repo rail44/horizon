@@ -282,6 +282,7 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
+            Vec::new(),
         ));
         // No `spawn_resume_task` here, so nothing would ever open the
         // readiness gate every post-hello agent method blocks on
@@ -368,6 +369,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             Some(config.clone()),
+            Vec::new(),
             Vec::new(),
         ));
         state.mark_resume_ready();

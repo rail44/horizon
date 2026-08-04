@@ -437,6 +437,7 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -545,6 +546,7 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -610,6 +612,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
             Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
@@ -683,6 +686,7 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -753,6 +757,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
             Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
@@ -983,6 +988,7 @@ mod tests {
             SharedDuckdbStore::unavailable(),
             None,
             Vec::new(),
+            Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
@@ -1036,6 +1042,7 @@ mod tests {
             None,
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
             Vec::new(),
         ));
         let live_state = LiveState::with_disabled_persistence();

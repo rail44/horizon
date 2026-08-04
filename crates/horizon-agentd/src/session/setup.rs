@@ -98,6 +98,20 @@ pub(super) fn configured_domains(
     horizon_config::grants::domains_for_project(&state.project_grants, &project_root)
 }
 
+/// Whether this session's project root is in the user's `trusted_projects`
+/// config list -- the repository-trust gate (owner decision 2026-08-05).
+/// Resolved the same way [`configured_filesystem_grants`] resolves grants:
+/// `workspace_root` -> `worktree::project_root` (the main repository
+/// toplevel, so an isolated worktree session inherits its parent's trust)
+/// -> exact-match against `state.trusted_projects`. `false` for a session
+/// with no workspace root, no repository, or no matching entry -- fail-closed.
+pub(super) fn project_is_trusted(state: &Arc<AgentdState>, workspace_root: Option<&Path>) -> bool {
+    let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
+        return false;
+    };
+    state.trusted_projects.iter().any(|p| p == &project_root)
+}
+
 /// The pure half of [`configured_filesystem_grants`], split out so the
 /// config-entry-to-sandbox-grant mapping is testable without a session,
 /// a daemon, or a config file.
@@ -212,7 +226,7 @@ pub(super) fn resolve_and_create_isolated_worktree(
 mod tests {
     use super::*;
     use crate::session::state::SessionEntry;
-    use crate::session::test_support::state_with_rig_config;
+    use crate::session::test_support::{state_with_rig_config, state_with_trusted_projects};
     use crate::session::Connection;
     use crossbeam_channel::{unbounded, Sender};
     use horizon_agent::contract::{Command, ProviderId};
@@ -626,6 +640,80 @@ mod tests {
             assert!(
                 outgoing_rx.try_recv().is_err(),
                 "nothing should be announced when isolation never actually happened"
+            );
+        }
+
+        // --- project_is_trusted: repository-trust gate (owner decision 2026-08-05) --
+        //
+        // `project_is_trusted` reuses the same `worktree::project_root`
+        // resolution as `[grants]` (the main repo toplevel, so an isolated
+        // worktree inherits its parent project's trust). These tests need real
+        // git -- mirroring the rest of this module's real-git convention.
+
+        #[test]
+        fn project_is_trusted_resolves_a_worktree_to_its_main_repo_root() {
+            let _canary = EnclosingRepoGuard::capture();
+            let repo = scratch_repo();
+            let main_root =
+                std::fs::canonicalize(repo.path()).expect("canonicalize scratch repo root");
+
+            // Create a linked worktree of the scratch repo.
+            let worktree_path = main_root.join("trust-worktree");
+            git(
+                &main_root,
+                &["worktree", "add", worktree_path.to_str().unwrap(), "HEAD"],
+            );
+
+            // Trust the main repo root.
+            let state = state_with_trusted_projects(vec![main_root.clone()]);
+
+            // The main repo root itself is trusted.
+            assert!(
+                project_is_trusted(&state, Some(&main_root)),
+                "the main repo root must be trusted"
+            );
+            // The worktree resolves back to the main root and inherits trust.
+            assert!(
+                project_is_trusted(&state, Some(&worktree_path)),
+                "a worktree of a trusted repo must inherit trust"
+            );
+
+            // Clean up the worktree before the temp dir is dropped.
+            let _ = run_git(
+                &main_root,
+                &[
+                    "worktree",
+                    "remove",
+                    "--force",
+                    worktree_path.to_str().unwrap(),
+                ],
+            );
+        }
+
+        #[test]
+        fn project_is_trusted_is_false_for_an_unlisted_repo() {
+            let _canary = EnclosingRepoGuard::capture();
+            let repo = scratch_repo();
+            let main_root =
+                std::fs::canonicalize(repo.path()).expect("canonicalize scratch repo root");
+
+            // Trust a different repo entirely.
+            let state =
+                state_with_trusted_projects(vec![std::path::PathBuf::from("/some/other/repo")]);
+
+            assert!(
+                !project_is_trusted(&state, Some(&main_root)),
+                "an unlisted repo must not be trusted"
+            );
+        }
+
+        #[test]
+        fn project_is_trusted_is_false_without_a_workspace_root() {
+            let _canary = EnclosingRepoGuard::capture();
+            let state = state_with_trusted_projects(vec![std::path::PathBuf::from("/src/project")]);
+            assert!(
+                !project_is_trusted(&state, None),
+                "no workspace root means no trust"
             );
         }
     }

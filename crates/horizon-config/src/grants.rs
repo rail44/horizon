@@ -281,7 +281,7 @@ pub fn domains_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec
 /// `~user` form is deliberately *not* supported: it would need passwd
 /// lookups to mean anything, and this file only ever describes the account
 /// Horizon runs as.
-fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
+pub(crate) fn expand(value: &str, home: Option<&Path>) -> Option<PathBuf> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;

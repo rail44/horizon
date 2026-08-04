@@ -112,6 +112,7 @@ impl ProviderRegistry {
         role_id: Option<RoleId>,
         workspace_root: Option<PathBuf>,
         history: Vec<Event>,
+        trusted_project: bool,
     ) -> Option<SessionHandle> {
         if let Some(role_id) = &role_id {
             crate::roles::resolve(role_id)?;
@@ -123,6 +124,7 @@ impl ProviderRegistry {
                 role_id,
                 workspace_root,
                 history,
+                trusted_project,
             })
         })
     }

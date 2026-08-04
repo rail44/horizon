@@ -121,6 +121,15 @@ pub(crate) struct AgentdState {
     /// own, and does not apply to test binaries here). Empty at every test
     /// construction site.
     pub(super) project_grants: Vec<horizon_config::ProjectGrant>,
+    /// Validated `trusted_projects` entries from the same config load
+    /// (`main`'s `horizon_config::trusted_projects` call) -- the
+    /// repository-trust gate (owner decision 2026-08-05). A session whose
+    /// project root is not in this list gets embedded skills only and no
+    /// `AGENTS.md`/`CLAUDE.md` instructions; behavioral defense (sandbox,
+    /// approval) is unaffected. Same lifecycle as `project_grants`:
+    /// startup-only, refreshed on `Reload Agent Runtime` (daemon respawn),
+    /// not live-reloadable. Empty at every test construction site.
+    pub(super) trusted_projects: Vec<std::path::PathBuf>,
 }
 
 impl AgentdState {
@@ -132,6 +141,7 @@ impl AgentdState {
         duckdb_cell: SharedDuckdbStore,
         config_path: Option<PathBuf>,
         project_grants: Vec<horizon_config::ProjectGrant>,
+        trusted_projects: Vec<std::path::PathBuf>,
     ) -> Self {
         Self {
             providers: Mutex::new(providers),
@@ -148,6 +158,7 @@ impl AgentdState {
             duckdb_cell,
             config_path,
             project_grants,
+            trusted_projects,
         }
     }
 

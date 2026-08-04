@@ -19,6 +19,7 @@ fn mock_agent_emits_initial_session_events() {
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
 
@@ -810,6 +811,7 @@ fn mock_agent_accepts_tool_call_result_command() {
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
     let tx = handle.sender();
@@ -847,6 +849,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
     let tx = handle.sender();
@@ -944,6 +947,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
     let tx = handle.sender();
@@ -998,6 +1002,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             role_id: None,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
     let tx = handle.sender();
@@ -1384,7 +1389,7 @@ fn provider_registry_starts_builtin_provider() {
     let registry = registry::ProviderRegistry::builtin();
     let provider_id = registry.default_provider_id();
     let handle = registry
-        .start_session(&provider_id, SessionId::new(), None, None, Vec::new())
+        .start_session(&provider_id, SessionId::new(), None, None, Vec::new(), true)
         .expect("builtin provider");
 
     let first = handle.events().recv().expect("first event");
