@@ -367,6 +367,15 @@ pub struct RigAgentConfig {
     /// has a role that restricts tools (`roles::RoleDefinition::
     /// allowed_tool_ids`).
     pub allowed_tool_ids: Option<Vec<String>>,
+    /// Whether this session's project root is in the user's
+    /// `trusted_projects` list — threaded in from
+    /// `StartSession::trusted_project` by `spawn_rig_session` so
+    /// `rig_tool_definitions` can filter the knowledge tools
+    /// (`knowledge.read`/`knowledge.write`) out of the advertised
+    /// catalog for untrusted sessions. Defaults to `false`
+    /// (fail-closed), matching `StartSession::trusted_project`'s own
+    /// `#[serde(default)]`.
+    pub trusted_project: bool,
 }
 
 impl Default for RigAgentConfig {
@@ -383,6 +392,7 @@ impl Default for RigAgentConfig {
             max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
             clearing_threshold_pct: DEFAULT_CLEARING_TRIGGER_PCT,
             allowed_tool_ids: None,
+            trusted_project: false,
         }
     }
 }
@@ -403,6 +413,7 @@ impl RigAgentConfig {
                 std::env::var(CLEARING_THRESHOLD_PCT_VAR).ok(),
             ),
             allowed_tool_ids: None,
+            trusted_project: false,
         }
     }
 }
@@ -502,7 +513,7 @@ pub(crate) fn resolve_event_log_path(
 /// to the OS temp dir if even `$HOME` is unset. Factored out of
 /// [`default_event_log_path_from`] so [`default_state_db_path_from`]
 /// mirrors its exact resolution shape instead of duplicating it.
-fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
+pub(crate) fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> PathBuf {
     let non_empty = |value: Option<String>| value.filter(|value| !value.is_empty());
     match non_empty(xdg_data_home) {
         Some(dir) => PathBuf::from(dir),
@@ -511,6 +522,18 @@ fn agent_data_home_from(xdg_data_home: Option<String>, home: Option<String>) -> 
             None => std::env::temp_dir(),
         },
     }
+}
+
+/// Convenience wrapper around [`agent_data_home_from`] that reads the
+/// env vars itself, for callers that don't need the parameterized form
+/// (testability). The knowledge store (`crate::knowledge`) uses this to
+/// resolve its base directory the same way the event log and DuckDB
+/// projection do.
+pub(crate) fn agent_data_home() -> PathBuf {
+    agent_data_home_from(
+        std::env::var(XDG_DATA_HOME_VAR).ok(),
+        std::env::var(HOME_VAR).ok(),
+    )
 }
 
 /// The event log's built-in default when `HORIZON_AGENT_EVENT_LOG` doesn't

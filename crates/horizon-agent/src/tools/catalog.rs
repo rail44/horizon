@@ -584,6 +584,68 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
+        Definition {
+            id: "knowledge.read".to_string(),
+            title: "Read Knowledge".to_string(),
+            description: "Read one of this project's knowledge entries by id (see the system \
+                prompt's project-knowledge section) and return its full frontmatter and body."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Knowledge entry id, as listed in the system prompt's project-knowledge section.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
+            id: "knowledge.write".to_string(),
+            title: "Write Knowledge".to_string(),
+            description: "Create or update a knowledge entry for this project. Upserts by id: \
+                an existing entry's `created` date is preserved while `updated` is refreshed. \
+                No approval — the tool-event recording is the audit."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "description", "body", "sources"],
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Entry id (slug: lowercase alphanumeric and hyphens). Used as the filename.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One-line summary shown in the system prompt's knowledge index.",
+                    },
+                    "body": {
+                        "type": "string",
+                        "description": "Free-form Markdown body.",
+                    },
+                    "sources": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Verifiable source references, e.g. \"session:<uuid> seq:<range>\". At least one required.",
+                    },
+                    "anchors": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Repository-relative paths or symbols this entry relates to (optional).",
+                    },
+                    "status": {
+                        "type": "string",
+                        "enum": ["active", "needs-review", "expired"],
+                        "description": "Entry status. Defaults to \"active\" for new entries; preserved on upsert if omitted.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
     ]
 }
 

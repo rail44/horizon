@@ -73,6 +73,13 @@ pub(super) fn spawn_rig_session(
     let session_id = request.session_id;
     let fallback_events = request.history;
     let trusted_project = request.trusted_project;
+    // Thread `trusted_project` into the per-session config so
+    // `rig_tool_definitions` can filter the knowledge tools out of the
+    // advertised catalog for untrusted sessions. `role_adjusted_config`
+    // (the caller) doesn't set this — trust is per-session, not
+    // role-level.
+    let mut config = config;
+    config.trusted_project = trusted_project;
 
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
