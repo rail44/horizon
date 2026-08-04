@@ -1,7 +1,7 @@
 ---
 id: 016
 title: A turn truncated at the output-token cap ends as "Completed" with nothing to show for it
-status: open
+status: partially-resolved
 severity: high
 area: agent, ui
 ---
@@ -73,3 +73,47 @@ Workaround that unblocked the session: telling it to make one edit and
 immediately call the tool, deciding the next edit only after seeing the
 result. Its following turns were normal (5395, 1831, 76, 10413 output
 tokens).
+
+## Resolution (surfacing half)
+Fixed in `dcc305f` (merged as `aeb472e`). `output_cap_truncated` compares
+the reported `output_tokens` against the cap actually sent, excluding
+cancelled turns; a match raises an `Event::Error` naming both numbers and
+routes the turn through the *existing* truncation recovery — same guard,
+same three-attempt ceiling as the mid-stream tool-call case, with a
+continuation prompt that tells the model to act rather than re-derive its
+plan. No UI change was needed: the error rides the generic
+`AgentFrameItem::Error` rendering the other case already used.
+
+The two blind spots are in the code's doc comment, not just here: usage
+never arrives on ~2% of `syn:large:text` streams, and a provider that
+reports zero usage is indistinguishable from a genuinely tiny turn.
+
+## The cause half is NOT resolved
+Probed against the configured provider 2026-08-04 (`syn:large:text` on
+synthetic.new, trivial and reasoning-heavy prompts, n=1 per condition):
+
+| setting | reasoning chars | answer chars | completion tokens |
+|---|---|---|---|
+| baseline | 2,814 | 650 | 804 |
+| `none` / `low` | 0 | 4,652 | 1,073 |
+| `medium` | 1,910 | 613 | 589 |
+| `high` | 1,611 | 1,175 | 705 |
+
+So `reasoning_effort` **is** honoured — but it is effectively binary
+(`none` and `low` both suppress entirely; `medium` and `high` do not
+differ), and suppressing the reasoning block does not reduce the thinking,
+it **relocates it into the answer text**: total output went *up* 33%.
+That is why the knob fixed the judge (a one-token classifier, where
+relocation into the answer is exactly what was wanted) and would not fix
+an implementation turn.
+
+Adding "work incrementally" instructions to the prompt or brief was
+considered and declined by the owner (2026-08-04) as bad know-how — the
+goal is that a simple brief suffices, not that each incident adds a line.
+
+What remains, if this recurs often enough to matter: the model itself is
+the lever (`syn:large:text`'s reasoning tail is 3.5-5x the other two
+production models at p99, and both capped turns on record are its), or
+the delegation prompt section's plan-first framing, whose effect on
+*post-report* re-planning was never measured — only its effect on
+delegation adoption was.
