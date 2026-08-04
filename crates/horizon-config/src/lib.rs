@@ -92,6 +92,17 @@ pub struct RawConfig {
     /// this is user-owned config rather than anything the repository or
     /// the approval flow can write.
     pub grants: RawGrantsConfig,
+    /// `trusted_projects`: absolute repository toplevels whose repository
+    /// content (`.horizon/skills/` skills, `AGENTS.md`/`CLAUDE.md`
+    /// instructions) an agent session may load into its system prompt. A
+    /// session whose project root is NOT listed here gets embedded skills
+    /// only and no repository instructions — the prompt-injection surface
+    /// `skills`' module doc's trust note used to accept unconditionally is
+    /// now gated behind this user-owned, per-project decision (owner
+    /// decision 2026-08-05). Same semantics as `[[grants.project]]` `root`:
+    /// each entry is the project's main-repository toplevel, a session in
+    /// an isolated worktree resolves back to it, and matching is exact.
+    pub trusted_projects: Vec<String>,
 }
 
 /// `[provider]`: model selection and base URL for the built-in rig/OpenAI
@@ -298,6 +309,34 @@ fn home_dir() -> Option<PathBuf> {
 /// when the file was read.
 pub fn project_grants(config: &RawConfig) -> Vec<ProjectGrant> {
     grants::resolve(&config.grants.project, home_dir().as_deref()).0
+}
+
+/// Every validated `trusted_projects` entry — what `horizon-agentd`
+/// consults at session spawn to decide whether repository skills and
+/// `AGENTS.md`/`CLAUDE.md` instructions may be loaded into the prompt. Each
+/// entry is expanded the same way `[[grants.project]]` `root` is (a leading
+/// `~/` against `$HOME`, then required to be absolute); an entry that
+/// doesn't survive that expansion is warned about on stderr and dropped,
+/// matching `grants::resolve`'s warn-and-ignore policy.
+pub fn trusted_projects(config: &RawConfig) -> Vec<std::path::PathBuf> {
+    let home = home_dir();
+    let mut resolved = Vec::new();
+    for entry in &config.trusted_projects {
+        match grants::expand(entry, home.as_deref()) {
+            Some(path) => {
+                if !resolved.contains(&path) {
+                    resolved.push(path);
+                }
+            }
+            None => {
+                eprintln!(
+                    "horizon config: trusted_projects: entry {entry:?} is not an absolute path \
+                     (and no $HOME is set to expand a leading \"~/\" against), ignoring it"
+                );
+            }
+        }
+    }
+    resolved
 }
 
 /// The outcome of trying to read and parse the config file at some path,

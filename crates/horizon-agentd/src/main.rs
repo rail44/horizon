@@ -142,6 +142,7 @@ async fn main() -> anyhow::Result<()> {
         duckdb_cell.clone(),
         config_path,
         horizon_config::project_grants(raw_config),
+        horizon_config::trusted_projects(raw_config),
     ));
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
@@ -391,6 +392,7 @@ mod tests {
             Some(writer),
             SharedDuckdbStore::unavailable(),
             None,
+            Vec::new(),
             Vec::new(),
         ));
         let listener = daemon::bind_listener(&socket_path, DAEMON_NAME)

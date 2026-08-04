@@ -42,8 +42,18 @@ pub(super) fn session_extra_sections(
     environment: &SessionEnvironment,
     config: &RigAgentConfig,
     role: Option<&'static RoleDefinition>,
+    trusted_project: bool,
 ) -> Vec<String> {
-    let skills = crate::skills::SkillRegistry::discover(&environment.cwd);
+    // Untrusted project: embedded skills only (no `.horizon/skills/`
+    // discovery), and no `AGENTS.md`/`CLAUDE.md` injection — see the `skills`
+    // module doc's trust note (owner decision 2026-08-05). Embedded skills
+    // are ship-native, so they stay advertised; the repository layer is the
+    // only thing the gate suppresses.
+    let skills = if trusted_project {
+        crate::skills::SkillRegistry::discover(&environment.cwd)
+    } else {
+        crate::skills::SkillRegistry::embedded()
+    };
     let mut sections = Vec::new();
     if advertises_task_tool(config) {
         sections.push(crate::prompt::DELEGATION_ROUTING_SECTION.to_string());
@@ -63,11 +73,20 @@ pub(super) fn session_extra_sections(
             true
         }
     };
-    if include_repository_instructions {
+    if trusted_project && include_repository_instructions {
         sections.extend(crate::instructions::extra_sections(
             &environment.cwd,
             config.repository_instructions_cap_chars,
         ));
+    } else if !trusted_project {
+        // One-line note so the model doesn't read the absence of AGENTS.md
+        // as an anomaly — the repository's content was deliberately not
+        // loaded because the project is untrusted.
+        sections.push(
+            "Repository content not loaded (untrusted project) — AGENTS.md/CLAUDE.md and \
+             .horizon/skills/ were not injected into this prompt; this is expected, not an error."
+                .to_string(),
+        );
     }
     sections
 }

@@ -18,10 +18,14 @@
 //! `AGENTS.md`/`CLAUDE.md` ingestion — and arguably sharper here, since a
 //! repository skill *overrides* an embedded one by id (any session working
 //! in a repo could have `horizon-config`'s instructions silently shadowed).
-//! Accepted anyway (owner decision, 2026-07-07): Horizon is presently a
-//! personal project, and this is a deliberate hypothesis-testing setup that
-//! lets a skill be iterated on without rebuilding the binary — exactly the
-//! same trade repository-instructions ingestion already makes.
+//! Originally accepted unconditionally (owner decision, 2026-07-07) as a
+//! personal-project hypothesis-testing convenience; now gated behind a
+//! user-level trust decision (owner decision, 2026-08-05): a session whose
+//! project root is not in the user's `trusted_projects` config list gets
+//! [`SkillRegistry::embedded`] only — no repository skills are discovered
+//! or loaded, and the same gate suppresses `AGENTS.md`/`CLAUDE.md`
+//! instructions (`instructions::extra_sections`). Behavioral defense
+//! (sandbox, approval) is unaffected: an untrusted session still runs.
 //!
 //! Three stages of disclosure, matching the design material:
 //!
@@ -154,6 +158,19 @@ pub struct SkillRegistry {
 }
 
 impl SkillRegistry {
+    /// Builds the registry from this build's embedded skills only — no
+    /// `.horizon/skills/` repository discovery. Used for sessions whose
+    /// project root is not in the user's `trusted_projects` list (see the
+    /// module doc's trust note): embedded skills are ship-native, not
+    /// repo-controlled, so they are always safe to advertise regardless of
+    /// trust. Produces the same sorted set [`Self::discover`] starts from
+    /// before overlaying repository skills.
+    pub fn embedded() -> Self {
+        let mut skills: Vec<Skill> = embedded_skills().to_vec();
+        skills.sort_by(|a, b| a.name.cmp(&b.name));
+        Self { skills }
+    }
+
     /// Builds the registry for a session whose working directory is `cwd`:
     /// every embedded skill, with each `.horizon/skills/<id>/SKILL.md`
     /// discovered while walking from the repository root (or just `cwd`
@@ -570,6 +587,20 @@ mod tests {
         let registry = SkillRegistry::discover(&nested);
         let skill = registry.get("dup").unwrap();
         assert_eq!(skill.description, "nested version");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn embedded_returns_only_embedded_skills_ignoring_repository_skills() {
+        let root = temp_repo("embedded-only");
+        write_skill(&root, "repo-skill", "repo-skill", "A repo skill.", "Body.");
+
+        let registry = SkillRegistry::embedded();
+        // Embedded skills are present.
+        assert!(registry.get("horizon-config").is_some());
+        // Repository skill is NOT present — embedded() does no discovery.
+        assert!(registry.get("repo-skill").is_none());
 
         let _ = std::fs::remove_dir_all(&root);
     }

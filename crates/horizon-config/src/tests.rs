@@ -382,6 +382,71 @@ fn config_example_toml_documents_grants_without_activating_any() {
     );
 }
 
+// --- trusted_projects: repository-trust gate resolution -----------------
+
+#[test]
+fn trusted_projects_resolves_absolute_paths() {
+    let config = RawConfig {
+        trusted_projects: vec!["/src/project".to_string(), "/src/other".to_string()],
+        ..Default::default()
+    };
+    assert_eq!(
+        trusted_projects(&config),
+        vec![
+            std::path::PathBuf::from("/src/project"),
+            std::path::PathBuf::from("/src/other"),
+        ]
+    );
+}
+
+#[test]
+fn trusted_projects_refuses_relative_entries() {
+    let config = RawConfig {
+        trusted_projects: vec!["relative/path".to_string()],
+        ..Default::default()
+    };
+    assert!(trusted_projects(&config).is_empty());
+}
+
+#[test]
+fn trusted_projects_deduplicates() {
+    let config = RawConfig {
+        trusted_projects: vec!["/src/project".to_string(), "/src/project".to_string()],
+        ..Default::default()
+    };
+    assert_eq!(
+        trusted_projects(&config),
+        vec![std::path::PathBuf::from("/src/project")]
+    );
+}
+
+#[test]
+fn trusted_projects_is_empty_by_default() {
+    assert!(trusted_projects(&RawConfig::default()).is_empty());
+}
+
+#[test]
+fn trusted_projects_parses_from_a_config_file() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-test-trusted-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        "trusted_projects = [\"/src/project\", \"/src/other\"]\n",
+    )
+    .unwrap();
+    let loaded = load_from_path(Some(&path));
+    assert_eq!(
+        trusted_projects(&loaded),
+        vec![
+            std::path::PathBuf::from("/src/project"),
+            std::path::PathBuf::from("/src/other"),
+        ]
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // --- [theme] text_contrast: lenient number parsing ----------------------
 
 #[test]

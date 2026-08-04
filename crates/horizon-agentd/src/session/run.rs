@@ -32,7 +32,8 @@ use super::panic::{
 };
 use super::setup::{
     configured_domains, configured_filesystem_grants, configured_loopback_connect,
-    resolve_and_create_isolated_worktree, skill_discovery_root, tool_session_state_for,
+    project_is_trusted, resolve_and_create_isolated_worktree, skill_discovery_root,
+    tool_session_state_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree::WorktreeInfo;
@@ -93,6 +94,14 @@ pub(super) fn run_session(
         (workspace_root, false)
     };
 
+    // Repository-trust gate (owner decision 2026-08-05): resolved from the
+    // same post-isolation `workspace_root` as `[grants]` (so an isolated
+    // worktree session inherits its parent project's trust), using the same
+    // `worktree::project_root` resolution. Threaded into the provider so
+    // `session_extra_sections` can gate skills/instructions, and used below
+    // to gate the tool-side skill registry.
+    let trusted = project_is_trusted(state, workspace_root.as_deref());
+
     let handle = {
         let providers = lock_unpoisoned(&state.providers);
         providers.start_session(
@@ -101,6 +110,7 @@ pub(super) fn run_session(
             role_id.clone(),
             workspace_root.clone(),
             history.clone(),
+            trusted,
         )
     };
     let Some(handle) = handle else {
@@ -221,7 +231,11 @@ pub(super) fn run_session(
     .with_isolated_worktree(isolated)
     .with_filesystem_grants(filesystem_grants.clone())
     .with_loopback_connect(loopback_connect)
-    .with_skills(SkillRegistry::discover(&skill_root))
+    .with_skills(if trusted {
+        SkillRegistry::discover(&skill_root)
+    } else {
+        SkillRegistry::embedded()
+    })
     .with_config_path(state.config_path.clone())
     .with_domain_policy(domains)
     .with_network_proxy(network)

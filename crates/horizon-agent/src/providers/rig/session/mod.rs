@@ -72,6 +72,7 @@ pub(super) fn spawn_rig_session(
     let provider_id = request.provider_id;
     let session_id = request.session_id;
     let fallback_events = request.history;
+    let trusted_project = request.trusted_project;
 
     let panic_events_tx = events_tx.clone();
     thread::spawn(move || {
@@ -107,7 +108,8 @@ pub(super) fn spawn_rig_session(
                     .into(),
                 );
             }
-            let extra_sections = session_extra_sections(&environment, &config, role);
+            let extra_sections =
+                session_extra_sections(&environment, &config, role, trusted_project);
 
             let Ok(runtime) = tokio::runtime::Builder::new_current_thread()
                 .enable_all()

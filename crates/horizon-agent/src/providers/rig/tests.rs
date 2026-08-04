@@ -1894,6 +1894,7 @@ fn start_fallback_rig_session_as(
             role_id,
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
     let tx = handle.sender();
@@ -2834,6 +2835,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             role_id: Some(RoleId("config".to_string())),
             workspace_root: None,
             history: Vec::new(),
+            trusted_project: true,
         },
     );
 
@@ -2985,6 +2987,7 @@ fn session_environment_uses_the_start_session_workspace_root_for_an_isolated_ses
         role_id: None,
         workspace_root: Some(isolated_root.clone()),
         history: Vec::new(),
+        trusted_project: true,
     };
 
     let environment = session_environment(&request);
@@ -3005,6 +3008,7 @@ fn session_environment_falls_back_to_process_cwd_when_no_workspace_root_is_known
         role_id: None,
         workspace_root: None,
         history: Vec::new(),
+        trusted_project: true,
     };
 
     let environment = session_environment(&request);
@@ -3038,7 +3042,7 @@ fn session_extra_sections_lists_every_skill_then_repository_instructions_for_a_r
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None);
+    let sections = session_extra_sections(&environment, &config, None, true);
     let expected_instructions = crate::instructions::extra_sections(
         &environment.cwd,
         config.repository_instructions_cap_chars,
@@ -3085,13 +3089,100 @@ fn session_extra_sections_lists_a_repository_skill_discovered_from_cwd_for_a_rol
     let environment = test_environment(cwd.clone());
     let config = RigAgentConfig::default();
 
-    let sections = session_extra_sections(&environment, &config, None);
+    let sections = session_extra_sections(&environment, &config, None, true);
 
     // [0] is the delegation-routing block; the skills section follows it.
     assert!(
         sections[1].contains("my-skill") && sections[1].contains("A repository skill."),
         "expected the repository skill in the skills section, got: {:?}",
         sections[1]
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[test]
+fn session_extra_sections_skips_repository_content_for_an_untrusted_project() {
+    let cwd = git_repo_with_agents_md("untrusted");
+    // Also write a repository skill so we can assert it's absent.
+    let skill_dir = cwd.join(".horizon").join("skills").join("repo-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: A repo skill.\n---\nBody.\n",
+    )
+    .unwrap();
+    let environment = test_environment(cwd.clone());
+    let config = RigAgentConfig::default();
+
+    let sections = session_extra_sections(&environment, &config, None, false);
+
+    // Delegation routing is still present (it's not repo-controlled).
+    assert_eq!(
+        sections[0],
+        crate::prompt::DELEGATION_ROUTING_SECTION,
+        "the delegation-routing block is not repo-controlled, so it stays"
+    );
+    // Skills section lists embedded skills only — no repo skill.
+    assert!(
+        sections[1].contains("horizon-config"),
+        "embedded skills must still be listed for an untrusted project"
+    );
+    assert!(
+        !sections[1].contains("repo-skill"),
+        "a repository skill must not appear for an untrusted project"
+    );
+    // No repository instructions; the untrusted note is present.
+    assert!(
+        sections
+            .iter()
+            .any(|s| s.contains("Repository content not loaded (untrusted project)")),
+        "the untrusted note must be present, got: {sections:?}"
+    );
+    assert!(
+        sections
+            .iter()
+            .all(|s| !s.contains("Repository instructions (AGENTS.md):")),
+        "no repository instructions section for an untrusted project, got: {sections:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+#[test]
+fn session_extra_sections_loads_repository_content_for_a_trusted_project() {
+    let cwd = git_repo_with_agents_md("trusted");
+    let skill_dir = cwd.join(".horizon").join("skills").join("repo-skill");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "---\nname: repo-skill\ndescription: A repo skill.\n---\nBody.\n",
+    )
+    .unwrap();
+    let environment = test_environment(cwd.clone());
+    let config = RigAgentConfig::default();
+
+    let sections = session_extra_sections(&environment, &config, None, true);
+
+    // Repository skill IS present for a trusted project.
+    assert!(
+        sections[1].contains("repo-skill"),
+        "a repository skill must appear for a trusted project, got: {:?}",
+        sections[1]
+    );
+    // Repository instructions ARE present for a trusted project.
+    assert!(
+        sections
+            .iter()
+            .any(|s| s.contains("Repository instructions (AGENTS.md):")),
+        "repository instructions must be present for a trusted project, got: {sections:?}"
+    );
+    // No untrusted note.
+    assert!(
+        sections
+            .iter()
+            .all(|s| !s.contains("Repository content not loaded")),
+        "no untrusted note for a trusted project, got: {sections:?}"
     );
 
     let _ = std::fs::remove_dir_all(&cwd);
@@ -3109,7 +3200,7 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
     let cwd = git_repo_with_agents_md("delegation-routing");
     let environment = test_environment(cwd.clone());
 
-    let role_less = session_extra_sections(&environment, &RigAgentConfig::default(), None);
+    let role_less = session_extra_sections(&environment, &RigAgentConfig::default(), None, true);
     assert!(
         role_less.contains(&crate::prompt::DELEGATION_ROUTING_SECTION.to_string()),
         "a role-less session advertises `task`, so it must be routed to it: {role_less:?}"
@@ -3119,7 +3210,7 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
         .expect("the explore role must resolve");
     let explore_config = role_adjusted_config(&RigAgentConfig::default(), Some(explore_role));
     let explore_sections =
-        session_extra_sections(&environment, &explore_config, Some(explore_role));
+        session_extra_sections(&environment, &explore_config, Some(explore_role), true);
     assert!(
         !explore_sections
             .iter()
@@ -3142,7 +3233,7 @@ fn session_extra_sections_orders_role_then_skills_and_excludes_repository_instru
     // is what decides whether the delegation-routing block is included.
     let config = role_adjusted_config(&RigAgentConfig::default(), Some(role));
 
-    let sections = session_extra_sections(&environment, &config, Some(role));
+    let sections = session_extra_sections(&environment, &config, Some(role), true);
 
     assert_eq!(
         sections.len(),

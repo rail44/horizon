@@ -276,6 +276,40 @@ cyan = "#56b6c2"
 # network = ["127.0.0.1:4226"]
 
 # ---------------------------------------------------------------------------
+# trusted_projects — repository trust gate (owner decision 2026-08-05).
+#
+# A top-level array of absolute repository toplevels. An agent session whose
+# project root is NOT listed here gets embedded skills only (no .horizon/skills/
+# repository skills) and no AGENTS.md/CLAUDE.md repository instructions in its
+# system prompt. A session whose project root IS listed here gets both, as
+# before. Behavioral defense (sandbox, approval) is unaffected either way — an
+# untrusted session still runs, just without repository-authored prompt
+# content.
+#
+# Each entry is a project's main-repository toplevel (the directory `git
+# rev-parse --show-toplevel` reports) — the same semantics as [[grants.project]]
+# `root`. A session in an isolated worktree under .horizon/worktrees/ resolves
+# back to this root, so isolated sessions inherit the project's trust. Matched
+# exactly: naming a parent directory does NOT cover the projects beneath it.
+# A leading "~/" is expanded against $HOME.
+#
+# This lives here, in YOUR config file, for the same reason [grants] does: a
+# tracked project file would let a cloned repository inject its own
+# instructions and skills into the prompt the moment an agent session opened
+# it — the classic prompt-injection surface. The unconditional acceptance of
+# that surface (recorded 2026-07-07) is replaced by this explicit, user-owned,
+# per-project decision.
+#
+# Applied at session spawn only. Existing sessions keep the trust they started
+# with; "Reload Agent Runtime" picks changes up for new ones — same lifecycle
+# as [grants].
+#
+# Commented out: an empty list (the default) means every project is untrusted,
+# including this one — no AGENTS.md or repository skills load until you add an
+# entry. Add your own repository toplevel below to trust it.
+# trusted_projects = ["/home/you/src/github.com/you/your-project"]
+
+# ---------------------------------------------------------------------------
 # Environment-only overrides — no [agent] file key exists for any of these
 # any more (the whole section retired 2026-07-18), but the event log's and
 # DuckDB projection's paths are still relocatable via env var:

@@ -99,6 +99,16 @@ pub(crate) struct StartSession {
     /// normal path -- store available -- still loads from DuckDB; this is
     /// only the fallback when `store` is `None`.
     pub history: Vec<Event>,
+    /// Whether this session's project root is in the user's `trusted_projects`
+    /// config list — when `false`, repository skills (`.horizon/skills/`)
+    /// and repository instructions (`AGENTS.md`/`CLAUDE.md`) are not loaded
+    /// into the system prompt, and only embedded skills are advertised.
+    /// Computed by `horizon-agentd` at session spawn (reusing the same
+    /// `worktree::project_root` resolution as `[grants]`) and threaded in
+    /// here so the rig provider's `session_extra_sections` can gate on it.
+    /// `#[serde(default)]` defaults to `false` (untrusted) — fail-closed.
+    #[serde(default)]
+    pub trusted_project: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]

@@ -23,6 +23,7 @@ pub(super) fn judge_test_state() -> Arc<AgentdState> {
         SharedDuckdbStore::unavailable(),
         None,
         Vec::new(),
+        Vec::new(),
     ))
 }
 
@@ -75,5 +76,25 @@ pub(super) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<Ag
         SharedDuckdbStore::unavailable(),
         None,
         Vec::new(),
+        Vec::new(),
+    ))
+}
+
+/// Like [`state_with_rig_config`], but with explicit `trusted_projects`
+/// entries — for the repository-trust gate's tests (owner decision
+/// 2026-08-05).
+pub(super) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> Arc<AgentdState> {
+    let agent_config = AgentConfig::from_env_and_provider(None, None);
+    Arc::new(AgentdState::new(
+        ProviderRegistry::builtin_with_config(
+            agent_config.clone(),
+            SharedDuckdbStore::unavailable(),
+        ),
+        agent_config,
+        None,
+        SharedDuckdbStore::unavailable(),
+        None,
+        Vec::new(),
+        trusted,
     ))
 }
