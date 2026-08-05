@@ -999,6 +999,16 @@ impl Render for WorkspaceShell {
             .flex()
             .flex_col()
             .bg(rgb(theme::background()))
+            // Apply the config-driven font family (`[ui] font_family`) at the
+            // shell root so every gpui-component widget that lacks its own
+            // `.font()` ancestor -- the tab strip, palette, view chooser,
+            // session manager, and title bar -- inherits it instead of
+            // falling back to gpui-component's built-in default. Only the
+            // family is set here; the terminal-grid size (`[terminal]
+            // font_size`) is deliberately not applied to chrome, so modals
+            // keep their own sizing. The terminal grid resolves its font
+            // directly (`text_system.resolve_font`) and ignores this.
+            .font(crate::terminal::resolved_font())
             .key_context(if mode_active {
                 MODE_CONTEXT
             } else {
