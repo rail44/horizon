@@ -1,0 +1,37 @@
+//! `horizon-board`: an event-sourced work-item store for Horizon's T-board
+//! (task board).
+//!
+//! Items are persisted as an append-only JSONL event log at
+//! `<data-home>/horizon/board/<sanitized-root>/events.jsonl`, serialised
+//! across processes with an advisory `flock` (the CLI invokes separate
+//! short-lived processes, so the agent event log's single-writer-thread
+//! model does not apply). On read, events are folded in memory; malformed
+//! lines are skipped with a count reported — the same house style as the
+//! agent event log.
+//!
+//! Zero-dependency on `horizon-agent` or any other Horizon crate. The crate
+//! boundary is a seam for future extension/plugin abstraction (owner
+//! requirement).
+//!
+//! ## Item fields
+//!
+//! - `id`: sequential within the project (assigned on `item-created`)
+//! - `title` / `body`: one-line summary / markdown body
+//! - `status`: free-form string (recommended: proposed / ready /
+//!   in-progress / review / done / blocked). Not an enum so future
+//!   vocabulary changes never break past events.
+//! - `rank`: lexicographic rank string (lexorank over `a`-`z`)
+//! - `assignee`: free-form string (empty = unassigned)
+//! - `parent`: optional parent item id
+//! - `depends_on`: list of item ids
+//! - `links`: free-form strings (session ids, branch names, doc paths)
+//! - `comments`: `{ author, text, at }` entries
+
+mod event;
+mod model;
+mod path;
+mod rank;
+mod store;
+
+pub use model::{Comment, Item};
+pub use store::{ListResult, Position, Store, StoreError};

@@ -3668,9 +3668,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "horizon-board"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "horizon-cli"
 version = "0.1.0"
 dependencies = [
+ "horizon-board",
  "horizon-control",
  "serde_json",
 ]
