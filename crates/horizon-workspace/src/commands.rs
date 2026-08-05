@@ -28,6 +28,12 @@ pub enum CommandId {
     /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
     /// scoped to the active session only.
     OpenTerminalInSessionDirectory,
+    /// Opens the task-board modal (`src/board_view.rs`): a read-mostly view
+    /// over the `horizon-board` event store where the owner can browse items
+    /// (rank order, with comment count and last-activity time) and post
+    /// comments. Palette-only -- no default keybinding (see
+    /// `keymap::command_for`'s `"open-board"` entry for an optional user binding).
+    OpenBoard,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -207,6 +213,13 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Open a new terminal whose working directory is the active session's directory.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::OpenBoard,
+            title: "Open Board",
+            category: CommandCategory::Workspace,
+            description: "Browse the task board and post owner comments.",
+            destructive: false,
+        },
     ]
 }
 
@@ -224,7 +237,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReloadAgentRuntime
         | CommandId::ReloadTerminalRuntime
         | CommandId::OpenSessionManager
-        | CommandId::ReloadConfig => true,
+        | CommandId::ReloadConfig
+        | CommandId::OpenBoard => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` (closing a tab's last pane must go
         // through closing the tab itself instead), closing the
@@ -280,7 +294,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 17);
+        assert_eq!(commands.len(), 18);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -303,6 +317,8 @@ mod tests {
         assert_eq!(commands[15].title, "Reload Config");
         assert_eq!(commands[16].id, CommandId::OpenTerminalInSessionDirectory);
         assert_eq!(commands[16].title, "Open Terminal in Session Directory");
+        assert_eq!(commands[17].id, CommandId::OpenBoard);
+        assert_eq!(commands[17].title, "Open Board");
     }
 
     #[test]

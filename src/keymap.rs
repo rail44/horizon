@@ -141,6 +141,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "reload-terminal-runtime" => Some(CommandId::ReloadTerminalRuntime),
         "reload-config" => Some(CommandId::ReloadConfig),
         "manage-sessions" => Some(CommandId::OpenSessionManager),
+        "open-board" => Some(CommandId::OpenBoard),
         _ => None,
     }
 }

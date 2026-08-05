@@ -111,6 +111,7 @@ impl WorkspaceShell {
                 self.reconcile(window, cx);
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
+            CommandId::OpenBoard => self.open_board(window, cx),
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
                     let pending = session.read(cx).pending_approval_call_ids();
