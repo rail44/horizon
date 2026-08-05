@@ -115,6 +115,60 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
     );
 }
 
+/// Issue 017: a descendant that called `setsid` escapes the process-group
+/// SIGKILL and survives — continuing to write to its output file after the
+/// tool result reports `killed`. `kill_process_tree` walks `/proc` to find
+/// and kill those escapees by pid. This test spawns such a grandchild and
+/// verifies its writes stop after the timeout kill, using a single
+/// size-stability comparison (docs/issues/015's lesson: no threshold race,
+/// just a grace-then-check).
+#[cfg(target_os = "linux")]
+#[test]
+fn timeout_kill_reaches_a_setsid_grandchild() {
+    let cwd = cwd_handle(std::env::temp_dir());
+    let call_id = ToolCallId("timeout-setsid".to_string());
+    let marker =
+        std::env::temp_dir().join(format!("horizon-setsid-kill-{}.txt", uuid::Uuid::new_v4()));
+    let marker_str = marker.display().to_string();
+
+    // `setsid` detaches the grandchild into its own session/process group,
+    // escaping the group SIGKILL. The `sleep 10` keeps the bash parent
+    // alive so the timeout fires while the grandchild is still writing.
+    let output = super::exec::run(
+        &call_id,
+        &json!({
+            "command": format!(
+                "setsid bash -c 'while true; do echo x >> \"{marker_str}\"; sleep 0.1; done' & sleep 10"
+            ),
+            "timeout_secs": 1
+        }),
+        &cwd,
+        &config(),
+    );
+
+    assert_eq!(output["is_error"], true);
+    assert!(
+        output["message"]
+            .as_str()
+            .expect("message")
+            .contains("timed out"),
+        "should report a timeout: {output}"
+    );
+
+    // Grace period for any in-flight write to land, then a single
+    // stability check: the file must not keep growing.
+    std::thread::sleep(Duration::from_millis(300));
+    let size_a = std::fs::metadata(&marker).map(|m| m.len()).unwrap_or(0);
+    std::thread::sleep(Duration::from_millis(300));
+    let size_b = std::fs::metadata(&marker).map(|m| m.len()).unwrap_or(0);
+    assert_eq!(
+        size_a, size_b,
+        "the setsid grandchild should have been killed; the marker file should not keep growing"
+    );
+
+    let _ = std::fs::remove_file(&marker);
+}
+
 // --- spawn failure ---------------------------------------------------------
 
 /// Backlog 46 (the 2026-07-19 event-log analysis of session `2f3668b8`):
