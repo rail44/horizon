@@ -1,7 +1,7 @@
 ---
 id: 017
 title: bash tool timeout kill does not reach descendant processes (pre-commit hooks, setsid grandchildren)
-status: open
+status: resolved
 severity: medium
 area: agent
 ---
@@ -59,3 +59,12 @@ duplicate, or assume cleanup that never happened.
 - Severity is **medium**: not a crash or data loss on its own, but the
   false "killed" report misleads retry decisions and risks double commits.
 - Fix is out of scope for this filing; this issue is the record only.
+
+## Resolution
+Fixed in `4bc278b`. Both bash execution paths share
+`registry::kill_process_tree`: a /proc descendant snapshot taken while
+the PPID chain is intact, a group SIGKILL, then individual SIGKILLs for
+snapshotted escapees (setsid/setpgid children). Regression test
+`timeout_kill_reaches_a_setsid_grandchild` verifies a session-escaped
+grandchild stops writing after the kill. Post-snapshot forks remain a
+theoretical race, documented at the function.
