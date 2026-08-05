@@ -217,13 +217,14 @@ async fn run_async(
 
     // Bounded drain: the child being dead does NOT guarantee EOF on the
     // pipes — a background process it left behind still holds the write
-    // ends (`some-server &`; or, on the timeout path, a `setsid` grandchild
-    // that escaped the process-group SIGKILL). An unbounded join here would
-    // hang the call forever, past the point where cancellation can help. On
-    // expiry, abort the pumps and return with whatever the buffers hold —
-    // safe to read immediately afterwards: this is a current-thread
-    // runtime, so an aborted pump can't be concurrently touching its
-    // buffer once this `await` returns.
+    // ends (`some-server &`). The tree-walk kill (`kill_process_tree`)
+    // now reaches `setsid`/`setpgid` escapees too, but a process forked
+    // during the `/proc` snapshot window is still possible, so an
+    // unbounded join here would hang the call forever past the point
+    // where cancellation can help. On expiry, abort the pumps and return
+    // with whatever the buffers hold — safe to read immediately afterwards:
+    // this is a current-thread runtime, so an aborted pump can't be
+    // concurrently touching its buffer once this `await` returns.
     let drained = tokio::time::timeout(drain_grace, async {
         let _ = tokio::join!(&mut stdout_task, &mut stderr_task);
     })
@@ -957,14 +958,13 @@ fn wait_child_with_timeout(
 
 #[cfg(unix)]
 fn kill_pid(pid: u32) {
-    // The Linux sandbox child is the dedicated helper and process-group
-    // leader; its real target and every descendant inherit that group. Kill
-    // the whole group so timeout and early setup failures cannot orphan a
-    // grandchild after the helper disappears.
-    // SAFETY: `pid` belongs to the child we spawned with process_group(0).
-    unsafe {
-        libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
-    }
+    // Kill the entire process tree, not just the process group: the
+    // sandbox child (the dedicated helper on Linux) is the process-group
+    // leader, and every descendant that stays in the group is reached by
+    // the group signal. But a descendant that called `setsid`/`setpgid`
+    // escaped the group and survives it — `kill_process_tree` walks
+    // `/proc` to find and kill those individually (issue 017).
+    super::registry::kill_process_tree(pid);
 }
 
 #[cfg(not(unix))]
