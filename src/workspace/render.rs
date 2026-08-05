@@ -1092,6 +1092,15 @@ impl Render for WorkspaceShell {
                                         .shadow(theme::overlay_shadow())
                                         .rounded_md()
                                         .overflow_hidden()
+                                        // Stop the panel's mouse-down from bubbling
+                                        // to the backdrop's click-outside handler:
+                                        // a click on a row should run the row's
+                                        // action (the List emits `Confirm` on
+                                        // click, same as Enter), not cancel the
+                                        // modal. See board item #11.
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
                                         .child(List::new(&palette)),
                                 ),
                         )
@@ -1125,6 +1134,15 @@ impl Render for WorkspaceShell {
                                         .shadow(theme::overlay_shadow())
                                         .rounded_md()
                                         .overflow_hidden()
+                                        // Stop the panel's mouse-down from
+                                        // bubbling to the backdrop's
+                                        // click-outside handler so a row
+                                        // click confirms (as Enter does)
+                                        // rather than cancelling. See board
+                                        // item #11.
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
                                         .child(List::new(&chooser)),
                                 ),
                         )
@@ -1168,6 +1186,15 @@ impl Render for WorkspaceShell {
                                         .shadow(theme::overlay_shadow())
                                         .rounded_md()
                                         .overflow_hidden()
+                                        // Stop the panel's mouse-down from
+                                        // bubbling to the backdrop's
+                                        // click-outside handler so a row
+                                        // click confirms (as Enter does)
+                                        // rather than cancelling. See board
+                                        // item #11.
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
                                         .child(List::new(&manager)),
                                 ),
                         )
@@ -1200,6 +1227,15 @@ impl Render for WorkspaceShell {
                                         .shadow(theme::overlay_shadow())
                                         .rounded_md()
                                         .overflow_hidden()
+                                        // Stop the panel's mouse-down from
+                                        // bubbling to the backdrop's
+                                        // click-outside handler so a row
+                                        // click opens the detail (as Enter
+                                        // does) rather than closing the
+                                        // modal. See board item #11.
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
                                         .child(List::new(&board)),
                                 ),
                         )
