@@ -111,9 +111,13 @@ Adding "work incrementally" instructions to the prompt or brief was
 considered and declined by the owner (2026-08-04) as bad know-how — the
 goal is that a simple brief suffices, not that each incident adds a line.
 
-What remains, if this recurs often enough to matter: the model itself is
-the lever (`syn:large:text`'s reasoning tail is 3.5-5x the other two
-production models at p99, and both capped turns on record are its), or
-the delegation prompt section's plan-first framing, whose effect on
-*post-report* re-planning was never measured — only its effect on
-delegation adoption was.
+Remaining observations, recorded without a causal claim (the owner has
+not agreed that the model is the problem, and the cross-model numbers
+are confounded — `syn:large:text` carried the implementation-heavy
+dogfood workload while other models' samples come from different eras
+and task types): in this corpus `syn:large:text`'s reasoning tail
+measured 3.5-5x the other two models at p99 and both capped turns were
+its; and the delegation prompt section's plan-first framing has only
+ever been measured for delegation adoption, never for its effect on
+post-report re-planning. Any attribution needs a controlled comparison
+first.
