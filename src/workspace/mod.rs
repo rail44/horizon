@@ -41,7 +41,7 @@ use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentSession, AgentView};
-use crate::board_view::{BoardDetail, BoardListDelegate};
+use crate::board_pane::BoardPaneView;
 use crate::palette::PaletteDelegate;
 use crate::runtime::{AgentdHandle, TerminaldHandle, TerminaldSlot};
 use crate::session_manager::SessionManagerDelegate;
@@ -197,6 +197,7 @@ enum PaneView {
 enum CachedPaneLeaf {
     Terminal(Entity<TerminalView>),
     ThemeSettings(Entity<ThemeSettingsView>),
+    Board(Entity<BoardPaneView>),
 }
 
 /// A pane that owns narrower cache boundaries internally. Composite panes must
@@ -212,6 +213,7 @@ impl CachedPaneLeaf {
         match self {
             Self::Terminal(view) => view.focus_handle(cx),
             Self::ThemeSettings(view) => view.focus_handle(cx),
+            Self::Board(view) => view.focus_handle(cx),
         }
     }
 
@@ -220,6 +222,7 @@ impl CachedPaneLeaf {
         match self {
             Self::Terminal(view) => view.clone().cached(style()).into_any_element(),
             Self::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
+            Self::Board(view) => view.clone().cached(style()).into_any_element(),
         }
     }
 }
@@ -249,6 +252,10 @@ impl PaneView {
 
     fn theme_settings(view: Entity<ThemeSettingsView>) -> Self {
         Self::Cached(CachedPaneLeaf::ThemeSettings(view))
+    }
+
+    fn board(view: Entity<BoardPaneView>) -> Self {
+        Self::Cached(CachedPaneLeaf::Board(view))
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -331,10 +338,6 @@ pub(crate) struct WorkspaceShell {
     _session_manager_subscription: Option<Subscription>,
     view_chooser: Option<Entity<ListState<ViewChooserDelegate>>>,
     _view_chooser_subscription: Option<Subscription>,
-    board: Option<Entity<ListState<BoardListDelegate>>>,
-    _board_subscription: Option<Subscription>,
-    board_detail: Option<Entity<BoardDetail>>,
-    _board_detail_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
     // Live state for an in-progress split-handle drag (`render_node`'s
@@ -397,10 +400,6 @@ impl WorkspaceShell {
             _session_manager_subscription: None,
             view_chooser: None,
             _view_chooser_subscription: None,
-            board: None,
-            _board_subscription: None,
-            board_detail: None,
-            _board_detail_subscription: None,
             pending_placement: None,
             active_split_drag: None,
             last_focused_terminal: None,

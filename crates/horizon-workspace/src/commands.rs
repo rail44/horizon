@@ -28,11 +28,13 @@ pub enum CommandId {
     /// 4a) -- v1's "hunt down the agent's worktree and cd there" fix,
     /// scoped to the active session only.
     OpenTerminalInSessionDirectory,
-    /// Opens the task-board modal (`src/board_view.rs`): a read-mostly view
-    /// over the `horizon-board` event store where the owner can browse items
-    /// (rank order, with comment count and last-activity time) and post
-    /// comments. Palette-only -- no default keybinding (see
-    /// `keymap::command_for`'s `"open-board"` entry for an optional user binding).
+    /// Opens the task-board pane (`ViewKind::Board`): a session-less
+    /// first-party view over the `horizon-board` event store where the owner
+    /// can browse items (rank order, with comment count and last-activity
+    /// time) and post comments. The pane is placed as a new tab or split
+    /// via the view chooser's placement flow. Palette-only -- no default
+    /// keybinding (see `keymap::command_for`'s `"open-board"` entry for an
+    /// optional user binding).
     OpenBoard,
 }
 

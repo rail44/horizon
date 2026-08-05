@@ -18,7 +18,6 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::Escape;
 use gpui_component::list::List;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::TitleBar;
@@ -355,11 +354,7 @@ impl WorkspaceShell {
     /// manager) currently has the shell's attention -- the same predicate
     /// used to suppress workspace-mode key dispatch while a modal is open.
     fn any_modal_open(&self) -> bool {
-        self.palette.is_some()
-            || self.view_chooser.is_some()
-            || self.session_manager.is_some()
-            || self.board.is_some()
-            || self.board_detail.is_some()
+        self.palette.is_some() || self.view_chooser.is_some() || self.session_manager.is_some()
     }
 
     fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1206,76 +1201,6 @@ impl Render for WorkspaceShell {
                                             cx.stop_propagation()
                                         })
                                         .child(List::new(&manager)),
-                                ),
-                        )
-                    })
-                    .when_some(self.board.clone(), |this, board| {
-                        this.child(
-                            div()
-                                .id("board-backdrop")
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full()
-                                .flex()
-                                .justify_center()
-                                .items_start()
-                                .pt(px(64.0))
-                                .on_mouse_down(
-                                    MouseButton::Left,
-                                    cx.listener(|shell, _, window, cx| {
-                                        shell.cancel_board(window, cx);
-                                    }),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(560.0))
-                                        .h(px(400.0))
-                                        .bg(rgb(theme::background()))
-                                        .border_1()
-                                        .border_color(theme::border())
-                                        .shadow(theme::overlay_shadow())
-                                        .rounded_md()
-                                        .overflow_hidden()
-                                        // Stop the panel's mouse-down from
-                                        // bubbling to the backdrop's
-                                        // click-outside handler so a row
-                                        // click opens the detail (as Enter
-                                        // does) rather than closing the
-                                        // modal. See board item #11.
-                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                                            cx.stop_propagation()
-                                        })
-                                        .child(List::new(&board)),
-                                ),
-                        )
-                    })
-                    .when_some(self.board_detail.clone(), |this, detail| {
-                        this.child(
-                            div()
-                                .id("board-detail-backdrop")
-                                .on_action(cx.listener(|shell, _: &Escape, window, cx| {
-                                    shell.back_from_board_detail(window, cx);
-                                }))
-                                .absolute()
-                                .top_0()
-                                .left_0()
-                                .size_full()
-                                .flex()
-                                .justify_center()
-                                .items_start()
-                                .pt(px(64.0))
-                                .child(
-                                    div()
-                                        .w(px(640.0))
-                                        .h(px(560.0))
-                                        .bg(rgb(theme::background()))
-                                        .border_1()
-                                        .border_color(theme::border())
-                                        .shadow(theme::overlay_shadow())
-                                        .rounded_md()
-                                        .overflow_hidden()
-                                        .child(detail),
                                 ),
                         )
                     }),

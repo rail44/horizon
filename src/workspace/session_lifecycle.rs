@@ -21,6 +21,7 @@ use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
+use crate::board_pane::BoardPaneView;
 use crate::runtime::{wait_for_drain, AgentdHandle, AgentdResponder, TerminaldHandle};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
@@ -254,6 +255,20 @@ impl WorkspaceShell {
                     PaneView::theme_settings(
                         cx.new(|cx| ThemeSettingsView::new(terminald, window, cx)),
                     ),
+                );
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::Board))
+            ) {
+                let session_root = self.workspace.active_session_id().and_then(|id| {
+                    self.workspace
+                        .session_workspace_root(id)
+                        .map(|p| p.to_path_buf())
+                });
+                let cwd = std::env::current_dir().ok();
+                self.panes.insert(
+                    pane_id,
+                    PaneView::board(cx.new(|cx| BoardPaneView::new(session_root, cwd, window, cx))),
                 );
             }
         }
