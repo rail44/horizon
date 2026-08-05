@@ -24,6 +24,18 @@ fn first_row_to_select(items_count: usize) -> Option<IndexPath> {
     (items_count > 0).then(IndexPath::default)
 }
 
+/// The pure fallback behind [`board_root`], kept free of `WorkspaceShell`/
+/// `App` so it's unit-testable without a GPUI window: the active session's
+/// `workspace_root` wins; when that is absent (no active session, or a
+/// terminal/resumed session with no recorded root — the common
+/// terminal-only state) the shell process's own cwd stands in. Both are
+/// *starting* directories — `Store::from_dir` does the worktree -> main-root
+/// collapse, the same resolution `horizon board`'s `Store::from_cwd` uses —
+/// so `None` only when neither is available.
+fn board_root_dir(session_root: Option<PathBuf>, cwd: Option<PathBuf>) -> Option<PathBuf> {
+    session_root.or(cwd)
+}
+
 /// Selects the first row right after a searchable `List` is constructed,
 /// so a bare Enter on open runs it without arrowing down first
 /// (owner report, 2026-07-13). gpui-component's `ListState` starts with
@@ -190,17 +202,22 @@ impl WorkspaceShell {
 
     // -- Board modal -----------------------------------------------------
 
-    /// Resolves the project root for the board store from the active
-    /// session's `workspace_root` (worktree -> main root, via the board
-    /// crate's own `main_root`, the same resolution `horizon board` uses).
-    /// `None` when there is no active session or it isn't inside a git repo;
-    /// the modal shows an empty state in that case.
+    /// Resolves a starting directory for the board store: the active
+    /// session's `workspace_root` when one is known, else the shell
+    /// process's own cwd (the GUI is normally launched from a repo
+    /// checkout). Either is a *starting* directory — `Store::from_dir` does
+    /// the worktree -> main-root collapse, the same resolution `horizon
+    /// board`'s `Store::from_cwd` uses. The cwd fallback covers the common
+    /// terminal-only state, where the active session is a terminal (or a
+    /// resumed agent) with no recorded `workspace_root`; `None` only when
+    /// neither is available, leaving the modal's empty state.
     fn board_root(&self) -> Option<PathBuf> {
-        self.workspace.active_session_id().and_then(|id| {
+        let session_root = self.workspace.active_session_id().and_then(|id| {
             self.workspace
                 .session_workspace_root(id)
                 .map(|path| path.to_path_buf())
-        })
+        });
+        board_root_dir(session_root, std::env::current_dir().ok())
     }
 
     pub(super) fn open_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -256,8 +273,9 @@ impl WorkspaceShell {
                 .detach();
             }
             None => {
-                // No active session to resolve a root from: leave the empty
-                // (non-loading) state rather than a perpetual "Loading…".
+                // Neither a session root nor the shell cwd yielded a starting
+                // directory: leave the empty (non-loading) state rather than a
+                // perpetual "Loading…".
                 if let Some(list) = self.board.as_ref() {
                     list.update(cx, |list, cx| {
                         list.delegate_mut().set_loaded(Vec::new());
@@ -444,9 +462,11 @@ impl WorkspaceShell {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use gpui_component::IndexPath;
 
-    use super::first_row_to_select;
+    use super::{board_root_dir, first_row_to_select};
 
     #[test]
     fn first_row_to_select_is_the_default_index_when_the_list_is_nonempty() {
@@ -457,5 +477,32 @@ mod tests {
     #[test]
     fn first_row_to_select_is_none_when_the_list_is_empty() {
         assert_eq!(first_row_to_select(0), None);
+    }
+
+    #[test]
+    fn board_root_dir_falls_back_to_cwd_when_no_session_root() {
+        // Terminal-only workspace: the active session is a terminal (or a
+        // resumed agent) with no recorded `workspace_root`, so `session_root`
+        // is None -- the bug condition that used to force "No board items".
+        // The shell cwd stands in so `Store::from_dir` still gets a chance to
+        // resolve the store (worktree -> main root).
+        let cwd = PathBuf::from("/repo/worktree");
+        assert_eq!(board_root_dir(None, Some(cwd.clone())), Some(cwd));
+    }
+
+    #[test]
+    fn board_root_dir_prefers_the_session_root_over_cwd() {
+        let session_root = PathBuf::from("/agent/worktree");
+        let cwd = PathBuf::from("/shell/cwd");
+        assert_eq!(
+            board_root_dir(Some(session_root.clone()), Some(cwd)),
+            Some(session_root)
+        );
+    }
+
+    #[test]
+    fn board_root_dir_is_none_when_neither_available() {
+        // No session root and an unreadable cwd: empty state, as before.
+        assert_eq!(board_root_dir(None, None), None);
     }
 }

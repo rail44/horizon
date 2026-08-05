@@ -5,12 +5,15 @@
 //!
 //! Both read and write the `horizon-board` event store directly from the
 //! shell process -- no control plane, no daemon. The store is resolved from
-//! the active session's `workspace_root` (worktree -> main root, the same
-//! resolution the board CLI's `Store::from_cwd` uses) via the crate's
-//! `Store::from_dir`, so the modal reads the exact store `horizon board list`
-//! prints. Blocking file I/O and the `git rev-parse` subprocess run off the
-//! UI thread (`cx.spawn` + `background_executor`); the list delegate starts in
-//! a loading state and fills when the first read returns.
+//! the active session's `workspace_root` when one is known, else the shell
+//! process's own cwd (worktree -> main root, the same resolution the board
+//! CLI's `Store::from_cwd` uses) via the crate's `Store::from_dir`, so the
+//! modal reads the exact store `horizon board list` prints -- and still
+//! resolves in the common terminal-only state where no agent session has
+//! recorded a `workspace_root`. Blocking file I/O and the `git rev-parse`
+//! subprocess run off the UI thread (`cx.spawn` + `background_executor`);
+//! the list delegate starts in a loading state and fills when the first
+//! read returns.
 //!
 //! The "updated" column is the item's latest comment timestamp -- the only
 //! last-activity signal the public `Item` model exposes (the per-event `at`
