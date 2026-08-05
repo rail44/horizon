@@ -3,12 +3,16 @@
 //! over gpui-component's searchable `List` (`src/palette.rs`,
 //! `src/view_chooser.rs`, `src/session_manager.rs`).
 
+use std::path::PathBuf;
+
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListEvent, ListState};
 use gpui_component::IndexPath;
+use horizon_board::{Item, Store};
 use horizon_workspace::commands::command_entries;
 
 use super::WorkspaceShell;
+use crate::board_view::{BoardDetail, BoardDetailEvent, BoardListDelegate};
 use crate::palette::PaletteDelegate;
 use crate::session_manager::{subtree_session_ids, SessionManagerDelegate};
 use crate::view_chooser::{Placement, ViewChooserDelegate};
@@ -182,6 +186,132 @@ impl WorkspaceShell {
             self.focus_active(window, cx);
         }
         cx.notify();
+    }
+
+    // -- Board modal -----------------------------------------------------
+
+    /// Resolves the project root for the board store from the active
+    /// session's `workspace_root` (worktree -> main root, via the board
+    /// crate's own `main_root`, the same resolution `horizon board` uses).
+    /// `None` when there is no active session or it isn't inside a git repo;
+    /// the modal shows an empty state in that case.
+    fn board_root(&self) -> Option<PathBuf> {
+        self.workspace.active_session_id().and_then(|id| {
+            self.workspace
+                .session_workspace_root(id)
+                .map(|path| path.to_path_buf())
+        })
+    }
+
+    pub(super) fn open_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.board_root();
+        let list = cx.new(|cx| {
+            let mut list = ListState::new(BoardListDelegate::new(), window, cx).searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
+        });
+        let subscription = cx.subscribe_in(
+            &list,
+            window,
+            |shell, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(index) => {
+                    let item = list.read(cx).delegate().item_at(*index).cloned();
+                    let root = shell.board_root();
+                    if let (Some(item), Some(root)) = (item, root) {
+                        shell.board = None;
+                        shell._board_subscription = None;
+                        shell.open_board_detail(item, root, window, cx);
+                    }
+                }
+                ListEvent::Cancel => shell.cancel_board(window, cx),
+                ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        self.board = Some(list);
+        self._board_subscription = Some(subscription);
+        cx.notify();
+        match root {
+            Some(root) => {
+                // Load off the UI thread: `Store::from_dir` runs `git rev-parse`
+                // and `list` reads+folds the event log -- both blocking.
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            Store::from_dir(&root)
+                                .and_then(|store| store.list(None))
+                                .map(|result| result.items)
+                        })
+                        .await;
+                    let _ = this.update(cx, |shell, cx| {
+                        if let Some(list) = shell.board.as_ref() {
+                            list.update(cx, |list, cx| {
+                                list.delegate_mut().set_loaded(result.unwrap_or_default());
+                                cx.notify();
+                            });
+                        }
+                    });
+                })
+                .detach();
+            }
+            None => {
+                // No active session to resolve a root from: leave the empty
+                // (non-loading) state rather than a perpetual "Loading…".
+                if let Some(list) = self.board.as_ref() {
+                    list.update(cx, |list, cx| {
+                        list.delegate_mut().set_loaded(Vec::new());
+                        cx.notify();
+                    });
+                }
+            }
+        }
+    }
+
+    pub(super) fn cancel_board(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.board = None;
+        self._board_subscription = None;
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
+    fn open_board_detail(
+        &mut self,
+        item: Item,
+        root: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let detail = cx.new(|cx| BoardDetail::new(item, root, window, cx));
+        let subscription = cx.subscribe_in(
+            &detail,
+            window,
+            |shell, _detail, event: &BoardDetailEvent, window, cx| match event {
+                BoardDetailEvent::Back => shell.back_from_board_detail(window, cx),
+            },
+        );
+        window.focus(&detail.read(cx).input_focus_handle(cx), cx);
+        self.board_detail = Some(detail);
+        self._board_detail_subscription = Some(subscription);
+        cx.notify();
+    }
+
+    fn close_board_detail(&mut self, cx: &mut Context<Self>) {
+        self.board_detail = None;
+        self._board_detail_subscription = None;
+        cx.notify();
+    }
+
+    /// Back from the detail to the (re-read) list: close the detail and re-open
+    /// the board, which re-resolves the root and re-reads the store so a
+    /// just-posted comment's bump to the row's count/updated is visible.
+    pub(super) fn back_from_board_detail(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_board_detail(cx);
+        self.open_board(window, cx);
     }
 
     /// `OpenSessionDirectory` (`docs/session-relationship-design.md`

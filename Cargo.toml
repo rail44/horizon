@@ -72,6 +72,7 @@ gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "
 # control icons) resolve through the asset source registered below.
 gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
 horizon-agent = { path = "crates/horizon-agent" }
+horizon-board = { path = "crates/horizon-board" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
