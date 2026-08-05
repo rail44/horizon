@@ -151,6 +151,7 @@ enum PaneKindState {
 #[serde(rename_all = "snake_case")]
 enum ViewKindState {
     ThemeSettings,
+    Board,
 }
 
 impl PaneKindState {
@@ -638,6 +639,7 @@ impl From<ViewKind> for ViewKindState {
     fn from(kind: ViewKind) -> Self {
         match kind {
             ViewKind::ThemeSettings => Self::ThemeSettings,
+            ViewKind::Board => Self::Board,
         }
     }
 }
@@ -646,6 +648,7 @@ impl From<ViewKindState> for ViewKind {
     fn from(kind: ViewKindState) -> Self {
         match kind {
             ViewKindState::ThemeSettings => Self::ThemeSettings,
+            ViewKindState::Board => Self::Board,
         }
     }
 }
@@ -789,6 +792,41 @@ mod tests {
         );
         // No session was ever created for the view pane -- only the mvp
         // terminal's session survives the round trip.
+        assert_eq!(restored.session_count(), workspace.session_count());
+        assert!(restored.all_pane_ids().contains(&terminal_pane));
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    #[test]
+    fn state_round_trip_preserves_a_board_pane_without_a_session() {
+        let mut workspace = Workspace::mvp();
+        let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
+        let view_pane =
+            workspace.split_active_tab_with_view(ViewKind::Board, SplitAxis::Horizontal);
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        assert_eq!(
+            value["tabs"][0]["root"]["children"][1]["node"]["pane"]["kind"],
+            json!({"view": "board"})
+        );
+        assert!(value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"].is_null());
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+
+        assert_eq!(
+            restored.pane_kind(view_pane),
+            Some(PaneKind::View(ViewKind::Board))
+        );
+        assert_eq!(
+            restored
+                .panes
+                .iter()
+                .find(|pane| pane.id == view_pane)
+                .expect("view pane")
+                .session_id,
+            None
+        );
         assert_eq!(restored.session_count(), workspace.session_count());
         assert!(restored.all_pane_ids().contains(&terminal_pane));
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);

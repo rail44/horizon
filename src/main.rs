@@ -13,7 +13,7 @@
 #![recursion_limit = "256"]
 
 mod agent;
-mod board_view;
+mod board_pane;
 mod control_plane;
 mod input_trace;
 mod keymap;

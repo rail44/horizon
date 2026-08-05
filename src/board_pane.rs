@@ -1,28 +1,31 @@
-//! The task-board modal's two views: a searchable item list (a
-//! gpui-component `List` delegate, the same shape as `src/session_manager.rs`
-//! and `src/palette.rs`) and a drill-in detail view showing one item's full
-//! body and comment thread plus a one-line owner-comment composer.
+//! The task-board pane: a session-less first-party view (`ViewKind::Board`)
+//! that reads and writes the `horizon-board` event store directly from the
+//! shell process -- no control plane, no daemon. Mirrors the former board
+//! modal (`src/board_view.rs`, deleted in the same change) but as a native
+//! pane with internal list/detail navigation rather than a modal overlay.
 //!
-//! Both read and write the `horizon-board` event store directly from the
-//! shell process -- no control plane, no daemon. The store is resolved from
-//! the active session's `workspace_root` when one is known, else the shell
-//! process's own cwd (worktree -> main root, the same resolution the board
-//! CLI's `Store::from_cwd` uses) via the crate's `Store::from_dir`, so the
-//! modal reads the exact store `horizon board list` prints -- and still
-//! resolves in the common terminal-only state where no agent session has
-//! recorded a `workspace_root`. Blocking file I/O and the `git rev-parse`
-//! subprocess run off the UI thread (`cx.spawn` + `background_executor`);
-//! the list delegate starts in a loading state and fills when the first
-//! read returns.
+//! The store is resolved from the active session's `workspace_root` when one
+//! is known, else the shell process's own cwd (worktree -> main root, the same
+//! resolution the board CLI's `Store::from_cwd` uses) via the crate's
+//! `Store::from_dir`. Blocking file I/O and the `git rev-parse` subprocess run
+//! off the UI thread (`cx.spawn` + `background_executor`); the list delegate
+//! starts in a loading state and fills when the first read returns.
 //!
 //! The "updated" column is the item's latest comment timestamp -- the only
 //! last-activity signal the public `Item` model exposes (the per-event `at`
 //! is crate-private in `horizon-board`), so an item with no comments shows a
 //! dash. Comment count is `item.comments.len()`.
+//!
+//! Keyboard navigation (consistent across list and detail): arrows move
+//! selection on the list, Enter opens the detail for the selected item, Esc
+//! returns from detail to the list. Click on a row is equivalent to Enter.
+//! The pane itself closes via normal workspace operations (close pane/tab).
+
+use std::path::PathBuf;
 
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
-use gpui_component::list::{ListDelegate, ListItem, ListState};
+use gpui_component::input::{Escape, Input, InputEvent, InputState};
+use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_component::{h_flex, v_flex, IndexPath};
 use horizon_board::{Item, Store, StoreError};
 
@@ -34,8 +37,7 @@ use crate::theme;
 
 /// Filters `items` to those whose `title` contains `query` (trimmed,
 /// case-insensitive). An empty query returns every item in its original --
-/// rank-sorted -- order, the same shape as `PaletteDelegate` and
-/// `SessionManagerDelegate`'s `perform_search`.
+/// rank-sorted -- order.
 fn filter_items(items: &[Item], query: &str) -> Vec<Item> {
     let query = query.trim().to_ascii_lowercase();
     items
@@ -46,10 +48,7 @@ fn filter_items(items: &[Item], query: &str) -> Vec<Item> {
 }
 
 /// The "updated" signal for a row: the timestamp of the item's latest
-/// comment, or `None` when it has none. The board `Item` has no top-level
-/// "updated" field (only per-event `at`, which is crate-private); comments
-/// are the only activity this view surfaces, so the last comment's `at` is
-/// the honest "last activity" time.
+/// comment, or `None` when it has none.
 fn item_updated(item: &Item) -> Option<u64> {
     item.comments.last().map(|comment| comment.at)
 }
@@ -94,8 +93,7 @@ fn updated_label(item: &Item) -> String {
 
 /// Posts a comment to item `id` and returns the re-read item (the new comment
 /// included, in chronological order). Pure I/O over a `Store` -- no GPUI -- so
-/// it is unit-testable with a tempdir store and is exactly what
-/// [`BoardDetail::post_comment`] runs off the UI thread.
+/// it is unit-testable with a tempdir store.
 fn post_and_reload(
     store: &Store,
     id: u64,
@@ -106,14 +104,57 @@ fn post_and_reload(
     store.show(id)
 }
 
+/// The pure fallback behind the pane's root resolution, kept free of
+/// `WorkspaceShell`/`App` so it's unit-testable without a GPUI window: the
+/// active session's `workspace_root` wins; when that is absent (no active
+/// session, or a terminal/resumed session with no recorded root -- the common
+/// terminal-only state) the shell process's own cwd stands in. Both are
+/// *starting* directories -- `Store::from_dir` does the worktree -> main-root
+/// collapse.
+pub(crate) fn board_root_dir(
+    session_root: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+) -> Option<PathBuf> {
+    session_root.or(cwd)
+}
+
+/// The pure decision behind the list's `ListEvent::Confirm` handler: a
+/// confirm on a row opens the detail view *iff* both the row's item and a
+/// resolvable store root are present. Extracted so the event→transition
+/// mapping is unit-testable without a GPUI window.
+fn board_confirm_transition(item: Option<Item>, root: Option<PathBuf>) -> Option<(Item, PathBuf)> {
+    let item = item?;
+    let root = root?;
+    Some((item, root))
+}
+
+/// The first row is selectable exactly when the list isn't empty -- the
+/// pure predicate behind [`select_first_row_on_open`].
+fn first_row_to_select(items_count: usize) -> Option<IndexPath> {
+    (items_count > 0).then(IndexPath::default)
+}
+
+/// Selects the first row right after a searchable `List` is constructed, so
+/// a bare Enter on open runs it without arrowing down first. A no-op when
+/// the delegate starts empty.
+fn select_first_row_on_open<D: ListDelegate>(
+    list: &mut ListState<D>,
+    window: &mut Window,
+    cx: &mut Context<ListState<D>>,
+) {
+    if let Some(ix) = first_row_to_select(list.delegate().items_count(0, cx)) {
+        list.set_selected_index(Some(ix), window, cx);
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Item list (the modal's default view)
+// Item list (the pane's default view)
 // ---------------------------------------------------------------------------
 
 /// The board item list: a `ListDelegate` over rank-sorted `Item`s, filtered by
-/// title substring. Starts empty in a loading state; the shell fills it via
+/// title substring. Starts empty in a loading state; the pane fills it via
 /// [`BoardListDelegate::set_loaded`] once the off-thread `Store::list` returns.
-pub(crate) struct BoardListDelegate {
+struct BoardListDelegate {
     all: Vec<Item>,
     filtered: Vec<Item>,
     selected: Option<IndexPath>,
@@ -121,7 +162,7 @@ pub(crate) struct BoardListDelegate {
 }
 
 impl BoardListDelegate {
-    pub(crate) fn new() -> Self {
+    fn new() -> Self {
         Self {
             all: Vec::new(),
             filtered: Vec::new(),
@@ -132,13 +173,13 @@ impl BoardListDelegate {
 
     /// Replaces the loaded items (after the off-thread read returns) and
     /// clears the loading state. Re-derives `filtered` for an empty query.
-    pub(crate) fn set_loaded(&mut self, items: Vec<Item>) {
+    fn set_loaded(&mut self, items: Vec<Item>) {
         self.filtered = filter_items(&items, "");
         self.all = items;
         self.loading = false;
     }
 
-    pub(crate) fn item_at(&self, index: IndexPath) -> Option<&Item> {
+    fn item_at(&self, index: IndexPath) -> Option<&Item> {
         self.filtered.get(index.row)
     }
 }
@@ -254,35 +295,111 @@ impl ListDelegate for BoardListDelegate {
 }
 
 // ---------------------------------------------------------------------------
-// Item detail (drilled in from the list)
+// The pane view
 // ---------------------------------------------------------------------------
 
-/// Emitted by the detail's "← Back" affordance so the shell can close the
-/// detail and re-open the (re-read) list.
-pub(crate) enum BoardDetailEvent {
-    Back,
+/// Which sub-view the pane is currently showing.
+enum BoardPaneMode {
+    /// The searchable item list.
+    List,
+    /// A drilled-in item detail with its comment thread and composer.
+    Detail {
+        item: Box<Item>,
+        comment_input: Entity<InputState>,
+        _subscription: Subscription,
+    },
 }
 
-/// One item's full view: header (title/id/status + back), the body, the
-/// comment thread (old -> new), and a one-line owner-comment composer.
-/// Posting a comment appends a `comment-added` event and re-reads the item
-/// so the new comment appears immediately.
-pub(crate) struct BoardDetail {
-    item: Item,
-    root: std::path::PathBuf,
-    comment_input: Entity<InputState>,
-    _subscription: Option<Subscription>,
+/// The board pane entity: a session-less first-party view that owns its own
+/// list/detail navigation internally (no modal overlay, no shell-level
+/// state). The list reads the store on open and after a comment is posted;
+/// no live updates beyond that.
+pub(crate) struct BoardPaneView {
+    focus_handle: FocusHandle,
+    root: Option<PathBuf>,
+    list: Entity<ListState<BoardListDelegate>>,
+    _list_subscription: Subscription,
+    mode: BoardPaneMode,
 }
 
-impl EventEmitter<BoardDetailEvent> for BoardDetail {}
-
-impl BoardDetail {
+impl BoardPaneView {
+    /// `session_root` is the active session's `workspace_root` (if any);
+    /// `cwd` is the shell process cwd. Both are starting directories for
+    /// `Store::from_dir`'s worktree -> main-root collapse. When neither is
+    /// available the pane shows an empty (non-loading) state.
     pub(crate) fn new(
-        item: Item,
-        root: std::path::PathBuf,
+        session_root: Option<PathBuf>,
+        cwd: Option<PathBuf>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let root = board_root_dir(session_root, cwd);
+        let list = cx.new(|cx| {
+            let mut list = ListState::new(BoardListDelegate::new(), window, cx).searchable(true);
+            select_first_row_on_open(&mut list, window, cx);
+            list
+        });
+        let _list_subscription = cx.subscribe_in(
+            &list,
+            window,
+            |view, list, event: &ListEvent, window, cx| match event {
+                ListEvent::Confirm(index) => {
+                    let item = list.read(cx).delegate().item_at(*index).cloned();
+                    if let Some((item, _)) = board_confirm_transition(item, view.root.clone()) {
+                        view.open_detail(item, window, cx);
+                    }
+                }
+                ListEvent::Cancel | ListEvent::Select(_) => {}
+            },
+        );
+        window.focus(&list.focus_handle(cx), cx);
+        let view = Self {
+            focus_handle: cx.focus_handle(),
+            root,
+            list,
+            _list_subscription,
+            mode: BoardPaneMode::List,
+        };
+        view.spawn_load(cx);
+        view
+    }
+
+    /// Triggers the off-thread store read that fills the list delegate. A
+    /// `None` root (no session root and no shell cwd) drops straight to the
+    /// empty (non-loading) state.
+    fn spawn_load(&self, cx: &mut Context<Self>) {
+        match &self.root {
+            Some(root) => {
+                let root = root.clone();
+                cx.spawn(async move |this, cx| {
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            Store::from_dir(&root)
+                                .and_then(|store| store.list(None))
+                                .map(|result| result.items)
+                        })
+                        .await;
+                    let _ = this.update(cx, |view, cx| {
+                        view.list.update(cx, |list, cx| {
+                            list.delegate_mut().set_loaded(result.unwrap_or_default());
+                            cx.notify();
+                        });
+                    });
+                })
+                .detach();
+            }
+            None => {
+                self.list.update(cx, |list, cx| {
+                    list.delegate_mut().set_loaded(Vec::new());
+                    cx.notify();
+                });
+            }
+        }
+    }
+
+    fn open_detail(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.root.clone();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Comment as owner…")
@@ -291,33 +408,49 @@ impl BoardDetail {
         let subscription = cx.subscribe_in(
             &input,
             window,
-            |detail: &mut Self, _input, event: &InputEvent, window, cx| {
+            move |view, _input, event: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { shift: false, .. } = event {
-                    detail.post_comment(window, cx);
+                    view.post_comment(window, cx);
                 }
             },
         );
-        Self {
-            item,
-            root,
+        window.focus(&input.read(cx).focus_handle(cx), cx);
+        let _ = root; // root is read from self in post_comment, not needed here
+        self.mode = BoardPaneMode::Detail {
+            item: Box::new(item),
             comment_input: input,
-            _subscription: Some(subscription),
-        }
+            _subscription: subscription,
+        };
+        cx.notify();
     }
 
-    pub(crate) fn input_focus_handle(&self, cx: &App) -> FocusHandle {
-        self.comment_input.read(cx).focus_handle(cx)
+    fn back_to_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.mode = BoardPaneMode::List;
+        // Re-read the store so a just-posted comment's bump to the row's
+        // count/updated is visible.
+        self.spawn_load(cx);
+        window.focus(&self.list.focus_handle(cx), cx);
+        cx.notify();
     }
 
     fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let text = self.comment_input.read(cx).value().to_string();
+        let BoardPaneMode::Detail {
+            item,
+            comment_input,
+            ..
+        } = &self.mode
+        else {
+            return;
+        };
+        let text = comment_input.read(cx).value().to_string();
         if text.trim().is_empty() {
             return;
         }
-        self.comment_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
-        let root = self.root.clone();
-        let id = self.item.id;
+        let id = item.id;
+        comment_input.update(cx, |input, cx| input.set_value("", window, cx));
+        let Some(root) = self.root.clone() else {
+            return;
+        };
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
@@ -326,9 +459,11 @@ impl BoardDetail {
                     post_and_reload(&store, id, "owner", &text)
                 })
                 .await;
-            let _ = this.update(cx, |detail, cx| {
+            let _ = this.update(cx, |view, cx| {
                 if let Ok(Some(reloaded)) = result {
-                    detail.item = reloaded;
+                    if let BoardPaneMode::Detail { item, .. } = &mut view.mode {
+                        **item = reloaded;
+                    }
                     cx.notify();
                 }
             });
@@ -336,8 +471,8 @@ impl BoardDetail {
         .detach();
     }
 
-    fn render_comments(&self) -> AnyElement {
-        if self.item.comments.is_empty() {
+    fn render_comments(item: &Item) -> AnyElement {
+        if item.comments.is_empty() {
             return div()
                 .text_size(px(11.0))
                 .text_color(theme::text_muted())
@@ -346,7 +481,7 @@ impl BoardDetail {
         }
         v_flex()
             .gap_1()
-            .children(self.item.comments.iter().map(|comment| {
+            .children(item.comments.iter().map(|comment| {
                 h_flex()
                     .gap_1()
                     .items_start()
@@ -371,17 +506,20 @@ impl BoardDetail {
             }))
             .into_any_element()
     }
-}
 
-impl Render for BoardDetail {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self.item.title.clone();
-        let id = self.item.id;
-        let status = status_label(&self.item.status);
-        let body = if self.item.body.is_empty() {
+    fn render_detail(
+        &self,
+        item: &Item,
+        comment_input: &Entity<InputState>,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let title = item.title.clone();
+        let id = item.id;
+        let status = status_label(&item.status);
+        let body = if item.body.is_empty() {
             "(no body)".to_string()
         } else {
-            self.item.body.clone()
+            item.body.clone()
         };
 
         v_flex()
@@ -400,8 +538,8 @@ impl Render for BoardDetail {
                             .text_size(px(12.0))
                             .text_color(theme::text_muted())
                             .child("← Back")
-                            .on_click(cx.listener(|_detail, _event, _window, cx| {
-                                cx.emit(BoardDetailEvent::Back);
+                            .on_click(cx.listener(|view, _event, window, cx| {
+                                view.back_to_list(window, cx);
                             })),
                     )
                     .child(
@@ -442,7 +580,7 @@ impl Render for BoardDetail {
                                     .text_color(theme::text_primary())
                                     .child(body),
                             )
-                            .child(self.render_comments()),
+                            .child(Self::render_comments(item)),
                     ),
             )
             .child(
@@ -450,14 +588,51 @@ impl Render for BoardDetail {
                     .px(px(12.0))
                     .pb(px(8.0))
                     .pt(px(4.0))
-                    .child(Input::new(&self.comment_input).appearance(false)),
+                    .child(Input::new(comment_input).appearance(false)),
             )
+    }
+}
+
+impl Focusable for BoardPaneView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for BoardPaneView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id("board-pane")
+            .track_focus(&self.focus_handle)
+            .size_full()
+            .on_action(cx.listener(|view, _: &Escape, window, cx| {
+                // Esc returns from detail to the list. In list mode the
+                // ListState already handles Esc internally (no-op here).
+                if matches!(view.mode, BoardPaneMode::Detail { .. }) {
+                    view.back_to_list(window, cx);
+                }
+            }))
+            .child(match &self.mode {
+                BoardPaneMode::List => List::new(&self.list).into_any_element(),
+                BoardPaneMode::Detail {
+                    item,
+                    comment_input,
+                    ..
+                } => self
+                    .render_detail(item, comment_input, cx)
+                    .into_any_element(),
+            })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_items, format_timestamp, item_updated, post_and_reload};
+    use std::path::PathBuf;
+
+    use super::{
+        board_confirm_transition, board_root_dir, filter_items, format_timestamp, item_updated,
+        post_and_reload,
+    };
     use horizon_board::{Comment, Item, Position, Store};
 
     fn item(id: u64, title: &str, status: &str) -> Item {
@@ -467,6 +642,10 @@ mod tests {
             status: status.to_string(),
             ..Default::default()
         }
+    }
+
+    fn item2(id: u64, title: &str) -> Item {
+        item(id, title, "")
     }
 
     fn comment(author: &str, text: &str, at: u64) -> Comment {
@@ -479,7 +658,7 @@ mod tests {
 
     fn tmp_store() -> Store {
         let dir = std::env::temp_dir().join(format!(
-            "horizon-board-view-test-{}",
+            "horizon-board-pane-test-{}",
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -527,27 +706,82 @@ mod tests {
         let reloaded = post_and_reload(&store, item.id, "owner", "a note")
             .unwrap()
             .unwrap();
+
         assert_eq!(reloaded.comments.len(), 1);
         assert_eq!(reloaded.comments[0].author, "owner");
         assert_eq!(reloaded.comments[0].text, "a note");
 
-        // A fresh re-read (simulating the modal reopening) sees the event.
-        let again = store.show(item.id).unwrap().unwrap();
-        assert_eq!(again.comments.len(), 1);
-        assert_eq!(again.comments[0].text, "a note");
+        // Durable: a fresh read sees the comment too.
+        let reread = store.show(item.id).unwrap().unwrap();
+        assert_eq!(reread.comments.len(), 1);
+        assert_eq!(reread.comments[0].text, "a note");
     }
 
     #[test]
     fn post_and_reload_appends_in_chronological_order() {
         let store = tmp_store();
         let item = store.add("Task", "body", None, Position::Bottom).unwrap();
-        store.comment(item.id, "owner", "first").unwrap();
-        post_and_reload(&store, item.id, "agent", "second").unwrap();
 
-        let reloaded = store.show(item.id).unwrap().unwrap();
-        assert_eq!(reloaded.comments.len(), 2);
-        assert_eq!(reloaded.comments[0].text, "first");
-        assert_eq!(reloaded.comments[1].text, "second");
-        assert_eq!(reloaded.comments[1].author, "agent");
+        let first = post_and_reload(&store, item.id, "owner", "first")
+            .unwrap()
+            .unwrap();
+        let second = post_and_reload(&store, item.id, "owner", "second")
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(first.comments.len(), 1);
+        assert_eq!(second.comments.len(), 2);
+        // Chronological: first comment's `at` <= second's.
+        assert!(second.comments[0].at <= second.comments[1].at);
+        assert_eq!(second.comments[0].text, "first");
+        assert_eq!(second.comments[1].text, "second");
+    }
+
+    #[test]
+    fn board_root_dir_falls_back_to_cwd_when_no_session_root() {
+        let cwd = PathBuf::from("/repo/worktree");
+        assert_eq!(board_root_dir(None, Some(cwd.clone())), Some(cwd));
+    }
+
+    #[test]
+    fn board_root_dir_prefers_the_session_root_over_cwd() {
+        let session_root = PathBuf::from("/agent/worktree");
+        let cwd = PathBuf::from("/shell/cwd");
+        assert_eq!(
+            board_root_dir(Some(session_root.clone()), Some(cwd)),
+            Some(session_root)
+        );
+    }
+
+    #[test]
+    fn board_root_dir_is_none_when_neither_available() {
+        assert_eq!(board_root_dir(None, None), None);
+    }
+
+    #[test]
+    fn board_confirm_transition_opens_detail_when_item_and_root_present() {
+        let item = item2(7, "Fix modal click bug");
+        let root = PathBuf::from("/repo/worktree");
+        assert_eq!(
+            board_confirm_transition(Some(item.clone()), Some(root.clone())),
+            Some((item, root))
+        );
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_item_missing() {
+        let root = PathBuf::from("/repo/worktree");
+        assert_eq!(board_confirm_transition(None, Some(root)), None);
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_root_missing() {
+        let item = item2(1, "Task");
+        assert_eq!(board_confirm_transition(Some(item), None), None);
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_both_missing() {
+        assert_eq!(board_confirm_transition(None, None), None);
     }
 }

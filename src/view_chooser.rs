@@ -70,6 +70,12 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: false,
         },
+        ViewChoice {
+            title: "Board",
+            kind: PaneKind::View(ViewKind::Board),
+            role_id: None,
+            isolate: false,
+        },
     ]
 }
 
