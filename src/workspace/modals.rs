@@ -36,6 +36,21 @@ fn board_root_dir(session_root: Option<PathBuf>, cwd: Option<PathBuf>) -> Option
     session_root.or(cwd)
 }
 
+/// The pure decision behind the board list's `ListEvent::Confirm` handler:
+/// a confirm on a row opens the detail view *iff* both the row's item and a
+/// resolvable store root are present. Extracted so the event→transition
+/// mapping is unit-testable without a GPUI window (the handler in
+/// [`WorkspaceShell::open_board`] just threads `item_at`/`board_root` into
+/// here and calls `open_board_detail` when it yields `Some`). Returns `None`
+/// on a missing item (out-of-range index) or a missing root (no session root
+/// and no shell cwd — the terminal-only empty state), in which case the
+/// confirm is a no-op and the modal stays on the list.
+fn board_confirm_transition(item: Option<Item>, root: Option<PathBuf>) -> Option<(Item, PathBuf)> {
+    let item = item?;
+    let root = root?;
+    Some((item, root))
+}
+
 /// Selects the first row right after a searchable `List` is constructed,
 /// so a bare Enter on open runs it without arrowing down first
 /// (owner report, 2026-07-13). gpui-component's `ListState` starts with
@@ -234,7 +249,7 @@ impl WorkspaceShell {
                 ListEvent::Confirm(index) => {
                     let item = list.read(cx).delegate().item_at(*index).cloned();
                     let root = shell.board_root();
-                    if let (Some(item), Some(root)) = (item, root) {
+                    if let Some((item, root)) = board_confirm_transition(item, root) {
                         shell.board = None;
                         shell._board_subscription = None;
                         shell.open_board_detail(item, root, window, cx);
@@ -466,7 +481,7 @@ mod tests {
 
     use gpui_component::IndexPath;
 
-    use super::{board_root_dir, first_row_to_select};
+    use super::{board_confirm_transition, board_root_dir, first_row_to_select};
 
     #[test]
     fn first_row_to_select_is_the_default_index_when_the_list_is_nonempty() {
@@ -504,5 +519,49 @@ mod tests {
     fn board_root_dir_is_none_when_neither_available() {
         // No session root and an unreadable cwd: empty state, as before.
         assert_eq!(board_root_dir(None, None), None);
+    }
+
+    fn item(id: u64, title: &str) -> horizon_board::Item {
+        horizon_board::Item {
+            id,
+            title: title.to_string(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn board_confirm_transition_opens_detail_when_item_and_root_present() {
+        // The normal case: a row is confirmed (Enter or click — both emit
+        // `ListEvent::Confirm`), the item exists and the store root resolves,
+        // so the modal opens the detail view for that item.
+        let item = item(7, "Fix modal click bug");
+        let root = PathBuf::from("/repo/worktree");
+        assert_eq!(
+            board_confirm_transition(Some(item.clone()), Some(root.clone())),
+            Some((item, root))
+        );
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_item_missing() {
+        // An out-of-range index (e.g. confirm on an empty list, or a stale
+        // index after a filter narrowed the list): no item, so no detail —
+        // the modal stays on the list rather than opening an empty detail.
+        let root = PathBuf::from("/repo/worktree");
+        assert_eq!(board_confirm_transition(None, Some(root)), None);
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_root_missing() {
+        // Terminal-only state with an unreadable cwd: the item is present but
+        // no store root can be resolved, so the confirm is a no-op (the modal
+        // can't open a detail it has no store to read from).
+        let item = item(1, "Task");
+        assert_eq!(board_confirm_transition(Some(item), None), None);
+    }
+
+    #[test]
+    fn board_confirm_transition_is_noop_when_both_missing() {
+        assert_eq!(board_confirm_transition(None, None), None);
     }
 }
