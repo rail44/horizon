@@ -163,3 +163,17 @@ existing skill), how to read full context before concluding anything
 ("nothing recurring enough to distill") is a fine outcome, naming
 `docs/research/letta.md` §14's "generic and lossy" failure mode as exactly
 what forcing a lesson out of insufficient evidence would produce.
+
+**Update (2026-08-05):** The knowledge layer v1 merged, and with it the
+distillation write target moved. Drafts no longer land as repository skill
+files (`.horizon/skills/<id>/SKILL.md` via `fs.write`); they land as
+entries in the user-side knowledge store via `knowledge.write`, which the
+system prompt's Project knowledge index surfaces back to every session.
+This keeps distilled lessons out of the git tree (the owner promotes a
+lesson to a committed repository skill separately, by their own
+decision) while still giving every future session automatic access to
+them. The `horizon-distill` skill was rewritten to match: its signal
+priority, duplicate-avoidance, and writing-rules sections now teach the
+knowledge-layer flow and the `sources`/`anchors` contract, replacing the
+former `fs.write`-to-`.horizon/skills` instructions. The section above is
+kept as the original design record; this paragraph is the only change.
