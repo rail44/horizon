@@ -549,6 +549,15 @@ lands:
   Margin sizing remains intentionally tuneable;
   interim "smooth the reply cadence" fix assessed as symptomatic, skip.
 
+### Knowledge layer (v1 shipped 2026-08-05)
+
+The dynamic tier between session logs and repository skills:
+`docs/agent-knowledge-design.md` is the self-contained record
+(decisions, evidence from both validation arms, deferred items —
+embeddings, relational projection, automatic cadence). Operation is
+manual distillation on owner request via the reworked `horizon-distill`
+skill; the store is user-side and never enters the repository.
+
 ### Deferred: session-attention surface and non-interrupting sends
 
 Recorded on owner request 2026-08-05; to be designed together with the
