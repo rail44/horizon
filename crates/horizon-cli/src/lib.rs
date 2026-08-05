@@ -13,6 +13,7 @@
 //! [`commands`], [`client`], [`confirm`], [`output`]) is independently
 //! unit-testable, colocated with its own module.
 
+mod board;
 mod cli;
 mod client;
 mod commands;
@@ -56,6 +57,14 @@ pub fn run(
     stdin_is_tty: bool,
     ask: &mut impl FnMut(&str) -> bool,
 ) -> u8 {
+    // The `board` family bypasses the control plane entirely — it calls
+    // `horizon-board` directly against the local events.jsonl. Intercepted
+    // before `cli::parse` because board's own flags (--body, --after, …)
+    // would be rejected by the global flag parser.
+    if let Some(code) = board::try_run(args, stdout, stderr) {
+        return code;
+    }
+
     let mut parsed = match cli::parse(args) {
         Ok(parsed) => parsed,
         Err(err) => {

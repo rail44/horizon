@@ -14,6 +14,7 @@ members = [
     "crates/horizon-sandbox",
     "crates/horizon-sandbox-runtime",
     "crates/horizon-sandbox-proxy",
+    "crates/horizon-board",
 ]
 
 # The one workspace-wide remoc pin (docs/remoc-adoption-design.md §1,

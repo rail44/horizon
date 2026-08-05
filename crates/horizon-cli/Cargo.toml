@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+horizon-board = { path = "../horizon-board" }
 horizon-control = { path = "../horizon-control" }
 # Not a "new" dependency in spirit: `horizon-control::contract::{Invoke,
 # Query}::args`/`what` are typed as `serde_json::Value`, and Rust's extern
