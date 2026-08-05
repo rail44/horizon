@@ -558,6 +558,17 @@ embeddings, relational projection, automatic cadence). Operation is
 manual distillation on owner request via the reworked `horizon-distill`
 skill; the store is user-side and never enters the repository.
 
+### logd — log infrastructure daemon (designed 2026-08-06, not started)
+
+The third daemon: sole appender of the event logs, owner of the DuckDB
+projection, named-query servant, and the primary notification (poke)
+source — peeled off agentd and the UI. `docs/logd-design.md` is the
+self-contained record (decisions, the dissolved requirements, the
+DuckDB re-justification with its exit clause, open v1-slicing items);
+`docs/research/change-notification.md` and
+`docs/research/duckdb-ecosystem.md` carry the surveys. Supersedes the
+notification half of the deferred item below when built.
+
 ### Deferred: session-attention surface and non-interrupting sends
 
 Recorded on owner request 2026-08-05; to be designed together with the
