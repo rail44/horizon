@@ -13,8 +13,8 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-pub(crate) const SCHEMA: &str = "horizon.board.event_log";
-pub(crate) const VERSION: u32 = 1;
+pub const SCHEMA: &str = "horizon.board.event_log";
+pub const VERSION: u32 = 1;
 
 /// The versioned envelope persisted as one JSON object per line.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]

@@ -62,6 +62,26 @@ pub fn default_terminald_socket_path() -> PathBuf {
     )
 }
 
+/// [`default_terminald_socket_path`]'s `horizon-logd` sibling
+/// (`docs/logd-design.md`): the log daemon binds its own socket next to
+/// agentd's and terminald's, so a drain aimed at any one never reaches the
+/// others. Same resolution rules -- `$HORIZON_LOGD_SOCKET`, else
+/// `$XDG_RUNTIME_DIR/horizon/logd.sock`, else
+/// `/tmp/horizon-logd-$UID.sock`.
+pub fn default_logd_socket_path() -> PathBuf {
+    let override_path = std::env::var("HORIZON_LOGD_SOCKET").ok();
+    let xdg_runtime_dir = std::env::var("XDG_RUNTIME_DIR").ok();
+    // SAFETY: `getuid()` is a plain syscall wrapper with no preconditions.
+    let uid = unsafe { libc::getuid() };
+    daemon_socket_path_from(
+        override_path,
+        xdg_runtime_dir,
+        uid,
+        "logd.sock",
+        "horizon-logd",
+    )
+}
+
 /// Pure resolution logic behind [`default_agentd_socket_path`], factored out
 /// for unit-testability without mutating process environment variables --
 /// `cargo test` runs tests in parallel within one process, so real env
@@ -175,6 +195,24 @@ mod tests {
                 "horizon-terminald",
             ),
             default_agentd_socket_path_from(None, Some("/run/user/1000".to_string()), 1000)
+        );
+    }
+
+    #[test]
+    fn the_logd_default_is_a_sibling_of_the_other_two() {
+        assert_eq!(
+            daemon_socket_path_from(
+                None,
+                Some("/run/user/1000".to_string()),
+                1000,
+                "logd.sock",
+                "horizon-logd",
+            ),
+            PathBuf::from("/run/user/1000/horizon/logd.sock")
+        );
+        assert_eq!(
+            daemon_socket_path_from(None, None, 1000, "logd.sock", "horizon-logd"),
+            PathBuf::from("/tmp/horizon-logd-1000.sock")
         );
     }
 

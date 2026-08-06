@@ -20,7 +20,11 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use remoc::RemoteSend;
 use tokio::net::UnixStream;
+use tokio::task::JoinHandle;
+
+use crate::codec::WireCodec;
 
 /// Starting delay for the connect retry loop's exponential backoff
 /// (doubling, capped at 1s -- see [`connect_or_spawn_daemon`]). Verified
@@ -40,6 +44,9 @@ const AGENTD_BINARY_NAME: &str = "horizon-agentd";
 /// (`docs/terminald-split-design.md` decision 1): same spawn-or-connect
 /// shape, same discovery rules, a different process on a different socket.
 const TERMINALD_BINARY_NAME: &str = "horizon-terminald";
+
+/// [`TERMINALD_BINARY_NAME`]'s log-daemon sibling (`docs/logd-design.md`).
+const LOGD_BINARY_NAME: &str = "horizon-logd";
 
 /// Connects immediately when agentd is already listening; otherwise starts
 /// it once and keeps retrying with capped backoff until its socket is ready.
@@ -63,6 +70,18 @@ pub async fn connect_or_spawn_terminald_retrying(
     control_socket: &Path,
 ) -> Result<UnixStream, String> {
     connect_or_spawn_daemon(socket_path, control_socket, TERMINALD_BINARY_NAME).await
+}
+
+/// [`connect_or_spawn_terminald_retrying`]'s `horizon-logd` twin
+/// (`docs/logd-design.md`). logd has no children that need the control-plane
+/// socket, so -- unlike the other two daemons -- no `control_socket` argument
+/// is needed: the `HORIZON_SOCKET` env injection `daemon_command` does is
+/// moot here (logd ignores it).
+pub async fn connect_or_spawn_logd_retrying(socket_path: &Path) -> Result<UnixStream, String> {
+    // Passing the socket path itself as the "control socket" is harmless:
+    // `daemon_command` sets `HORIZON_SOCKET` to it, and logd never reads that
+    // variable.
+    connect_or_spawn_daemon(socket_path, socket_path, LOGD_BINARY_NAME).await
 }
 
 async fn connect_or_spawn_daemon(
@@ -123,6 +142,35 @@ fn daemon_command(
     command
 }
 
+/// Establishes the remoc connection over an already-connected stream and
+/// takes the hub client the daemon hands over on the base channel.
+///
+/// Returns the client and the chmux mux task; the caller owns that task and
+/// must abort it when done (which closes the socket, so a daemon's
+/// one-at-a-time accept loop can serve the next connection).
+///
+/// This is the client-side counterpart of [`crate::daemon::serve_connection`],
+/// factored here so any client (the shell's runtime clients, the board
+/// library, a test harness) shares one definition.
+pub async fn connect_hub_client<T: RemoteSend>(
+    stream: UnixStream,
+) -> Result<(T, JoinHandle<()>), String> {
+    let (read_half, write_half) = stream.into_split();
+    let (conn, _base_tx, mut base_rx) =
+        remoc::Connect::io::<_, _, (), T, WireCodec>(remoc::Cfg::default(), read_half, write_half)
+            .await
+            .map_err(|e| format!("remoc connect failed: {e}"))?;
+    let conn_task = tokio::spawn(async move {
+        let _ = conn.await;
+    });
+    let hub = base_rx
+        .recv()
+        .await
+        .map_err(|e| format!("base channel error: {e}"))?
+        .ok_or("the daemon closed the connection before handing over its hub client")?;
+    Ok((hub, conn_task))
+}
+
 /// Where to look for a daemon binary: first, right next to Horizon's own
 /// executable (the shape `cargo build --workspace`/`cargo run` produces --
 /// every workspace binary lands in the same `target/debug` or
@@ -134,7 +182,7 @@ fn daemon_command(
 /// reliably fail to find a workspace build even though one exists two
 /// directories away -- see [`spawn_daemon`]'s error message for the
 /// resulting actionable hint when neither location has it.
-fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
+pub fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(binary_name);

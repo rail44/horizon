@@ -24,7 +24,7 @@
 # serializing them against each other -- not just within each binary -- is
 # what removes self-contention as a variable.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e)'
+filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e)'
 test-group = 'daemon-e2e'
 
 [test-groups.daemon-e2e]
@@ -122,6 +122,7 @@ default-filter = '''
         binary_id(horizon-agent::tier1_network_containment)
         + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
+        + binary_id(horizon-logd::e2e)
         + (binary_id(horizon::bin/horizon) & test(/^runtime::tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
@@ -142,5 +143,14 @@ default-filter = '''
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
         + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
+        + test(/^store::tests::/)
     )
 '''
+
+# horizon-board write-path tests spawn a real `horizon-logd` binary (via
+# `DaemonProcess` on a `scratch_socket` under `std::env::temp_dir()`). Under
+# containment $TMPDIR lives under the worktree, so the socket path exceeds
+# SUN_LEN and logd's `bind()` fails with `InvalidInput` before the test can
+# exercise the write path. The read-path tests in the same module that do not
+# spawn logd (`show_nonexistent_returns_none`) ride along — the integrator's
+# full gate covers them.

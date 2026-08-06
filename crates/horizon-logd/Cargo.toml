@@ -1,0 +1,19 @@
+[package]
+name = "horizon-logd"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+horizon-board = { path = "../horizon-board" }
+horizon-wire = { path = "../horizon-wire" }
+libc = "0.2"
+remoc = { workspace = true }
+serde_json = "1.0"
+tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time"] }
+
+[dev-dependencies]
+horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
