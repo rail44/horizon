@@ -1,8 +1,8 @@
 # logd — Log Infrastructure Daemon — Design
 
 Status: decisions settled 2026-08-06 (owner consultation in the project
-session). Not implemented; no roadmap slot claimed yet. Evidence base:
-`docs/research/change-notification.md` and
+session). **Stage A (ingest) and stage B (subscribe) implemented.**
+Evidence base: `docs/research/change-notification.md` and
 `docs/research/duckdb-ecosystem.md` (both surveys predate and informed
 these decisions; several of their framing assumptions were dissolved
 DURING the consultation and the surveys record that honestly).
@@ -147,6 +147,24 @@ defers the agentd extraction surgery. v1 scope:
   external processes; the world-readable JSONL plus `tail -n +N -F`
   stays supported indefinitely and must not be degraded by the socket
   path existing.
+
+### Transport multiplexing (implemented stage B)
+
+The subscribe NDJSON stream and the remoc chmux ingest path coexist on one
+socket via **first-byte sniffing**: logd's accept loop (logd-local, not the
+shared `daemon::run` — which is serial and would block all ingests on a
+long-lived subscriber) reads one byte from each accepted connection with
+`BufReader::fill_buf` (peek without consuming). A `{` byte (0x7B, the first
+character of a JSON subscribe request) routes to the raw NDJSON subscribe
+handler; anything else (chmux's binary first byte) routes to the remoc
+handshake. Both paths share the same `UnixStream` halves — the peeked byte
+stays in the `BufReader`'s buffer for the handler that follows.
+
+The **seq** is the 1-based line number in the JSONL file (counted by the
+tolerant reader's `line_count`), assigned by the writer under the exclusive
+flock. A consumer that misses pokes catches up via `tail -n +<seq+1> -F`,
+which sees byte-identical results (decision 3). logd does not persist
+consumer positions; the registry is process-wide and in-memory.
 
 ## Open items
 

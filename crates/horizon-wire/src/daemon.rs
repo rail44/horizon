@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use remoc::rtc::{self, Client as _};
 use remoc::RemoteSend;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::{UnixListener, UnixStream};
 
 use crate::channels::{RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES};
@@ -156,6 +157,33 @@ where
     Server::Client: RemoteSend + Clone,
 {
     let (read_half, write_half) = stream.into_split();
+    serve_connection_halves::<Target, Server, _, _>(
+        read_half,
+        write_half,
+        daemon_name,
+        target,
+        on_disconnect,
+    )
+    .await
+}
+
+/// [`serve_connection`]'s generic-halves variant, for callers that need to
+/// inspect the first bytes of the connection before handing it to remoc
+/// (`horizon-logd`'s first-byte sniff that routes a `{` to the raw NDJSON
+/// subscribe path and anything else here).
+pub async fn serve_connection_halves<Target, Server, R, W>(
+    read_half: R,
+    write_half: W,
+    daemon_name: &str,
+    target: Arc<Target>,
+    on_disconnect: impl FnOnce(),
+) -> anyhow::Result<()>
+where
+    R: AsyncRead + Unpin + Send + Sync + 'static,
+    W: AsyncWrite + Unpin + Send + Sync + 'static,
+    Server: rtc::ServerShared<Target, WireCodec>,
+    Server::Client: RemoteSend + Clone,
+{
     let connect = remoc::Connect::io::<_, _, Server::Client, (), WireCodec>(
         remoc::Cfg::default(),
         read_half,

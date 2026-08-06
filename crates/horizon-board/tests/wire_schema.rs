@@ -19,7 +19,8 @@ use schemars::generate::SchemaSettings;
 use serde_json::{json, Value};
 
 use horizon_board::wire::{
-    IngestReply, IngestRequest, LogError, LogHubHello, LOG_PROTOCOL_VERSION,
+    IngestReply, IngestRequest, LogError, LogHubHello, SubscribePoke, SubscribeRequest,
+    LOG_PROTOCOL_VERSION,
 };
 use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
 use horizon_wire::{ClientHello, HubError};
@@ -48,6 +49,13 @@ fn generate_wire_schema() -> Value {
         "drain": {
             "request": unit,
             "reply": unit,
+        },
+        // The subscribe path is raw NDJSON (not an rtc method) — documented
+        // here so the artifact records the full wire surface. See
+        // docs/logd-design.md Subscription shape.
+        "subscribe": {
+            "request": generator.subschema_for::<SubscribeRequest>().to_value(),
+            "reply": generator.subschema_for::<SubscribePoke>().to_value(),
         },
     });
 

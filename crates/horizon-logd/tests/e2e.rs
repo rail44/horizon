@@ -282,3 +282,232 @@ async fn board_store_client_round_trip_through_real_logd() {
     drop(logd);
     std::env::remove_var("HORIZON_LOGD_BINARY");
 }
+
+// ---- subscribe (stage B) --------------------------------------------------
+
+/// Connects a raw NDJSON subscriber to logd (not remoc — the subscribe path
+/// is first-byte-sniffed away from chmux). Sends the request line, reads
+/// the current-seq reply, and returns the stream for further reads.
+struct SubscribeClient {
+    reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+    _write: tokio::net::unix::OwnedWriteHalf,
+}
+
+async fn connect_subscriber(
+    socket_path: &std::path::Path,
+    request: &horizon_board::wire::SubscribeRequest,
+) -> SubscribeClient {
+    use tokio::io::AsyncWriteExt;
+    let stream = connect_with_retry(socket_path).await;
+    let (read_half, mut write_half) = stream.into_split();
+    let line = serde_json::to_string(request).unwrap();
+    write_half
+        .write_all(line.as_bytes())
+        .await
+        .expect("write subscribe request");
+    write_half.write_all(b"\n").await.expect("write newline");
+    write_half.flush().await.expect("flush");
+    SubscribeClient {
+        reader: tokio::io::BufReader::new(read_half),
+        _write: write_half,
+    }
+}
+
+impl SubscribeClient {
+    async fn read_line(&mut self) -> Option<String> {
+        use tokio::io::AsyncBufReadExt;
+        let mut line = String::new();
+        let n = self.reader.read_line(&mut line).await.expect("read");
+        if n == 0 {
+            return None;
+        }
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        Some(line)
+    }
+}
+
+/// A subscriber connects, receives the current-seq reply (0 for an empty
+/// file), then a second client ingests and the subscriber receives the
+/// poke {"log":"board","seq":1}.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_receives_poke_after_ingest() {
+    use horizon_board::wire::SubscribeRequest;
+
+    let logd = spawn_logd();
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-sub-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("events.jsonl");
+
+    // Connect a subscriber before any ingest.
+    let mut sub = connect_subscriber(
+        &logd.socket_path,
+        &SubscribeRequest {
+            path: Some(path.to_string_lossy().to_string()),
+            since: None,
+        },
+    )
+    .await;
+
+    // The first line is the current-seq reply: 0 (empty file).
+    let first = sub.read_line().await.expect("current-seq reply");
+    assert_eq!(first, r#"{"log":"board","seq":0}"#);
+
+    // A second client hellos and ingests an Add.
+    let writer = connect_hub(&logd.socket_path).await;
+    writer
+        .hub
+        .hello(log_client_hello("test-client"))
+        .await
+        .expect("hello");
+    let reply = writer
+        .hub
+        .ingest(
+            path.to_string_lossy().to_string(),
+            IngestRequest::Add {
+                title: "First".to_string(),
+                body: String::new(),
+                parent: None,
+                position: horizon_board::Position::Bottom,
+            },
+        )
+        .await
+        .expect("ingest");
+    assert!(matches!(reply, IngestReply::Item(_)));
+
+    // The subscriber should receive a poke with seq=1.
+    let poke = tokio::time::timeout(Duration::from_secs(5), sub.read_line())
+        .await
+        .expect("timed out waiting for poke")
+        .expect("poke line");
+    assert_eq!(poke, r#"{"log":"board","seq":1}"#);
+}
+
+/// The cursor-on-connect reply reflects the current seq when the file
+/// already has events (not just 0).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn subscribe_cursor_reply_reflects_current_seq() {
+    use horizon_board::wire::SubscribeRequest;
+
+    let logd = spawn_logd();
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-cur-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("events.jsonl");
+
+    // Ingest two items first.
+    let writer = connect_hub(&logd.socket_path).await;
+    writer
+        .hub
+        .hello(log_client_hello("test-client"))
+        .await
+        .expect("hello");
+    writer
+        .hub
+        .ingest(
+            path.to_string_lossy().to_string(),
+            IngestRequest::Add {
+                title: "A".to_string(),
+                body: String::new(),
+                parent: None,
+                position: horizon_board::Position::Bottom,
+            },
+        )
+        .await
+        .expect("ingest 1");
+    writer
+        .hub
+        .ingest(
+            path.to_string_lossy().to_string(),
+            IngestRequest::Add {
+                title: "B".to_string(),
+                body: String::new(),
+                parent: None,
+                position: horizon_board::Position::Bottom,
+            },
+        )
+        .await
+        .expect("ingest 2");
+
+    // Now subscribe — the cursor reply should be seq=2 (two lines in the file).
+    let mut sub = connect_subscriber(
+        &logd.socket_path,
+        &SubscribeRequest {
+            path: Some(path.to_string_lossy().to_string()),
+            since: Some(1),
+        },
+    )
+    .await;
+
+    let first = sub.read_line().await.expect("current-seq reply");
+    assert_eq!(first, r#"{"log":"board","seq":2}"#);
+}
+
+/// A subscriber that is stuck (not reading) must not block ingest. The
+/// poke may be dropped (lossy by design), but the ingest must complete.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn stuck_subscriber_does_not_block_ingest() {
+    use horizon_board::wire::SubscribeRequest;
+
+    let logd = spawn_logd();
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-stuck-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("events.jsonl");
+
+    // Connect a subscriber but never read from it — its channel will fill.
+    let _sub = connect_subscriber(
+        &logd.socket_path,
+        &SubscribeRequest {
+            path: Some(path.to_string_lossy().to_string()),
+            since: None,
+        },
+    )
+    .await;
+
+    // Give the subscribe handler a moment to register.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Ingest should complete promptly despite the stuck subscriber.
+    let writer = connect_hub(&logd.socket_path).await;
+    writer
+        .hub
+        .hello(log_client_hello("test-client"))
+        .await
+        .expect("hello");
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        writer.hub.ingest(
+            path.to_string_lossy().to_string(),
+            IngestRequest::Add {
+                title: "X".to_string(),
+                body: String::new(),
+                parent: None,
+                position: horizon_board::Position::Bottom,
+            },
+        ),
+    )
+    .await;
+    assert!(
+        result.is_ok(),
+        "ingest must not block on a stuck subscriber"
+    );
+    assert!(result.unwrap().is_ok(), "ingest should succeed");
+}

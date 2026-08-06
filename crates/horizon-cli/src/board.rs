@@ -44,6 +44,9 @@ Commands:
   claim [--as <who>]
       Atomically claim the first ready+unassigned item: sets it to
       in-progress and assigns it to <who> (default: owner).
+  watch [--since <seq>]
+      Stream subscription pokes as NDJSON lines. Pipe to jq or other
+      line-oriented tools. Runs until interrupted.
 ";
 
 fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> u8 {
@@ -66,6 +69,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
     let mut status: Option<String> = None;
     let mut author: Option<String> = None;
     let mut as_who: Option<String> = None;
+    let mut since: Option<String> = None;
     let mut json = false;
 
     while let Some(arg) = iter.next() {
@@ -120,6 +124,13 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
                     return 2;
                 }
             },
+            "--since" => match iter.next() {
+                Some(v) => since = Some(v.clone()),
+                None => {
+                    let _ = writeln!(stderr, "error: --since requires a value");
+                    return 2;
+                }
+            },
             "--json" => json = true,
             s if s.starts_with("--") => {
                 let _ = writeln!(stderr, "error: unrecognized flag: {s}");
@@ -162,6 +173,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         &status,
         &author,
         &as_who,
+        &since,
         json,
         &store,
         stdout,
@@ -186,6 +198,7 @@ async fn dispatch(
     status: &Option<String>,
     author: &Option<String>,
     as_who: &Option<String>,
+    since: &Option<String>,
     json: bool,
     store: &Store,
     stdout: &mut impl Write,
@@ -328,6 +341,30 @@ async fn dispatch(
                     Ok(())
                 }
             }
+        }
+        "watch" => {
+            let since_seq = since
+                .as_deref()
+                .map(|s| {
+                    s.parse::<u64>()
+                        .map_err(|_| format!("--since must be a number, got: {s}"))
+                })
+                .transpose()?;
+            let mut stream = store
+                .subscribe(since_seq)
+                .await
+                .map_err(|e| e.to_string())?;
+            // Read NDJSON lines and pipe them to stdout verbatim. Each
+            // line is one {"log":"board","seq":N} — the cursor reply
+            // first, then one poke per appended event. Runs until logd
+            // closes the connection (drain/shutdown) or the pipe breaks.
+            while let Some(line) = stream.next_line().await.map_err(|e| e.to_string())? {
+                if writeln!(stdout, "{line}").is_err() {
+                    break; // broken pipe (e.g. jq exited)
+                }
+                let _ = stdout.flush();
+            }
+            Ok(())
         }
         other => Err(format!("unknown board command: {other}\n\n{BOARD_USAGE}")),
     }

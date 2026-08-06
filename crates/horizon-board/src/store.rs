@@ -15,10 +15,14 @@ use std::path::PathBuf;
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::event::{self, ReadReport};
 use crate::model::{fold, sorted_by_rank, Item};
-use crate::wire::{log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient};
+use crate::wire::{
+    log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient, SubscribeRequest,
+};
 
 /// Advisory shared lock via `flock(2)`. Reads use this so a concurrent writer
 /// (logd, with its exclusive lock) does not starve readers.
@@ -344,6 +348,68 @@ impl Store {
 
         conn_task.abort();
         Ok(reply)
+    }
+
+    // -- subscribe (raw NDJSON, stage B) -------------------------------
+    //
+    // Unlike `ingest` (which rides the remoc chmux path), `subscribe` is a
+    // raw NDJSON line protocol on the same socket — see `docs/logd-design.md`
+    // Subscription shape. The caller owns the tokio runtime and the returned
+    // [`SubscribeStream`], reading lines until the connection closes.
+
+    /// Connects to logd (spawning it if necessary), sends the subscribe
+    /// request as one NDJSON line, and returns a stream the caller reads
+    /// NDJSON poke lines from (`{"log":"board","seq":N}`). The first line
+    /// is the current seq (the cursor-on-connect reply); subsequent lines
+    /// are pokes for each appended event.
+    pub async fn subscribe(&self, since: Option<u64>) -> Result<SubscribeStream, StoreError> {
+        let stream = horizon_wire::spawn::connect_or_spawn_logd_retrying(&self.logd_socket)
+            .await
+            .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+        let (read_half, mut write_half) = stream.into_split();
+
+        let request = serde_json::to_string(&SubscribeRequest {
+            path: Some(self.path.to_string_lossy().to_string()),
+            since,
+        })
+        .map_err(StoreError::Json)?;
+        write_half
+            .write_all(request.as_bytes())
+            .await
+            .map_err(StoreError::Io)?;
+        write_half.write_all(b"\n").await.map_err(StoreError::Io)?;
+        write_half.flush().await.map_err(StoreError::Io)?;
+
+        Ok(SubscribeStream {
+            reader: tokio::io::BufReader::new(read_half),
+            _write: write_half,
+        })
+    }
+}
+
+/// A raw NDJSON line stream from logd's subscribe path. The caller reads
+/// lines (one `{"log":"board","seq":N}` per appended event) until the
+/// connection closes. The write half is held to keep the connection alive.
+pub struct SubscribeStream {
+    reader: tokio::io::BufReader<OwnedReadHalf>,
+    _write: OwnedWriteHalf,
+}
+
+impl SubscribeStream {
+    /// Reads the next NDJSON line from the stream. Returns `None` when logd
+    /// closes the connection (drain/shutdown). The line includes the
+    /// trailing `\n` stripped.
+    pub async fn next_line(&mut self) -> std::io::Result<Option<String>> {
+        let mut line = String::new();
+        let n = self.reader.read_line(&mut line).await?;
+        if n == 0 {
+            return Ok(None);
+        }
+        // Strip the trailing newline.
+        if line.ends_with('\n') {
+            line.pop();
+        }
+        Ok(Some(line))
     }
 }
 

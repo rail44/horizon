@@ -121,7 +121,12 @@ fn compute_rank(items: &HashMap<u64, Item>, position: &Position) -> Result<Strin
 /// `path`. Each operation opens the file with an exclusive lock, reads-folds,
 /// computes, appends, and flushes — the same atomic sequence the library's
 /// `Store` used to do in-process.
-pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogError> {
+///
+/// Returns the reply plus the 1-based line numbers (seqs) of every line
+/// appended, in order. The caller (the hub) fans these out as subscribe pokes
+/// so live subscribers learn that new events landed. The seq is the line index
+/// in the JSONL file — the durable cursor a consumer catches up from.
+pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<u64>), LogError> {
     match request {
         IngestRequest::Add {
             title,
@@ -130,6 +135,7 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
             position,
         } => {
             let (mut file, report) = open_locked(path)?;
+            let mut seq = report.line_count;
             let items = fold(&report.envelopes);
             let id = report.max_id.map_or(1, |m| m + 1);
             let rank = compute_rank(&items, &position)?;
@@ -140,7 +146,9 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 body: body.clone(),
                 rank: rank.clone(),
             });
+            seq += 1;
             append(&mut file, &env)?;
+            let mut seqs = vec![seq];
 
             if let Some(pid) = parent {
                 let upd = make_envelope(BoardEvent::ItemUpdated {
@@ -154,17 +162,22 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                     title: None,
                     body: None,
                 });
+                seq += 1;
                 append(&mut file, &upd)?;
+                seqs.push(seq);
             }
 
-            Ok(IngestReply::Item(Item {
-                id,
-                title,
-                body,
-                rank,
-                parent,
-                ..Item::default()
-            }))
+            Ok((
+                IngestReply::Item(Item {
+                    id,
+                    title,
+                    body,
+                    rank,
+                    parent,
+                    ..Item::default()
+                }),
+                seqs,
+            ))
         }
         IngestRequest::Comment { id, author, text } => {
             let (mut file, report) = open_locked(path)?;
@@ -173,8 +186,9 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 return Err(LogError::ItemNotFound(id));
             }
             let env = make_envelope(BoardEvent::CommentAdded { id, author, text });
+            let seq = report.line_count + 1;
             append(&mut file, &env)?;
-            Ok(IngestReply::Done)
+            Ok((IngestReply::Done, vec![seq]))
         }
         IngestRequest::SetStatus { id, status } => {
             let (mut file, report) = open_locked(path)?;
@@ -193,8 +207,9 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 title: None,
                 body: None,
             });
+            let seq = report.line_count + 1;
             append(&mut file, &env)?;
-            Ok(IngestReply::Done)
+            Ok((IngestReply::Done, vec![seq]))
         }
         IngestRequest::Assign { id, who } => {
             let (mut file, report) = open_locked(path)?;
@@ -213,8 +228,9 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 title: None,
                 body: None,
             });
+            let seq = report.line_count + 1;
             append(&mut file, &env)?;
-            Ok(IngestReply::Done)
+            Ok((IngestReply::Done, vec![seq]))
         }
         IngestRequest::MoveItem { id, position } => {
             let (mut file, report) = open_locked(path)?;
@@ -234,8 +250,9 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 title: None,
                 body: None,
             });
+            let seq = report.line_count + 1;
             append(&mut file, &env)?;
-            Ok(IngestReply::Rank(rank))
+            Ok((IngestReply::Rank(rank), vec![seq]))
         }
         IngestRequest::Claim { who } => {
             let (mut file, report) = open_locked(path)?;
@@ -247,7 +264,7 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 .find(|i| i.status == "ready" && i.assignee.is_empty());
 
             let Some(mut item) = found.cloned() else {
-                return Ok(IngestReply::MaybeItem(None));
+                return Ok((IngestReply::MaybeItem(None), vec![]));
             };
 
             let env = make_envelope(BoardEvent::ItemUpdated {
@@ -261,11 +278,12 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<IngestReply, LogEr
                 title: None,
                 body: None,
             });
+            let seq = report.line_count + 1;
             append(&mut file, &env)?;
 
             item.status = "in-progress".to_string();
             item.assignee = who;
-            Ok(IngestReply::MaybeItem(Some(item)))
+            Ok((IngestReply::MaybeItem(Some(item)), vec![seq]))
         }
     }
 }

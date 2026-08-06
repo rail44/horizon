@@ -113,6 +113,12 @@ pub struct ReadReport {
     pub corrupt_count: u32,
     pub skipped_count: u32,
     pub torn_trailing: bool,
+    /// The number of non-empty, non-torn lines in the file — the 1-based
+    /// sequence number the next appended line will get. Used by the logd
+    /// subscribe path (`docs/logd-design.md` Subscription shape): the seq
+    /// is the line index in the JSONL, so a consumer that misses the stream
+    /// and catches up via `tail -n +N -F` sees byte-identical results.
+    pub line_count: u64,
 }
 
 impl ReadReport {
@@ -165,6 +171,7 @@ pub fn read(path: &Path) -> std::io::Result<ReadReport> {
         if line.trim().is_empty() {
             continue;
         }
+        report.line_count += 1;
         match decode_line(line) {
             DecodedLine::Record(env) => {
                 if let Some(id) = event_id(&env.event) {
