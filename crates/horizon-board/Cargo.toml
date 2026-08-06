@@ -16,10 +16,5 @@ thiserror = "2.0"
 # one `ingest` rtc call. Reads stay synchronous file folds.
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros"] }
 
-[dev-dependencies]
-# The write-path tests spawn a real `horizon-logd` binary; the testkit owns
-# the binary-resolution + scratch-socket + DaemonProcess contract.
-horizon-daemon-testkit = { path = "../horizon-daemon-testkit" }
-
 [lints.clippy]
 all = { level = "warn", priority = -1 }

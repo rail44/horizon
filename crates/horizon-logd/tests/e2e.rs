@@ -212,3 +212,59 @@ async fn ingest_comment_on_nonexistent_item_is_rejected() {
         "expected ItemNotFound(99), got {result:?}"
     );
 }
+
+/// The full client→daemon round-trip: `horizon_board::Store` (the library
+/// callers use — CLI and GUI) connect-or-spawns this very daemon, hellos,
+/// and sends `ingest` over the real socket. `CARGO_BIN_EXE_horizon-logd`
+/// (the env var `resolve_daemon_binary` reads) is guaranteed by cargo for
+/// this test's own package, so the binary is always built before the test
+/// runs — the ordering gap that broke `horizon-board`'s in-crate spawn is
+/// absent here by construction.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn board_store_client_round_trip_through_real_logd() {
+    use horizon_board::{Position, Store};
+
+    // Point the store at this daemon's socket (not the default path).
+    let socket_path = scratch_socket("logd-board-rt");
+    let mut command = Command::new(resolve_logd_binary());
+    command.arg("--socket").arg(&socket_path);
+    let logd = DaemonProcess::spawn(&mut command, socket_path.clone());
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-board-rt-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = Store::at_with_socket(dir.join("events.jsonl"), socket_path);
+
+    // add → set_status → comment → show, all through the socket.
+    let item = store
+        .add("Task", "body", None, Position::Bottom)
+        .expect("add through logd");
+    assert_eq!(item.id, 1);
+    assert_eq!(item.rank, "n");
+
+    store
+        .set_status(1, "ready")
+        .expect("set_status through logd");
+    store
+        .comment(1, "owner", "a note")
+        .expect("comment through logd");
+
+    let shown = store.show(1).expect("show").expect("item exists");
+    assert_eq!(shown.title, "Task");
+    assert_eq!(shown.status, "ready");
+    assert_eq!(shown.comments.len(), 1);
+    assert_eq!(shown.comments[0].text, "a note");
+
+    // claim on the same store through the same daemon.
+    let claimed = store.claim("alice").expect("claim through logd");
+    let claimed = claimed.expect("a ready+unassigned item exists");
+    assert_eq!(claimed.id, 1);
+    assert_eq!(claimed.status, "in-progress");
+    assert_eq!(claimed.assignee, "alice");
+
+    drop(logd);
+}

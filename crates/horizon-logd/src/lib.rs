@@ -23,6 +23,6 @@
 //! append logic, and `horizon-board`'s write path is this daemon's client.
 
 pub mod hub;
-mod writer;
+pub mod writer;
 
 pub use hub::Hub;

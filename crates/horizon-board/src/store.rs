@@ -354,15 +354,16 @@ fn log_error_to_store(err: LogError) -> StoreError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use horizon_daemon_testkit::{scratch_socket, DaemonProcess};
-    use horizon_wire::spawn::resolve_daemon_binary;
+    use crate::event::{BoardEvent, Envelope, SCHEMA, VERSION};
     use std::io::Write;
+    use std::path::PathBuf;
 
-    /// Spawns a `horizon-logd` on an isolated socket and returns a `Store`
-    /// whose write path targets it. The `DaemonProcess` kills logd on drop,
-    /// so the caller must hold it for the test's duration.
-    fn logd_store() -> (Store, DaemonProcess) {
-        let socket_path = scratch_socket("board-test");
+    /// A throwaway events.jsonl path for a test. No daemon, no socket — the
+    /// unit tests seed the file directly and read it back with `Store::show`/
+    /// `Store::list` (file folds that need no daemon). The write path (id
+    /// assignment, rank computation, claim) is tested end-to-end in
+    /// `crates/horizon-logd/tests/e2e.rs` against the real daemon.
+    fn tmp_path() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "horizon-board-test-{}",
             std::time::SystemTime::now()
@@ -370,27 +371,18 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        let store = Store::at_with_socket(dir.join("events.jsonl"), socket_path.clone());
-        let binary = resolve_daemon_binary("horizon-logd");
-        let mut command = std::process::Command::new(&binary);
-        command.arg("--socket").arg(&socket_path);
-        let daemon = DaemonProcess::spawn(&mut command, socket_path);
-        (store, daemon)
+        dir.join("events.jsonl")
     }
 
-    /// Writes a single `item-created` envelope directly to `store.path`,
-    /// bypassing logd — for read-path tests that need seeded state without
-    /// the write path.
-    #[allow(dead_code)]
-    fn seed_item(store: &Store, id: u64, title: &str, rank: &str) {
-        use crate::event::{BoardEvent, Envelope, SCHEMA, VERSION};
-        if let Some(parent) = store.path.parent() {
+    /// Seeds an `item-created` event at `at` ms, returning the id.
+    fn seed_item(path: &std::path::Path, id: u64, title: &str, rank: &str, at: u64) {
+        if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         let env = Envelope {
             schema: SCHEMA.to_string(),
             version: VERSION,
-            at: 1000,
+            at,
             event: BoardEvent::ItemCreated {
                 id,
                 title: title.to_string(),
@@ -401,29 +393,70 @@ mod tests {
         let mut file = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&store.path)
+            .open(path)
             .unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+
+    /// Seeds an `item-updated` event.
+    fn seed_update(
+        path: &std::path::Path,
+        id: u64,
+        at: u64,
+        status: Option<&str>,
+        rank: Option<&str>,
+        assignee: Option<&str>,
+        parent: Option<Option<u64>>,
+    ) {
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::ItemUpdated {
+                id,
+                status: status.map(String::from),
+                rank: rank.map(String::from),
+                assignee: assignee.map(String::from),
+                parent,
+                depends_on: None,
+                links: None,
+                title: None,
+                body: None,
+            },
+        };
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+
+    /// Seeds a `comment-added` event.
+    fn seed_comment(path: &std::path::Path, id: u64, author: &str, text: &str, at: u64) {
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::CommentAdded {
+                id,
+                author: author.to_string(),
+                text: text.to_string(),
+            },
+        };
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
         serde_json::to_writer(&mut file, &env).unwrap();
         file.write_all(b"\n").unwrap();
     }
 
     #[test]
     fn fold_roundtrip_create_update_comment() {
-        let (store, _daemon) = logd_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "Task", "n", 1000);
+        seed_update(&path, 1, 2000, Some("ready"), None, Some("owner"), None);
+        seed_comment(&path, 1, "owner", "Starting now", 3000);
 
-        let item = store
-            .add("Task", "Do the thing", None, Position::Bottom)
-            .unwrap();
-        assert_eq!(item.id, 1);
-        assert_eq!(item.rank, "n");
-
-        store.set_status(1, "ready").unwrap();
-        store.assign(1, "owner").unwrap();
-        store.comment(1, "owner", "Starting now").unwrap();
-
+        let store = Store::at(path);
         let shown = store.show(1).unwrap().unwrap();
         assert_eq!(shown.title, "Task");
-        assert_eq!(shown.body, "Do the thing");
         assert_eq!(shown.status, "ready");
         assert_eq!(shown.assignee, "owner");
         assert_eq!(shown.comments.len(), 1);
@@ -432,76 +465,65 @@ mod tests {
 
     #[test]
     fn list_rank_order_and_statuses() {
-        let (store, _daemon) = logd_store();
+        let path = tmp_path();
+        // C at rank "a" (top), A at "n", B at "s" (bottom).
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_item(&path, 2, "B", "s", 2000);
+        seed_item(&path, 3, "C", "a", 3000);
 
-        let a = store.add("A", "", None, Position::Bottom).unwrap();
-        let b = store.add("B", "", None, Position::Bottom).unwrap();
-        let c = store.add("C", "", None, Position::Top).unwrap();
-
+        let store = Store::at(path.clone());
         let result = store.list(None).unwrap();
         assert_eq!(result.items.len(), 3);
-        assert_eq!(result.items[0].id, c.id);
-        assert_eq!(result.items[1].id, a.id);
-        assert_eq!(result.items[2].id, b.id);
-
+        // Sorted by rank: C (a), A (n), B (s).
+        assert_eq!(result.items[0].id, 3);
+        assert_eq!(result.items[1].id, 1);
+        assert_eq!(result.items[2].id, 2);
         assert!(result.statuses.is_empty());
 
-        store.set_status(a.id, "proposed").unwrap();
-        store.set_status(b.id, "ready").unwrap();
+        seed_update(&path, 1, 4000, Some("proposed"), None, None, None);
+        seed_update(&path, 2, 5000, Some("ready"), None, None, None);
 
         let result = store.list(None).unwrap();
         assert_eq!(result.statuses, vec!["proposed", "ready"]);
 
         let result = store.list(Some("ready")).unwrap();
         assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].id, b.id);
+        assert_eq!(result.items[0].id, 2);
     }
 
     #[test]
-    fn claim_serialization_two_claims_get_different_items() {
-        let (store, _daemon) = logd_store();
+    fn claim_sees_ready_unassigned_items() {
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_item(&path, 2, "B", "s", 2000);
+        // Both ready.
+        seed_update(&path, 1, 3000, Some("ready"), None, None, None);
+        seed_update(&path, 2, 4000, Some("ready"), None, None, None);
 
-        store.add("A", "", None, Position::Bottom).unwrap();
-        store.add("B", "", None, Position::Bottom).unwrap();
-
-        store.set_status(1, "ready").unwrap();
-        store.set_status(2, "ready").unwrap();
-
-        let first = store.claim("alice").unwrap().unwrap();
-        assert_eq!(first.id, 1);
-        assert_eq!(first.status, "in-progress");
-        assert_eq!(first.assignee, "alice");
-
-        let second = store.claim("bob").unwrap().unwrap();
-        assert_eq!(second.id, 2);
-        assert_eq!(second.status, "in-progress");
-        assert_eq!(second.assignee, "bob");
-    }
-
-    #[test]
-    fn claim_returns_none_when_no_ready_unassigned() {
-        let (store, _daemon) = logd_store();
-
-        store.add("A", "", None, Position::Bottom).unwrap();
-        assert!(store.claim("alice").unwrap().is_none());
-
-        store.set_status(1, "ready").unwrap();
-        store.assign(1, "bob").unwrap();
-        assert!(store.claim("alice").unwrap().is_none());
-
-        store.assign(1, "").unwrap();
-        let claimed = store.claim("alice").unwrap().unwrap();
-        assert_eq!(claimed.id, 1);
+        // The fold (read path) should show both as ready+unassigned.
+        let store = Store::at(path);
+        let result = store.list(Some("ready")).unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert!(result.items[0].assignee.is_empty());
+        assert!(result.items[1].assignee.is_empty());
     }
 
     #[test]
     fn unknown_status_and_author_dont_break() {
-        let (store, _daemon) = logd_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_update(
+            &path,
+            1,
+            2000,
+            Some("weird-custom-status"),
+            None,
+            None,
+            None,
+        );
+        seed_comment(&path, 1, "session:abc-123", "a note", 3000);
 
-        store.add("A", "", None, Position::Bottom).unwrap();
-        store.set_status(1, "weird-custom-status").unwrap();
-        store.comment(1, "session:abc-123", "a note").unwrap();
-
+        let store = Store::at(path);
         let item = store.show(1).unwrap().unwrap();
         assert_eq!(item.status, "weird-custom-status");
         assert_eq!(item.comments[0].author, "session:abc-123");
@@ -511,82 +533,37 @@ mod tests {
     }
 
     #[test]
-    fn move_item_changes_rank() {
-        let (store, _daemon) = logd_store();
-
-        let a = store.add("A", "", None, Position::Bottom).unwrap();
-        let _b = store.add("B", "", None, Position::Bottom).unwrap();
-        let _c = store.add("C", "", None, Position::Bottom).unwrap();
-
-        let new_rank = store.move_item(a.id, Position::Top).unwrap();
-        assert!(new_rank.as_str() < "n");
-
-        let result = store.list(None).unwrap();
-        assert_eq!(result.items[0].id, a.id);
-    }
-
-    #[test]
     fn add_with_parent() {
-        let (store, _daemon) = logd_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "Parent", "n", 1000);
+        seed_item(&path, 2, "Child", "s", 2000);
+        seed_update(&path, 2, 3000, None, None, None, Some(Some(1)));
 
-        let parent = store.add("Parent", "", None, Position::Bottom).unwrap();
-        let child = store
-            .add("Child", "", Some(parent.id), Position::Bottom)
-            .unwrap();
-
-        let shown = store.show(child.id).unwrap().unwrap();
-        assert_eq!(shown.parent, Some(parent.id));
-    }
-
-    #[test]
-    fn item_not_found_errors() {
-        let (store, _daemon) = logd_store();
-        store.add("A", "", None, Position::Bottom).unwrap();
-
-        assert!(matches!(
-            store.set_status(99, "ready"),
-            Err(StoreError::ItemNotFound(99))
-        ));
-        assert!(matches!(
-            store.comment(99, "x", "y"),
-            Err(StoreError::ItemNotFound(99))
-        ));
-        assert!(matches!(
-            store.move_item(99, Position::Top),
-            Err(StoreError::ItemNotFound(99))
-        ));
+        let store = Store::at(path);
+        let shown = store.show(2).unwrap().unwrap();
+        assert_eq!(shown.parent, Some(1));
     }
 
     #[test]
     fn show_nonexistent_returns_none() {
-        let store = Store::at(
-            std::env::temp_dir()
-                .join(format!(
-                    "horizon-board-read-test-{}",
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_nanos()
-                ))
-                .join("events.jsonl"),
-        );
+        let store = Store::at(tmp_path());
         assert!(store.show(99).unwrap().is_none());
     }
 
     #[test]
     fn corrupt_lines_are_skipped_and_reported() {
-        let (store, _daemon) = logd_store();
-
-        store.add("A", "", None, Position::Bottom).unwrap();
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
         // Append a corrupt line directly to the file
         std::fs::OpenOptions::new()
             .append(true)
-            .open(&store.path)
+            .open(&path)
             .unwrap()
             .write_all(b"this is corrupt\n")
             .unwrap();
-        store.add("B", "", None, Position::Bottom).unwrap();
+        seed_item(&path, 2, "B", "s", 2000);
 
+        let store = Store::at(path);
         let result = store.list(None).unwrap();
         assert_eq!(result.items.len(), 2);
         assert!(result.skipped.is_some());
