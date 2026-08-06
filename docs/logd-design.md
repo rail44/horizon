@@ -105,13 +105,27 @@ pair per the terminald-split precedent.
    subscriber's policy, kept out of the log infrastructure. "判断は
    エージェント、起床は機構" — logd is the 機構's lower half only.
 
-## Open items (v1 slicing not yet decided)
+## v1 slicing (owner decision 2026-08-06)
 
-- Migration order: extract the event-log writer from
-  `crates/horizon-agent` (agentd becomes a sender) vs. start with the
-  board logs (smaller, newer, fewer consumers) — undecided.
-- Whether recall's query path moves to logd in v1 or keeps its
-  in-agentd store until the projection migrates.
+Start with the **board logs**: smaller, newer, fewer consumers, and it
+defers the agentd extraction surgery. v1 scope:
+
+- logd owns board WRITES (the horizon-board library's write path
+  becomes a socket client with connect-or-spawn; the direct flock
+  append moves inside logd — replaced, not kept as a fallback).
+- Board READS stay file-folds in the library: JSONL stays
+  world-readable, a single writer plus atomic appends make direct
+  reads safe, and boards have no projection. The named-query surface
+  becomes relevant only when agent-events/projection migrate.
+- Subscriptions (sequence-number pokes) ship as v1's second half,
+  after the daemon skeleton lands.
+- agent-events migration and recall's query path are explicitly
+  later phases.
+
+## Open items
+
+- Whether recall's query path moves to logd when the projection
+  migrates, or earlier.
 - Subscription protocol details (per-log streams vs one multiplexed
   stream; cursor persistence convention for consumers).
 - Crash-window semantics of decision 2 (what agentd's send blocks on,
