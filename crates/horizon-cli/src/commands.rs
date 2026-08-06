@@ -25,7 +25,6 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
     match subcommand {
         Subcommand::NewTerminal { .. } => "new-terminal",
         Subcommand::NewAgent { .. } => "new-agent",
-        Subcommand::NewConfigAgent { .. } => "new-config-agent",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -77,10 +76,11 @@ pub fn to_request(
     match subcommand {
         Subcommand::NewTerminal { activate, .. } => invoke(
             "new-terminal",
-            create_session_args(resolved_split, *activate, None, None, issuer),
+            create_session_args(resolved_split, *activate, None, None, None, issuer),
         ),
         Subcommand::NewAgent {
             prompt,
+            role,
             activate,
             share,
             ..
@@ -90,21 +90,7 @@ pub fn to_request(
                 resolved_split,
                 *activate,
                 prompt.as_deref(),
-                share.then_some(false),
-                issuer,
-            ),
-        ),
-        Subcommand::NewConfigAgent {
-            prompt,
-            activate,
-            share,
-            ..
-        } => invoke(
-            "new-config-agent",
-            create_session_args(
-                resolved_split,
-                *activate,
-                prompt.as_deref(),
+                role.as_deref(),
                 share.then_some(false),
                 issuer,
             ),
@@ -191,12 +177,12 @@ fn invoke(command: &str, args: serde_json::Value) -> Request {
 }
 
 /// `new-terminal`/`new-agent`'s wire args -- the mirror image of
-/// `app::external_commands::create_session_invocation`'s parsing on the
-/// server side. `split`/`prompt`/`isolate`/`issuer` are only included when
+/// the server side's `dispatch_invoke` parsing. `split`/`prompt`/`role`/
+/// `isolate`/`issuer` are only included when
 /// present, so an unadorned `new-terminal`/`new-agent` sends the same
 /// `{\"activate\":false}` shape v1 already sent (plus the always-present
-/// `activate` field the Second revision adds). `isolate` is `new-agent`/
-/// `new-config-agent`'s `--share` override (`Some(false)`) turned into the
+/// `activate` field the Second revision adds). `isolate` is
+/// `new-agent`'s `--share` override (`Some(false)`) turned into the
 /// wire's `docs/session-relationship-design.md` decision 3 knob; `None`
 /// (the common case) omits the key entirely, letting the server apply its
 /// own CLI-origin default (isolated) -- `new-terminal` always passes `None`
@@ -207,6 +193,7 @@ fn create_session_args(
     split: Option<&str>,
     activate: bool,
     prompt: Option<&str>,
+    role: Option<&str>,
     isolate: Option<bool>,
     issuer: Option<&str>,
 ) -> serde_json::Value {
@@ -222,6 +209,12 @@ fn create_session_args(
         args.insert(
             "prompt".to_string(),
             serde_json::Value::String(prompt.to_string()),
+        );
+    }
+    if let Some(role) = role {
+        args.insert(
+            "role".to_string(),
+            serde_json::Value::String(role.to_string()),
         );
     }
     if let Some(isolate) = isolate {
@@ -248,6 +241,7 @@ mod tests {
     fn new_agent(prompt: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {
         Subcommand::NewAgent {
             prompt: prompt.map(str::to_string),
+            role: None,
             split,
             activate,
             share: false,
@@ -381,6 +375,7 @@ mod tests {
         let Request::Invoke(invoke) = to_request(
             &Subcommand::NewAgent {
                 prompt: None,
+                role: None,
                 split: None,
                 activate: false,
                 share: true,
@@ -637,5 +632,27 @@ mod tests {
             to_request(&Subcommand::State, None, None),
             Request::Query(q) if q.what == "state"
         ));
+    }
+
+    #[test]
+    fn new_agent_with_role_carries_it_in_the_args() {
+        let Request::Invoke(invoke) = to_request(
+            &Subcommand::NewAgent {
+                prompt: None,
+                role: Some("keeper".to_string()),
+                split: None,
+                activate: false,
+                share: false,
+            },
+            None,
+            None,
+        ) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "new-agent");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({ "activate": false, "role": "keeper" })
+        );
     }
 }

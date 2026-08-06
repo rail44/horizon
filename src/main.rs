@@ -76,6 +76,27 @@ fn build_application() -> Application {
 }
 
 fn run_gui() {
+    // Register the board keeper role from `horizon-board` — the same
+    // registration `horizon-agentd` does at its startup. The shell process
+    // and the agent daemon are separate processes with separate copies of
+    // `roles::EXTERNAL_ROLES`; both must register the same externally-
+    // provided roles from the same `pub const` data so the shell's view
+    // chooser (which enumerates `roles::user_launchable`) sees the same set
+    // the daemon's `roles::resolve` can find. See `docs/board-keeper-
+    // design.md` §1.
+    horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
+        id: horizon_board::keeper::ROLE_ID,
+        title: horizon_board::keeper::ROLE_TITLE,
+        prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
+        allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
+        model: horizon_board::keeper::ROLE_MODEL,
+        iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
+        include_repository_instructions:
+            horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
+        skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
+        summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+    }]);
+
     let application = build_application();
     // `.with_assets` registers gpui-component's bundled SVGs, including the
     // client-side titlebar's window-control glyphs.

@@ -37,7 +37,7 @@ pub(crate) struct ViewChoice {
 }
 
 fn view_choices() -> Vec<ViewChoice> {
-    vec![
+    let mut choices = vec![
         ViewChoice {
             title: "Terminal",
             kind: PaneKind::Terminal,
@@ -56,14 +56,20 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: true,
         },
-        ViewChoice {
-            title: "Configuration Agent",
+    ];
+    // One entry per user-launchable role, enumerated from the role registry
+    // (`roles::user_launchable`). The shell registers the same externally-
+    // provided roles at startup (`main::run_gui`) that `horizon-agentd`
+    // registers, so both processes see an identical set.
+    for role in horizon_agent::roles::user_launchable() {
+        choices.push(ViewChoice {
+            title: role.title,
             kind: PaneKind::Agent,
-            role_id: Some(horizon_agent::roles::RoleId(
-                horizon_agent::roles::CONFIG_ROLE.id.to_string(),
-            )),
+            role_id: Some(horizon_agent::roles::RoleId(role.id.to_string())),
             isolate: false,
-        },
+        });
+    }
+    choices.extend([
         ViewChoice {
             title: "Theme Settings",
             kind: PaneKind::View(ViewKind::ThemeSettings),
@@ -76,7 +82,8 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: false,
         },
-    ]
+    ]);
+    choices
 }
 
 pub(crate) struct ViewChooserDelegate {
@@ -207,6 +214,72 @@ mod tests {
                 "{} should default to a shared spawn, not isolated",
                 choice.title
             );
+        }
+    }
+
+    #[test]
+    fn every_role_choice_carries_a_role_id_and_is_not_isolated() {
+        let choices = view_choices();
+        let role_choices: Vec<_> = choices.iter().filter(|c| c.role_id.is_some()).collect();
+        assert!(
+            !role_choices.is_empty(),
+            "at least one role choice must exist"
+        );
+        for choice in &role_choices {
+            assert_eq!(
+                choice.kind,
+                PaneKind::Agent,
+                "{} is a role choice and must be an Agent",
+                choice.title
+            );
+            assert!(!choice.isolate, "role choices default to shared");
+        }
+    }
+
+    #[test]
+    fn the_config_role_is_present_as_a_choice() {
+        let choices = view_choices();
+        assert!(choices
+            .iter()
+            .any(|c| c.role_id.as_ref().is_some_and(|r| r.0 == "config")));
+    }
+
+    #[test]
+    fn the_keeper_role_is_present_as_a_choice() {
+        // The shell registers the keeper role at startup (`main::run_gui`);
+        // in the test process the `EXTERNAL_ROLES` registry starts empty, so
+        // the same registration must happen here before `view_choices` can
+        // enumerate it.
+        horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
+            id: horizon_board::keeper::ROLE_ID,
+            title: horizon_board::keeper::ROLE_TITLE,
+            prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
+            allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
+            model: horizon_board::keeper::ROLE_MODEL,
+            iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
+            include_repository_instructions:
+                horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
+            skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
+            summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+        }]);
+        let choices = view_choices();
+        assert!(choices
+            .iter()
+            .any(|c| c.role_id.as_ref().is_some_and(|r| r.0 == "keeper")));
+    }
+
+    #[test]
+    fn role_less_entries_stay_role_less() {
+        let choices = view_choices();
+        for title in [
+            "Terminal",
+            "Agent",
+            "Agent (Isolated Worktree)…",
+            "Theme Settings",
+            "Board",
+        ] {
+            let c = choices.iter().find(|c| c.title == title).expect(title);
+            assert!(c.role_id.is_none(), "{title} must remain role-less");
         }
     }
 }
