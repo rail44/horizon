@@ -122,12 +122,36 @@ defers the agentd extraction surgery. v1 scope:
 - agent-events migration and recall's query path are explicitly
   later phases.
 
+## Subscription shape (owner-settled 2026-08-06)
+
+- **One multiplexed NDJSON stream**, not per-log streams: a consumer
+  holds one connection and reads `{"log":"board","seq":1234}` lines.
+  Per-log streams would scale connections with the number of boards.
+- **NDJSON rather than an agent-protocol standard.** A2A's events are
+  task-scoped with terminal states and its push mode makes every
+  consumer host an authenticated webhook; ACP's updates are
+  session/turn-scoped with no topic or cursor; MCP's resource
+  subscriptions are the closest fit in *shape* (identifier-only poke,
+  client re-reads) but require a JSON-RPC client, carry no sequence
+  field, and churn (`resources/subscribe` existed in 2025-11-25 and is
+  gone in 2026-07-28). NDJSON over the socket is the only form a shell
+  script can consume with no SDK, and MCP's own current spec says a
+  custom Unix-socket transport SHOULD reuse newline-delimited framing —
+  so an MCP facade later is a message-layer addition, not a transport
+  migration. See `docs/research/change-notification.md`.
+- **Cursor on connect, no server-side cursor state.** A subscriber may
+  send its last-seen seq when it connects; logd replies with the
+  current seq before streaming. Borrowed from SSE's `Last-Event-ID`
+  without adopting HTTP. logd never persists consumer positions.
+- **`horizon board watch`** exposes the stream as lines for shells and
+  external processes; the world-readable JSONL plus `tail -n +N -F`
+  stays supported indefinitely and must not be degraded by the socket
+  path existing.
+
 ## Open items
 
 - Whether recall's query path moves to logd when the projection
   migrates, or earlier.
-- Subscription protocol details (per-log streams vs one multiplexed
-  stream; cursor persistence convention for consumers).
 - Crash-window semantics of decision 2 (what agentd's send blocks on,
   and for how long, before surfacing the error).
 - The distro libduckdb 1.5.0 pin (`AGENTS.md` Build setup) is
