@@ -186,16 +186,19 @@ pub async fn connect_hub_client<T: RemoteSend>(
 /// [`spawn_daemon`]'s error message for the resulting actionable hint when
 /// none of the locations has it.
 ///
-/// The env-var override is `HORIZON_<UPPER_NAME>_BINARY` where
-/// `<UPPER_NAME>` is `binary_name` with `-` → `_` and uppercased — e.g.
-/// `horizon-logd` → `HORIZON_LOGD_BINARY`. This lets a test pin the exact
+/// The env-var override is `HORIZON_<NAME>_BINARY` where `<NAME>` is
+/// `binary_name` with its `horizon-` prefix stripped, `-` → `_`, and
+/// uppercased — e.g. `horizon-logd` → `HORIZON_LOGD_BINARY`,
+/// `horizon-agentd` → `HORIZON_AGENTD_BINARY`. Stripping the prefix avoids
+/// a doubled `HORIZON_HORIZON_*` key. This lets a test pin the exact
 /// binary (via `CARGO_BIN_EXE`, which cargo guarantees for the test's own
 /// package) without changing production's resolution when the env var is
 /// absent. Same convention shape as `$HORIZON_*_SOCKET` for socket paths.
 pub fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
+    let stripped = binary_name.strip_prefix("horizon-").unwrap_or(binary_name);
     let env_key = format!(
         "HORIZON_{}_BINARY",
-        binary_name.replace('-', "_").to_uppercase()
+        stripped.replace('-', "_").to_uppercase()
     );
     if let Ok(path) = std::env::var(&env_key) {
         let path = PathBuf::from(path);
