@@ -3656,6 +3656,7 @@ dependencies = [
  "anyhow",
  "crossbeam-channel",
  "horizon-agent",
+ "horizon-board",
  "horizon-config",
  "horizon-daemon-testkit",
  "horizon-sandbox",

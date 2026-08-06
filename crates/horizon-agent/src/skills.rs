@@ -112,28 +112,53 @@ const GITHUB_PR_SKILL_SOURCE: &str = include_str!("../skills/github-pr/SKILL.md"
 
 /// Every skill this build embeds, parsed once and cached for the process's
 /// lifetime -- the input [`SkillRegistry::discover`] starts every session's
-/// composition from.
+/// composition from. Includes any externally-provided skill sources
+/// registered via [`register_external_skill_sources`] (e.g. the board
+/// keeper skill from `horizon-board`, contributed by `horizon-agentd` at
+/// startup) alongside this crate's own `include_str!`-loaded skills.
 fn embedded_skills() -> &'static [Skill] {
     static SKILLS: std::sync::OnceLock<Vec<Skill>> = std::sync::OnceLock::new();
     SKILLS.get_or_init(|| {
-        [
+        let mut sources: Vec<&'static str> = vec![
             HORIZON_CONFIG_SKILL_SOURCE,
             HORIZON_CLI_SKILL_SOURCE,
             HORIZON_DISTILL_SKILL_SOURCE,
             GITHUB_PR_SKILL_SOURCE,
-        ]
-        .into_iter()
-        .map(|source| {
-            let parsed =
-                parse_skill_md(source).expect("crates/horizon-agent/skills/*/SKILL.md must parse");
-            Skill {
-                name: parsed.name,
-                description: parsed.description,
-                source: SkillBody::Embedded(parsed.body),
-            }
-        })
-        .collect()
+        ];
+        if let Some(external) = EXTERNAL_SKILL_SOURCES.get() {
+            sources.extend_from_slice(external);
+        }
+        sources
+            .into_iter()
+            .map(|source| {
+                let parsed = parse_skill_md(source)
+                    .expect("crates/horizon-agent/skills/*/SKILL.md must parse");
+                Skill {
+                    name: parsed.name,
+                    description: parsed.description,
+                    source: SkillBody::Embedded(parsed.body),
+                }
+            })
+            .collect()
     })
+}
+
+/// Externally-provided embedded skill sources, registered at runtime by the
+/// composition root (`horizon-agentd`) from crates `horizon-agent` does not
+/// depend on (e.g. `horizon_board::keeper::SKILL_SOURCE`). Populated once at
+/// daemon startup, before any session is spawned; `embedded_skills` reads
+/// this lazily on first access, so registration must happen before the first
+/// `SkillRegistry` is composed (which happens at the first session spawn).
+/// See `docs/board-keeper-design.md` §1.
+static EXTERNAL_SKILL_SOURCES: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+
+/// Registers externally-provided embedded skill sources so
+/// [`embedded_skills`] includes them. Each source is a `&'static str`
+/// pointing at a `SKILL.md` file `include_str!`-loaded by the providing crate
+/// (e.g. `horizon_board::keeper::SKILL_SOURCE`). Called once at
+/// `horizon-agentd` startup.
+pub fn register_external_skill_sources(sources: Vec<&'static str>) {
+    let _ = EXTERNAL_SKILL_SOURCES.set(sources);
 }
 
 /// Bounds a skill's body as returned by `skill.read` -- a repository skill
@@ -663,5 +688,36 @@ mod tests {
         assert!(output["body"].as_str().unwrap().chars().count() <= SKILL_BODY_CAP_CHARS);
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    // -- external skill source registration (docs/board-keeper-design.md §1) -
+
+    /// A skill source registered via [`register_external_skill_sources`]
+    /// must appear in [`embedded_skills`] and be resolvable through a
+    /// [`SkillRegistry`]. This is the mechanism `horizon-agentd` uses to
+    /// contribute `horizon-board`'s keeper skill without a Cargo edge.
+    const TEST_EXTERNAL_SKILL_SOURCE: &str =
+        "---\nname: test-external-skill\ndescription: An externally-registered test skill.\n---\nTest body.\n";
+
+    #[test]
+    fn register_external_skill_sources_makes_the_skill_embedded() {
+        register_external_skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE]);
+        let registry = SkillRegistry::embedded();
+        let skill = registry
+            .get("test-external-skill")
+            .expect("external skill source must be embedded after registration");
+        assert_eq!(skill.description, "An externally-registered test skill.");
+        assert!(skill.body().contains("Test body."));
+    }
+
+    #[test]
+    fn external_skill_appears_in_prompt_section_for_ids() {
+        register_external_skill_sources(vec![TEST_EXTERNAL_SKILL_SOURCE]);
+        let registry = SkillRegistry::embedded();
+        let section = registry
+            .prompt_section_for_ids(&["test-external-skill"])
+            .expect("must build a section for the external skill");
+        assert!(section.contains("test-external-skill"));
+        assert!(section.contains("skill.read"));
     }
 }

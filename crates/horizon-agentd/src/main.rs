@@ -145,6 +145,31 @@ async fn main() -> anyhow::Result<()> {
         horizon_config::trusted_projects(raw_config),
     ));
 
+    // Register the board keeper role and its skill from `horizon-board` —
+    // the first instance of a board "package" (feature + agent definition +
+    // skill) contributed by an external crate. `horizon-agentd` is the
+    // composition root: it depends on both `horizon-agent` (which owns
+    // `RoleDefinition`/`SkillRegistry`) and `horizon-board` (which owns the
+    // keeper role's `pub const` fields and `SKILL_SOURCE`), so it assembles
+    // the `RoleDefinition` from board's data and registers it here, at
+    // startup, before any session is spawned. See
+    // `docs/board-keeper-design.md` §1.
+    horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
+        id: horizon_board::keeper::ROLE_ID,
+        title: horizon_board::keeper::ROLE_TITLE,
+        prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
+        allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
+        model: horizon_board::keeper::ROLE_MODEL,
+        iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
+        include_repository_instructions:
+            horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
+        skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
+        summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+    }]);
+    horizon_agent::skills::register_external_skill_sources(vec![
+        horizon_board::keeper::SKILL_SOURCE,
+    ]);
+
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
 
     run(listener, &socket_path, state).await

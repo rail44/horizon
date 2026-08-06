@@ -189,6 +189,15 @@ struct Inner {
     /// `task` resolve to an actionable error result rather than a
     /// silent no-op.
     exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
+    /// This session's handle onto the daemon's board read/comment capability
+    /// (`tools::board`, `docs/board-keeper-design.md`). Injected
+    /// post-construction the same way [`Self::exploration`] is: only
+    /// `horizon-agentd`'s `session::run_session` can construct a
+    /// `horizon_board::Store` (it knows the workspace root and the logd
+    /// socket). `None` (every construction site in this crate's own tests)
+    /// makes `board.read`/`board.comment` resolve to an actionable error
+    /// rather than a silent no-op.
+    board: Option<Arc<dyn crate::tools::board::BoardHost>>,
 }
 
 impl ToolSessionState {
@@ -238,6 +247,7 @@ impl ToolSessionState {
                 domains: SessionDomainPolicy::default(),
                 judge: None,
                 exploration: None,
+                board: None,
             }),
         }
     }
@@ -381,6 +391,25 @@ impl ToolSessionState {
         &self,
     ) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
         self.inner.exploration.clone()
+    }
+
+    /// Installs this session's board host after construction -- see
+    /// [`Inner::board`]'s doc comment. Same construction-time-only safety
+    /// contract as [`Self::with_exploration_host`].
+    pub fn with_board_host(
+        mut self,
+        board: Option<Arc<dyn crate::tools::board::BoardHost>>,
+    ) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.board = board;
+        }
+        self
+    }
+
+    /// This session's board host, if one is installed -- what
+    /// `tools::board::execute_auto`/`execute_comment` read and write through.
+    pub(crate) fn board_host(&self) -> Option<Arc<dyn crate::tools::board::BoardHost>> {
+        self.inner.board.clone()
     }
 
     /// v1 workspace root: the process's current directory at session start,

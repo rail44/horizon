@@ -594,6 +594,10 @@ external notification path.
 
 ## Shipped (index — details in the named docs and git history)
 
+- 2026-08-06 Board keeper agent: first board "package" (feature + agent
+  definition + skill), external role/skill registration seams,
+  `board.read`/`board.comment` tools (`docs/board-keeper-design.md`)
+
 - 2026-07-22 Pane/scroll performance boundary: cached fixed-bounds Terminal
   and ThemeSettings leaves with an uncached composite Agent around its nested
   transcript cache, terminal scroll-window row sharing/shaping cache plus

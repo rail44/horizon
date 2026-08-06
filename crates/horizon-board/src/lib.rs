@@ -28,6 +28,7 @@
 //! - `comments`: `{ author, text, at }` entries
 
 mod event;
+pub mod keeper;
 mod model;
 mod path;
 mod rank;

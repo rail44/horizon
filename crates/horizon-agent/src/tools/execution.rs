@@ -8,6 +8,7 @@ use crate::policy::{
     annotate_auto_approval, boundary_disposition, classify_call, BoundaryDisposition,
     Classification,
 };
+use crate::tools::board;
 use crate::tools::config;
 use crate::tools::error_output;
 use crate::tools::fs;
@@ -72,6 +73,13 @@ pub fn execute_agent_tool(
             if request.tool_id == crate::tools::TASK_OUTPUT_TOOL_ID =>
         {
             crate::tools::explore::output(session_id, request)
+        }
+        // `board.comment` needs the session id for the comment author
+        // (set to `session:<id>`, never model-controlled), so it's
+        // special-cased here rather than routed through
+        // `execute_auto_tool` (whose signature doesn't carry session_id).
+        Some(ToolPermission::AutoAllowRead) if request.tool_id == "board.comment" => {
+            crate::tools::board::execute_comment(tool_state, session_id, request)
         }
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             Execution::Auto(execute_auto_tool(host, tool_state, request))
@@ -296,7 +304,8 @@ fn execute_auto_tool(
         .or_else(|| fs::execute_auto(tool_state, &request.tool_id, &request.input))
         .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input))
         .or_else(|| knowledge::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input));
+        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input))
+        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input));
     let output = match output {
         Some(output) => output,
         None => {
