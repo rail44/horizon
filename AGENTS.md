@@ -84,16 +84,18 @@ reliable and cheaper.
 
 The last step is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per runtime —
-`crates/horizon-agent/schema/agent-wire.json` and
-`crates/horizon-terminal-core/schema/terminal-wire.json`, each with its own
-version pair, so an agent-side bump no longer drains `horizon-terminald`'s
-PTYs — and the checker diffs each against the merge-base's copy, failing on
+`crates/horizon-agent/schema/agent-wire.json`,
+`crates/horizon-terminal-core/schema/terminal-wire.json`, and
+`crates/horizon-board/schema/log-wire.json`, each with its own version pair,
+so an agent-side bump no longer drains `horizon-terminald`'s PTYs — and the
+checker diffs each against the merge-base's copy, failing on
 any non-additive change that doesn't bump that hub's protocol version
-(`AGENT_PROTOCOL_VERSION` / `TERMINAL_PROTOCOL_VERSION`) with it. If you
-changed a wire type, regenerate the artifacts first:
+(`AGENT_PROTOCOL_VERSION` / `TERMINAL_PROTOCOL_VERSION` /
+`LOG_PROTOCOL_VERSION`) with it. If you changed a wire type, regenerate
+the artifacts first:
 `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent
--p horizon-terminal-core wire_schema` (a stale artifact is itself a red
-nextest test).
+-p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
+is itself a red nextest test).
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the

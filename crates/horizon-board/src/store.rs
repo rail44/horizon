@@ -1,36 +1,27 @@
-//! The board store: flock-serialised append + in-memory fold.
+//! The board store: reads are flock-serialised file folds; writes are socket
+//! calls to `horizon-logd`.
 //!
-//! Each CLI invocation is a separate short-lived process, so cross-process
-//! serialisation is done with an advisory exclusive lock (`flock` via `fs4`)
-//! rather than the single-writer-thread model the agent event log uses
-//! (that model only works within one long-lived daemon process). Reads use
-//! a shared lock; writes use an exclusive lock held across the
-//! read-fold-append sequence so that `claim` is atomic against concurrent
-//! claims from other processes.
+//! The write path (exclusive flock + read-fold + id/rank computation + append)
+//! moved to `horizon-logd` in the logd v1 split (`docs/logd-design.md`). The
+//! library's write methods are now thin socket clients: connect-or-spawn logd,
+//! `hello`, send one `ingest` rtc call, return the result. The direct flock
+//! append path is gone (owner decision — no fallback). Reads stay file folds
+//! with a shared lock: JSONL is world-readable, a single writer (logd) plus
+//! atomic appends make direct reads safe, and boards have no projection.
 
-use std::collections::HashMap;
-use std::fs::{File, OpenOptions};
-use std::io::Write;
+use std::fs::File;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
 
-use crate::event::{self, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use crate::event::{self, ReadReport};
 use crate::model::{fold, sorted_by_rank, Item};
-use crate::rank;
+use crate::wire::{log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient};
 
-/// Advisory exclusive lock via `flock(2)`. Held until the file is dropped
-/// (the kernel releases it on close). Used across the read-fold-append
-/// sequence so concurrent CLI processes serialise on the same events file.
-fn lock_exclusive(file: &File) -> std::io::Result<()> {
-    let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-    if ret == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-/// Advisory shared lock via `flock(2)`.
+/// Advisory shared lock via `flock(2)`. Reads use this so a concurrent writer
+/// (logd, with its exclusive lock) does not starve readers.
 fn lock_shared(file: &File) -> std::io::Result<()> {
     let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) };
     if ret == 0 {
@@ -46,7 +37,7 @@ fn unlock(file: &File) {
 }
 
 /// Where to place a new or moved item in the rank queue.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub enum Position {
     Top,
     After(u64),
@@ -99,28 +90,13 @@ impl From<serde_json::Error> for StoreError {
     }
 }
 
-/// The board store. Owns only the path; every operation opens the file,
-/// locks, reads-folds, (maybe) appends, and releases.
+/// The board store. Owns the events.jsonl path (for reads) and the logd
+/// socket path (for writes). Every read opens the file, takes a shared lock,
+/// folds, and releases. Every write connects to logd and sends an `ingest`
+/// rtc call.
 pub struct Store {
     path: PathBuf,
-}
-
-fn unix_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
-}
-
-fn make_envelope(event: BoardEvent) -> Envelope {
-    Envelope {
-        schema: SCHEMA.to_string(),
-        version: VERSION,
-        at: unix_ms(),
-        event,
-    }
+    logd_socket: PathBuf,
 }
 
 impl Store {
@@ -130,6 +106,7 @@ impl Store {
         let root = crate::path::main_root(&cwd).ok_or(StoreError::NotInGitRepo)?;
         Ok(Self {
             path: crate::path::events_path(&root),
+            logd_socket: horizon_wire::socket::default_logd_socket_path(),
         })
     }
 
@@ -143,31 +120,30 @@ impl Store {
         let root = crate::path::main_root(dir).ok_or(StoreError::NotInGitRepo)?;
         Ok(Self {
             path: crate::path::events_path(&root),
+            logd_socket: horizon_wire::socket::default_logd_socket_path(),
         })
     }
 
     /// Opens a store at an explicit path (for testing).
     pub fn at(path: PathBuf) -> Self {
-        Self { path }
-    }
-
-    // -- internals ------------------------------------------------------
-
-    /// Opens the file for writing (create + append), acquires an exclusive
-    /// lock, and reads the current event log. The lock is held until the
-    /// returned `File` is dropped.
-    fn open_locked(&self) -> Result<(File, ReadReport), StoreError> {
-        if let Some(parent) = self.path.parent() {
-            std::fs::create_dir_all(parent)?;
+        Self {
+            path,
+            logd_socket: horizon_wire::socket::default_logd_socket_path(),
         }
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)?;
-        lock_exclusive(&file)?;
-        let report = event::read(&self.path)?;
-        Ok((file, report))
     }
+
+    /// Opens a store at an explicit path with an explicit logd socket (for
+    /// tests that spawn logd on an isolated socket).
+    pub fn at_with_socket(path: PathBuf, logd_socket: PathBuf) -> Self {
+        Self { path, logd_socket }
+    }
+
+    /// The events.jsonl path this store reads from and tells logd to append to.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    // -- reads (file folds, unchanged) ----------------------------------
 
     /// Opens the file for reading with a shared lock.
     fn read_locked(&self) -> Result<ReadReport, StoreError> {
@@ -179,103 +155,6 @@ impl Store {
         let report = event::read(&self.path)?;
         unlock(&file);
         Ok(report)
-    }
-
-    fn append(file: &mut File, env: &Envelope) -> Result<(), StoreError> {
-        serde_json::to_writer(&mut *file, env)?;
-        file.write_all(b"\n")?;
-        file.flush()?;
-        Ok(())
-    }
-
-    /// Computes the rank for a new/moved item at `position`, given the
-    /// current folded items.
-    fn compute_rank(items: &HashMap<u64, Item>, position: &Position) -> Result<String, StoreError> {
-        let sorted = sorted_by_rank(items);
-        match position {
-            Position::Top => {
-                let hi = sorted.first().map(|i| i.rank.as_str());
-                rank::between(None, hi).ok_or(StoreError::RankExhausted)
-            }
-            Position::Bottom => {
-                let lo = sorted.last().map(|i| i.rank.as_str());
-                rank::between(lo, None).ok_or(StoreError::RankExhausted)
-            }
-            Position::After(id) => {
-                let item = items.get(id).ok_or(StoreError::ItemNotFound(*id))?;
-                let idx = sorted
-                    .iter()
-                    .position(|i| i.id == *id)
-                    .expect("item in map but not in sorted list");
-                let lo = Some(item.rank.as_str());
-                let hi = sorted.get(idx + 1).map(|i| i.rank.as_str());
-                rank::between(lo, hi).ok_or(StoreError::RankExhausted)
-            }
-            Position::Before(id) => {
-                let item = items.get(id).ok_or(StoreError::ItemNotFound(*id))?;
-                let idx = sorted
-                    .iter()
-                    .position(|i| i.id == *id)
-                    .expect("item in map but not in sorted list");
-                let lo = if idx > 0 {
-                    Some(sorted[idx - 1].rank.as_str())
-                } else {
-                    None
-                };
-                let hi = Some(item.rank.as_str());
-                rank::between(lo, hi).ok_or(StoreError::RankExhausted)
-            }
-        }
-    }
-
-    // -- public operations ----------------------------------------------
-
-    /// Creates a new item. If `parent` is set, a follow-up `item-updated`
-    /// event is appended under the same lock so the item appears with its
-    /// parent on the next read.
-    pub fn add(
-        &self,
-        title: &str,
-        body: &str,
-        parent: Option<u64>,
-        position: Position,
-    ) -> Result<Item, StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        let id = report.max_id.map_or(1, |m| m + 1);
-        let rank = Self::compute_rank(&items, &position)?;
-
-        let env = make_envelope(BoardEvent::ItemCreated {
-            id,
-            title: title.to_string(),
-            body: body.to_string(),
-            rank: rank.clone(),
-        });
-        Self::append(&mut file, &env)?;
-
-        if let Some(pid) = parent {
-            let upd = make_envelope(BoardEvent::ItemUpdated {
-                id,
-                status: None,
-                rank: None,
-                assignee: None,
-                parent: Some(Some(pid)),
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
-            });
-            Self::append(&mut file, &upd)?;
-        }
-
-        Ok(Item {
-            id,
-            title: title.to_string(),
-            body: body.to_string(),
-            rank,
-            parent,
-            ..Item::default()
-        })
     }
 
     /// Lists items in rank order, optionally filtered by status. Always
@@ -321,128 +200,184 @@ impl Store {
         Ok(items.get(&id).cloned())
     }
 
-    /// Appends a comment to item `id`.
-    pub fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        if !items.contains_key(&id) {
-            return Err(StoreError::ItemNotFound(id));
+    // -- writes (socket client → horizon-logd) --------------------------
+    //
+    // The write methods are `async fn`: each makes one remoc rtc round-trip
+    // to `horizon-logd` (connect-or-spawn, `hello`, `ingest`). The caller
+    // owns the tokio runtime — the CLI creates one in `run_board`, the GUI
+    // creates one on its background thread — so the library never builds a
+    // runtime inside a sync method (which would panic if the caller was
+    // already on a runtime: 'Cannot start a runtime from within a runtime').
+
+    /// Creates a new item. If `parent` is set, a follow-up `item-updated`
+    /// event is appended under the same lock so the item appears with its
+    /// parent on the next read.
+    pub async fn add(
+        &self,
+        title: &str,
+        body: &str,
+        parent: Option<u64>,
+        position: Position,
+    ) -> Result<Item, StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Add {
+                title: title.to_string(),
+                body: body.to_string(),
+                parent,
+                position,
+            })
+            .await?;
+        match reply {
+            IngestReply::Item(item) => Ok(item),
+            _ => Err(Self::type_mismatch()),
         }
-        let env = make_envelope(BoardEvent::CommentAdded {
-            id,
-            author: author.to_string(),
-            text: text.to_string(),
-        });
-        Self::append(&mut file, &env)
+    }
+
+    /// Appends a comment to item `id`.
+    pub async fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Comment {
+                id,
+                author: author.to_string(),
+                text: text.to_string(),
+            })
+            .await?;
+        match reply {
+            IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
+        }
     }
 
     /// Sets the status of item `id`. The status is a free-form string
     /// (recommended vocabulary: proposed / ready / in-progress / review /
     /// done / blocked).
-    pub fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        if !items.contains_key(&id) {
-            return Err(StoreError::ItemNotFound(id));
+    pub async fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::SetStatus {
+                id,
+                status: status.to_string(),
+            })
+            .await?;
+        match reply {
+            IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
         }
-        let env = make_envelope(BoardEvent::ItemUpdated {
-            id,
-            status: Some(status.to_string()),
-            rank: None,
-            assignee: None,
-            parent: None,
-            depends_on: None,
-            links: None,
-            title: None,
-            body: None,
-        });
-        Self::append(&mut file, &env)
     }
 
     /// Assigns item `id` to `who` (empty string = unassign).
-    pub fn assign(&self, id: u64, who: &str) -> Result<(), StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        if !items.contains_key(&id) {
-            return Err(StoreError::ItemNotFound(id));
+    pub async fn assign(&self, id: u64, who: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Assign {
+                id,
+                who: who.to_string(),
+            })
+            .await?;
+        match reply {
+            IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
         }
-        let env = make_envelope(BoardEvent::ItemUpdated {
-            id,
-            status: None,
-            rank: None,
-            assignee: Some(who.to_string()),
-            parent: None,
-            depends_on: None,
-            links: None,
-            title: None,
-            body: None,
-        });
-        Self::append(&mut file, &env)
     }
 
     /// Re-ranks item `id` to a new position in the queue.
-    pub fn move_item(&self, id: u64, position: Position) -> Result<String, StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        if !items.contains_key(&id) {
-            return Err(StoreError::ItemNotFound(id));
+    pub async fn move_item(&self, id: u64, position: Position) -> Result<String, StoreError> {
+        let reply = self
+            .ingest(IngestRequest::MoveItem { id, position })
+            .await?;
+        match reply {
+            IngestReply::Rank(rank) => Ok(rank),
+            _ => Err(Self::type_mismatch()),
         }
-        let rank = Self::compute_rank(&items, &position)?;
-        let env = make_envelope(BoardEvent::ItemUpdated {
-            id,
-            status: None,
-            rank: Some(rank.clone()),
-            assignee: None,
-            parent: None,
-            depends_on: None,
-            links: None,
-            title: None,
-            body: None,
-        });
-        Self::append(&mut file, &env)?;
-        Ok(rank)
     }
 
     /// Atomically claims the first ready+unassigned item (by rank order):
     /// sets `status = in-progress` and `assignee = who` under the exclusive
     /// lock, so two concurrent claims never grab the same item.
-    pub fn claim(&self, who: &str) -> Result<Option<Item>, StoreError> {
-        let (mut file, report) = self.open_locked()?;
-        let items = fold(&report.envelopes);
-        let sorted = sorted_by_rank(&items);
+    pub async fn claim(&self, who: &str) -> Result<Option<Item>, StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Claim {
+                who: who.to_string(),
+            })
+            .await?;
+        match reply {
+            IngestReply::MaybeItem(item) => Ok(item),
+            _ => Err(Self::type_mismatch()),
+        }
+    }
 
-        let found = sorted
-            .into_iter()
-            .find(|i| i.status == "ready" && i.assignee.is_empty());
+    // -- internals ------------------------------------------------------
 
-        let Some(mut item) = found.cloned() else {
-            return Ok(None);
-        };
+    #[cold]
+    fn type_mismatch() -> StoreError {
+        StoreError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "logd returned an unexpected reply type for this request",
+        ))
+    }
 
-        let env = make_envelope(BoardEvent::ItemUpdated {
-            id: item.id,
-            status: Some("in-progress".to_string()),
-            rank: None,
-            assignee: Some(who.to_string()),
-            parent: None,
-            depends_on: None,
-            links: None,
-            title: None,
-            body: None,
-        });
-        Self::append(&mut file, &env)?;
+    /// Connects to logd (spawning it if necessary), hellos, and sends one
+    /// `ingest` call. Each write method wraps this with the matching
+    /// `IngestRequest`/`IngestReply` variant. Pure async — the caller owns
+    /// the tokio runtime (see the write-methods section doc above).
+    async fn ingest(&self, request: IngestRequest) -> Result<IngestReply, StoreError> {
+        let socket = self.logd_socket.clone();
+        let path = self.path.to_string_lossy().to_string();
+        let stream = horizon_wire::spawn::connect_or_spawn_logd_retrying(&socket)
+            .await
+            .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+        let (hub, conn_task) = horizon_wire::spawn::connect_hub_client::<
+            LogHubClient<horizon_wire::WireCodec>,
+        >(stream)
+        .await
+        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
 
-        item.status = "in-progress".to_string();
-        item.assignee = who.to_string();
-        Ok(Some(item))
+        hub.hello(log_client_hello(concat!(
+            "horizon-board/",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .await
+        .map_err(hub_error_to_store)?;
+
+        let reply = hub
+            .ingest(path, request)
+            .await
+            .map_err(log_error_to_store)?;
+
+        conn_task.abort();
+        Ok(reply)
+    }
+}
+
+/// Maps a `HubError` from the `hello` call to `StoreError`. A `hello` failure
+/// is a protocol/transport problem (version mismatch, lost connection), not a
+/// board-domain error.
+fn hub_error_to_store(err: horizon_wire::HubError) -> StoreError {
+    StoreError::Io(std::io::Error::other(err.to_string()))
+}
+
+/// Maps a `LogError` from the `ingest` call to `StoreError`, preserving the
+/// typed domain errors (`ItemNotFound`, `RankExhausted`).
+fn log_error_to_store(err: LogError) -> StoreError {
+    match err {
+        LogError::ItemNotFound(id) => StoreError::ItemNotFound(id),
+        LogError::RankExhausted => StoreError::RankExhausted,
+        LogError::Io(msg) => StoreError::Io(std::io::Error::other(msg)),
+        LogError::Call(msg) => StoreError::Io(std::io::Error::other(msg)),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::event::{BoardEvent, Envelope, SCHEMA, VERSION};
+    use std::io::Write;
+    use std::path::PathBuf;
 
-    fn tmp_store() -> Store {
+    /// A throwaway events.jsonl path for a test. No daemon, no socket — the
+    /// unit tests seed the file directly and read it back with `Store::show`/
+    /// `Store::list` (file folds that need no daemon). The write path (id
+    /// assignment, rank computation, claim) is tested end-to-end in
+    /// `crates/horizon-logd/tests/e2e.rs` against the real daemon.
+    fn tmp_path() -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "horizon-board-test-{}",
             std::time::SystemTime::now()
@@ -450,26 +385,92 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ));
-        Store::at(dir.join("events.jsonl"))
+        dir.join("events.jsonl")
+    }
+
+    /// Seeds an `item-created` event at `at` ms, returning the id.
+    fn seed_item(path: &std::path::Path, id: u64, title: &str, rank: &str, at: u64) {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::ItemCreated {
+                id,
+                title: title.to_string(),
+                body: String::new(),
+                rank: rank.to_string(),
+            },
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+
+    /// Seeds an `item-updated` event.
+    fn seed_update(
+        path: &std::path::Path,
+        id: u64,
+        at: u64,
+        status: Option<&str>,
+        rank: Option<&str>,
+        assignee: Option<&str>,
+        parent: Option<Option<u64>>,
+    ) {
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::ItemUpdated {
+                id,
+                status: status.map(String::from),
+                rank: rank.map(String::from),
+                assignee: assignee.map(String::from),
+                parent,
+                depends_on: None,
+                links: None,
+                title: None,
+                body: None,
+            },
+        };
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        file.write_all(b"\n").unwrap();
+    }
+
+    /// Seeds a `comment-added` event.
+    fn seed_comment(path: &std::path::Path, id: u64, author: &str, text: &str, at: u64) {
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::CommentAdded {
+                id,
+                author: author.to_string(),
+                text: text.to_string(),
+            },
+        };
+        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        file.write_all(b"\n").unwrap();
     }
 
     #[test]
     fn fold_roundtrip_create_update_comment() {
-        let store = tmp_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "Task", "n", 1000);
+        seed_update(&path, 1, 2000, Some("ready"), None, Some("owner"), None);
+        seed_comment(&path, 1, "owner", "Starting now", 3000);
 
-        let item = store
-            .add("Task", "Do the thing", None, Position::Bottom)
-            .unwrap();
-        assert_eq!(item.id, 1);
-        assert_eq!(item.rank, "n");
-
-        store.set_status(1, "ready").unwrap();
-        store.assign(1, "owner").unwrap();
-        store.comment(1, "owner", "Starting now").unwrap();
-
+        let store = Store::at(path);
         let shown = store.show(1).unwrap().unwrap();
         assert_eq!(shown.title, "Task");
-        assert_eq!(shown.body, "Do the thing");
         assert_eq!(shown.status, "ready");
         assert_eq!(shown.assignee, "owner");
         assert_eq!(shown.comments.len(), 1);
@@ -478,85 +479,65 @@ mod tests {
 
     #[test]
     fn list_rank_order_and_statuses() {
-        let store = tmp_store();
+        let path = tmp_path();
+        // C at rank "a" (top), A at "n", B at "s" (bottom).
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_item(&path, 2, "B", "s", 2000);
+        seed_item(&path, 3, "C", "a", 3000);
 
-        let a = store.add("A", "", None, Position::Bottom).unwrap();
-        let b = store.add("B", "", None, Position::Bottom).unwrap();
-        let c = store.add("C", "", None, Position::Top).unwrap();
-
+        let store = Store::at(path.clone());
         let result = store.list(None).unwrap();
-        // C was inserted at top, then A, then B at bottom
         assert_eq!(result.items.len(), 3);
-        assert_eq!(result.items[0].id, c.id);
-        assert_eq!(result.items[1].id, a.id);
-        assert_eq!(result.items[2].id, b.id);
-
-        // No statuses set yet
+        // Sorted by rank: C (a), A (n), B (s).
+        assert_eq!(result.items[0].id, 3);
+        assert_eq!(result.items[1].id, 1);
+        assert_eq!(result.items[2].id, 2);
         assert!(result.statuses.is_empty());
 
-        // Set some statuses
-        store.set_status(a.id, "proposed").unwrap();
-        store.set_status(b.id, "ready").unwrap();
+        seed_update(&path, 1, 4000, Some("proposed"), None, None, None);
+        seed_update(&path, 2, 5000, Some("ready"), None, None, None);
 
         let result = store.list(None).unwrap();
         assert_eq!(result.statuses, vec!["proposed", "ready"]);
 
-        // Filter by status
         let result = store.list(Some("ready")).unwrap();
         assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].id, b.id);
+        assert_eq!(result.items[0].id, 2);
     }
 
     #[test]
-    fn claim_serialization_two_claims_get_different_items() {
-        let store = tmp_store();
+    fn claim_sees_ready_unassigned_items() {
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_item(&path, 2, "B", "s", 2000);
+        // Both ready.
+        seed_update(&path, 1, 3000, Some("ready"), None, None, None);
+        seed_update(&path, 2, 4000, Some("ready"), None, None, None);
 
-        store.add("A", "", None, Position::Bottom).unwrap();
-        store.add("B", "", None, Position::Bottom).unwrap();
-
-        store.set_status(1, "ready").unwrap();
-        store.set_status(2, "ready").unwrap();
-
-        // First claim gets item 1 (rank "n", first in queue)
-        let first = store.claim("alice").unwrap().unwrap();
-        assert_eq!(first.id, 1);
-        assert_eq!(first.status, "in-progress");
-        assert_eq!(first.assignee, "alice");
-
-        // Second claim gets item 2
-        let second = store.claim("bob").unwrap().unwrap();
-        assert_eq!(second.id, 2);
-        assert_eq!(second.status, "in-progress");
-        assert_eq!(second.assignee, "bob");
-    }
-
-    #[test]
-    fn claim_returns_none_when_no_ready_unassigned() {
-        let store = tmp_store();
-
-        store.add("A", "", None, Position::Bottom).unwrap();
-        // Status is empty (not "ready"), so no claim
-        assert!(store.claim("alice").unwrap().is_none());
-
-        store.set_status(1, "ready").unwrap();
-        store.assign(1, "bob").unwrap();
-        // Ready but assigned, so no claim
-        assert!(store.claim("alice").unwrap().is_none());
-
-        store.assign(1, "").unwrap(); // unassign
-                                      // Now ready and unassigned
-        let claimed = store.claim("alice").unwrap().unwrap();
-        assert_eq!(claimed.id, 1);
+        // The fold (read path) should show both as ready+unassigned.
+        let store = Store::at(path);
+        let result = store.list(Some("ready")).unwrap();
+        assert_eq!(result.items.len(), 2);
+        assert!(result.items[0].assignee.is_empty());
+        assert!(result.items[1].assignee.is_empty());
     }
 
     #[test]
     fn unknown_status_and_author_dont_break() {
-        let store = tmp_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
+        seed_update(
+            &path,
+            1,
+            2000,
+            Some("weird-custom-status"),
+            None,
+            None,
+            None,
+        );
+        seed_comment(&path, 1, "session:abc-123", "a note", 3000);
 
-        store.add("A", "", None, Position::Bottom).unwrap();
-        store.set_status(1, "weird-custom-status").unwrap();
-        store.comment(1, "session:abc-123", "a note").unwrap();
-
+        let store = Store::at(path);
         let item = store.show(1).unwrap().unwrap();
         assert_eq!(item.status, "weird-custom-status");
         assert_eq!(item.comments[0].author, "session:abc-123");
@@ -566,74 +547,37 @@ mod tests {
     }
 
     #[test]
-    fn move_item_changes_rank() {
-        let store = tmp_store();
-
-        let a = store.add("A", "", None, Position::Bottom).unwrap();
-        let _b = store.add("B", "", None, Position::Bottom).unwrap();
-        let _c = store.add("C", "", None, Position::Bottom).unwrap();
-
-        // Move A to top
-        let new_rank = store.move_item(a.id, Position::Top).unwrap();
-        assert!(new_rank.as_str() < "n"); // A's new rank should be before the first item
-
-        let result = store.list(None).unwrap();
-        assert_eq!(result.items[0].id, a.id);
-    }
-
-    #[test]
     fn add_with_parent() {
-        let store = tmp_store();
+        let path = tmp_path();
+        seed_item(&path, 1, "Parent", "n", 1000);
+        seed_item(&path, 2, "Child", "s", 2000);
+        seed_update(&path, 2, 3000, None, None, None, Some(Some(1)));
 
-        let parent = store.add("Parent", "", None, Position::Bottom).unwrap();
-        let child = store
-            .add("Child", "", Some(parent.id), Position::Bottom)
-            .unwrap();
-
-        let shown = store.show(child.id).unwrap().unwrap();
-        assert_eq!(shown.parent, Some(parent.id));
-    }
-
-    #[test]
-    fn item_not_found_errors() {
-        let store = tmp_store();
-        store.add("A", "", None, Position::Bottom).unwrap();
-
-        assert!(matches!(
-            store.set_status(99, "ready"),
-            Err(StoreError::ItemNotFound(99))
-        ));
-        assert!(matches!(
-            store.comment(99, "x", "y"),
-            Err(StoreError::ItemNotFound(99))
-        ));
-        assert!(matches!(
-            store.move_item(99, Position::Top),
-            Err(StoreError::ItemNotFound(99))
-        ));
+        let store = Store::at(path);
+        let shown = store.show(2).unwrap().unwrap();
+        assert_eq!(shown.parent, Some(1));
     }
 
     #[test]
     fn show_nonexistent_returns_none() {
-        let store = tmp_store();
-        store.add("A", "", None, Position::Bottom).unwrap();
+        let store = Store::at(tmp_path());
         assert!(store.show(99).unwrap().is_none());
     }
 
     #[test]
     fn corrupt_lines_are_skipped_and_reported() {
-        let store = tmp_store();
-
-        store.add("A", "", None, Position::Bottom).unwrap();
+        let path = tmp_path();
+        seed_item(&path, 1, "A", "n", 1000);
         // Append a corrupt line directly to the file
         std::fs::OpenOptions::new()
             .append(true)
-            .open(&store.path)
+            .open(&path)
             .unwrap()
             .write_all(b"this is corrupt\n")
             .unwrap();
-        store.add("B", "", None, Position::Bottom).unwrap();
+        seed_item(&path, 2, "B", "s", 2000);
 
+        let store = Store::at(path);
         let result = store.list(None).unwrap();
         assert_eq!(result.items.len(), 2);
         assert!(result.skipped.is_some());

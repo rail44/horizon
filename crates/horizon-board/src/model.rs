@@ -2,13 +2,14 @@
 
 use std::collections::HashMap;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::event::{BoardEvent, Envelope};
 
 /// A comment attached to an item. `author` is a free-form string
 /// (convention: `owner` / `session:<uuid>` / future prefix-tagged forms).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Comment {
     pub author: String,
     pub text: String,
@@ -16,7 +17,7 @@ pub struct Comment {
 }
 
 /// The full state of one work item after folding all events.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
     pub id: u64,
     pub title: String,

@@ -1,0 +1,581 @@
+{
+  "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
+  "$defs": {
+    "ClientHello": {
+      "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "supported": {
+          "$ref": "#/$defs/VersionRange"
+        }
+      },
+      "required": [
+        "supported",
+        "binary_id"
+      ],
+      "type": "object"
+    },
+    "Comment": {
+      "description": "A comment attached to an item. `author` is a free-form string\n(convention: `owner` / `session:<uuid>` / future prefix-tagged forms).",
+      "properties": {
+        "at": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "author": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "author",
+        "text",
+        "at"
+      ],
+      "type": "object"
+    },
+    "HubError": {
+      "description": "The hub's error vocabulary. One enum for every method: domain errors\nand transport errors share it, per remoc's own rtc pattern (the\n`From<rtc::CallError>` impl is what lets a lost connection surface as\nan `Err` from any pending call).",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`hello`: the peers' version ranges do not overlap. Feeds the same\nauto-drain recovery as the JSONL era's `HandshakeRejected`.",
+          "properties": {
+            "IncompatibleVersion": {
+              "properties": {
+                "client": {
+                  "$ref": "#/$defs/VersionRange"
+                },
+                "daemon": {
+                  "$ref": "#/$defs/VersionRange"
+                }
+              },
+              "required": [
+                "client",
+                "daemon"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "IncompatibleVersion"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "TerminalNotFound",
+          "description": "`attach_terminal`: no live terminal session with that id.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`create_terminal`: the PTY spawn itself failed (bad shell,\npermissions, or the bounded spawn retries were exhausted). What the\nJSONL wire reported as a `TerminalUpdate::Error` on the update\nstream is now the create call's own result.",
+          "properties": {
+            "TerminalSpawnFailed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "TerminalSpawnFailed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Transport failure of the rtc call itself, carried as its rendered\nmessage (`rtc::CallError` itself is not `Eq`/`JsonSchema`; nothing\nprogrammatic branches on its inner structure). Constructed\nclient-side by the `From<rtc::CallError>` impl below — a server\nnever sends it.",
+          "properties": {
+            "Call": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Call"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "HelloRequired",
+          "description": "Any method other than `hello`/`drain` was called before a\nsuccessful `hello` on this connection. `hello` is contractually the\nfirst call (§3), and the daemon enforces it rather than trusting\nthe client: a rejected or skipped negotiation must not grant access\nto the negotiated-behavior surface. (`drain` stays reachable — it\nis the version-stable recovery path a rejected client legitimately\nuses.) Appended additively for v10.1 of the artifact's history —\nan older client never triggers it (it always hellos first).",
+          "type": "string"
+        }
+      ]
+    },
+    "IngestReply": {
+      "description": "The result of an [`IngestRequest`], carrying back exactly what the\ncorresponding `Store` method returns.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`add` / `claim`: the new or claimed item (with assigned id and rank).",
+          "properties": {
+            "Item": {
+              "$ref": "#/$defs/Item"
+            }
+          },
+          "required": [
+            "Item"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "Done",
+          "description": "`comment` / `set_status` / `assign`: success, no data.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`move_item`: the new rank string.",
+          "properties": {
+            "Rank": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Rank"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`claim` when no ready+unassigned item was found.",
+          "properties": {
+            "MaybeItem": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Item"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "MaybeItem"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "IngestRequest": {
+      "description": "One board write operation, sent over the socket to logd. Each variant\nmirrors a `Store` write method; logd performs the full read-fold-compute-\nappend atomically under its exclusive flock (the same sequence the library\nused to do in-process) and returns the result.\n\n`BoardEvent` is reused internally (logd constructs it from these\nparameters when appending to the JSONL) — the wire type is the operation,\nnot the event, because operations like `add` need context the event does\nnot carry (e.g. `Position` for rank computation) and because `claim` must\nfind-and-append atomically.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "`Store::add`: create a new item, optionally with a parent.",
+          "properties": {
+            "Add": {
+              "properties": {
+                "body": {
+                  "type": "string"
+                },
+                "parent": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "$ref": "#/$defs/Position"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title",
+                "body",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Add"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::comment`: append a comment to an existing item.",
+          "properties": {
+            "Comment": {
+              "properties": {
+                "author": {
+                  "type": "string"
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "author",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Comment"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::set_status`: set an item's status string.",
+          "properties": {
+            "SetStatus": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SetStatus"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::assign`: set an item's assignee.",
+          "properties": {
+            "Assign": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "who": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "who"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Assign"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::move_item`: re-rank an item to a new position.",
+          "properties": {
+            "MoveItem": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "position": {
+                  "$ref": "#/$defs/Position"
+                }
+              },
+              "required": [
+                "id",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "MoveItem"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::claim`: atomically claim the first ready+unassigned item.",
+          "properties": {
+            "Claim": {
+              "properties": {
+                "who": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "who"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Claim"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Item": {
+      "description": "The full state of one work item after folding all events.",
+      "properties": {
+        "assignee": {
+          "description": "Free-form assignee. Empty = unassigned.",
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "comments": {
+          "description": "Comments in chronological order.",
+          "items": {
+            "$ref": "#/$defs/Comment"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "description": "Items this one depends on.",
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "id": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "links": {
+          "description": "Free-form links (session ids, branch names, doc paths, …).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "parent": {
+          "description": "Optional parent item id.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rank": {
+          "description": "Lexicographic rank string (lowercase a-z).",
+          "type": "string"
+        },
+        "status": {
+          "description": "Free-form slug string (recommended vocabulary: proposed / ready /\nin-progress / review / done / blocked). Empty until first set.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "body",
+        "status",
+        "rank",
+        "assignee",
+        "depends_on",
+        "links",
+        "comments"
+      ],
+      "type": "object"
+    },
+    "LogError": {
+      "description": "The domain error `ingest` returns. Distinct from [`HubError`] (which is\n`horizon-wire`'s shared protocol-level vocabulary) because the board\ndomain has its own error shape (`ItemNotFound`, `RankExhausted`) that\nshould survive the wire round-trip as typed data, not be stringified into\n`HubError::Call`.",
+      "oneOf": [
+        {
+          "enum": [
+            "RankExhausted"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ItemNotFound": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "ItemNotFound"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Io": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Io"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Transport failure of the rtc call itself, carried as its rendered\nmessage (constructed client-side by the `From<rtc::CallError>` impl —\na server never sends it).",
+          "properties": {
+            "Call": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Call"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "LogHubHello": {
+      "description": "`horizon-logd`'s `hello` reply. Channel-free, like terminald's: logd has\nno connection-global channels in stage A.",
+      "properties": {
+        "binary_id": {
+          "type": "string"
+        },
+        "negotiated": {
+          "description": "The highest mutually supported version.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "negotiated",
+        "binary_id"
+      ],
+      "type": "object"
+    },
+    "Position": {
+      "description": "Where to place a new or moved item in the rank queue.",
+      "oneOf": [
+        {
+          "enum": [
+            "Top",
+            "Bottom"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "After": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "After"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Before": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "Before"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "VersionRange": {
+      "description": "An inclusive protocol-version range one peer supports, as exchanged in\n[`SessionHub::hello`].",
+      "properties": {
+        "current": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "min_supported": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "min_supported",
+        "current"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "log_hub": {
+    "drain": {
+      "reply": {
+        "type": "null"
+      },
+      "request": {
+        "type": "null"
+      }
+    },
+    "hello": {
+      "error": {
+        "$ref": "#/$defs/HubError"
+      },
+      "reply": {
+        "$ref": "#/$defs/LogHubHello"
+      },
+      "request": {
+        "$ref": "#/$defs/ClientHello"
+      }
+    },
+    "ingest": {
+      "error": {
+        "$ref": "#/$defs/LogError"
+      },
+      "reply": {
+        "$ref": "#/$defs/IngestReply"
+      },
+      "request": {
+        "path": {
+          "type": "string"
+        },
+        "request": {
+          "$ref": "#/$defs/IngestRequest"
+        }
+      }
+    }
+  },
+  "title": "horizon-log-wire",
+  "x-session-protocol-version": 1
+}

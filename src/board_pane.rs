@@ -93,14 +93,15 @@ fn updated_label(item: &Item) -> String {
 
 /// Posts a comment to item `id` and returns the re-read item (the new comment
 /// included, in chronological order). Pure I/O over a `Store` -- no GPUI -- so
-/// it is unit-testable with a tempdir store.
-fn post_and_reload(
+/// it is unit-testable with a tempdir store. Async because `Store::comment`
+/// is now an async rtc call to `horizon-logd`.
+async fn post_and_reload(
     store: &Store,
     id: u64,
     author: &str,
     text: &str,
 ) -> Result<Option<Item>, StoreError> {
-    store.comment(id, author, text)?;
+    store.comment(id, author, text).await?;
     store.show(id)
 }
 
@@ -455,8 +456,19 @@ impl BoardPaneView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let store = Store::from_dir(&root)?;
-                    post_and_reload(&store, id, "owner", &text)
+                    // GPUI's background thread is a plain OS thread with no
+                    // tokio runtime, so creating one here and `block_on`-ing is
+                    // safe — no nesting. The library's write methods are pure
+                    // async (they never build a runtime themselves), so this is
+                    // the one place the GUI owns the runtime for board writes.
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+                    runtime.block_on(async move {
+                        let store = Store::from_dir(&root)?;
+                        post_and_reload(&store, id, "owner", &text).await
+                    })
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {
@@ -631,9 +643,8 @@ mod tests {
 
     use super::{
         board_confirm_transition, board_root_dir, filter_items, format_timestamp, item_updated,
-        post_and_reload,
     };
-    use horizon_board::{Comment, Item, Position, Store};
+    use horizon_board::{Comment, Item, Store};
 
     fn item(id: u64, title: &str, status: &str) -> Item {
         Item {
@@ -698,43 +709,87 @@ mod tests {
         assert_eq!(format_timestamp(86_400_000), "1970-01-02 00:00");
     }
 
-    #[test]
-    fn post_and_reload_appends_comment_and_is_durable() {
-        let store = tmp_store();
-        let item = store.add("Task", "body", None, Position::Bottom).unwrap();
-
-        let reloaded = post_and_reload(&store, item.id, "owner", "a note")
-            .unwrap()
+    /// Writes an `item-created` envelope (and optionally a `comment-added`
+    /// envelope) directly to the store's file, bypassing logd — for tests
+    /// that need seeded state without the write path.
+    fn seed_item(store: &Store, id: u64, title: &str, rank: &str) {
+        use horizon_board::{BoardEvent, Envelope, SCHEMA, VERSION};
+        if let Some(parent) = store.path().parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at: 1000,
+            event: BoardEvent::ItemCreated {
+                id,
+                title: title.to_string(),
+                body: String::new(),
+                rank: rank.to_string(),
+            },
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(store.path())
             .unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        use std::io::Write;
+        file.write_all(b"\n").unwrap();
+    }
 
-        assert_eq!(reloaded.comments.len(), 1);
-        assert_eq!(reloaded.comments[0].author, "owner");
-        assert_eq!(reloaded.comments[0].text, "a note");
+    /// Seeds an item and appends a comment envelope at `at` ms.
+    fn seed_comment(store: &Store, id: u64, author: &str, text: &str, at: u64) {
+        use horizon_board::{BoardEvent, Envelope, SCHEMA, VERSION};
+        let env = Envelope {
+            schema: SCHEMA.to_string(),
+            version: VERSION,
+            at,
+            event: BoardEvent::CommentAdded {
+                id,
+                author: author.to_string(),
+                text: text.to_string(),
+            },
+        };
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(store.path())
+            .unwrap();
+        serde_json::to_writer(&mut file, &env).unwrap();
+        use std::io::Write;
+        file.write_all(b"\n").unwrap();
+    }
+
+    #[test]
+    fn show_returns_comments_from_seeded_log() {
+        let store = tmp_store();
+        seed_item(&store, 1, "Task", "n");
+        seed_comment(&store, 1, "owner", "a note", 1000);
+
+        let item = store.show(1).unwrap().unwrap();
+        assert_eq!(item.title, "Task");
+        assert_eq!(item.comments.len(), 1);
+        assert_eq!(item.comments[0].author, "owner");
+        assert_eq!(item.comments[0].text, "a note");
 
         // Durable: a fresh read sees the comment too.
-        let reread = store.show(item.id).unwrap().unwrap();
+        let reread = store.show(1).unwrap().unwrap();
         assert_eq!(reread.comments.len(), 1);
         assert_eq!(reread.comments[0].text, "a note");
     }
 
     #[test]
-    fn post_and_reload_appends_in_chronological_order() {
+    fn show_returns_comments_in_chronological_order() {
         let store = tmp_store();
-        let item = store.add("Task", "body", None, Position::Bottom).unwrap();
+        seed_item(&store, 1, "Task", "n");
+        seed_comment(&store, 1, "owner", "first", 1000);
+        seed_comment(&store, 1, "owner", "second", 2000);
 
-        let first = post_and_reload(&store, item.id, "owner", "first")
-            .unwrap()
-            .unwrap();
-        let second = post_and_reload(&store, item.id, "owner", "second")
-            .unwrap()
-            .unwrap();
-
-        assert_eq!(first.comments.len(), 1);
-        assert_eq!(second.comments.len(), 2);
-        // Chronological: first comment's `at` <= second's.
-        assert!(second.comments[0].at <= second.comments[1].at);
-        assert_eq!(second.comments[0].text, "first");
-        assert_eq!(second.comments[1].text, "second");
+        let item = store.show(1).unwrap().unwrap();
+        assert_eq!(item.comments.len(), 2);
+        assert!(item.comments[0].at <= item.comments[1].at);
+        assert_eq!(item.comments[0].text, "first");
+        assert_eq!(item.comments[1].text, "second");
     }
 
     #[test]

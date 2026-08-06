@@ -24,7 +24,7 @@
 # serializing them against each other -- not just within each binary -- is
 # what removes self-contention as a variable.
 [[profile.default.overrides]]
-filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e)'
+filter = 'binary_id(horizon-agentd::e2e) + binary_id(horizon-terminald::e2e) + binary_id(horizon-logd::e2e)'
 test-group = 'daemon-e2e'
 
 [test-groups.daemon-e2e]
@@ -122,6 +122,7 @@ default-filter = '''
         binary_id(horizon-agent::tier1_network_containment)
         + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
+        + binary_id(horizon-logd::e2e)
         + (binary_id(horizon::bin/horizon) & test(/^runtime::tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)

@@ -3672,9 +3672,14 @@ dependencies = [
 name = "horizon-board"
 version = "0.1.0"
 dependencies = [
+ "horizon-wire",
  "libc",
+ "remoc",
+ "schemars 1.2.1",
  "serde",
  "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3684,6 +3689,7 @@ dependencies = [
  "horizon-board",
  "horizon-control",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -3715,6 +3721,20 @@ dependencies = [
  "remoc",
  "tokio",
  "uuid",
+]
+
+[[package]]
+name = "horizon-logd"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "horizon-board",
+ "horizon-daemon-testkit",
+ "horizon-wire",
+ "libc",
+ "remoc",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
