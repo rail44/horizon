@@ -201,23 +201,32 @@ impl Store {
     }
 
     // -- writes (socket client → horizon-logd) --------------------------
+    //
+    // The write methods are `async fn`: each makes one remoc rtc round-trip
+    // to `horizon-logd` (connect-or-spawn, `hello`, `ingest`). The caller
+    // owns the tokio runtime — the CLI creates one in `run_board`, the GUI
+    // creates one on its background thread — so the library never builds a
+    // runtime inside a sync method (which would panic if the caller was
+    // already on a runtime: 'Cannot start a runtime from within a runtime').
 
     /// Creates a new item. If `parent` is set, a follow-up `item-updated`
     /// event is appended under the same lock so the item appears with its
     /// parent on the next read.
-    pub fn add(
+    pub async fn add(
         &self,
         title: &str,
         body: &str,
         parent: Option<u64>,
         position: Position,
     ) -> Result<Item, StoreError> {
-        let reply = self.ingest(IngestRequest::Add {
-            title: title.to_string(),
-            body: body.to_string(),
-            parent,
-            position,
-        })?;
+        let reply = self
+            .ingest(IngestRequest::Add {
+                title: title.to_string(),
+                body: body.to_string(),
+                parent,
+                position,
+            })
+            .await?;
         match reply {
             IngestReply::Item(item) => Ok(item),
             _ => Err(Self::type_mismatch()),
@@ -225,12 +234,14 @@ impl Store {
     }
 
     /// Appends a comment to item `id`.
-    pub fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), StoreError> {
-        let reply = self.ingest(IngestRequest::Comment {
-            id,
-            author: author.to_string(),
-            text: text.to_string(),
-        })?;
+    pub async fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Comment {
+                id,
+                author: author.to_string(),
+                text: text.to_string(),
+            })
+            .await?;
         match reply {
             IngestReply::Done => Ok(()),
             _ => Err(Self::type_mismatch()),
@@ -240,11 +251,13 @@ impl Store {
     /// Sets the status of item `id`. The status is a free-form string
     /// (recommended vocabulary: proposed / ready / in-progress / review /
     /// done / blocked).
-    pub fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
-        let reply = self.ingest(IngestRequest::SetStatus {
-            id,
-            status: status.to_string(),
-        })?;
+    pub async fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::SetStatus {
+                id,
+                status: status.to_string(),
+            })
+            .await?;
         match reply {
             IngestReply::Done => Ok(()),
             _ => Err(Self::type_mismatch()),
@@ -252,11 +265,13 @@ impl Store {
     }
 
     /// Assigns item `id` to `who` (empty string = unassign).
-    pub fn assign(&self, id: u64, who: &str) -> Result<(), StoreError> {
-        let reply = self.ingest(IngestRequest::Assign {
-            id,
-            who: who.to_string(),
-        })?;
+    pub async fn assign(&self, id: u64, who: &str) -> Result<(), StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Assign {
+                id,
+                who: who.to_string(),
+            })
+            .await?;
         match reply {
             IngestReply::Done => Ok(()),
             _ => Err(Self::type_mismatch()),
@@ -264,8 +279,10 @@ impl Store {
     }
 
     /// Re-ranks item `id` to a new position in the queue.
-    pub fn move_item(&self, id: u64, position: Position) -> Result<String, StoreError> {
-        let reply = self.ingest(IngestRequest::MoveItem { id, position })?;
+    pub async fn move_item(&self, id: u64, position: Position) -> Result<String, StoreError> {
+        let reply = self
+            .ingest(IngestRequest::MoveItem { id, position })
+            .await?;
         match reply {
             IngestReply::Rank(rank) => Ok(rank),
             _ => Err(Self::type_mismatch()),
@@ -275,10 +292,12 @@ impl Store {
     /// Atomically claims the first ready+unassigned item (by rank order):
     /// sets `status = in-progress` and `assignee = who` under the exclusive
     /// lock, so two concurrent claims never grab the same item.
-    pub fn claim(&self, who: &str) -> Result<Option<Item>, StoreError> {
-        let reply = self.ingest(IngestRequest::Claim {
-            who: who.to_string(),
-        })?;
+    pub async fn claim(&self, who: &str) -> Result<Option<Item>, StoreError> {
+        let reply = self
+            .ingest(IngestRequest::Claim {
+                who: who.to_string(),
+            })
+            .await?;
         match reply {
             IngestReply::MaybeItem(item) => Ok(item),
             _ => Err(Self::type_mismatch()),
@@ -297,39 +316,34 @@ impl Store {
 
     /// Connects to logd (spawning it if necessary), hellos, and sends one
     /// `ingest` call. Each write method wraps this with the matching
-    /// `IngestRequest`/`IngestReply` variant.
-    fn ingest(&self, request: IngestRequest) -> Result<IngestReply, StoreError> {
+    /// `IngestRequest`/`IngestReply` variant. Pure async — the caller owns
+    /// the tokio runtime (see the write-methods section doc above).
+    async fn ingest(&self, request: IngestRequest) -> Result<IngestReply, StoreError> {
         let socket = self.logd_socket.clone();
         let path = self.path.to_string_lossy().to_string();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
-        runtime.block_on(async move {
-            let stream = horizon_wire::spawn::connect_or_spawn_logd_retrying(&socket)
-                .await
-                .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
-            let (hub, conn_task) = horizon_wire::spawn::connect_hub_client::<
-                LogHubClient<horizon_wire::WireCodec>,
-            >(stream)
+        let stream = horizon_wire::spawn::connect_or_spawn_logd_retrying(&socket)
             .await
             .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+        let (hub, conn_task) = horizon_wire::spawn::connect_hub_client::<
+            LogHubClient<horizon_wire::WireCodec>,
+        >(stream)
+        .await
+        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
 
-            hub.hello(log_client_hello(concat!(
-                "horizon-board/",
-                env!("CARGO_PKG_VERSION")
-            )))
+        hub.hello(log_client_hello(concat!(
+            "horizon-board/",
+            env!("CARGO_PKG_VERSION")
+        )))
+        .await
+        .map_err(hub_error_to_store)?;
+
+        let reply = hub
+            .ingest(path, request)
             .await
-            .map_err(hub_error_to_store)?;
+            .map_err(log_error_to_store)?;
 
-            let reply = hub
-                .ingest(path, request)
-                .await
-                .map_err(log_error_to_store)?;
-
-            conn_task.abort();
-            Ok::<IngestReply, StoreError>(reply)
-        })
+        conn_task.abort();
+        Ok(reply)
     }
 }
 

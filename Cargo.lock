@@ -3689,6 +3689,7 @@ dependencies = [
  "horizon-board",
  "horizon-control",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

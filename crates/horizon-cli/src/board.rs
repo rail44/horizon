@@ -137,7 +137,21 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         }
     };
 
-    let result = dispatch(
+    // The board write methods are async (they make a remoc rtc round-trip to
+    // `horizon-logd`). The CLI is a plain synchronous process, so this is the
+    // one place that owns a tokio runtime — `block_on` here is safe because no
+    // outer runtime exists. Reads (`list`/`show`) stay synchronous file folds.
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = writeln!(stderr, "error: {e}");
+            return 1;
+        }
+    };
+    let result = runtime.block_on(dispatch(
         command,
         &positionals,
         &body,
@@ -151,7 +165,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         json,
         &store,
         stdout,
-    );
+    ));
 
     if let Err(e) = result {
         let _ = writeln!(stderr, "error: {e}");
@@ -161,7 +175,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn dispatch(
+async fn dispatch(
     command: &str,
     positionals: &[String],
     body: &Option<String>,
@@ -189,6 +203,7 @@ fn dispatch(
             let pos = resolve_position(top, after.as_deref(), before.as_deref())?;
             let item = store
                 .add(title, body.as_deref().unwrap_or(""), parent_id, pos)
+                .await
                 .map_err(|e| e.to_string())?;
             if json {
                 let _ = writeln!(
@@ -246,7 +261,10 @@ fn dispatch(
             let author = author
                 .as_deref()
                 .ok_or_else(|| "comment requires --author".to_string())?;
-            store.comment(id, author, text).map_err(|e| e.to_string())?;
+            store
+                .comment(id, author, text)
+                .await
+                .map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Comment added to item {id}");
             Ok(())
         }
@@ -260,7 +278,7 @@ fn dispatch(
             let s = positionals
                 .get(1)
                 .ok_or_else(|| "set-status requires a <status>".to_string())?;
-            store.set_status(id, s).map_err(|e| e.to_string())?;
+            store.set_status(id, s).await.map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Item {id} -> status: {s}");
             Ok(())
         }
@@ -274,7 +292,7 @@ fn dispatch(
             let who = positionals
                 .get(1)
                 .ok_or_else(|| "assign requires a <who>".to_string())?;
-            store.assign(id, who).map_err(|e| e.to_string())?;
+            store.assign(id, who).await.map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Item {id} -> assignee: {who}");
             Ok(())
         }
@@ -286,13 +304,13 @@ fn dispatch(
             )
             .map_err(|e| e.to_string())?;
             let pos = resolve_position(top, after.as_deref(), before.as_deref())?;
-            let rank = store.move_item(id, pos).map_err(|e| e.to_string())?;
+            let rank = store.move_item(id, pos).await.map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Item {id} -> rank: {rank}");
             Ok(())
         }
         "claim" => {
             let who = as_who.as_deref().unwrap_or("owner");
-            match store.claim(who).map_err(|e| e.to_string())? {
+            match store.claim(who).await.map_err(|e| e.to_string())? {
                 Some(item) => {
                     if json {
                         let _ = writeln!(

@@ -93,14 +93,15 @@ fn updated_label(item: &Item) -> String {
 
 /// Posts a comment to item `id` and returns the re-read item (the new comment
 /// included, in chronological order). Pure I/O over a `Store` -- no GPUI -- so
-/// it is unit-testable with a tempdir store.
-fn post_and_reload(
+/// it is unit-testable with a tempdir store. Async because `Store::comment`
+/// is now an async rtc call to `horizon-logd`.
+async fn post_and_reload(
     store: &Store,
     id: u64,
     author: &str,
     text: &str,
 ) -> Result<Option<Item>, StoreError> {
-    store.comment(id, author, text)?;
+    store.comment(id, author, text).await?;
     store.show(id)
 }
 
@@ -455,8 +456,19 @@ impl BoardPaneView {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let store = Store::from_dir(&root)?;
-                    post_and_reload(&store, id, "owner", &text)
+                    // GPUI's background thread is a plain OS thread with no
+                    // tokio runtime, so creating one here and `block_on`-ing is
+                    // safe — no nesting. The library's write methods are pure
+                    // async (they never build a runtime themselves), so this is
+                    // the one place the GUI owns the runtime for board writes.
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+                    runtime.block_on(async move {
+                        let store = Store::from_dir(&root)?;
+                        post_and_reload(&store, id, "owner", &text).await
+                    })
                 })
                 .await;
             let _ = this.update(cx, |view, cx| {

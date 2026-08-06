@@ -242,15 +242,18 @@ async fn board_store_client_round_trip_through_real_logd() {
     // add → set_status → comment → show, all through the socket.
     let item = store
         .add("Task", "body", None, Position::Bottom)
+        .await
         .expect("add through logd");
     assert_eq!(item.id, 1);
     assert_eq!(item.rank, "n");
 
     store
         .set_status(1, "ready")
+        .await
         .expect("set_status through logd");
     store
         .comment(1, "owner", "a note")
+        .await
         .expect("comment through logd");
 
     let shown = store.show(1).expect("show").expect("item exists");
@@ -260,7 +263,7 @@ async fn board_store_client_round_trip_through_real_logd() {
     assert_eq!(shown.comments[0].text, "a note");
 
     // claim on the same store through the same daemon.
-    let claimed = store.claim("alice").expect("claim through logd");
+    let claimed = store.claim("alice").await.expect("claim through logd");
     let claimed = claimed.expect("a ready+unassigned item exists");
     assert_eq!(claimed.id, 1);
     assert_eq!(claimed.status, "in-progress");
