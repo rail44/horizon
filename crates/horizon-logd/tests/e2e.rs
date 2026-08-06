@@ -230,6 +230,16 @@ async fn board_store_client_round_trip_through_real_logd() {
     command.arg("--socket").arg(&socket_path);
     let logd = DaemonProcess::spawn(&mut command, socket_path.clone());
 
+    // Inject the binary path so `connect_or_spawn_logd_retrying` (inside
+    // the Store's `ingest`) finds this exact binary instead of searching
+    // next to the test process's own executable (which is under deps/, not
+    // next to the daemon). `CARGO_BIN_EXE_horizon-logd` is guaranteed by
+    // cargo for this test's own package.
+    std::env::set_var(
+        "HORIZON_LOGD_BINARY",
+        resolve_logd_binary().to_string_lossy().to_string(),
+    );
+
     let dir = std::env::temp_dir().join(format!(
         "horizon-logd-board-rt-{}",
         std::time::SystemTime::now()
@@ -270,4 +280,5 @@ async fn board_store_client_round_trip_through_real_logd() {
     assert_eq!(claimed.assignee, "alice");
 
     drop(logd);
+    std::env::remove_var("HORIZON_LOGD_BINARY");
 }

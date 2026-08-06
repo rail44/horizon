@@ -171,18 +171,38 @@ pub async fn connect_hub_client<T: RemoteSend>(
     Ok((hub, conn_task))
 }
 
-/// Where to look for a daemon binary: first, right next to Horizon's own
-/// executable (the shape `cargo build --workspace`/`cargo run` produces --
-/// every workspace binary lands in the same `target/debug` or
-/// `target/release` directory), falling back to a bare name resolved
-/// through `PATH` (an installed deployment, or a developer who's put it
-/// there themselves). The dev-flow gotcha this exists for: `cargo run`
-/// alone only rebuilds the `horizon` binary, and `target/debug` is not on
-/// `PATH` by default, so a bare `Command::new("horizon-agentd")` would
-/// reliably fail to find a workspace build even though one exists two
-/// directories away -- see [`spawn_daemon`]'s error message for the
-/// resulting actionable hint when neither location has it.
+/// Where to look for a daemon binary: first, an explicit override via the
+/// `HORIZON_<NAME>_BINARY` env var (if set and the file exists — used by
+/// tests that know the binary path via `env!("CARGO_BIN_EXE_<name>")`);
+/// then right next to Horizon's own executable (the shape
+/// `cargo build --workspace`/`cargo run` produces -- every workspace binary
+/// lands in the same `target/debug` or `target/release` directory); then a
+/// bare name resolved through `PATH` (an installed deployment, or a
+/// developer who's put it there themselves). The dev-flow gotcha the
+/// next-to-exe rule exists for: `cargo run` alone only rebuilds the
+/// `horizon` binary, and `target/debug` is not on `PATH` by default, so a
+/// bare `Command::new("horizon-agentd")` would reliably fail to find a
+/// workspace build even though one exists two directories away -- see
+/// [`spawn_daemon`]'s error message for the resulting actionable hint when
+/// none of the locations has it.
+///
+/// The env-var override is `HORIZON_<UPPER_NAME>_BINARY` where
+/// `<UPPER_NAME>` is `binary_name` with `-` → `_` and uppercased — e.g.
+/// `horizon-logd` → `HORIZON_LOGD_BINARY`. This lets a test pin the exact
+/// binary (via `CARGO_BIN_EXE`, which cargo guarantees for the test's own
+/// package) without changing production's resolution when the env var is
+/// absent. Same convention shape as `$HORIZON_*_SOCKET` for socket paths.
 pub fn resolve_daemon_binary(binary_name: &str) -> PathBuf {
+    let env_key = format!(
+        "HORIZON_{}_BINARY",
+        binary_name.replace('-', "_").to_uppercase()
+    );
+    if let Ok(path) = std::env::var(&env_key) {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return path;
+        }
+    }
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
             let candidate = dir.join(binary_name);
