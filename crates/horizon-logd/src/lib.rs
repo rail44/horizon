@@ -6,8 +6,9 @@
 //! `horizon-agentd` and `horizon-terminald`, spawn-on-demand by any client.
 //!
 //! **Stage A (this crate):** `ingest` only. Board reads stay file folds in
-//! the library; subscriptions are stage B; agent-events migration and the
-//! DuckDB projection are later phases.
+//! the library; **stage B adds the subscribe stream** (raw NDJSON pokes,
+//! first-byte-sniffed away from the remoc chmux path on the same socket);
+//! agent-events migration and the DuckDB projection are later phases.
 //!
 //! **No persistence, no readiness gate.** Like terminald, this daemon owns no
 //! event log of its own and has nothing to resume at startup or flush on
@@ -23,6 +24,10 @@
 //! append logic, and `horizon-board`'s write path is this daemon's client.
 
 pub mod hub;
+pub mod subscribe;
+pub mod subscribers;
 pub mod writer;
 
 pub use hub::Hub;
+pub use subscribe::handle_subscribe;
+pub use subscribers::SubscriberRegistry;

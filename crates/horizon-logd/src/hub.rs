@@ -3,11 +3,14 @@
 //! so a slow call (a large fold) never blocks the others.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use horizon_board::wire::{
-    log_version_range, IngestReply, IngestRequest, LogError, LogHub, LogHubHello,
+    log_version_range, IngestReply, IngestRequest, LogError, LogHub, LogHubHello, SubscribePoke,
 };
 use horizon_wire::{negotiate_hello, ClientHello, HelloGate, HubError};
+
+use crate::subscribers::SubscriberRegistry;
 
 /// This daemon's name in every log line and diagnostic.
 pub(crate) const DAEMON_NAME: &str = "horizon-logd";
@@ -15,28 +18,31 @@ pub(crate) const DAEMON_NAME: &str = "horizon-logd";
 /// Reported in this binary's `hello` reply's `binary_id`.
 const BINARY_ID: &str = concat!("horizon-logd/", env!("CARGO_PKG_VERSION"));
 
-/// One connection's hub. Owns only the `hello` gate — the write path is
-/// stateless (each `ingest` opens, locks, appends, and releases).
+/// The log type for board pokes (the only log type in v1).
+const BOARD_LOG: &str = "board";
+
+/// One connection's hub. Owns the `hello` gate and a handle to the
+/// process-wide subscriber registry (so `ingest` can fan new seqs out to
+/// live subscribers after each append).
 pub struct Hub {
     binary_id: &'static str,
-    /// Whether this connection's `hello` has completed successfully — the
-    /// enforcement half of "`hello` is the first call on every connection",
-    /// shared with the other two daemons' hubs.
     hello: HelloGate,
+    registry: Arc<SubscriberRegistry>,
 }
 
 impl Hub {
-    pub fn new() -> Self {
+    pub fn new(registry: Arc<SubscriberRegistry>) -> Self {
         Self {
             binary_id: BINARY_ID,
             hello: HelloGate::new(),
+            registry,
         }
     }
 }
 
 impl Default for Hub {
     fn default() -> Self {
-        Self::new()
+        Self::new(Arc::new(SubscriberRegistry::new()))
     }
 }
 
@@ -54,13 +60,30 @@ impl LogHub for Hub {
         self.hello
             .require()
             .map_err(|_| LogError::Call("hello has not completed".to_string()))?;
-        let path = PathBuf::from(path);
+        let path_buf = PathBuf::from(path.clone());
+        let registry = self.registry.clone();
         // The write path is synchronous (flock, file I/O); `serve(true)` runs
         // this call on its own task, and `spawn_blocking` keeps that task off
         // the async workers.
-        tokio::task::spawn_blocking(move || crate::writer::perform(&path, request))
-            .await
-            .map_err(|e| LogError::Io(e.to_string()))?
+        let (reply, seqs) =
+            tokio::task::spawn_blocking(move || crate::writer::perform(&path_buf, request))
+                .await
+                .map_err(|e| LogError::Io(e.to_string()))??;
+
+        // Fan the new seqs out to live subscribers. Lossy and non-blocking
+        // (`subscribers::notify` never blocks on a stuck subscriber).
+        let poke_path = std::path::Path::new(&path);
+        for seq in &seqs {
+            registry.notify(
+                poke_path,
+                &SubscribePoke {
+                    log: BOARD_LOG.to_string(),
+                    seq: *seq,
+                },
+            );
+        }
+
+        Ok(reply)
     }
 
     async fn drain(&self) -> Result<(), HubError> {
@@ -76,7 +99,7 @@ mod tests {
     use horizon_wire::VersionRange;
 
     fn test_hub() -> Hub {
-        Hub::new()
+        Hub::default()
     }
 
     /// The hello gate: a method called before `hello` — or after a rejected

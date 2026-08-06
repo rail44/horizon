@@ -14,7 +14,7 @@ thiserror = "2.0"
 # The write path is now a socket client of `horizon-logd`: each write method
 # spins up a current-thread runtime, connect-or-spawns the daemon, and makes
 # one `ingest` rtc call. Reads stay synchronous file folds.
-tokio = { version = "1.52", features = ["rt", "net", "time", "macros"] }
+tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"] }
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

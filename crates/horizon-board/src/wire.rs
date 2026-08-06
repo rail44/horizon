@@ -11,9 +11,11 @@
 //! The daemon crate (`crates/horizon-logd`) supplies the `Hub` implementation
 //! and the `main.rs` entry point; this module owns only the wire contract.
 //!
-//! **Stage A** (`docs/logd-design.md` v1 slicing): the API is `ingest` only.
-//! Subscribe is stage B and will be added by bumping `LOG_PROTOCOL_VERSION`
-//! (lockstep — no wire slots reserved).
+//! **Stage A** was `ingest` only. **Stage B** adds the subscribe stream — a
+//! raw NDJSON line protocol multiplexed onto the same socket via first-byte
+//! sniffing (a `{` byte routes to subscribe, anything else to the remoc chmux
+//! handshake for `ingest`). The subscribe types below are plain serde structs,
+//! not remoc rtc types — the `LogHub` trait itself is unchanged.
 
 use remoc::prelude::*;
 use schemars::JsonSchema;
@@ -31,12 +33,12 @@ use crate::store::Position;
 /// policy (`MIN_SUPPORTED_LOG_PROTOCOL_VERSION == LOG_PROTOCOL_VERSION`),
 /// same-machine self-spawned daemons need no cross-version interop, only
 /// honest restart.
-pub const LOG_PROTOCOL_VERSION: u32 = 1;
+pub const LOG_PROTOCOL_VERSION: u32 = 2;
 
 /// The oldest log-wire version this build is still willing to negotiate down
 /// to in [`LogHub::hello`]. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
-pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 1;
+pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 2;
 
 /// The version range this build advertises in every `hello` to `horizon-logd`.
 pub fn log_version_range() -> VersionRange {
@@ -132,11 +134,43 @@ impl From<remoc::rtc::CallError> for LogError {
     }
 }
 
-/// The log hub — `horizon-logd`'s whole rtc surface (`docs/logd-design.md`).
+/// The subscribe request a consumer sends on connect, as one NDJSON line.
+/// The daemon replies with a [`SubscribePoke`] carrying the current seq, then
+/// streams further [`SubscribePoke`]s as ingests append to the file.
+///
+/// This is **not** a remoc rtc type — it rides a raw NDJSON line on the same
+/// socket, sniffed apart from the chmux path by the first byte (`{` vs
+/// binary). See `docs/logd-design.md` Subscription shape.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribeRequest {
+    /// The events.jsonl path to watch (the same path `ingest` takes). If
+    /// absent, the subscriber receives pokes for all paths.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// The last seq the subscriber has seen. logd does not replay missed
+    /// pokes — the subscriber catches up on its own (e.g. `tail -n +N`).
+    #[serde(default)]
+    pub since: Option<u64>,
+}
+
+/// One line on the subscribe stream: `{"log":"board","seq":1234}`. Carries the
+/// log type and the 1-based line number of the appended event — never the
+/// payload. Pokes are lossy; correctness lives in cursors over the log
+/// (`docs/logd-design.md` decision 3).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct SubscribePoke {
+    /// The log type (v1: "board" only).
+    pub log: String,
+    /// The 1-based line number of the appended event in the JSONL file.
+    pub seq: u64,
+}
+
+/// The log hub — `horizon-logd`'s remoc rtc surface (`docs/logd-design.md`).
 ///
 /// `hello` and `drain` return [`HubError`] (the shared protocol vocabulary);
-/// `ingest` returns [`LogError`] (the board domain vocabulary). Stage A is
-/// `ingest` only; subscribe is stage B.
+/// `ingest` returns [`LogError`] (the board domain vocabulary). The subscribe
+/// stream is **not** an rtc method — it rides a raw NDJSON line on the same
+/// socket, sniffed apart from chmux by the first byte.
 #[rtc::remote]
 pub trait LogHub {
     /// Version negotiation — the first call on every connection.
@@ -169,7 +203,7 @@ mod tests {
 
     #[test]
     fn the_lockstep_pair_is_equal() {
-        assert_eq!(LOG_PROTOCOL_VERSION, 1);
-        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 1);
+        assert_eq!(LOG_PROTOCOL_VERSION, 2);
+        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 2);
     }
 }
