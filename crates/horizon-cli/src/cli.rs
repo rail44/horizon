@@ -42,10 +42,14 @@ pub enum SplitFlag {
 /// `activate` (the CLI's `--active`, wired to `docs/cli-control-plane-
 /// design.md`'s "activate rides on creating/attaching operations" decision)
 /// and (for the first two) `split` (the CLI's `--split`, "Placement
-/// vocabulary"). `NewAgent`/`NewConfigAgent` also carry `share` (`--share`):
+/// vocabulary"). `NewAgent` also carries `share` (`--share`):
 /// `docs/session-relationship-design.md` decision 3's CLI-origin default is
 /// an *isolated* worktree, so `--share` is the opt-out override (there is no
-/// `--isolate` counterpart -- it would be a no-op given the default).
+/// `--isolate` counterpart -- it would be a no-op given the default), and
+/// `role` (`--role <id>`): the role id to spawn the agent session with
+/// (validated server-side by the shell's control-plane dispatch, which knows
+/// the set of user-launchable roles). `new-config-agent` is kept as an alias
+/// for `new-agent --role config`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     NewTerminal {
@@ -54,17 +58,7 @@ pub enum Subcommand {
     },
     NewAgent {
         prompt: Option<String>,
-        split: Option<SplitFlag>,
-        activate: bool,
-        share: bool,
-    },
-    /// `new-agent`'s role-tagged flavor: spawns the configuration agent
-    /// (the `config` role -- theme/keybinding editing). A separate
-    /// subcommand rather than a `--role` flag on `new-agent`: the external
-    /// vocabulary names each role-tagged flavor so the set of roles stays
-    /// the server's to define, never a free-form client-supplied string.
-    NewConfigAgent {
-        prompt: Option<String>,
+        role: Option<String>,
         split: Option<SplitFlag>,
         activate: bool,
         share: bool,
@@ -143,8 +137,8 @@ const USAGE: &str = "Usage: horizon [--socket <path>] [--json] [--yes] <subcomma
 Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
-  new-agent [--prompt <text>] [--split [<session-id>]] [--active] [--share]\n  \
-  new-config-agent [--prompt <text>] [--split [<session-id>]] [--active] [--share]\n  \
+  new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active] [--share]\n  \
+  new-config-agent (alias for new-agent --role config)\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -161,7 +155,7 @@ Subcommands:\n  \
   state";
 
 /// Parses `argv` (already stripped of `argv[0]`). Global flags
-/// (`--socket`/`--json`/`--yes`/`--prompt`/`--split`/`--active`/`--share`)
+/// (`--socket`/`--json`/`--yes`/`--prompt`/`--role`/`--split`/`--active`/`--share`)
 /// are recognized anywhere in the argument list, not just before the
 /// subcommand name -- simpler than enforcing a strict positional grammar, and
 /// unambiguous because every subcommand's own positional arguments
@@ -179,6 +173,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
     let mut json = false;
     let mut yes = false;
     let mut prompt: Option<String> = None;
+    let mut role: Option<String> = None;
     let mut split: Option<SplitFlag> = None;
     let mut active = false;
     let mut share = false;
@@ -216,6 +211,13 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             prompt = Some(value.clone());
         } else if let Some(value) = arg.strip_prefix("--prompt=") {
             prompt = Some(value.to_string());
+        } else if arg == "--role" {
+            let value = iter
+                .next()
+                .ok_or_else(|| UsageError("--role requires a value".to_string()))?;
+            role = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--role=") {
+            role = Some(value.to_string());
         } else if arg == "--split" {
             split = Some(match iter.peek() {
                 Some(next) if !next.starts_with("--") => {
@@ -250,15 +252,21 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "new-agent")?;
             Subcommand::NewAgent {
                 prompt: prompt.take(),
+                role: role.take(),
                 split: split.take(),
                 activate: std::mem::take(&mut active),
                 share: std::mem::take(&mut share),
             }
         }
+        // `new-config-agent` is kept as an alias for `new-agent --role config`
+        // -- the role-tagged flavor that started as a separate subcommand now
+        // rides the generic `--role` flag, and the old name is preserved for
+        // muscle memory and existing scripts.
         "new-config-agent" => {
             reject_extra(&mut positionals, "new-config-agent")?;
-            Subcommand::NewConfigAgent {
+            Subcommand::NewAgent {
                 prompt: prompt.take(),
+                role: Some("config".to_string()),
                 split: split.take(),
                 activate: std::mem::take(&mut active),
                 share: std::mem::take(&mut share),
@@ -348,6 +356,11 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             "--prompt is only valid with new-agent/new-config-agent".to_string(),
         ));
     }
+    if role.is_some() {
+        return Err(UsageError(
+            "--role is only valid with new-agent/new-config-agent".to_string(),
+        ));
+    }
     if split.is_some() {
         return Err(UsageError(
             "--split is only valid with new-terminal/new-agent/new-config-agent".to_string(),
@@ -421,9 +434,9 @@ pub fn resolved_split_for(
     env_session_id: Option<String>,
 ) -> Result<Option<String>, String> {
     match subcommand {
-        Subcommand::NewTerminal { split, .. }
-        | Subcommand::NewAgent { split, .. }
-        | Subcommand::NewConfigAgent { split, .. } => resolve_split(split.clone(), env_session_id),
+        Subcommand::NewTerminal { split, .. } | Subcommand::NewAgent { split, .. } => {
+            resolve_split(split.clone(), env_session_id)
+        }
         _ => Ok(None),
     }
 }
@@ -504,6 +517,7 @@ mod tests {
             parsed.subcommand,
             Subcommand::NewAgent {
                 prompt: Some("fix the bug".to_string()),
+                role: None,
                 split: None,
                 activate: false,
                 share: false,
@@ -518,6 +532,7 @@ mod tests {
             parsed.subcommand,
             Subcommand::NewAgent {
                 prompt: Some("fix the bug".to_string()),
+                role: None,
                 split: None,
                 activate: false,
                 share: false,
@@ -532,6 +547,7 @@ mod tests {
             parsed.subcommand,
             Subcommand::NewAgent {
                 prompt: None,
+                role: None,
                 split: None,
                 activate: false,
                 share: true,
@@ -540,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_new_config_agent_with_prompt_split_and_active() {
+    fn new_config_agent_is_an_alias_for_role_config() {
         let parsed = parse(&args(&[
             "new-config-agent",
             "--prompt",
@@ -552,8 +568,9 @@ mod tests {
         .unwrap();
         assert_eq!(
             parsed.subcommand,
-            Subcommand::NewConfigAgent {
+            Subcommand::NewAgent {
                 prompt: Some("make it dark".to_string()),
+                role: Some("config".to_string()),
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: true,
                 share: false,
@@ -568,6 +585,7 @@ mod tests {
             parsed.subcommand,
             Subcommand::NewAgent {
                 prompt: None,
+                role: None,
                 split: None,
                 activate: false,
                 share: false,
@@ -630,6 +648,7 @@ mod tests {
             parsed.subcommand,
             Subcommand::NewAgent {
                 prompt: None,
+                role: None,
                 split: Some(SplitFlag::Explicit("s-1".to_string())),
                 activate: false,
                 share: false,
@@ -815,11 +834,47 @@ mod tests {
     fn dangling_flag_value_is_a_usage_error() {
         assert!(parse(&args(&["--socket"])).is_err());
         assert!(parse(&args(&["new-agent", "--prompt"])).is_err());
+        assert!(parse(&args(&["new-agent", "--role"])).is_err());
     }
 
     #[test]
     fn prompt_on_a_non_new_agent_subcommand_is_a_usage_error() {
         assert!(parse(&args(&["sessions", "--prompt", "x"])).is_err());
+    }
+
+    #[test]
+    fn parses_new_agent_with_role() {
+        let parsed = parse(&args(&["new-agent", "--role", "keeper"])).unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::NewAgent {
+                prompt: None,
+                role: Some("keeper".to_string()),
+                split: None,
+                activate: false,
+                share: false,
+            }
+        );
+    }
+
+    #[test]
+    fn parses_new_agent_with_role_equals_form() {
+        let parsed = parse(&args(&["new-agent", "--role=keeper"])).unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::NewAgent {
+                prompt: None,
+                role: Some("keeper".to_string()),
+                split: None,
+                activate: false,
+                share: false,
+            }
+        );
+    }
+
+    #[test]
+    fn role_on_a_non_new_agent_subcommand_is_a_usage_error() {
+        assert!(parse(&args(&["sessions", "--role", "x"])).is_err());
     }
 
     #[test]
@@ -892,6 +947,7 @@ mod tests {
 
         let new_agent = Subcommand::NewAgent {
             prompt: None,
+            role: None,
             split: Some(SplitFlag::Here),
             activate: false,
             share: false,

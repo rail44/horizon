@@ -116,16 +116,29 @@ fn dispatch_invoke(
 ) -> EnvelopeBody {
     let args = &invoke.args;
     match invoke.command.as_str() {
-        "new-terminal" | "new-agent" | "new-config-agent" => {
+        "new-terminal" | "new-agent" => {
             let kind = if invoke.command == "new-terminal" {
                 PaneKind::Terminal
             } else {
                 PaneKind::Agent
             };
-            let role_id = if invoke.command == "new-config-agent" {
-                Some(config_agent_role_id())
-            } else {
-                None
+            let role_id = match optional_string_arg(args, "role") {
+                Ok(Some(role)) => {
+                    let known = crate::view_chooser::user_launchable_roles();
+                    if !known.iter().any(|(id, _)| *id == role) {
+                        let available = known
+                            .iter()
+                            .map(|(_, title)| *title)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        return error_body(format!(
+                            "unknown role: {role} (available: {available})"
+                        ));
+                    }
+                    Some(horizon_agent::roles::RoleId(role))
+                }
+                Ok(None) => None,
+                Err(message) => return error_body(message),
             };
             let split = match optional_session_id_arg(args, "split") {
                 Ok(split) => split,
@@ -432,12 +445,6 @@ fn required_string_arg(args: &serde_json::Value, key: &str) -> Result<String, St
         Some(_) => Err(format!("`{key}` must be a string")),
         None => Err(format!("`{key}` is required")),
     }
-}
-
-/// `new-config-agent`'s fixed role id, mirroring the Floem shell's
-/// `command_actions::config_agent_role_id`.
-fn config_agent_role_id() -> horizon_agent::roles::RoleId {
-    horizon_agent::roles::RoleId(horizon_agent::roles::CONFIG_ROLE.id.to_string())
 }
 
 #[cfg(test)]

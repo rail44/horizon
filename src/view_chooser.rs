@@ -36,8 +36,32 @@ pub(crate) struct ViewChoice {
     pub(crate) isolate: bool,
 }
 
-fn view_choices() -> Vec<ViewChoice> {
+/// The set of roles a user can launch from the view chooser or the CLI's
+/// `--role` flag. Assembled from the same `pub const` data each
+/// role-providing crate exposes (`horizon-agent`'s `CONFIG_ROLE`,
+/// `horizon-board`'s keeper), mirroring how `horizon-agentd` assembles its
+/// `register_external` call at startup -- the shell process and the agent
+/// daemon each build their role list independently from these compile-time
+/// constants, because there is no wire query for "registered roles": the set
+/// is fixed at build time (the crates the shell links are the same crates
+/// agentd links). Adding a new externally-provided role means both (a)
+/// agentd's startup registration and (b) an entry here, both sourced from
+/// the same `pub const` data -- see `docs/board-keeper-design.md` §1.
+pub(crate) fn user_launchable_roles() -> Vec<(&'static str, &'static str)> {
     vec![
+        (
+            horizon_agent::roles::CONFIG_ROLE.id,
+            horizon_agent::roles::CONFIG_ROLE.title,
+        ),
+        (
+            horizon_board::keeper::ROLE_ID,
+            horizon_board::keeper::ROLE_TITLE,
+        ),
+    ]
+}
+
+fn view_choices() -> Vec<ViewChoice> {
+    let mut choices = vec![
         ViewChoice {
             title: "Terminal",
             kind: PaneKind::Terminal,
@@ -56,14 +80,18 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: true,
         },
-        ViewChoice {
-            title: "Configuration Agent",
+    ];
+    // One entry per user-launchable role, sourced from the same `pub const`
+    // data agentd uses to register them (see `user_launchable_roles`).
+    for (id, title) in user_launchable_roles() {
+        choices.push(ViewChoice {
+            title,
             kind: PaneKind::Agent,
-            role_id: Some(horizon_agent::roles::RoleId(
-                horizon_agent::roles::CONFIG_ROLE.id.to_string(),
-            )),
+            role_id: Some(horizon_agent::roles::RoleId(id.to_string())),
             isolate: false,
-        },
+        });
+    }
+    choices.extend([
         ViewChoice {
             title: "Theme Settings",
             kind: PaneKind::View(ViewKind::ThemeSettings),
@@ -76,7 +104,8 @@ fn view_choices() -> Vec<ViewChoice> {
             role_id: None,
             isolate: false,
         },
-    ]
+    ]);
+    choices
 }
 
 pub(crate) struct ViewChooserDelegate {
@@ -181,7 +210,7 @@ impl ListDelegate for ViewChooserDelegate {
 mod tests {
     use horizon_workspace::PaneKind;
 
-    use super::view_choices;
+    use super::{user_launchable_roles, view_choices};
 
     #[test]
     fn only_the_dedicated_isolated_worktree_choice_opts_in_to_isolation() {
@@ -208,5 +237,63 @@ mod tests {
                 choice.title
             );
         }
+    }
+
+    #[test]
+    fn every_role_choice_carries_a_role_id_and_is_not_isolated() {
+        let choices = view_choices();
+        let role_choices: Vec<_> = choices.iter().filter(|c| c.role_id.is_some()).collect();
+        assert!(
+            !role_choices.is_empty(),
+            "at least one role choice must exist"
+        );
+        for choice in &role_choices {
+            assert_eq!(
+                choice.kind,
+                PaneKind::Agent,
+                "{} is a role choice and must be an Agent",
+                choice.title
+            );
+            assert!(!choice.isolate, "role choices default to shared");
+        }
+    }
+
+    #[test]
+    fn the_config_role_is_present_as_a_choice() {
+        let choices = view_choices();
+        assert!(choices
+            .iter()
+            .any(|c| c.role_id.as_ref().is_some_and(|r| r.0 == "config")));
+    }
+
+    #[test]
+    fn the_keeper_role_is_present_as_a_choice() {
+        let choices = view_choices();
+        assert!(choices
+            .iter()
+            .any(|c| c.role_id.as_ref().is_some_and(|r| r.0 == "keeper")));
+    }
+
+    #[test]
+    fn role_less_entries_stay_role_less() {
+        let choices = view_choices();
+        for title in [
+            "Terminal",
+            "Agent",
+            "Agent (Isolated Worktree)…",
+            "Theme Settings",
+            "Board",
+        ] {
+            let c = choices.iter().find(|c| c.title == title).expect(title);
+            assert!(c.role_id.is_none(), "{title} must remain role-less");
+        }
+    }
+
+    #[test]
+    fn user_launchable_roles_returns_config_and_keeper() {
+        let roles = user_launchable_roles();
+        let ids: Vec<&str> = roles.iter().map(|(id, _)| *id).collect();
+        assert!(ids.contains(&"config"));
+        assert!(ids.contains(&"keeper"));
     }
 }
