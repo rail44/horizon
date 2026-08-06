@@ -26,8 +26,9 @@ use std::path::PathBuf;
 use gpui::*;
 use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
+use gpui_component::text::TextView;
 use gpui_component::{h_flex, v_flex, IndexPath};
-use horizon_board::{Item, Store, StoreError};
+use horizon_board::{Item, Position, Store, StoreError};
 
 use crate::theme;
 
@@ -127,6 +128,19 @@ fn board_confirm_transition(item: Option<Item>, root: Option<PathBuf>) -> Option
     let item = item?;
     let root = root?;
     Some((item, root))
+}
+
+/// The pure validation behind the pane's add-item composer: returns the
+/// trimmed title when the input is non-blank, or `None` so the caller can
+/// no-op on empty. Trimming stops a whitespace-only submit from creating
+/// an untitled item.
+fn parse_new_item(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// The first row is selectable exactly when the list isn't empty -- the
@@ -320,6 +334,8 @@ pub(crate) struct BoardPaneView {
     root: Option<PathBuf>,
     list: Entity<ListState<BoardListDelegate>>,
     _list_subscription: Subscription,
+    new_item_input: Entity<InputState>,
+    _new_item_subscription: Subscription,
     mode: BoardPaneMode,
 }
 
@@ -353,12 +369,28 @@ impl BoardPaneView {
                 ListEvent::Cancel | ListEvent::Select(_) => {}
             },
         );
+        let new_item_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Add item: type a title, then Enter…")
+                .submit_on_enter(true)
+        });
+        let _new_item_subscription = cx.subscribe_in(
+            &new_item_input,
+            window,
+            move |view, _input, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { shift: false, .. } = event {
+                    view.add_item(window, cx);
+                }
+            },
+        );
         window.focus(&list.focus_handle(cx), cx);
         let view = Self {
             focus_handle: cx.focus_handle(),
             root,
             list,
             _list_subscription,
+            new_item_input,
+            _new_item_subscription,
             mode: BoardPaneMode::List,
         };
         view.spawn_load(cx);
@@ -483,6 +515,42 @@ impl BoardPaneView {
         .detach();
     }
 
+    fn add_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(title) = parse_new_item(&self.new_item_input.read(cx).value()) else {
+            return;
+        };
+        self.new_item_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    // Same runtime-ownership pattern as `post_comment`: the
+                    // GUI owns a fresh current-thread tokio runtime for the
+                    // one write, then drops it.
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+                    runtime.block_on(async move {
+                        let store = Store::from_dir(&root)?;
+                        store.add(&title, "", None, Position::Bottom).await
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if result.is_ok() {
+                    view.spawn_load(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_comments(item: &Item) -> AnyElement {
         if item.comments.is_empty() {
             return div()
@@ -492,28 +560,39 @@ impl BoardPaneView {
                 .into_any_element();
         }
         v_flex()
-            .gap_1()
-            .children(item.comments.iter().map(|comment| {
-                h_flex()
-                    .gap_1()
-                    .items_start()
+            .gap_2()
+            .w_full()
+            .children(item.comments.iter().enumerate().map(|(index, comment)| {
+                v_flex()
+                    .gap_0p5()
+                    .w_full()
+                    .min_w_0()
+                    .pt(px(6.0))
+                    .border_t_1()
+                    .border_color(theme::border())
                     .child(
-                        div()
-                            .text_size(px(10.0))
-                            .text_color(theme::text_muted())
-                            .child(format_timestamp(comment.at)),
+                        h_flex()
+                            .gap_1()
+                            .items_center()
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(theme::text_primary())
+                                    .child(comment.author.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(10.0))
+                                    .text_color(theme::text_muted())
+                                    .child(format_timestamp(comment.at)),
+                            ),
                     )
                     .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme::text_primary())
-                            .child(format!("{}:", comment.author)),
-                    )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(theme::text_primary())
-                            .child(comment.text.clone()),
+                        div().w_full().min_w_0().child(
+                            TextView::markdown(("board-comment", index), comment.text.clone())
+                                .text_size(px(12.0))
+                                .text_color(theme::text_primary()),
+                        ),
                     )
             }))
             .into_any_element()
@@ -558,6 +637,8 @@ impl BoardPaneView {
                         div()
                             .text_size(px(14.0))
                             .text_color(theme::text_primary())
+                            .flex_1()
+                            .min_w_0()
                             .child(title),
                     )
                     .child(
@@ -578,6 +659,7 @@ impl BoardPaneView {
                     .id("board-detail-body")
                     .flex_1()
                     .min_h_0()
+                    .min_w_0()
                     .overflow_y_scroll()
                     .px(px(12.0))
                     .py(px(8.0))
@@ -586,11 +668,13 @@ impl BoardPaneView {
                     .child(
                         v_flex()
                             .gap_2()
+                            .w_full()
                             .child(
-                                div()
-                                    .text_size(px(12.0))
-                                    .text_color(theme::text_primary())
-                                    .child(body),
+                                div().w_full().min_w_0().child(
+                                    TextView::markdown(("board-detail-body-md", 0usize), body)
+                                        .text_size(px(12.0))
+                                        .text_color(theme::text_primary()),
+                                ),
                             )
                             .child(Self::render_comments(item)),
                     ),
@@ -625,7 +709,25 @@ impl Render for BoardPaneView {
                 }
             }))
             .child(match &self.mode {
-                BoardPaneMode::List => List::new(&self.list).into_any_element(),
+                BoardPaneMode::List => v_flex()
+                    .size_full()
+                    .child(
+                        div()
+                            .id("board-list-wrap")
+                            .flex_1()
+                            .min_h_0()
+                            .child(List::new(&self.list)),
+                    )
+                    .child(
+                        div()
+                            .px(px(12.0))
+                            .pb(px(8.0))
+                            .pt(px(4.0))
+                            .border_t_1()
+                            .border_color(theme::border())
+                            .child(Input::new(&self.new_item_input).appearance(false)),
+                    )
+                    .into_any_element(),
                 BoardPaneMode::Detail {
                     item,
                     comment_input,
@@ -643,6 +745,7 @@ mod tests {
 
     use super::{
         board_confirm_transition, board_root_dir, filter_items, format_timestamp, item_updated,
+        parse_new_item,
     };
     use horizon_board::{Comment, Item, Store};
 
@@ -838,5 +941,21 @@ mod tests {
     #[test]
     fn board_confirm_transition_is_noop_when_both_missing() {
         assert_eq!(board_confirm_transition(None, None), None);
+    }
+
+    #[test]
+    fn parse_new_item_rejects_blank() {
+        assert_eq!(parse_new_item(""), None);
+        assert_eq!(parse_new_item("   "), None);
+        assert_eq!(parse_new_item("\t\n"), None);
+    }
+
+    #[test]
+    fn parse_new_item_trims_and_accepts() {
+        assert_eq!(
+            parse_new_item("  Fix login bug  "),
+            Some("Fix login bug".to_string())
+        );
+        assert_eq!(parse_new_item("Single"), Some("Single".to_string()));
     }
 }
