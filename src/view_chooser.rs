@@ -36,30 +36,6 @@ pub(crate) struct ViewChoice {
     pub(crate) isolate: bool,
 }
 
-/// The set of roles a user can launch from the view chooser or the CLI's
-/// `--role` flag. Assembled from the same `pub const` data each
-/// role-providing crate exposes (`horizon-agent`'s `CONFIG_ROLE`,
-/// `horizon-board`'s keeper), mirroring how `horizon-agentd` assembles its
-/// `register_external` call at startup -- the shell process and the agent
-/// daemon each build their role list independently from these compile-time
-/// constants, because there is no wire query for "registered roles": the set
-/// is fixed at build time (the crates the shell links are the same crates
-/// agentd links). Adding a new externally-provided role means both (a)
-/// agentd's startup registration and (b) an entry here, both sourced from
-/// the same `pub const` data -- see `docs/board-keeper-design.md` §1.
-pub(crate) fn user_launchable_roles() -> Vec<(&'static str, &'static str)> {
-    vec![
-        (
-            horizon_agent::roles::CONFIG_ROLE.id,
-            horizon_agent::roles::CONFIG_ROLE.title,
-        ),
-        (
-            horizon_board::keeper::ROLE_ID,
-            horizon_board::keeper::ROLE_TITLE,
-        ),
-    ]
-}
-
 fn view_choices() -> Vec<ViewChoice> {
     let mut choices = vec![
         ViewChoice {
@@ -81,13 +57,15 @@ fn view_choices() -> Vec<ViewChoice> {
             isolate: true,
         },
     ];
-    // One entry per user-launchable role, sourced from the same `pub const`
-    // data agentd uses to register them (see `user_launchable_roles`).
-    for (id, title) in user_launchable_roles() {
+    // One entry per user-launchable role, enumerated from the role registry
+    // (`roles::user_launchable`). The shell registers the same externally-
+    // provided roles at startup (`main::run_gui`) that `horizon-agentd`
+    // registers, so both processes see an identical set.
+    for role in horizon_agent::roles::user_launchable() {
         choices.push(ViewChoice {
-            title,
+            title: role.title,
             kind: PaneKind::Agent,
-            role_id: Some(horizon_agent::roles::RoleId(id.to_string())),
+            role_id: Some(horizon_agent::roles::RoleId(role.id.to_string())),
             isolate: false,
         });
     }
@@ -210,7 +188,7 @@ impl ListDelegate for ViewChooserDelegate {
 mod tests {
     use horizon_workspace::PaneKind;
 
-    use super::{user_launchable_roles, view_choices};
+    use super::view_choices;
 
     #[test]
     fn only_the_dedicated_isolated_worktree_choice_opts_in_to_isolation() {
@@ -268,6 +246,22 @@ mod tests {
 
     #[test]
     fn the_keeper_role_is_present_as_a_choice() {
+        // The shell registers the keeper role at startup (`main::run_gui`);
+        // in the test process the `EXTERNAL_ROLES` registry starts empty, so
+        // the same registration must happen here before `view_choices` can
+        // enumerate it.
+        horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
+            id: horizon_board::keeper::ROLE_ID,
+            title: horizon_board::keeper::ROLE_TITLE,
+            prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
+            allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
+            model: horizon_board::keeper::ROLE_MODEL,
+            iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
+            include_repository_instructions:
+                horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
+            skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
+            summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+        }]);
         let choices = view_choices();
         assert!(choices
             .iter()
@@ -287,13 +281,5 @@ mod tests {
             let c = choices.iter().find(|c| c.title == title).expect(title);
             assert!(c.role_id.is_none(), "{title} must remain role-less");
         }
-    }
-
-    #[test]
-    fn user_launchable_roles_returns_config_and_keeper() {
-        let roles = user_launchable_roles();
-        let ids: Vec<&str> = roles.iter().map(|(id, _)| *id).collect();
-        assert!(ids.contains(&"config"));
-        assert!(ids.contains(&"keeper"));
     }
 }

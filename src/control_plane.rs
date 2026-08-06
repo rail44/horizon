@@ -124,13 +124,10 @@ fn dispatch_invoke(
             };
             let role_id = match optional_string_arg(args, "role") {
                 Ok(Some(role)) => {
-                    let known = crate::view_chooser::user_launchable_roles();
-                    if !known.iter().any(|(id, _)| *id == role) {
-                        let available = known
-                            .iter()
-                            .map(|(_, title)| *title)
-                            .collect::<Vec<_>>()
-                            .join(", ");
+                    let known = horizon_agent::roles::user_launchable();
+                    if !known.iter().any(|r| r.id == role) {
+                        let available =
+                            known.iter().map(|r| r.title).collect::<Vec<_>>().join(", ");
                         return error_body(format!(
                             "unknown role: {role} (available: {available})"
                         ));

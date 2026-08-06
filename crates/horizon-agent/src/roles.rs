@@ -249,6 +249,28 @@ pub fn register_external(roles: Vec<RoleDefinition>) {
     let _ = EXTERNAL_ROLES.set(roles);
 }
 
+/// Every role this build knows about that a user can launch directly —
+/// the built-in [`ROLES`] plus any registered via [`register_external`],
+/// minus exploration sessions ([`EXPLORE_ROLE`], which is a delegated
+/// sub-session spawned by the `task` tool, never user-creatable). Called by
+/// the shell's view chooser (to populate the list of launchable roles) and
+/// its control-plane dispatch (to validate `--role` ids). Each process that
+/// links `horizon-agent` and wants to see externally-provided roles must
+/// call [`register_external`] at startup — `horizon-agentd` does this for
+/// the board keeper role, and the shell does the same so both processes see
+/// an identical set, sourced from the same `pub const` data in each
+/// providing crate.
+pub fn user_launchable() -> Vec<&'static RoleDefinition> {
+    let mut roles: Vec<&'static RoleDefinition> = ROLES.to_vec();
+    if let Some(external) = EXTERNAL_ROLES.get() {
+        roles.extend(external.iter());
+    }
+    roles
+        .into_iter()
+        .filter(|role| role.id != EXPLORE_ROLE_ID)
+        .collect()
+}
+
 /// Resolves `role_id` to its static definition, or `None` if this build
 /// doesn't know it. Checks the compile-time [`ROLES`] slice first, then the
 /// runtime-registered [`EXTERNAL_ROLES`]. See the module doc: a `None` here
@@ -448,5 +470,19 @@ mod tests {
         assert!(resolve(&RoleId("test-additive".to_string())).is_some());
         // And a genuinely unknown id is still None.
         assert!(resolve(&RoleId("no-such-role".to_string())).is_none());
+    }
+
+    /// `user_launchable` must include the config role and any externally
+    /// registered roles, but never the explore role (a delegated sub-session
+    /// that is never user-creatable).
+    #[test]
+    fn user_launchable_includes_config_excludes_explore() {
+        let roles = user_launchable();
+        let ids: Vec<&str> = roles.iter().map(|r| r.id).collect();
+        assert!(ids.contains(&"config"), "config must be user-launchable");
+        assert!(
+            !ids.contains(&EXPLORE_ROLE_ID),
+            "explore must never be user-launchable"
+        );
     }
 }
