@@ -7,6 +7,7 @@ edition = "2021"
 anyhow = "1.0"
 crossbeam-channel = "0.5"
 horizon-agent = { path = "../horizon-agent" }
+horizon-board = { path = "../horizon-board" }
 horizon-config = { path = "../horizon-config" }
 horizon-sandbox = { path = "../horizon-sandbox" }
 horizon-wire = { path = "../horizon-wire" }

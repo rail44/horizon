@@ -1,5 +1,6 @@
 mod approval;
 mod bash;
+mod board;
 mod catalog;
 mod config;
 mod execution;
@@ -23,6 +24,10 @@ pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 // session's `ToolSessionState`, the same way it constructs the network
 // proxy and judge handles this module also exposes.
 pub use explore::{ExplorationHost, StartedExploration};
+// The board daemon seam (`docs/board-keeper-design.md`): `pub` for the
+// same reason as `ExplorationHost` — `horizon-agentd` implements
+// `BoardHost` and installs it on every session's `ToolSessionState`.
+pub use board::BoardHost;
 // The model-visible ids of that tool and its companion fetch tool, named
 // for the places outside `explore` that have to recognize them: dispatch
 // (`execution`), the prompt's delegation-routing block

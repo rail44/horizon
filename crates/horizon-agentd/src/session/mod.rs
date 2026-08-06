@@ -48,6 +48,7 @@
 //! thread's panic boundary.
 
 mod approval;
+mod board;
 mod completion;
 mod connection;
 mod events;

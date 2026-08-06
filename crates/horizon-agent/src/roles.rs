@@ -230,11 +230,39 @@ pub fn is_exploration(role_id: &RoleId) -> bool {
 /// minimal rather than data-driven.
 static ROLES: &[&RoleDefinition] = &[&CONFIG_ROLE, &EXPLORE_ROLE];
 
+/// Roles registered at runtime by the composition root (`horizon-agentd`)
+/// from external crates (e.g. `horizon-board`'s keeper role) -- see
+/// [`register_external`]. Populated once at daemon startup, before any
+/// session is spawned; a `OnceLock` because `resolve` is called from every
+/// session-start path and must be lock-free after init.
+static EXTERNAL_ROLES: std::sync::OnceLock<Vec<RoleDefinition>> = std::sync::OnceLock::new();
+
+/// Registers externally-provided roles (from crates `horizon-agent` does not
+/// depend on) so [`resolve`] can find them. Called once at `horizon-agentd`
+/// startup, before any session is spawned. Each `RoleDefinition`'s `&'static`
+/// fields come from `pub const` data in the providing crate (e.g.
+/// `horizon_board::keeper`), so the registration is a by-value copy of thin
+/// references -- no allocation, no lifetime extension. See
+/// `docs/board-keeper-design.md` §1 for why this indirection exists instead
+/// of a Cargo edge.
+pub fn register_external(roles: Vec<RoleDefinition>) {
+    let _ = EXTERNAL_ROLES.set(roles);
+}
+
 /// Resolves `role_id` to its static definition, or `None` if this build
-/// doesn't know it. See the module doc: a `None` here must never be
-/// silently treated as "no role" by a session-starting caller.
+/// doesn't know it. Checks the compile-time [`ROLES`] slice first, then the
+/// runtime-registered [`EXTERNAL_ROLES`]. See the module doc: a `None` here
+/// must never be silently treated as "no role" by a session-starting caller.
 pub fn resolve(role_id: &RoleId) -> Option<&'static RoleDefinition> {
-    ROLES.iter().copied().find(|role| role.id == role_id.0)
+    if let Some(role) = ROLES.iter().copied().find(|role| role.id == role_id.0) {
+        return Some(role);
+    }
+    // `OnceLock::get` returns `&Vec<RoleDefinition>` with `'static` lifetime
+    // (the OnceLock itself is static), and `Vec::iter` borrows from it -- so
+    // the returned `&RoleDefinition` is `'static` too.
+    EXTERNAL_ROLES
+        .get()
+        .and_then(|roles| roles.iter().find(|role| role.id == role_id.0))
 }
 
 #[cfg(test)]
@@ -367,5 +395,58 @@ mod tests {
         assert!(is_exploration(&RoleId(EXPLORE_ROLE_ID.to_string())));
         assert!(!is_exploration(&RoleId("config".to_string())));
         assert!(!is_exploration(&RoleId("exploration".to_string())));
+    }
+
+    // -- external role registration (docs/board-keeper-design.md §1) ---------
+
+    /// A role registered via [`register_external`] must be findable by
+    /// [`resolve`], exactly like the compile-time [`ROLES`] entries. This is
+    /// the mechanism `horizon-agentd` uses to contribute `horizon-board`'s
+    /// keeper role without a Cargo edge between the two crates.
+    #[test]
+    fn register_external_makes_resolve_find_the_role() {
+        register_external(vec![RoleDefinition {
+            id: "test-external-role",
+            title: "Test External Role",
+            prompt_section: "You are a test role.",
+            allowed_tool_ids: Some(&["fs.read"]),
+            model: None,
+            iteration_cap: None,
+            include_repository_instructions: false,
+            skill_ids: &[],
+            summarize_on_cap: false,
+        }]);
+        let role = resolve(&RoleId("test-external-role".to_string()))
+            .expect("external role must resolve after registration");
+        assert_eq!(role.id, "test-external-role");
+        assert_eq!(
+            role.allowed_tool_ids,
+            Some(&["fs.read"][..]),
+            "external role's allowlist must be preserved"
+        );
+    }
+
+    /// Built-in roles must still resolve after an external registration —
+    /// the external registry is additive, not a replacement.
+    #[test]
+    fn builtin_roles_still_resolve_after_external_registration() {
+        register_external(vec![RoleDefinition {
+            id: "test-additive",
+            title: "Test Additive",
+            prompt_section: "",
+            allowed_tool_ids: None,
+            model: None,
+            iteration_cap: None,
+            include_repository_instructions: false,
+            skill_ids: &[],
+            summarize_on_cap: false,
+        }]);
+        // Built-in roles must still be found.
+        assert!(resolve(&RoleId("config".to_string())).is_some());
+        assert!(resolve(&RoleId(EXPLORE_ROLE_ID.to_string())).is_some());
+        // The external one too.
+        assert!(resolve(&RoleId("test-additive".to_string())).is_some());
+        // And a genuinely unknown id is still None.
+        assert!(resolve(&RoleId("no-such-role".to_string())).is_none());
     }
 }

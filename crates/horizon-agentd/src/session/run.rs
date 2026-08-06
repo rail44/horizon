@@ -22,6 +22,7 @@ use horizon_agent::tools::{
 use horizon_agent::wire::AgentWireEvent;
 
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
+use super::board::board_host_for;
 use super::completion::fold_tool_completion;
 use super::events::send_session_event;
 use super::exploration::AgentdExplorationHost;
@@ -223,6 +224,9 @@ pub(super) fn run_session(
     // `[provider]`.
     let filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
     let loopback_connect = configured_loopback_connect(state, workspace_root.as_deref());
+    // Constructed before `workspace_root` is moved into
+    // `tool_session_state_for` below.
+    let board = board_host_for(workspace_root.as_deref());
     let tool_state = tool_session_state_for(
         workspace_root,
         lock_unpoisoned(&state.agent_config).tools,
@@ -240,7 +244,8 @@ pub(super) fn run_session(
     .with_domain_policy(domains)
     .with_network_proxy(network)
     .with_judge(judge)
-    .with_exploration_host(exploration);
+    .with_exploration_host(exploration)
+    .with_board_host(board);
     let persisted_context = PersistedSessionContext {
         workspace_root: tool_state.workspace_root().map(Path::to_path_buf),
         isolated_worktree: isolated,

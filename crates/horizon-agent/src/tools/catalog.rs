@@ -646,6 +646,64 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
+        // `board.read` / `board.comment` (`docs/board-keeper-design.md`):
+        // the board keeper's (and any future board-aware role's) interface to
+        // the task board. Both are `AutoAllowRead` — `board.read` is a read,
+        // and `board.comment` is an append-only write whose audit trail is
+        // the board event log (same reasoning as `knowledge.write`).
+        // Structural enforcement of "comments only" is at the role level:
+        // the keeper role's allowlist names `board.comment` but no
+        // state-mutation tool, and no such tool exists in this catalog.
+        Definition {
+            id: "board.read".to_string(),
+            title: "Read Board".to_string(),
+            description: "Read the task board. If `id` is given, show that item with its \
+                full comment thread; otherwise list all items in rank order, optionally \
+                filtered by status. Items include id, title, body, status, rank, assignee, \
+                parent, dependencies, links, and comments."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Show this item with its comments. If omitted, lists all items.",
+                    },
+                    "status": {
+                        "type": "string",
+                        "description": "Filter the list by status (e.g. proposed, ready, in-progress, review, done, blocked). Ignored when `id` is given.",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
+            id: "board.comment".to_string(),
+            title: "Add Board Comment".to_string(),
+            description: "Add a comment to a board item. The comment author is set \
+                automatically from this session's id — you cannot set it. Comments are \
+                append-only; the board event log is the audit trail. No approval required."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "text"],
+                "properties": {
+                    "id": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "description": "Item id to comment on.",
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "Comment text (markdown).",
+                    },
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
     ]
 }
 
