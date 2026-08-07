@@ -27,6 +27,7 @@ use std::pin::Pin;
 
 use futures::channel::{mpsc, oneshot};
 use futures::StreamExt;
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
@@ -93,6 +94,52 @@ fn updated_label(item: &Item) -> String {
     match item_updated(item) {
         Some(at) => format_timestamp(at),
         None => "—".to_string(),
+    }
+}
+
+/// Determines the `Position` for a drag-and-drop reordering: if the
+/// dragged item is above the target (lower index), it goes after the
+/// target; if below, before. Same-index is a no-op (returns `None`).
+fn drop_position(dragged_index: usize, target_index: usize, target_id: u64) -> Option<Position> {
+    if dragged_index == target_index {
+        None
+    } else if dragged_index < target_index {
+        Some(Position::After(target_id))
+    } else {
+        Some(Position::Before(target_id))
+    }
+}
+
+/// Which half of a row the cursor is in during a drag, used to decide
+/// whether the drop indicator line shows above or below the row and
+/// whether the move is `Before` or `After`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DropHalf {
+    Above,
+    Below,
+}
+
+/// The drag payload for board item reordering: carried by GPUI's native
+/// `on_drag`/`on_drop` system. Also implements `Render` to produce the
+/// ghost view that follows the cursor during the drag.
+#[derive(Clone)]
+struct BoardDragValue {
+    item_id: u64,
+    title: String,
+}
+
+impl Render for BoardDragValue {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .bg(theme::surface_selected())
+            .text_color(theme::readable_on(
+                theme::text_primary(),
+                theme::surface_selected(),
+            ))
+            .text_size(px(13.0))
+            .child(self.title.clone())
     }
 }
 
@@ -198,6 +245,16 @@ struct BoardListDelegate {
     filtered: Vec<Item>,
     selected: Option<IndexPath>,
     loading: bool,
+    /// Back-reference to the pane view, set after construction so that
+    /// `on_drop` / `on_drag_move` callbacks in `render_item` can reach the
+    /// view's methods. Weak to avoid a reference cycle: the view owns the
+    /// list (strong `Entity`), so the delegate must hold a `WeakEntity` back
+    /// — a strong `Entity` here would prevent the view's `Drop` from running,
+    /// leaking the logd subscribe thread and socket on every pane close.
+    view: Option<WeakEntity<BoardPaneView>>,
+    /// The row and half the cursor is hovering over during an active drag,
+    /// for the drop indicator line. Cleared on drop or when the drag ends.
+    drop_indicator: Option<(u64, DropHalf)>,
 }
 
 impl BoardListDelegate {
@@ -207,6 +264,8 @@ impl BoardListDelegate {
             filtered: Vec::new(),
             selected: None,
             loading: true,
+            view: None,
+            drop_indicator: None,
         }
     }
 
@@ -245,7 +304,7 @@ impl ListDelegate for BoardListDelegate {
         &mut self,
         index: IndexPath,
         _window: &mut Window,
-        _cx: &mut Context<ListState<Self>>,
+        cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let item = self.filtered.get(index.row)?;
         let mut title_color = theme::text_primary();
@@ -261,12 +320,88 @@ impl ListDelegate for BoardListDelegate {
             count_color = theme::readable_on(count_color, surface);
             updated_color = theme::readable_on(updated_color, surface);
         }
+        let drag_value = BoardDragValue {
+            item_id: item.id,
+            title: item.title.clone(),
+        };
+        let view_entity = self.view.clone();
+        let target_id = item.id;
+        // Drop indicator: show a line above or below this row when a drag is
+        // active and the cursor is hovering over this row. Gated by
+        // `has_active_drag` so the indicator vanishes the instant the drag
+        // ends (drop or cancel), even though `drop_indicator` may still hold
+        // a stale value until the next interaction.
+        let is_drag_active = cx.has_active_drag();
+        let show_above = is_drag_active && self.drop_indicator == Some((item.id, DropHalf::Above));
+        let show_below = is_drag_active && self.drop_indicator == Some((item.id, DropHalf::Below));
+        let view_for_move = self.view.clone();
         Some(
             ListItem::new(index).child(
                 h_flex()
+                    .id(("board-item", item.id))
+                    .relative()
                     .items_center()
                     .gap_2()
                     .py_0p5()
+                    .on_drag(
+                        drag_value,
+                        |drag: &BoardDragValue, _pos, _window, cx: &mut App| {
+                            cx.new(|_| drag.clone())
+                        },
+                    )
+                    .on_drag_move(
+                        move |event: &DragMoveEvent<BoardDragValue>, _window, cx: &mut App| {
+                            let Some(view) = view_for_move.as_ref().and_then(|w| w.upgrade())
+                            else {
+                                return;
+                            };
+                            let mid_y = event.bounds.origin.y + event.bounds.size.height / 2.0;
+                            let half = if event.event.position.y < mid_y {
+                                DropHalf::Above
+                            } else {
+                                DropHalf::Below
+                            };
+                            view.update(cx, |view, cx| {
+                                view.list.update(cx, |list, cx| {
+                                    let changed = list.delegate_mut().drop_indicator
+                                        != Some((target_id, half));
+                                    list.delegate_mut().drop_indicator = Some((target_id, half));
+                                    if changed {
+                                        cx.notify();
+                                    }
+                                });
+                            });
+                        },
+                    )
+                    .on_drop(move |drag: &BoardDragValue, _window, cx: &mut App| {
+                        if let Some(view) = view_entity.as_ref().and_then(|w| w.upgrade()) {
+                            view.update(cx, |view, cx| {
+                                view.handle_drop(drag.item_id, target_id, cx);
+                            });
+                        }
+                    })
+                    .when(show_above, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .top(px(-1.0))
+                                .left_0()
+                                .w_full()
+                                .h(px(2.0))
+                                .bg(theme::accent()),
+                        )
+                    })
+                    .when(show_below, |this| {
+                        this.child(
+                            div()
+                                .absolute()
+                                .bottom(px(-1.0))
+                                .left_0()
+                                .w_full()
+                                .h(px(2.0))
+                                .bg(theme::accent()),
+                        )
+                    })
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -564,6 +699,11 @@ impl BoardPaneView {
         // `cx`); `root` is already resolved here. A pane with no root gets no
         // pump and no live updates, matching its no-read empty state.
         let live_updates = root.as_ref().map(|r| start_live_updates(r, cx));
+        let view_entity = cx.entity().downgrade();
+        list.update(cx, |list, cx| {
+            list.delegate_mut().view = Some(view_entity);
+            cx.notify();
+        });
         let view = Self {
             focus_handle: cx.focus_handle(),
             root,
@@ -769,6 +909,84 @@ impl BoardPaneView {
                     runtime.block_on(async move {
                         let store = Store::from_dir(&root)?;
                         store.add(&title, "", None, Position::Bottom).await
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if result.is_ok() {
+                    view.spawn_load(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    // -- drag-and-drop reordering ----------------------------------------
+
+    /// Called from a row's `on_drop` handler when a `BoardDragValue` is
+    /// dropped on the row for `target_id`. Looks up both items' indices in
+    /// the filtered list to determine `Before` or `After`, then calls
+    /// `Store::move_item` via `spawn_move`.
+    fn handle_drop(&mut self, dragged_id: u64, target_id: u64, cx: &mut Context<Self>) {
+        if dragged_id == target_id {
+            self.clear_drop_indicator(cx);
+            return;
+        }
+        // Prefer the drop indicator's half (precise: the cursor was in the
+        // top or bottom half of the target row). Fall back to index-based
+        // comparison if the indicator wasn't set (e.g. a fast drop where
+        // on_drag_move didn't fire).
+        let position = {
+            let delegate = self.list.read(cx).delegate();
+            delegate
+                .drop_indicator
+                .filter(|(id, _)| *id == target_id)
+                .map(|(_, half)| match half {
+                    DropHalf::Above => Position::Before(target_id),
+                    DropHalf::Below => Position::After(target_id),
+                })
+                .or_else(|| {
+                    let dragged_idx = delegate.filtered.iter().position(|i| i.id == dragged_id);
+                    let target_idx = delegate.filtered.iter().position(|i| i.id == target_id);
+                    match (dragged_idx, target_idx) {
+                        (Some(di), Some(ti)) => drop_position(di, ti, target_id),
+                        _ => None,
+                    }
+                })
+        };
+        self.clear_drop_indicator(cx);
+        if let Some(position) = position {
+            self.spawn_move(dragged_id, position, cx);
+        }
+    }
+
+    /// Clears the delegate's `drop_indicator` (called after a drop or when
+    /// the drag is cancelled).
+    fn clear_drop_indicator(&self, cx: &mut Context<Self>) {
+        self.list.update(cx, |list, cx| {
+            list.delegate_mut().drop_indicator = None;
+            cx.notify();
+        });
+    }
+
+    /// Moves item `item_id` to `position` via the store (same tokio-runtime
+    /// pattern as `add_item`), then reloads the list.
+    fn spawn_move(&self, item_id: u64, position: Position, cx: &mut Context<Self>) {
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+                    runtime.block_on(async move {
+                        let store = Store::from_dir(&root)?;
+                        store.move_item(item_id, position).await
                     })
                 })
                 .await;
@@ -990,8 +1208,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        board_confirm_transition, board_root_dir, filter_items, format_timestamp, item_updated,
-        parse_new_item,
+        board_confirm_transition, board_root_dir, drop_position, filter_items, format_timestamp,
+        item_updated, parse_new_item,
     };
     use horizon_board::{Comment, Item, Store};
 
@@ -1203,6 +1421,27 @@ mod tests {
             Some("Fix login bug".to_string())
         );
         assert_eq!(parse_new_item("Single"), Some("Single".to_string()));
+    }
+
+    #[test]
+    fn drop_position_after_when_dragging_down() {
+        assert_eq!(
+            drop_position(1, 3, 42),
+            Some(horizon_board::Position::After(42))
+        );
+    }
+
+    #[test]
+    fn drop_position_before_when_dragging_up() {
+        assert_eq!(
+            drop_position(3, 1, 42),
+            Some(horizon_board::Position::Before(42))
+        );
+    }
+
+    #[test]
+    fn drop_position_none_when_same_index() {
+        assert_eq!(drop_position(2, 2, 42), None);
     }
 
     // -- live-update poke -> reload target (pure model logic) --------------
