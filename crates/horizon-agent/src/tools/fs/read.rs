@@ -18,12 +18,16 @@ const MAX_LINE_LIMIT: usize = 2000;
 /// context budget before the line limit is reached.
 const MAX_CONTENT_CHARS: usize = 50_000;
 
-pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn execute(
+    tool_state: &ToolSessionState,
+    input: &Value,
+    allow_out_of_root: bool,
+) -> Value {
     let Some(path_arg) = input.get("path").and_then(Value::as_str) else {
         return error_output("fs.read requires a `path` string argument");
     };
 
-    let resolved = match resolve_path(tool_state, path_arg) {
+    let resolved = match resolve_path(tool_state, path_arg, allow_out_of_root) {
         Ok(path) => path,
         Err(error) => return error,
     };

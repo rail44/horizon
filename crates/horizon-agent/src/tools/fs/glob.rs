@@ -6,7 +6,11 @@ use super::safety::resolve_path;
 use super::traverse;
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn execute(
+    tool_state: &ToolSessionState,
+    input: &Value,
+    allow_out_of_root: bool,
+) -> Value {
     let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
         return error_output("fs.glob requires a `base_path` string argument");
     };
@@ -20,7 +24,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         .unwrap_or(tool_state.tools_config().fs.glob_result_limit)
         .max(1);
 
-    let base = match resolve_path(tool_state, base_arg) {
+    let base = match resolve_path(tool_state, base_arg, allow_out_of_root) {
         Ok(path) => path,
         Err(error) => return error,
     };

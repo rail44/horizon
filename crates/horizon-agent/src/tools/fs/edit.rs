@@ -59,7 +59,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     // edit's own failure.
     let lock_paths = edits
         .iter()
-        .filter_map(|edit| resolve_path(tool_state, edit.path).ok())
+        .filter_map(|edit| resolve_path(tool_state, edit.path, false).ok())
         .collect::<Vec<_>>();
     let locks = FileLocks::acquire(lock_paths);
     let _guards = locks.hold();
@@ -196,7 +196,7 @@ fn apply_one(
     written: &mut HashSet<PathBuf>,
 ) -> Result<usize, String> {
     let path_arg = edit.path;
-    let resolved = resolve_path(tool_state, path_arg).map_err(|error| message_of(&error))?;
+    let resolved = resolve_path(tool_state, path_arg, false).map_err(|error| message_of(&error))?;
 
     if !resolved.is_file() {
         return Err(format!(

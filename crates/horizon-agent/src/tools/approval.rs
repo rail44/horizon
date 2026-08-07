@@ -79,13 +79,22 @@ pub enum ApprovalOutcome {
 /// Tool ids Horizon executes itself once approved, rather than notifying
 /// the provider via `ApproveToolCall`/`DenyToolCall` and waiting for it to
 /// report a result. See `docs/agent-tools-design.md`, "Approval Wiring".
-/// `config.write` (`tools::config`) joins the fs tools here since it's the
-/// same "runs to completion synchronously" shape -- see
+/// `fs.read`/`fs.glob`/`fs.grep` join here because an out-of-workspace-root
+/// read routes through the approval gate (see `execution::execute_agent_tool`'s
+/// `call_escapes_root` check); `config.write` joins for the same reason -- all
+/// are "runs to completion synchronously" shape -- see
 /// [`resolve_synchronous_tool`].
 fn is_horizon_executed_tool(tool_id: &str) -> bool {
     matches!(
         tool_id,
-        "fs.write" | "fs.edit" | "bash" | "config.write" | "web_fetch"
+        "fs.read"
+            | "fs.glob"
+            | "fs.grep"
+            | "fs.write"
+            | "fs.edit"
+            | "bash"
+            | "config.write"
+            | "web_fetch"
     )
 }
 
@@ -283,7 +292,8 @@ fn resolve_web_fetch(
     ApprovalOutcome::Started { events, frame }
 }
 
-/// `fs.write`/`fs.edit`/`config.write`: all run to completion synchronously,
+/// `fs.write`/`fs.edit`/`config.write` and the approved-out-of-root read
+/// tools (`fs.read`/`fs.glob`/`fs.grep`): all run to completion synchronously,
 /// so their approve/deny always resolves to `Executed`. Dispatches through
 /// `tools::execute_approved`, which picks the owning module by tool id.
 fn resolve_synchronous_tool(

@@ -16,7 +16,7 @@ pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
         return error_output("fs.write requires a `content` string argument");
     };
 
-    let resolved = match resolve_path(tool_state, path_arg) {
+    let resolved = match resolve_path(tool_state, path_arg, false) {
         Ok(path) => path,
         Err(error) => return error,
     };

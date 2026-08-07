@@ -81,6 +81,18 @@ pub fn execute_agent_tool(
         Some(ToolPermission::AutoAllowRead) if request.tool_id == "board.comment" => {
             crate::tools::board::execute_comment(tool_state, session_id, request)
         }
+        // An fs read whose path escapes the workspace root is a boundary
+        // crossing — route it to the approval gate (judge/human) instead
+        // of auto-executing. The judge decides whether the out-of-root read
+        // is safe; a human can approve it directly. This puts fs and bash
+        // behind the same gate: in-workspace reads auto-run, out-of-workspace
+        // reads need approval, exactly as in-workspace bash auto-runs and
+        // out-of-workspace bash needs approval.
+        Some(ToolPermission::AutoAllowRead)
+            if fs::call_escapes_root(tool_state, &request.tool_id, &request.input) =>
+        {
+            Execution::RequiresApproval
+        }
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
             Execution::Auto(execute_auto_tool(host, tool_state, request))
         }

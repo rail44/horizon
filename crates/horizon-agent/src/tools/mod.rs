@@ -19,6 +19,7 @@ pub(crate) use bash::{
 };
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
+pub(crate) use fs::call_escapes_root;
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network

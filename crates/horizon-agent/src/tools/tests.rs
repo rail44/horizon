@@ -13,7 +13,7 @@ use crate::contract::{
 };
 use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::live::LiveState;
-use crate::tools::execution::{execute_agent_tool, HostTools};
+use crate::tools::execution::{execute_agent_tool, Execution, HostTools};
 use crate::tools::fs as fs_tools;
 use crate::tools::state::{
     register_session_runtime, session_runtime, unregister_session_runtime, ToolSessionState,
@@ -267,6 +267,135 @@ fn fs_read_rejects_path_escaping_workspace_root() {
 
     assert!(is_error(&output));
     assert!(output["message"].as_str().unwrap().contains("escapes"));
+}
+
+/// An out-of-root `fs.read` routes to the approval gate, not auto-execute.
+#[test]
+fn fs_read_out_of_root_routes_to_approval() {
+    let root = temp_workspace("ootr-routing");
+    let outside = temp_workspace("ootr-outside");
+    let outside_file = outside.join("secret.txt");
+    fs::write(&outside_file, "top secret").unwrap();
+
+    let tool_state = ToolSessionState::new(root);
+    let execution = execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: json!({ "path": outside_file.display().to_string() }).into(),
+            occurrence_id: None,
+        },
+    );
+
+    assert_eq!(execution, Execution::RequiresApproval);
+}
+
+/// An in-root `fs.read` still auto-executes (the routing is only for
+/// out-of-root paths).
+#[test]
+fn fs_read_in_root_auto_executes() {
+    let root = temp_workspace("ootr-inroot");
+    let file = root.join("file.txt");
+    fs::write(&file, "hello").unwrap();
+
+    let tool_state = ToolSessionState::new(root);
+    let execution = execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: json!({ "path": file.display().to_string() }).into(),
+            occurrence_id: None,
+        },
+    );
+
+    assert!(matches!(execution, Execution::Auto(_)));
+}
+
+/// `execute_approved` with `allow_out_of_root = true` (the post-approval
+/// path for `fs.read`) reads an out-of-root file successfully.
+#[test]
+fn fs_read_approved_reads_out_of_root_file() {
+    let root = temp_workspace("ootr-approved");
+    let outside = temp_workspace("ootr-approved-outside");
+    let outside_file = outside.join("data.txt");
+    fs::write(&outside_file, "external content").unwrap();
+
+    let tool_state = ToolSessionState::new(root);
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.read",
+        &json!({ "path": outside_file.display().to_string() }),
+    );
+
+    assert!(!is_error(&output));
+    assert!(output["content"]
+        .as_str()
+        .unwrap()
+        .contains("external content"));
+}
+
+/// `fs.grep` and `fs.glob` out-of-root base paths also route to approval.
+#[test]
+fn fs_grep_and_glob_out_of_root_route_to_approval() {
+    let root = temp_workspace("ootr-grep-glob");
+    let outside = temp_workspace("ootr-grep-glob-outside");
+    fs::write(outside.join("file.txt"), "x").unwrap();
+
+    let tool_state = ToolSessionState::new(root.clone());
+    let input = json!({ "base_path": outside.display().to_string(), "pattern": "x" });
+    let execution = execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &ToolCallRequest {
+            call_id: ToolCallId("call-grep".to_string()),
+            tool_id: "fs.grep".to_string(),
+            input: input.clone().into(),
+            occurrence_id: None,
+        },
+    );
+    assert_eq!(execution, Execution::RequiresApproval);
+
+    let execution = execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &ToolCallRequest {
+            call_id: ToolCallId("call-glob".to_string()),
+            tool_id: "fs.glob".to_string(),
+            input: json!({ "base_path": outside.display().to_string(), "pattern": "*.txt" }).into(),
+            occurrence_id: None,
+        },
+    );
+    assert_eq!(execution, Execution::RequiresApproval);
+}
+
+/// A path argument that is missing or non-string does not trigger the
+/// out-of-root routing — it falls through to auto-execute, which then
+/// returns an error (not a boundary crossing).
+#[test]
+fn fs_read_missing_path_arg_does_not_route_to_approval() {
+    let root = temp_workspace("ootr-missing");
+    let tool_state = ToolSessionState::new(root);
+    let execution = execute_agent_tool(
+        &StubHostTools,
+        &tool_state,
+        SessionId::new(),
+        &ToolCallRequest {
+            call_id: ToolCallId("call-1".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: json!({}).into(),
+            occurrence_id: None,
+        },
+    );
+
+    assert!(matches!(execution, Execution::Auto(_)));
 }
 
 #[test]
