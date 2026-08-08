@@ -388,7 +388,7 @@
           "type": "string"
         },
         "status": {
-          "description": "Free-form slug string (recommended vocabulary: proposed / ready /\nin-progress / review / done / blocked). Empty until first set.",
+          "description": "Free-form slug string (recommended vocabulary: proposed / ready /\nin-progress / review / done / blocked / archived). Empty until first\nset. `done` and `archived` are closed statuses — hidden from the\ndefault `list` view by `is_closed_status`.",
           "type": "string"
         },
         "title": {

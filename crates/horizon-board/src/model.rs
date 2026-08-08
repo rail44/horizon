@@ -23,7 +23,9 @@ pub struct Item {
     pub title: String,
     pub body: String,
     /// Free-form slug string (recommended vocabulary: proposed / ready /
-    /// in-progress / review / done / blocked). Empty until first set.
+    /// in-progress / review / done / blocked / archived). Empty until first
+    /// set. `done` and `archived` are closed statuses — hidden from the
+    /// default `list` view by `is_closed_status`.
     pub status: String,
     /// Lexicographic rank string (lowercase a-z).
     pub rank: String,
@@ -114,6 +116,15 @@ pub fn fold(envelopes: &[Envelope]) -> HashMap<u64, Item> {
         }
     }
     items
+}
+
+/// Whether an item's status counts as "closed" — hidden from the default
+/// list view. `done` and `archived` are closed; everything else (including the
+/// empty/unset status) is open. Centralised so the closed-set is defined in
+/// one testable place rather than scattered as string literals across the
+/// CLI, UI, and daemon.
+pub fn is_closed_status(status: &str) -> bool {
+    matches!(status, "done" | "archived")
 }
 
 /// Returns items sorted by rank (lexicographic).
@@ -270,6 +281,17 @@ mod tests {
         let items = fold(&envelopes);
         assert_eq!(items[&1].status, "weird-custom-status");
         assert_eq!(items[&1].comments[0].author, "session:abc-123");
+    }
+
+    #[test]
+    fn is_closed_status_recognises_done_and_archived() {
+        assert!(is_closed_status("done"));
+        assert!(is_closed_status("archived"));
+        assert!(!is_closed_status(""));
+        assert!(!is_closed_status("proposed"));
+        assert!(!is_closed_status("in-progress"));
+        assert!(!is_closed_status("review"));
+        assert!(!is_closed_status("blocked"));
     }
 
     #[test]

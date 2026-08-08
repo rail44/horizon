@@ -18,8 +18,10 @@
 //! - `id`: sequential within the project (assigned on `item-created`)
 //! - `title` / `body`: one-line summary / markdown body
 //! - `status`: free-form string (recommended: proposed / ready /
-//!   in-progress / review / done / blocked). Not an enum so future
-//!   vocabulary changes never break past events.
+//!   in-progress / review / done / blocked / archived). Not an enum so
+//!   future vocabulary changes never break past events. `done` and
+//!   `archived` are treated as closed — hidden from the default `list`
+//!   view — by `is_closed_status`.
 //! - `rank`: lexicographic rank string (lexorank over `a`-`z`)
 //! - `assignee`: free-form string (empty = unassigned)
 //! - `parent`: optional parent item id
@@ -42,5 +44,5 @@ pub use store::{ListResult, Position, Store, StoreError, SubscribeStream};
 // there from this crate's `store`). These were crate-internal when the write
 // path lived here; now the daemon needs them.
 pub use event::{read as read_events, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
-pub use model::{fold, sorted_by_rank};
+pub use model::{fold, is_closed_status, sorted_by_rank};
 pub use rank::between as rank_between;

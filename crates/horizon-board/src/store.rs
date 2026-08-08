@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::event::{self, ReadReport};
-use crate::model::{fold, sorted_by_rank, Item};
+use crate::model::{fold, is_closed_status, sorted_by_rank, Item};
 use crate::wire::{
     log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient, SubscribeRequest,
 };
@@ -161,10 +161,18 @@ impl Store {
         Ok(report)
     }
 
-    /// Lists items in rank order, optionally filtered by status. Always
-    /// returns the full set of statuses across all items (for vocabulary-
-    /// drift visibility).
-    pub fn list(&self, status_filter: Option<&str>) -> Result<ListResult, StoreError> {
+    /// Lists items in rank order, optionally filtered by status. When
+    /// `include_closed` is false and no explicit `status_filter` is given,
+    /// items whose status is closed (`done` / `archived`) are hidden — the
+    /// default view. An explicit `status_filter` always wins (asking for
+    /// `status=done` shows done items regardless of `include_closed`).
+    /// Always returns the full set of statuses across *all* items (for
+    /// vocabulary-drift visibility), not just the visible subset.
+    pub fn list(
+        &self,
+        status_filter: Option<&str>,
+        include_closed: bool,
+    ) -> Result<ListResult, StoreError> {
         let report = self.read_locked()?;
         let items = fold(&report.envelopes);
         let sorted = sorted_by_rank(&items);
@@ -187,7 +195,11 @@ impl Store {
                 .filter(|i| i.status == filter)
                 .cloned()
                 .collect(),
-            None => sorted.into_iter().cloned().collect(),
+            None => sorted
+                .into_iter()
+                .filter(|i| include_closed || !is_closed_status(&i.status))
+                .cloned()
+                .collect(),
         };
 
         Ok(ListResult {
@@ -254,7 +266,8 @@ impl Store {
 
     /// Sets the status of item `id`. The status is a free-form string
     /// (recommended vocabulary: proposed / ready / in-progress / review /
-    /// done / blocked).
+    /// done / blocked / archived). `done` and `archived` are closed —
+    /// hidden from the default `list` view.
     pub async fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
         let reply = self
             .ingest(IngestRequest::SetStatus {
@@ -552,7 +565,7 @@ mod tests {
         seed_item(&path, 3, "C", "a", 3000);
 
         let store = Store::at(path.clone());
-        let result = store.list(None).unwrap();
+        let result = store.list(None, true).unwrap();
         assert_eq!(result.items.len(), 3);
         // Sorted by rank: C (a), A (n), B (s).
         assert_eq!(result.items[0].id, 3);
@@ -563,10 +576,10 @@ mod tests {
         seed_update(&path, 1, 4000, Some("proposed"), None, None, None);
         seed_update(&path, 2, 5000, Some("ready"), None, None, None);
 
-        let result = store.list(None).unwrap();
+        let result = store.list(None, true).unwrap();
         assert_eq!(result.statuses, vec!["proposed", "ready"]);
 
-        let result = store.list(Some("ready")).unwrap();
+        let result = store.list(Some("ready"), true).unwrap();
         assert_eq!(result.items.len(), 1);
         assert_eq!(result.items[0].id, 2);
     }
@@ -582,7 +595,7 @@ mod tests {
 
         // The fold (read path) should show both as ready+unassigned.
         let store = Store::at(path);
-        let result = store.list(Some("ready")).unwrap();
+        let result = store.list(Some("ready"), true).unwrap();
         assert_eq!(result.items.len(), 2);
         assert!(result.items[0].assignee.is_empty());
         assert!(result.items[1].assignee.is_empty());
@@ -608,7 +621,7 @@ mod tests {
         assert_eq!(item.status, "weird-custom-status");
         assert_eq!(item.comments[0].author, "session:abc-123");
 
-        let result = store.list(None).unwrap();
+        let result = store.list(None, true).unwrap();
         assert_eq!(result.statuses, vec!["weird-custom-status"]);
     }
 
@@ -622,6 +635,33 @@ mod tests {
         let store = Store::at(path);
         let shown = store.show(2).unwrap().unwrap();
         assert_eq!(shown.parent, Some(1));
+    }
+
+    #[test]
+    fn list_hides_archived_by_default() {
+        let path = tmp_path();
+        seed_item(&path, 1, "Open", "n", 1000);
+        seed_item(&path, 2, "Done", "s", 2000);
+        seed_item(&path, 3, "Archived", "t", 3000);
+        seed_update(&path, 2, 4000, Some("done"), None, None, None);
+        seed_update(&path, 3, 5000, Some("archived"), None, None, None);
+
+        let store = Store::at(path);
+        // Default: closed items hidden.
+        let result = store.list(None, false).unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].id, 1);
+        // Statuses still reflect all items (vocabulary-drift visibility).
+        assert_eq!(result.statuses, vec!["archived", "done"]);
+
+        // --all: everything visible.
+        let result = store.list(None, true).unwrap();
+        assert_eq!(result.items.len(), 3);
+
+        // Explicit status filter wins even for closed statuses.
+        let result = store.list(Some("done"), false).unwrap();
+        assert_eq!(result.items.len(), 1);
+        assert_eq!(result.items[0].id, 2);
     }
 
     #[test]
@@ -644,7 +684,7 @@ mod tests {
         seed_item(&path, 2, "B", "s", 2000);
 
         let store = Store::at(path);
-        let result = store.list(None).unwrap();
+        let result = store.list(None, true).unwrap();
         assert_eq!(result.items.len(), 2);
         assert!(result.skipped.is_some());
         assert!(result.skipped.as_ref().unwrap().contains("corrupt"));

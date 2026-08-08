@@ -28,15 +28,17 @@ Usage: horizon board <command> [options]
 Commands:
   add <title> [--body <text>] [--parent <id>] [--after <id> | --before <id> | --top]
       Create a new item. Default position is the bottom of the queue.
-  list [--status <s>]
-      List items in rank order. Always shows all existing statuses.
+  list [--status <s>] [--all]
+      List items in rank order (closed items hidden by default; --all shows
+      them). Always shows all existing statuses.
   show <id>
       Show all fields and comments for one item.
   comment <id> --author <author> <text>
       Add a comment to an item.
   set-status <id> <status>
       Set an item's status (free-form; recommended: proposed / ready /
-      in-progress / review / done / blocked).
+      in-progress / review / done / blocked / archived). `done` and `archived`
+      are hidden from the default `list` view; use `list --all` to see them.
   assign <id> <who>
       Assign an item (empty string to unassign).
   move <id> [--after <id> | --before <id> | --top]
@@ -71,6 +73,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
     let mut as_who: Option<String> = None;
     let mut since: Option<String> = None;
     let mut json = false;
+    let mut all = false;
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -132,6 +135,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
                 }
             },
             "--json" => json = true,
+            "--all" => all = true,
             s if s.starts_with("--") => {
                 let _ = writeln!(stderr, "error: unrecognized flag: {s}");
                 return 2;
@@ -175,6 +179,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         &as_who,
         &since,
         json,
+        all,
         &store,
         stdout,
     ));
@@ -200,6 +205,7 @@ async fn dispatch(
     as_who: &Option<String>,
     since: &Option<String>,
     json: bool,
+    all: bool,
     store: &Store,
     stdout: &mut impl Write,
 ) -> Result<(), String> {
@@ -230,7 +236,9 @@ async fn dispatch(
             Ok(())
         }
         "list" => {
-            let result = store.list(status.as_deref()).map_err(|e| e.to_string())?;
+            let result = store
+                .list(status.as_deref(), all)
+                .map_err(|e| e.to_string())?;
             if json {
                 print_list_json(stdout, &result);
             } else {

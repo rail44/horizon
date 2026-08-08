@@ -90,6 +90,19 @@ fn status_label(status: &str) -> String {
     }
 }
 
+/// The status vocabulary offered in the detail view's status bar: the
+/// recommended vocabulary from `horizon-board`'s model docs plus `archived`
+/// for the hide-from-default-list lifecycle this pane implements.
+const STATUSES: &[&str] = &[
+    "proposed",
+    "ready",
+    "in-progress",
+    "review",
+    "done",
+    "blocked",
+    "archived",
+];
+
 fn updated_label(item: &Item) -> String {
     match item_updated(item) {
         Some(at) => format_timestamp(at),
@@ -730,7 +743,7 @@ impl BoardPaneView {
                         .background_executor()
                         .spawn(async move {
                             Store::from_dir(&root)
-                                .and_then(|store| store.list(None))
+                                .and_then(|store| store.list(None, false))
                                 .map(|result| result.items)
                         })
                         .await;
@@ -1000,6 +1013,45 @@ impl BoardPaneView {
         .detach();
     }
 
+    /// Sets item `id` to `status` via the store, then reloads the detail view
+    /// and the list (so the list reflects the new status when the user
+    /// navigates back — an `archived` item disappears from the default view).
+    fn spawn_set_status(&self, id: u64, status: String, cx: &mut Context<Self>) {
+        // No-op when the item already has this status — avoids appending a
+        // redundant `item-updated` event to the append-only log.
+        if let BoardPaneMode::Detail { item, .. } = &self.mode {
+            if item.status == status {
+                return;
+            }
+        }
+        let Some(root) = self.root.clone() else {
+            return;
+        };
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .map_err(|e| StoreError::Io(std::io::Error::other(e)))?;
+                    runtime.block_on(async move {
+                        let store = Store::from_dir(&root)?;
+                        store.set_status(id, &status).await
+                    })
+                })
+                .await;
+            let _ = this.update(cx, |view, cx| {
+                if result.is_ok() {
+                    view.spawn_show(id, cx);
+                    view.spawn_load(cx);
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
     fn render_comments(item: &Item) -> AnyElement {
         if item.comments.is_empty() {
             return div()
@@ -1062,6 +1114,33 @@ impl BoardPaneView {
             item.body.clone()
         };
 
+        let mut status_buttons: Vec<AnyElement> = Vec::new();
+        for (i, &s) in STATUSES.iter().enumerate() {
+            let is_current = item.status == s;
+            let status_str = s.to_string();
+            status_buttons.push(
+                div()
+                    .id(("board-status-btn", i))
+                    .text_size(px(11.0))
+                    .px(px(6.0))
+                    .py(px(2.0))
+                    .rounded(px(3.0))
+                    .when(is_current, |this| {
+                        this.bg(theme::surface_selected())
+                            .text_color(theme::readable_on(
+                                theme::text_primary(),
+                                theme::surface_selected(),
+                            ))
+                    })
+                    .when(!is_current, |this| this.text_color(theme::text_muted()))
+                    .child(s.to_string())
+                    .on_click(cx.listener(move |view, _event, _window, cx| {
+                        view.spawn_set_status(id, status_str.clone(), cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+
         v_flex()
             .size_full()
             .child(
@@ -1102,6 +1181,15 @@ impl BoardPaneView {
                             .text_color(theme::text_muted())
                             .child(status),
                     ),
+            )
+            .child(
+                h_flex()
+                    .gap_1()
+                    .px(px(12.0))
+                    .py(px(4.0))
+                    .border_b_1()
+                    .border_color(theme::border())
+                    .children(status_buttons),
             )
             .child(
                 div()

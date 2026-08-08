@@ -40,7 +40,10 @@ impl AgentdBoardHost {
 
 impl BoardHost for AgentdBoardHost {
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String> {
-        let result = self.store.list(status_filter).map_err(|e| e.to_string())?;
+        let result = self
+            .store
+            .list(status_filter, true)
+            .map_err(|e| e.to_string())?;
         // `ListResult` doesn't derive `Serialize`, but `Item` does — the
         // model cares about the items, not the status-vocabulary summary.
         serde_json::to_value(&result.items).map_err(|e| e.to_string())
