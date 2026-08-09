@@ -321,6 +321,23 @@ impl Store {
         }
     }
 
+    /// Updates an item's title and/or body. Pass `None` for either field to
+    /// leave it unchanged — the append is a single `item-updated` event
+    /// carrying only the `Some` fields, so a partial edit does not clobber
+    /// the other.
+    pub async fn edit(
+        &self,
+        id: u64,
+        title: Option<String>,
+        body: Option<String>,
+    ) -> Result<(), StoreError> {
+        let reply = self.ingest(IngestRequest::Edit { id, title, body }).await?;
+        match reply {
+            IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
+        }
+    }
+
     // -- internals ------------------------------------------------------
 
     #[cold]

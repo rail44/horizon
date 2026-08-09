@@ -333,6 +333,41 @@
             "Claim"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "`Store::edit`: update an item's title and/or body. Each `Option` is\n`None` for \"leave unchanged\", matching how `ItemUpdated` models partial\nupdates.",
+          "properties": {
+            "Edit": {
+              "properties": {
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Edit"
+          ],
+          "type": "object"
         }
       ]
     },
