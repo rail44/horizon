@@ -254,6 +254,27 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
             append(&mut file, &env)?;
             Ok((IngestReply::Rank(rank), vec![seq]))
         }
+        IngestRequest::Edit { id, title, body } => {
+            let (mut file, report) = open_locked(path)?;
+            let items = fold(&report.envelopes);
+            if !items.contains_key(&id) {
+                return Err(LogError::ItemNotFound(id));
+            }
+            let env = make_envelope(BoardEvent::ItemUpdated {
+                id,
+                status: None,
+                rank: None,
+                assignee: None,
+                parent: None,
+                depends_on: None,
+                links: None,
+                title,
+                body,
+            });
+            let seq = report.line_count + 1;
+            append(&mut file, &env)?;
+            Ok((IngestReply::Done, vec![seq]))
+        }
         IngestRequest::Claim { who } => {
             let (mut file, report) = open_locked(path)?;
             let items = fold(&report.envelopes);

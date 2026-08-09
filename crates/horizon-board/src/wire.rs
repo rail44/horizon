@@ -92,6 +92,14 @@ pub enum IngestRequest {
     MoveItem { id: u64, position: Position },
     /// `Store::claim`: atomically claim the first ready+unassigned item.
     Claim { who: String },
+    /// `Store::edit`: update an item's title and/or body. Each `Option` is
+    /// `None` for "leave unchanged", matching how `ItemUpdated` models partial
+    /// updates.
+    Edit {
+        id: u64,
+        title: Option<String>,
+        body: Option<String>,
+    },
 }
 
 /// The result of an [`IngestRequest`], carrying back exactly what the

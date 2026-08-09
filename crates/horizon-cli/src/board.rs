@@ -41,6 +41,9 @@ Commands:
       are hidden from the default `list` view; use `list --all` to see them.
   assign <id> <who>
       Assign an item (empty string to unassign).
+  edit <id> [--title <t>] [--body <text>]
+      Edit an item's title and/or body. At least one of --title/--body is
+      required; fields not given are left unchanged.
   move <id> [--after <id> | --before <id> | --top]
       Re-rank an item within the queue.
   claim [--as <who>]
@@ -64,6 +67,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
     // Collect positionals and flags for the subcommand.
     let mut positionals: Vec<String> = Vec::new();
     let mut body: Option<String> = None;
+    let mut title: Option<String> = None;
     let mut parent: Option<String> = None;
     let mut after: Option<String> = None;
     let mut before: Option<String> = None;
@@ -81,6 +85,13 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
                 Some(v) => body = Some(v.clone()),
                 None => {
                     let _ = writeln!(stderr, "error: --body requires a value");
+                    return 2;
+                }
+            },
+            "--title" => match iter.next() {
+                Some(v) => title = Some(v.clone()),
+                None => {
+                    let _ = writeln!(stderr, "error: --title requires a value");
                     return 2;
                 }
             },
@@ -170,6 +181,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         command,
         &positionals,
         &body,
+        &title,
         &parent,
         &after,
         &before,
@@ -196,6 +208,7 @@ async fn dispatch(
     command: &str,
     positionals: &[String],
     body: &Option<String>,
+    title: &Option<String>,
     parent: &Option<String>,
     after: &Option<String>,
     before: &Option<String>,
@@ -287,6 +300,28 @@ async fn dispatch(
                 .await
                 .map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Comment added to item {id}");
+            Ok(())
+        }
+        "edit" => {
+            let id = parse_id(
+                positionals
+                    .first()
+                    .ok_or_else(|| "edit requires an <id>".to_string())?,
+            )
+            .map_err(|e| e.to_string())?;
+            if title.is_none() && body.is_none() {
+                return Err("edit requires at least one of --title / --body".to_string());
+            }
+            store
+                .edit(id, title.clone(), body.clone())
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(t) = title {
+                let _ = writeln!(stdout, "Item {id} -> title: {t}");
+            }
+            if let Some(b) = body {
+                let _ = writeln!(stdout, "Item {id} -> body updated ({} chars)", b.len());
+            }
             Ok(())
         }
         "set-status" => {

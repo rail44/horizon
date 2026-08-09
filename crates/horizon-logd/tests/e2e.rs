@@ -285,6 +285,106 @@ async fn board_store_client_round_trip_through_real_logd() {
 
 // ---- subscribe (stage B) --------------------------------------------------
 
+/// `edit` updates title and body through the real daemon, and a partial edit
+/// (only --title) leaves the body untouched.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn edit_updates_title_and_body_through_logd() {
+    use horizon_board::{Position, Store};
+
+    let socket_path = scratch_socket("logd-board-edit");
+    let mut command = Command::new(resolve_logd_binary());
+    command.arg("--socket").arg(&socket_path);
+    let logd = DaemonProcess::spawn(&mut command, socket_path.clone());
+
+    std::env::set_var(
+        "HORIZON_LOGD_BINARY",
+        resolve_logd_binary().to_string_lossy().to_string(),
+    );
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-board-edit-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let store = Store::at_with_socket(dir.join("events.jsonl"), socket_path);
+
+    let item = store
+        .add("Old Title", "old body", None, Position::Bottom)
+        .await
+        .expect("add through logd");
+    assert_eq!(item.id, 1);
+
+    // Edit both fields.
+    store
+        .edit(
+            1,
+            Some("New Title".to_string()),
+            Some("new body".to_string()),
+        )
+        .await
+        .expect("edit through logd");
+
+    let shown = store.show(1).expect("show").expect("item exists");
+    assert_eq!(shown.title, "New Title");
+    assert_eq!(shown.body, "new body");
+
+    // Partial edit: only title — body must survive.
+    store
+        .edit(1, Some("Title Only".to_string()), None)
+        .await
+        .expect("partial edit through logd");
+
+    let shown = store.show(1).expect("show").expect("item exists");
+    assert_eq!(shown.title, "Title Only");
+    assert_eq!(shown.body, "new body");
+
+    drop(logd);
+    std::env::remove_var("HORIZON_LOGD_BINARY");
+}
+
+/// `edit` on a nonexistent item returns `ItemNotFound`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn edit_on_nonexistent_item_is_rejected() {
+    use horizon_board::wire::LogError;
+
+    let logd = spawn_logd();
+    let client = connect_hub(&logd.socket_path).await;
+    client
+        .hub
+        .hello(log_client_hello("test-client"))
+        .await
+        .expect("hello");
+
+    let dir = std::env::temp_dir().join(format!(
+        "horizon-logd-edit-err-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = dir.join("events.jsonl");
+
+    let result = client
+        .hub
+        .ingest(
+            path.to_string_lossy().to_string(),
+            IngestRequest::Edit {
+                id: 99,
+                title: Some("x".to_string()),
+                body: None,
+            },
+        )
+        .await;
+    assert!(
+        matches!(result, Err(LogError::ItemNotFound(99))),
+        "expected ItemNotFound(99), got {result:?}"
+    );
+}
+
+// ---- subscribe (stage B) --------------------------------------------------
+
 /// Connects a raw NDJSON subscriber to logd (not remoc — the subscribe path
 /// is first-byte-sniffed away from chmux). Sends the request line, reads
 /// the current-seq reply, and returns the stream for further reads.
