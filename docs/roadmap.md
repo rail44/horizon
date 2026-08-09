@@ -7,18 +7,6 @@ design docs under `docs/`; shipped history is one line each. Rewritten
 narrative, including the shared-foundations chronicle, is in git
 history).
 
-## How work flows
-
-One **project session** owns this roadmap, long-horizon decisions, and
-integration (see AGENTS.md "Branch and Integration Flow"). **Domain
-sessions take items directly from this roadmap**, make concrete design
-decisions with the owner in-session, and report their branch and commit
-directly to the project session, citing the item they implement. There is no
-separate plans layer or filesystem handoff queue. Owner-filed dogfooding
-issues ride their own faster lifecycle in `docs/issues/`; small in-code
-findings ride `docs/tasks/backlog.md` (resolved/closed entries are archived
-in `backlog-resolved.md`).
-
 ## Current position (orientation only — the repo is the truth)
 
 The shell is GPUI-based with Horizon's own winit platform layer on

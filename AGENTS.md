@@ -67,8 +67,7 @@ spawn a real `horizon-agentd` — so they cannot pass from inside
 containment, and making them pass would mean removing the containment
 they verify. The profile skips exactly those (`.config/nextest.toml`
 lists them with reasons); the integrator running the default profile
-covers them when the branch lands, which is the same division of labour
-the branch-handoff flow already uses. Do not hand-build an exclusion
+covers them when the branch lands. Do not hand-build an exclusion
 list: a failure *outside* the profile's skip set is a real finding, and
 one session burned 92 rounds growing a 30-term filter one failure at a
 time before this profile existed (`docs/issues/010`). When you add a
@@ -333,49 +332,15 @@ The shell is GPUI-based (the Floem shell retired at tag
   `agent-pane-design.md`, `agent-provider-contract.md`,
   `agent-duckdb-state-design.md`). Add or update a doc when making a
   non-obvious architectural decision.
+- **Confirm your worktree before editing; keep `main` untouched.**
+  Sessions share this filesystem, and the shared main checkout is live
+  working state — a session has edited it by mistake before. Before
+  editing anything, confirm `git rev-parse --show-toplevel` points at
+  your own worktree. Work on a branch; committing to or pushing `main`
+  is integration and needs the owner's explicit clearance.
 
-## Branch and Integration Flow
-
-Development is organized as one **project session** (long-horizon
-milestones, application-wide decisions, integration) plus per-domain
-work sessions. If you are a domain or task session: implement on a
-branch, never commit to or push `main` directly, and hand your branch
-back to the project session. Subagent workers already follow
-the same shape (worktree branch handoff, `.claude/agents/worker.md`);
-this section extends it to every session working in this repository.
-Codex sessions additionally follow `.codex/delegation-workflow.md` for
-model-tier guidance, delegation boundaries, and root/worker responsibilities.
-Before editing anything, confirm `git rev-parse --show-toplevel` points at
-your own worktree, not the shared main checkout — a domain session has
-edited the main checkout directly by mistake before, and that is exactly
-the collision this whole flow exists to prevent.
-
-Direction comes from `docs/roadmap.md`: a domain session picks an
-item there and makes the concrete design decisions with the owner
-in-session — there is no separate plans layer; **the task brief and branch
-handoff are the scope record**. The project session does not relitigate
-in-session decisions at merge — its review covers the gate, cross-domain
-integration, and coherence with the roadmap and architecture docs,
-returning non-blocking concerns as notes — and reflects merges back
-into the roadmap. Live session state is deliberately not tracked in
-git.
-
-**Branch handoff:** when a branch is ready, report its name and commit ref,
-the roadmap item it implements, key design decisions, a short summary, and
-the tail of the gate run directly to the project session. Optional
-out-of-scope findings or friction belong in that report; durable findings can
-also ride the branch as edits to `docs/tasks/backlog.md`. The project session
-reviews and integrates the branch directly. There is no filesystem review
-queue or result watcher.
-
-## Open Work
-
-Check `docs/roadmap.md` — it is the single direction document (in
-flight / next / later). Status is not duplicated here.
-
-Owner-filed dogfooding issues ride a **separate, faster lifecycle** from
-the roadmap: they are written one-file-each under `docs/issues/` (see
-`docs/issues/README.md`) by an issue-filing session, and the project
-session triages them by priority and merge-conflict and dispatches the
-chosen ones to workers through the same branch-handoff flow. Filing an issue
-is not a request to fix it now.
+There is deliberately no development-flow spec in this repository
+(owner decision 2026-08-09): how work is organized changes too often to
+canonize, and a stale flow description misleads every session it is
+injected into. Recurring patterns worth keeping are extracted as
+loadable skills instead, loaded when the pattern is actually wanted.
