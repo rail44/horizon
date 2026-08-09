@@ -126,10 +126,34 @@ fn drop_position(dragged_index: usize, target_index: usize, target_id: u64) -> O
 /// Which half of a row the cursor is in during a drag, used to decide
 /// whether the drop indicator line shows above or below the row and
 /// whether the move is `Before` or `After`.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum DropHalf {
     Above,
     Below,
+}
+
+/// The drop-half decision for a row during a drag, gated on the cursor
+/// actually being over the row. Returns `None` when the cursor is outside
+/// `row_bounds`, so the per-row `on_drag_move` caller skips writing the
+/// shared `drop_indicator` for rows the cursor isn't over.
+///
+/// `on_drag_move` is dispatched in the capture phase with no hit-test, so a
+/// handler registered on every row fires for every row on each mouse move.
+/// Without this containment guard every row would overwrite the single
+/// `drop_indicator` slot and the last row to handle would win, drawing the
+/// indicator on the wrong row. `on_drop`, by contrast, is hit-tested
+/// (`hitbox.is_hovered`), so the actual move stays correct even when the
+/// indicator is wrong -- which is why the bug is visual.
+fn drop_half_for_row(cursor: &Point<Pixels>, row_bounds: &Bounds<Pixels>) -> Option<DropHalf> {
+    if !row_bounds.contains(cursor) {
+        return None;
+    }
+    let mid_y = row_bounds.origin.y + row_bounds.size.height / 2.0;
+    if cursor.y < mid_y {
+        Some(DropHalf::Above)
+    } else {
+        Some(DropHalf::Below)
+    }
 }
 
 /// The drag payload for board item reordering: carried by GPUI's native
@@ -368,11 +392,18 @@ impl ListDelegate for BoardListDelegate {
                             else {
                                 return;
                             };
-                            let mid_y = event.bounds.origin.y + event.bounds.size.height / 2.0;
-                            let half = if event.event.position.y < mid_y {
-                                DropHalf::Above
-                            } else {
-                                DropHalf::Below
+                            // `on_drag_move` fires for every row that registered a
+                            // handler on each mouse move (gpui dispatches it in the
+                            // capture phase with no hit-test, unlike `on_drop`), so
+                            // each row must guard on cursor containment itself: only
+                            // the row under the cursor sets the shared
+                            // `drop_indicator`. Without this, every row overwrites
+                            // the slot and the last row to handle wins, drawing
+                            // the line on the wrong row.
+                            let Some(half) =
+                                drop_half_for_row(&event.event.position, &event.bounds)
+                            else {
+                                return;
                             };
                             view.update(cx, |view, cx| {
                                 view.list.update(cx, |list, cx| {
@@ -1296,9 +1327,10 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        board_confirm_transition, board_root_dir, drop_position, filter_items, format_timestamp,
-        item_updated, parse_new_item,
+        board_confirm_transition, board_root_dir, drop_half_for_row, drop_position, filter_items,
+        format_timestamp, item_updated, parse_new_item, DropHalf,
     };
+    use gpui::{bounds, point, px, size};
     use horizon_board::{Comment, Item, Store};
 
     fn item(id: u64, title: &str, status: &str) -> Item {
@@ -1530,6 +1562,36 @@ mod tests {
     #[test]
     fn drop_position_none_when_same_index() {
         assert_eq!(drop_position(2, 2, 42), None);
+    }
+
+    // -- drag-move drop-half decision (per-row containment guard) ---------
+
+    #[test]
+    fn drop_half_for_row_above_when_cursor_in_top_half() {
+        let row = bounds(point(px(0.0), px(10.0)), size(px(100.0), px(20.0)));
+        // Midpoint is y=20; cursor at y=14 is in the top half.
+        let cursor = point(px(50.0), px(14.0));
+        assert_eq!(drop_half_for_row(&cursor, &row), Some(DropHalf::Above));
+    }
+
+    #[test]
+    fn drop_half_for_row_below_when_cursor_in_bottom_half() {
+        let row = bounds(point(px(0.0), px(10.0)), size(px(100.0), px(20.0)));
+        // Midpoint is y=20; cursor at y=26 is in the bottom half.
+        let cursor = point(px(50.0), px(26.0));
+        assert_eq!(drop_half_for_row(&cursor, &row), Some(DropHalf::Below));
+    }
+
+    #[test]
+    fn drop_half_for_row_none_when_cursor_outside_row() {
+        let row = bounds(point(px(0.0), px(10.0)), size(px(100.0), px(20.0)));
+        // Above and below the row's vertical extent.
+        assert_eq!(drop_half_for_row(&point(px(50.0), px(5.0)), &row), None);
+        assert_eq!(drop_half_for_row(&point(px(50.0), px(40.0)), &row), None);
+        // Left of the row.
+        assert_eq!(drop_half_for_row(&point(px(-1.0), px(20.0)), &row), None);
+        // The right edge is exclusive (half-open bounds), so x=100 is out.
+        assert_eq!(drop_half_for_row(&point(px(100.0), px(20.0)), &row), None);
     }
 
     // -- live-update poke -> reload target (pure model logic) --------------
