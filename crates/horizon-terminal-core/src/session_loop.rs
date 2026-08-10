@@ -746,9 +746,38 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .expect("snapshot after opening the window");
 
-        // Drain the tracing events the setup chunks produced (each visible
-        // chunk emits `pty_chunk_processed` then `notify_snapshot`).
-        while event_rx.try_recv().is_ok() {}
+        // Deterministically drain the tracing events the two setup chunks
+        // produced. Each visible chunk emits `pty_chunk_processed` then
+        // `notify_snapshot`; the startup snapshot is sent outside the
+        // `pty_rx` arm and emits no event. The loop thread's execution order
+        // is: (1) debug!(pty_chunk_processed) -> (2) notify_snapshot sends
+        // the frame -> (3) debug!(notify_snapshot). The test thread is
+        // unblocked by the frame arriving at step (2), but step (3) may not
+        // have run yet -- a `try_recv` drain here races with that pending
+        // event. So instead of a non-deterministic drain, consume exactly
+        // the two `notify_snapshot` events with blocking `recv`: the
+        // `pty_chunk_processed` that precedes each is already in the channel
+        // (sent before the frame), and the `notify_snapshot` that follows
+        // is what we wait for. After two `notify_snapshot` events, the event
+        // stream is empty of setup events.
+        for i in 0..2 {
+            // Each visible setup chunk: skip its pty_chunk_processed, then
+            // confirm its notify_snapshot.
+            let label = event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap_or_else(|_| panic!("setup chunk {i} pty_chunk_processed event"));
+            assert_eq!(
+                label, "pty_chunk_processed",
+                "setup chunk {i} should produce pty_chunk_processed first"
+            );
+            let label = event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap_or_else(|_| panic!("setup chunk {i} notify_snapshot event"));
+            assert_eq!(
+                label, "notify_snapshot",
+                "setup chunk {i} should produce notify_snapshot second"
+            );
+        }
 
         // The erase that will remove STALE, queued inside the still-open
         // window with no ESU in this chunk: fully absorbed by the sync
