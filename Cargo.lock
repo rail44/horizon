@@ -3785,6 +3785,8 @@ dependencies = [
  "serde_json",
  "termwiz",
  "tokio",
+ "tracing",
+ "tracing-subscriber",
  "unicode-width",
  "uuid",
 ]
