@@ -24,6 +24,14 @@ serde = { version = "1.0", features = ["derive"] }
 # `serde_json::Value` as the schema stand-in for termwiz-owned key types.
 serde_json = "1.0"
 termwiz = { version = "0.23.3", features = ["use_serde"] }
+# Observation facade for the session loop's internal transition points.
+# No subscriber is wired up in production (`horizon-terminald` never installs
+# one), so these events are no-ops at runtime; tests install a per-test
+# in-memory capture layer (see `tests` module) to assert on loop behavior by
+# event order instead of wall-clock waits (board #9, docs/issues/015).
+# `max_level_debug` is required for `debug!` macros to compile in at all
+# (without it, tracing's compile-time filter strips them to no-ops).
+tracing = { version = "0.1", features = ["max_level_debug"] }
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["serde"] }
 
@@ -32,6 +40,8 @@ uuid = { version = "1.18", features = ["serde"] }
 # pre-extraction `horizon` crate's dev-dependency this one replaces.
 base64 = "0.22"
 serde_json = "1.0"
+# The session-loop tests' in-memory event-capture subscriber (board #9).
+tracing-subscriber = { version = "0.3", default-features = false, features = ["std", "registry"] }
 # The live-connection wire tests (`tests/frame_watch.rs`,
 # `tests/limits.rs`), which host both ends of a real remoc connection over
 # a `UnixStream` pair.

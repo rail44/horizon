@@ -368,6 +368,11 @@ pub fn run_terminal_core(
                     return;
                 };
                 let events = core.write_vt(&bytes);
+                tracing::debug!(
+                    target: "horizon_terminal_core::session_loop",
+                    visible_dirty = events.visible_dirty,
+                    "pty_chunk_processed"
+                );
                 for bytes in events.pty_writes {
                     let _ = command_tx.send(TerminalCommand::Input(bytes));
                 }
@@ -391,6 +396,15 @@ pub fn run_terminal_core(
                 // content that flushes later. See `TerminalCore::write_vt`.
                 if events.visible_dirty {
                     notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                    tracing::debug!(
+                        target: "horizon_terminal_core::session_loop",
+                        "notify_snapshot"
+                    );
+                } else {
+                    tracing::debug!(
+                        target: "horizon_terminal_core::session_loop",
+                        "skipped_notify_buffered"
+                    );
                 }
             }
             recv(flush_rx) -> _ => {
@@ -398,6 +412,10 @@ pub fn run_terminal_core(
             }
             recv(sync_flush_rx) -> _ => {
                 let events = core.flush_sync_update();
+                tracing::debug!(
+                    target: "horizon_terminal_core::session_loop",
+                    "sync_flush_fired"
+                );
                 for bytes in events.pty_writes {
                     let _ = command_tx.send(TerminalCommand::Input(bytes));
                 }
@@ -423,6 +441,87 @@ pub fn run_terminal_core(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tracing_subscriber::prelude::*;
+
+    // ------------------------------------------------------------------
+    // Session-loop event capture (board #9, docs/issues/015)
+    // ------------------------------------------------------------------
+    // A thin `tracing_subscriber::Layer` that drains the loop's `debug!`
+    // observation points into a crossbeam channel. Installed per-test via
+    // `tracing::subscriber::with_default` inside the spawned thread, so tests
+    // can assert on loop behavior by *event order* instead of wall-clock
+    // negative waits (sleeping to confirm nothing arrived). No subscriber is
+    // ever installed in production, so the loop's `tracing::debug!` calls are
+    // no-ops at runtime.
+
+    /// Captures the `message` field of each session-loop tracing event.
+    struct EventSink {
+        tx: Sender<String>,
+    }
+
+    impl<S: tracing::Subscriber> tracing_subscriber::Layer<S> for EventSink {
+        fn on_event(
+            &self,
+            event: &tracing::Event<'_>,
+            _ctx: tracing_subscriber::layer::Context<'_, S>,
+        ) {
+            let mut visitor = MessageExtractor { message: None };
+            event.record(&mut visitor);
+            if let Some(msg) = visitor.message {
+                let _ = self.tx.send(msg);
+            }
+        }
+    }
+
+    struct MessageExtractor {
+        message: Option<String>,
+    }
+
+    impl tracing::field::Visit for MessageExtractor {
+        fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+            if field.name() == "message" {
+                self.message = Some(value.to_string());
+            }
+        }
+        fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                // tracing records string-literal messages as Debug values on
+                // some code paths (not record_str), so capture them here too,
+                // stripping the surrounding quotes Debug adds to &str.
+                let raw = format!("{:?}", value);
+                self.message = Some(raw.trim_matches('"').to_string());
+            }
+        }
+    }
+
+    /// Install `EventSink` as the current thread's tracing subscriber for the
+    /// duration of `run_terminal_core`, returning the channel to observe.
+    fn spawn_core_with_capture(
+        size: TerminalSize,
+        pty_rx: Receiver<Vec<u8>>,
+        receivers: CoreReceivers,
+        command_tx: Sender<TerminalCommand>,
+        frame_tx: Sender<TerminalFrame>,
+        update_tx: Sender<TerminalUpdate>,
+    ) -> Receiver<String> {
+        let (event_tx, event_rx) = crossbeam_channel::unbounded();
+        let sink = EventSink { tx: event_tx };
+        std::thread::spawn(move || {
+            let subscriber = tracing_subscriber::registry().with(sink);
+            tracing::subscriber::with_default(subscriber, || {
+                run_terminal_core(
+                    size,
+                    TerminalCoreOptions::default(),
+                    pty_rx,
+                    receivers,
+                    command_tx,
+                    frame_tx,
+                    update_tx,
+                );
+            });
+        });
+        event_rx
+    }
 
     /// Review fix (Medium): the window arm coalesces a burst of pending
     /// `window_rx` requests to the newest before serving, so a flood costs one
@@ -589,11 +688,17 @@ mod tests {
     /// fix (`docs/roadmap.md`): a PTY chunk that lands entirely inside an
     /// already-open BSU/ESU synchronized-update window -- fully absorbed by
     /// the sync buffer, nothing reaches the grid -- must not trigger a
-    /// `TerminalUpdate::Snapshot` either, immediate or coalesced. Before the
+    /// snapshot notification either, immediate or coalesced. Before the
     /// fix, `write_vt`'s caller notified unconditionally on every `pty_rx`
     /// chunk regardless of whether anything was actually flushed, which is
     /// "a compounding risk for redraws split across multiple reads" (the
     /// investigation's words) on top of the keystroke bug itself.
+    ///
+    /// Verified by **event order** (board #9, docs/issues/015): the loop's
+    /// `tracing::debug!` observation points surface whether `notify_snapshot`
+    /// was called or skipped, so the test asserts the event sequence directly
+    /// instead of sleeping on `recv_timeout` to confirm nothing arrived --
+    /// the wall-clock negative wait that used to flake under load is gone.
     #[test]
     fn mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
@@ -613,17 +718,14 @@ mod tests {
             window_rx: crossbeam_channel::never(),
         };
 
-        std::thread::spawn(move || {
-            run_terminal_core(
-                TerminalSize::new(40, 40),
-                TerminalCoreOptions::default(),
-                pty_rx,
-                receivers,
-                command_tx,
-                frame_tx,
-                update_tx,
-            );
-        });
+        let event_rx = spawn_core_with_capture(
+            TerminalSize::new(40, 40),
+            pty_rx,
+            receivers,
+            command_tx,
+            frame_tx,
+            update_tx,
+        );
 
         // Drain the startup snapshot.
         frame_rx
@@ -644,49 +746,85 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .expect("snapshot after opening the window");
 
+        // Deterministically drain the tracing events the two setup chunks
+        // produced. Each visible chunk emits `pty_chunk_processed` then
+        // `notify_snapshot`; the startup snapshot is sent outside the
+        // `pty_rx` arm and emits no event. The loop thread's execution order
+        // is: (1) debug!(pty_chunk_processed) -> (2) notify_snapshot sends
+        // the frame -> (3) debug!(notify_snapshot). The test thread is
+        // unblocked by the frame arriving at step (2), but step (3) may not
+        // have run yet -- a `try_recv` drain here races with that pending
+        // event. So instead of a non-deterministic drain, consume exactly
+        // the two `notify_snapshot` events with blocking `recv`: the
+        // `pty_chunk_processed` that precedes each is already in the channel
+        // (sent before the frame), and the `notify_snapshot` that follows
+        // is what we wait for. After two `notify_snapshot` events, the event
+        // stream is empty of setup events.
+        for i in 0..2 {
+            // Each visible setup chunk: skip its pty_chunk_processed, then
+            // confirm its notify_snapshot.
+            let label = event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap_or_else(|_| panic!("setup chunk {i} pty_chunk_processed event"));
+            assert_eq!(
+                label, "pty_chunk_processed",
+                "setup chunk {i} should produce pty_chunk_processed first"
+            );
+            let label = event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .unwrap_or_else(|_| panic!("setup chunk {i} notify_snapshot event"));
+            assert_eq!(
+                label, "notify_snapshot",
+                "setup chunk {i} should produce notify_snapshot second"
+            );
+        }
+
         // The erase that will remove STALE, queued inside the still-open
         // window with no ESU in this chunk: fully absorbed by the sync
-        // buffer, nothing reaches the grid yet.
+        // buffer, nothing reaches the grid yet. The loop's observation
+        // points confirm this directly by event order -- no wall-clock
+        // negative wait needed.
         pty_tx.send(b"\x1b[H\x1b[K".to_vec()).unwrap();
-        // The wait must exceed COALESCE_WINDOW so a spurious coalescing
-        // flush-timer (armed at <= COALESCE_WINDOW under the old buggy code
-        // that notified on every chunk) has time to fire and surface a frame
-        // -- but it must stay under vte::ansi's SYNC_UPDATE_TIMEOUT (150 ms,
-        // per `core.rs` line 50; not re-exported, so hardcoded here) so the
-        // *correct* code's failsafe does not flush the buffered erase
-        // mid-wait and make this assertion pass for the wrong reason.
-        // 5x the coalesce window (80 ms) leaves balanced margins: ~64 ms
-        // above the lower bound, ~70 ms below the upper. An order-based
-        // rewrite is not feasible -- buffering is silent (no observable
-        // event), and coalescing hides the bug when the mid-sync chunk and
-        // the close are sent back-to-back (docs/issues/015).
-        const SYNC_UPDATE_TIMEOUT: Duration = Duration::from_millis(150);
-        let no_notify_wait = COALESCE_WINDOW * 5;
-        debug_assert!(
-            no_notify_wait > COALESCE_WINDOW && no_notify_wait < SYNC_UPDATE_TIMEOUT,
-            "no_notify_wait must sit between COALESCE_WINDOW and SYNC_UPDATE_TIMEOUT"
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("pty_chunk_processed event"),
+            "pty_chunk_processed",
+            "the buffered chunk must be processed"
         );
-        assert!(
-            frame_rx.recv_timeout(no_notify_wait).is_err(),
-            "a chunk fully buffered inside an open sync window must not notify"
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("skipped_notify_buffered event"),
+            "skipped_notify_buffered",
+            "a chunk fully buffered inside an open sync window must skip \
+             notify_snapshot, not call it"
         );
 
         // Closing the window flushes the erase onto the grid -- this one
         // must notify, and STALE must actually be gone.
         pty_tx.send(b"\x1b[?2026l".to_vec()).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(2);
-        let mut flushed = false;
-        while Instant::now() < deadline {
-            if let Ok(frame) = frame_rx.recv_timeout(Duration::from_millis(50)) {
-                assert!(
-                    !frame.text().contains("STALE"),
-                    "the flush must apply the buffered erase"
-                );
-                flushed = true;
-                break;
-            }
-        }
-        assert!(flushed, "closing the window must produce a snapshot");
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("pty_chunk_processed event"),
+            "pty_chunk_processed",
+            "the close-window chunk must be processed"
+        );
+        assert_eq!(
+            event_rx
+                .recv_timeout(Duration::from_millis(500))
+                .expect("notify_snapshot event"),
+            "notify_snapshot",
+            "closing the window must notify a snapshot"
+        );
+        let frame = frame_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("snapshot after closing the window");
+        assert!(
+            !frame.text().contains("STALE"),
+            "the flush must apply the buffered erase"
+        );
     }
 
     /// End-to-end regression coverage for OSC 52 clipboard-write plumbing
