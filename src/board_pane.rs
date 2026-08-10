@@ -110,16 +110,45 @@ fn updated_label(item: &Item) -> String {
     }
 }
 
-/// Determines the `Position` for a drag-and-drop reordering: if the
-/// dragged item is above the target (lower index), it goes after the
-/// target; if below, before. Same-index is a no-op (returns `None`).
-fn drop_position(dragged_index: usize, target_index: usize, target_id: u64) -> Option<Position> {
-    if dragged_index == target_index {
-        None
-    } else if dragged_index < target_index {
-        Some(Position::After(target_id))
-    } else {
-        Some(Position::Before(target_id))
+/// The `Position` (if any) for dropping `dragged_id` onto the given `half`
+/// of `target_id`'s row, or `None` when the drop is a no-op -- it would
+/// leave the item where it already is.
+///
+/// `Above` maps to `Before(target_id)` and `Below` to `After(target_id)`,
+/// but both are suppressed when the resulting insertion point equals the
+/// dragged item's current position. A drop is a no-op when the dragged
+/// and target items are the same, or when dropping on the near half of an
+/// adjacent row (the half that faces the dragged item): `Above` on the row
+/// immediately *below* the dragged item, or `Below` on the row immediately
+/// *above* it. This is the invariant behind the indicator: a position that
+/// shows an indicator is always one where a drop will execute a move.
+fn drop_position_from_half(
+    dragged_id: u64,
+    items: &[Item],
+    target_id: u64,
+    half: DropHalf,
+) -> Option<Position> {
+    let di = items.iter().position(|i| i.id == dragged_id)?;
+    let ti = items.iter().position(|i| i.id == target_id)?;
+    match half {
+        DropHalf::Above => {
+            // `Before(target)`: a no-op when the dragged item is the target
+            // itself, or already sits immediately before it.
+            if di == ti || di + 1 == ti {
+                None
+            } else {
+                Some(Position::Before(target_id))
+            }
+        }
+        DropHalf::Below => {
+            // `After(target)`: a no-op when the dragged item is the target
+            // itself, or already sits immediately after it.
+            if di == ti || di == ti + 1 {
+                None
+            } else {
+                Some(Position::After(target_id))
+            }
+        }
     }
 }
 
@@ -141,9 +170,10 @@ enum DropHalf {
 /// handler registered on every row fires for every row on each mouse move.
 /// Without this containment guard every row would overwrite the single
 /// `drop_indicator` slot and the last row to handle would win, drawing the
-/// indicator on the wrong row. `on_drop`, by contrast, is hit-tested
-/// (`hitbox.is_hovered`), so the actual move stays correct even when the
-/// indicator is wrong -- which is why the bug is visual.
+/// indicator on the wrong row. The drop itself is dispatched at the list level
+/// (a single `on_drop` on the list wrapper) and reads the target from
+/// `drop_indicator`, so a release anywhere over the list -- row, gap, or
+/// padding -- executes the insertion the indicator was showing.
 fn drop_half_for_row(cursor: &Point<Pixels>, row_bounds: &Bounds<Pixels>) -> Option<DropHalf> {
     if !row_bounds.contains(cursor) {
         return None;
@@ -282,15 +312,17 @@ struct BoardListDelegate {
     filtered: Vec<Item>,
     selected: Option<IndexPath>,
     loading: bool,
-    /// Back-reference to the pane view, set after construction so that
-    /// `on_drop` / `on_drag_move` callbacks in `render_item` can reach the
-    /// view's methods. Weak to avoid a reference cycle: the view owns the
-    /// list (strong `Entity`), so the delegate must hold a `WeakEntity` back
-    /// — a strong `Entity` here would prevent the view's `Drop` from running,
-    /// leaking the logd subscribe thread and socket on every pane close.
+    /// Back-reference to the pane view, set after construction so that the
+    /// `on_drag_move` callback in `render_item` can reach the view's methods.
+    /// Weak to avoid a reference cycle: the view owns the list (strong
+    /// `Entity`), so the delegate must hold a `WeakEntity` back -- a strong
+    /// `Entity` here would prevent the view's `Drop` from running, leaking the
+    /// logd subscribe thread and socket on every pane close.
     view: Option<WeakEntity<BoardPaneView>>,
     /// The row and half the cursor is hovering over during an active drag,
-    /// for the drop indicator line. Cleared on drop or when the drag ends.
+    /// for the drop indicator line. Set by `on_drag_move` only at non-no-op
+    /// positions (see `drop_position_from_half`); cleared on drop, when the
+    /// cursor moves onto a no-op position, or when the drag ends.
     drop_indicator: Option<(u64, DropHalf)>,
 }
 
@@ -361,7 +393,6 @@ impl ListDelegate for BoardListDelegate {
             item_id: item.id,
             title: item.title.clone(),
         };
-        let view_entity = self.view.clone();
         let target_id = item.id;
         // Drop indicator: show a line above or below this row when a drag is
         // active and the cursor is hovering over this row. Gated by
@@ -405,11 +436,32 @@ impl ListDelegate for BoardListDelegate {
                             else {
                                 return;
                             };
+                            let dragged_id = event.drag(cx).item_id;
                             view.update(cx, |view, cx| {
                                 view.list.update(cx, |list, cx| {
-                                    let changed = list.delegate_mut().drop_indicator
-                                        != Some((target_id, half));
-                                    list.delegate_mut().drop_indicator = Some((target_id, half));
+                                    let delegate = list.delegate_mut();
+                                    // Suppress the indicator at no-op positions
+                                    // (own row, or the near half of an adjacent row)
+                                    // so the invariant holds: a position that shows
+                                    // an indicator is always one where a drop will
+                                    // execute a move. Clearing -- rather than
+                                    // leaving the stale value -- also makes the
+                                    // indicator vanish as soon as the cursor moves
+                                    // onto a no-op position.
+                                    let new_indicator = if drop_position_from_half(
+                                        dragged_id,
+                                        &delegate.filtered,
+                                        target_id,
+                                        half,
+                                    )
+                                    .is_some()
+                                    {
+                                        Some((target_id, half))
+                                    } else {
+                                        None
+                                    };
+                                    let changed = delegate.drop_indicator != new_indicator;
+                                    delegate.drop_indicator = new_indicator;
                                     if changed {
                                         cx.notify();
                                     }
@@ -417,13 +469,6 @@ impl ListDelegate for BoardListDelegate {
                             });
                         },
                     )
-                    .on_drop(move |drag: &BoardDragValue, _window, cx: &mut App| {
-                        if let Some(view) = view_entity.as_ref().and_then(|w| w.upgrade()) {
-                            view.update(cx, |view, cx| {
-                                view.handle_drop(drag.item_id, target_id, cx);
-                            });
-                        }
-                    })
                     .when(show_above, |this| {
                         this.child(
                             div()
@@ -968,36 +1013,20 @@ impl BoardPaneView {
 
     // -- drag-and-drop reordering ----------------------------------------
 
-    /// Called from a row's `on_drop` handler when a `BoardDragValue` is
-    /// dropped on the row for `target_id`. Looks up both items' indices in
-    /// the filtered list to determine `Before` or `After`, then calls
-    /// `Store::move_item` via `spawn_move`.
-    fn handle_drop(&mut self, dragged_id: u64, target_id: u64, cx: &mut Context<Self>) {
-        if dragged_id == target_id {
-            self.clear_drop_indicator(cx);
-            return;
-        }
-        // Prefer the drop indicator's half (precise: the cursor was in the
-        // top or bottom half of the target row). Fall back to index-based
-        // comparison if the indicator wasn't set (e.g. a fast drop where
-        // on_drag_move didn't fire).
+    /// Called from the list-level `on_drop` handler when a `BoardDragValue`
+    /// is dropped anywhere over the board list. Reads the shared
+    /// `drop_indicator` (set by `on_drag_move`) to determine the target row
+    /// and half, then computes the `Position` via `drop_position_from_half`,
+    /// which suppresses no-ops. The invariant holds by construction:
+    /// `on_drag_move` only sets the indicator at non-no-op positions, so a
+    /// drop where the indicator shows always executes a move.
+    fn handle_drop(&mut self, dragged_id: u64, cx: &mut Context<Self>) {
         let position = {
             let delegate = self.list.read(cx).delegate();
-            delegate
-                .drop_indicator
-                .filter(|(id, _)| *id == target_id)
-                .map(|(_, half)| match half {
-                    DropHalf::Above => Position::Before(target_id),
-                    DropHalf::Below => Position::After(target_id),
-                })
-                .or_else(|| {
-                    let dragged_idx = delegate.filtered.iter().position(|i| i.id == dragged_id);
-                    let target_idx = delegate.filtered.iter().position(|i| i.id == target_id);
-                    match (dragged_idx, target_idx) {
-                        (Some(di), Some(ti)) => drop_position(di, ti, target_id),
-                        _ => None,
-                    }
-                })
+            let indicator = delegate.drop_indicator;
+            indicator.and_then(|(target_id, half)| {
+                drop_position_from_half(dragged_id, &delegate.filtered, target_id, half)
+            })
         };
         self.clear_drop_indicator(cx);
         if let Some(position) = position {
@@ -1292,25 +1321,43 @@ impl Render for BoardPaneView {
                 }
             }))
             .child(match &self.mode {
-                BoardPaneMode::List => v_flex()
-                    .size_full()
-                    .child(
-                        div()
-                            .id("board-list-wrap")
-                            .flex_1()
-                            .min_h_0()
-                            .child(List::new(&self.list)),
-                    )
-                    .child(
-                        div()
-                            .px(px(12.0))
-                            .pb(px(8.0))
-                            .pt(px(4.0))
-                            .border_t_1()
-                            .border_color(theme::border())
-                            .child(Input::new(&self.new_item_input).appearance(false)),
-                    )
-                    .into_any_element(),
+                BoardPaneMode::List => {
+                    let view_entity = cx.entity().downgrade();
+                    v_flex()
+                        .size_full()
+                        .child(
+                            div()
+                                .id("board-list-wrap")
+                                .flex_1()
+                                .min_h_0()
+                                // List-level drop dispatch: `on_drop` is hit-tested
+                                // per element, so a per-row handler misses the gaps
+                                // between rows and the list padding -- exactly where
+                                // the indicator line sits. A single handler on the
+                                // list wrapper covers the whole list region (rows,
+                                // gaps, and padding alike) and reads the target from
+                                // the shared `drop_indicator`, so a drop wherever
+                                // the indicator shows always executes that move.
+                                .on_drop(move |drag: &BoardDragValue, _window, cx: &mut App| {
+                                    if let Some(view) = view_entity.upgrade() {
+                                        view.update(cx, |view, cx| {
+                                            view.handle_drop(drag.item_id, cx);
+                                        });
+                                    }
+                                })
+                                .child(List::new(&self.list)),
+                        )
+                        .child(
+                            div()
+                                .px(px(12.0))
+                                .pb(px(8.0))
+                                .pt(px(4.0))
+                                .border_t_1()
+                                .border_color(theme::border())
+                                .child(Input::new(&self.new_item_input).appearance(false)),
+                        )
+                        .into_any_element()
+                }
                 BoardPaneMode::Detail {
                     item,
                     comment_input,
@@ -1327,8 +1374,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        board_confirm_transition, board_root_dir, drop_half_for_row, drop_position, filter_items,
-        format_timestamp, item_updated, parse_new_item, DropHalf,
+        board_confirm_transition, board_root_dir, drop_half_for_row, drop_position_from_half,
+        filter_items, format_timestamp, item_updated, parse_new_item, DropHalf,
     };
     use gpui::{bounds, point, px, size};
     use horizon_board::{Comment, Item, Store};
@@ -1543,25 +1590,126 @@ mod tests {
         assert_eq!(parse_new_item("Single"), Some("Single".to_string()));
     }
 
+    // -- drop-position from drop-half (no-op detection) -------------------
+    //
+    // `drop_position_from_half` is the half-based counterpart that drives
+    // both the indicator (no-op positions suppress it) and the drop. The
+    // sample list is [10, 20, 30, 40] at indices 0..3 so adjacency is easy
+    // to reason about.
+
+    fn sample_items() -> Vec<Item> {
+        vec![
+            item2(10, "a"),
+            item2(20, "b"),
+            item2(30, "c"),
+            item2(40, "d"),
+        ]
+    }
+
     #[test]
-    fn drop_position_after_when_dragging_down() {
+    fn drop_position_from_half_after_when_dragged_far_below_target() {
+        // Drag id 10 (idx 0) onto the bottom half of id 40 (idx 3): not
+        // adjacent, so After(40) is a real move.
+        let items = sample_items();
         assert_eq!(
-            drop_position(1, 3, 42),
-            Some(horizon_board::Position::After(42))
+            drop_position_from_half(10, &items, 40, DropHalf::Below),
+            Some(horizon_board::Position::After(40)),
         );
     }
 
     #[test]
-    fn drop_position_before_when_dragging_up() {
+    fn drop_position_from_half_before_when_dragged_far_above_target() {
+        // Drag id 40 (idx 3) onto the top half of id 10 (idx 0): not
+        // adjacent, so Before(10) is a real move.
+        let items = sample_items();
         assert_eq!(
-            drop_position(3, 1, 42),
-            Some(horizon_board::Position::Before(42))
+            drop_position_from_half(40, &items, 10, DropHalf::Above),
+            Some(horizon_board::Position::Before(10)),
         );
     }
 
     #[test]
-    fn drop_position_none_when_same_index() {
-        assert_eq!(drop_position(2, 2, 42), None);
+    fn drop_position_from_half_none_on_own_row_top_half() {
+        // Cause (2): the indicator used to draw on the dragged row's own
+        // halves; dropping there must be a no-op.
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(20, &items, 20, DropHalf::Above),
+            None
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_none_on_own_row_bottom_half() {
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(20, &items, 20, DropHalf::Below),
+            None
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_none_on_adjacent_row_near_half_above() {
+        // Drag id 20 (idx 1) onto the top half of id 30 (idx 2): the dragged
+        // item already sits immediately before the target, so Before(30)
+        // would leave it where it is -- a no-op.
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(20, &items, 30, DropHalf::Above),
+            None
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_none_on_adjacent_row_near_half_below() {
+        // Drag id 30 (idx 2) onto the bottom half of id 20 (idx 1): the
+        // dragged item already sits immediately after the target, so
+        // After(20) would leave it where it is -- a no-op.
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(30, &items, 20, DropHalf::Below),
+            None
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_moves_when_adjacent_far_half() {
+        // The far half of an adjacent row IS a move: drag id 20 (idx 1)
+        // onto the bottom half of id 30 (idx 2) -> After(30) swaps them.
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(20, &items, 30, DropHalf::Below),
+            Some(horizon_board::Position::After(30)),
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_swaps_two_items_via_far_half() {
+        // Two items only: dragging the first onto the bottom half of the
+        // second (the far half) swaps them.
+        let items = vec![item2(10, "a"), item2(20, "b")];
+        assert_eq!(
+            drop_position_from_half(10, &items, 20, DropHalf::Below),
+            Some(horizon_board::Position::After(20)),
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_none_when_target_absent() {
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(20, &items, 999, DropHalf::Above),
+            None
+        );
+    }
+
+    #[test]
+    fn drop_position_from_half_none_when_dragged_absent() {
+        let items = sample_items();
+        assert_eq!(
+            drop_position_from_half(999, &items, 20, DropHalf::Below),
+            None
+        );
     }
 
     // -- drag-move drop-half decision (per-row containment guard) ---------
