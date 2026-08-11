@@ -125,8 +125,9 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
    on a count (2026-08-11, board item #30), the workaround's reason for
    existing is gone: the harness paces against the provider's limit
    directly. The fail-fast refusal and the `MAX_CONCURRENT_PROVIDER_STREAMS`
-   / `MAX_CONCURRENT_TASKS` constants were removed; `running_for` and the
-   child registry stay for `task_output` and notification.
+   / `MAX_CONCURRENT_TASKS` constants were removed, along with the
+   `running_for` helper only that gate used; the child registry stays for
+   `task_output` and notification.
 6. **The plumbing is the subscription abstraction.** Everything above
    is written against "subscribe to another session's blocking/stop
    events" (owner direction recorded 2026-07-26 in
