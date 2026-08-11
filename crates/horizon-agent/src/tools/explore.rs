@@ -162,11 +162,6 @@ pub(crate) fn start(
         );
     };
 
-    let running = children::running_for(session_id);
-    if running.len() >= children::MAX_CONCURRENT_TASKS {
-        return synchronous(request, over_cap_output(&running));
-    }
-
     let started = match host.start(input.prompt) {
         Ok(started) => started,
         Err(message) => {
@@ -391,47 +386,6 @@ fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
 }
 
 use super::error_output;
-
-/// The over-cap refusal (decision 5, as amended 2026-07-28). It names every
-/// running child -- id and description -- so the model can decide whether to
-/// wait for one, read it with `task_output`, or work on something else,
-/// rather than blindly retrying, and it says *why* the ceiling exists: the
-/// budget is concurrent provider streams, of which the requester's own turn
-/// already holds one.
-fn over_cap_output(running: &[(SessionId, String)]) -> Value {
-    let listed = running
-        .iter()
-        .map(|(id, description)| format!("{} (\"{description}\")", id.as_uuid()))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let mut output = error_output(format!(
-        "this session may keep at most {} provider streams in flight at once, and your own turn \
-         is one of them, so at most {} tasks may run in parallel. {} already are: {listed}. This \
-         is the provider's concurrency limit, not a quota -- launching past it gets the whole \
-         session rate-limited. Keep working with what you have, or wait: you will be notified as \
-         each finishes.",
-        children::MAX_CONCURRENT_PROVIDER_STREAMS,
-        children::MAX_CONCURRENT_TASKS,
-        running.len(),
-    ));
-    if let Some(map) = output.as_object_mut() {
-        map.insert(
-            "running".to_string(),
-            Value::Array(
-                running
-                    .iter()
-                    .map(|(id, description)| {
-                        json!({
-                            "session_id": id.as_uuid().to_string(),
-                            "description": description,
-                        })
-                    })
-                    .collect(),
-            ),
-        );
-    }
-    output
-}
 
 /// Reasoning-close tags a serving layer can leak into an assistant message
 /// with no opening tag anywhere -- the `</mm:think>` shape observed
@@ -684,7 +638,9 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     // terminal (and unreachable in a v1 task child -- approvals
                     // cannot occur there; see the note above).
                     | Event::ApprovalResolved(_)
-                    | Event::ContinueTurnRequested(_) => {}
+                    | Event::ContinueTurnRequested(_)
+                    // Provider rate-limit pacing is not terminal.
+                    | Event::ProviderRateLimited(_) => {}
                 }
             },
         }

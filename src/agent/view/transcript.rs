@@ -95,6 +95,7 @@ pub(super) fn build_transcript_rows(
                     // `segment_bursts` closes the surrounding burst at it
                     // precisely so it can never be swallowed by a receipt.
                     | AgentFrameItem::HistoryCleared(_)
+                    | AgentFrameItem::ProviderRateLimited(_)
             ) || matches!(item, AgentFrameItem::ReasoningDelta(_) if span.ended.is_none())
                 || matches!(
                     item,
@@ -444,6 +445,20 @@ impl AgentTranscript {
                     "cleared {} old tool result(s) (~{} chars) — recoverable via recall",
                     cleared.cleared_call_ids.len(),
                     cleared.recovered_chars,
+                ),
+            )),
+            AgentFrameItem::ProviderRateLimited(rate_limited) => Some(block(
+                "throttled",
+                theme::text_subtle(),
+                format!(
+                    "provider {} — retrying in {}.{:03}s (attempt {})",
+                    rate_limited
+                        .status
+                        .map(|s| format!("HTTP {s}"))
+                        .unwrap_or_else(|| "transport failure".to_string()),
+                    rate_limited.backoff_ms / 1000,
+                    rate_limited.backoff_ms % 1000,
+                    rate_limited.attempt,
                 ),
             )),
             AgentFrameItem::Error(error) => {

@@ -34,6 +34,11 @@ pub enum AgentFrameItem {
     /// results above it, so without the divider the session would look
     /// unchanged while the model's view of it changed.
     HistoryCleared(HistoryCleared),
+    /// The provider rate-limited (or transiently rejected) a pre-generation
+    /// request and the turn is waiting out a backoff before retrying.
+    /// Visible but muted — the turn is still in progress. Deliberately not
+    /// a turn boundary (see `is_turn_boundary_item`).
+    ProviderRateLimited(ProviderRateLimited),
     Error(Error),
     Exited(Exit),
     /// A turn's receipt: the end reason `Event::TurnEnded` carries, plus the

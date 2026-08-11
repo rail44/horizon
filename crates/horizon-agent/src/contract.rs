@@ -266,6 +266,13 @@ pub enum Event {
     /// shows the resumed turn's `TurnEnded` receipt and the next turn's
     /// events; the audit row sits in the event log alongside them.
     ContinueTurnRequested(ContinueTurnRequested),
+    /// The provider rejected a pre-generation request with a transient
+    /// status (429 rate limit, 5xx gateway error, or a transport failure)
+    /// and the turn is retrying after a backoff. Emitted right before the
+    /// backoff sleep so the transcript shows the turn is pacing rather than
+    /// stalled. Not a turn boundary — the turn is still in progress, and
+    /// this item is deliberately excluded from `is_turn_boundary_item`.
+    ProviderRateLimited(ProviderRateLimited),
 }
 
 /// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
@@ -333,6 +340,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Error(_) => "error",
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
+        Event::ProviderRateLimited(_) => "provider_rate_limited",
     }
 }
 
@@ -914,6 +922,25 @@ pub enum ApprovalKind {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderRequestSent {
     pub model: String,
+}
+
+/// Payload for [`Event::ProviderRateLimited`]: the provider rejected a
+/// pre-generation request with a transient status and the turn is waiting
+/// out a backoff before retrying. Emitted from the retry loop
+/// (`providers::rig::completion::with_pre_generation_retry`) right before
+/// the backoff sleep, so the transcript shows the turn is pacing against
+/// the provider's rate limit rather than stalled.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ProviderRateLimited {
+    /// The HTTP status that caused the retry (429, 500, 502, 503, 504), or
+    /// `None` for a transport-level failure.
+    pub status: Option<u16>,
+    /// Which attempt this is (1-based). For 429 this climbs without bound;
+    /// for 5xx and transport failures it is bounded by
+    /// `PROVIDER_REQUEST_MAX_ATTEMPTS`.
+    pub attempt: u32,
+    /// How long the turn will wait before retrying, in milliseconds.
+    pub backoff_ms: u64,
 }
 
 /// Exact usage reported by a provider for one completion request. The fields

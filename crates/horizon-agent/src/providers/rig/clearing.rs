@@ -347,6 +347,7 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
             | Event::ContinueTurnRequested(_)
             // Turn/exit/error signals carry no clearing record.
             | Event::Error(_)
+            | Event::ProviderRateLimited(_)
             | Event::Exited(_)
             | Event::TurnEnded(_) => None,
         })

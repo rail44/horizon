@@ -105,23 +105,28 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
    `cancel-turn` (interrupting the requester must not vaporize
    in-flight investigation — mainstream behavior). Restart cleanup
    keeps using the role identity, unchanged.
-5. **Concurrency cap: 3** children in flight per requester. Launches
-   beyond the cap fail fast with a clear error naming the running
-   children (id + description). Per-child iteration cap 25 and
+5. **No concurrency cap on `task` children.** Launches are no longer
+   refused on a client-side concurrency limit; the provider's own rate
+   limiting (429) is absorbed by the harness — see
+   `providers::rig::completion::retryable_rejection`, where 429 retries
+   on time (exponential backoff capped at `PROVIDER_RETRY_MAX_BACKOFF`)
+   rather than on an attempt count. Per-child iteration cap 25 and
    `summarize_on_cap` behavior unchanged.
 
-   *Amended 2026-07-28.* The budget is **concurrent provider streams,
-   counting the requester's own turn**, not children: 3 children plus a
-   requester mid-turn is four streams against one endpoint, and that is
-   what produced the observed `429 Too many concurrent requests` which
-   killed a child 397s in
+   *History.* The original decision (pre-2026-07-28) was a cap of 3
+   children. The 2026-07-28 amendment redefined it as 3 concurrent
+   provider streams (counting the requester's own turn, i.e. 2 children)
+   after four streams against one endpoint produced a `429 Too many
+   concurrent requests` that killed a child 397s in
    (`docs/research/agent-harness-findings-97-2026-07-28.md`, candidate
-   5). So `MAX_CONCURRENT_PROVIDER_STREAMS = 3` and the launch ceiling
-   is that minus one, i.e. 2 children. The refusal now also says the
-   limit is provider concurrency rather than a policy quota, keeping the
-   running-children list. Held static: a provider-side signal
-   (`Retry-After`, or a 429 body naming the real limit) would be the
-   input for tuning it dynamically, and that is not built.
+   5). That cap was a client-side imitation of the provider's concurrency
+   limit — a workaround for a world where a 429 cost the full attempt
+   budget and killed the turn. With 429 now retried on time rather than
+   on a count (2026-08-11, board item #30), the workaround's reason for
+   existing is gone: the harness paces against the provider's limit
+   directly. The fail-fast refusal and the `MAX_CONCURRENT_PROVIDER_STREAMS`
+   / `MAX_CONCURRENT_TASKS` constants were removed; `running_for` and the
+   child registry stay for `task_output` and notification.
 6. **The plumbing is the subscription abstraction.** Everything above
    is written against "subscribe to another session's blocking/stop
    events" (owner direction recorded 2026-07-26 in
