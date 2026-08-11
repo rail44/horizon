@@ -9,6 +9,7 @@ use gpui::*;
 
 use super::{RunCommand, MODE_CONTEXT, SESSION_MANAGER_CONTEXT};
 use crate::keymap;
+use crate::terminal::TERMINAL_CONTEXT;
 
 /// Built-in default chord for [`super::ToggleWorkspaceMode`] — mirrors the
 /// Floem shell's `DEFAULT_WORKSPACE_MODE_CHORD`. Not bound when a
@@ -144,6 +145,22 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
     // dynamically instead of bound by type.
     bindings.push(list_select_binding(cx, "tab", "ui::SelectDown"));
     bindings.push(list_select_binding(cx, "shift-tab", "ui::SelectUp"));
+
+    // Cancel gpui-component `Root`'s global `tab`/`shift-tab` focus-traversal
+    // bindings (`crates/ui/src/root.rs`) while a terminal pane has focus. The
+    // terminal pane applies [`crate::terminal::TERMINAL_CONTEXT`] to its root
+    // div, and a `NoAction` binding at a more-specific context depth wins
+    // resolution (`Keymap::bindings_for_input` sorts by depth, descending) —
+    // so the `Root`-context `Tab`/`TabPrev` actions are suppressed and Tab
+    // falls through to the pane's `on_key_down` handler, reaching the encoder
+    // as `0x09` (board #31). These are fixed, like the List-context bindings
+    // above, so they are not part of `dynamic_keystrokes`.
+    bindings.push(KeyBinding::new("tab", NoAction, Some(TERMINAL_CONTEXT)));
+    bindings.push(KeyBinding::new(
+        "shift-tab",
+        NoAction,
+        Some(TERMINAL_CONTEXT),
+    ));
 
     (bindings, dynamic_keystrokes)
 }

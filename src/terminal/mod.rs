@@ -96,6 +96,19 @@ pub(crate) fn resolved_font() -> Font {
 /// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
 pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
 
+/// Key context applied to the terminal pane's root `div` so workspace-wide
+/// bindings scoped to the enclosing `Root`/`Workspace` contexts can be
+/// overridden here. Specifically, gpui-component's `Root` binds bare
+/// `tab`/`shift-tab` to its `Tab`/`TabPrev` focus-traversal actions in the
+/// `"Root"` context (`crates/ui/src/root.rs`); without a more-specific
+/// context on the terminal pane, that binding wins and the `KeyDownEvent`
+/// for Tab is consumed as an action before it can reach the pane's
+/// `on_key_down` handler — silently swallowing Tab (board #31). The
+/// `NoAction` overrides registered against this context in
+/// `workspace::bindings` cancel that, letting Tab fall through to the
+/// terminal's key encoder as `0x09`.
+pub(crate) const TERMINAL_CONTEXT: &str = "Terminal";
+
 pub(crate) fn font_size() -> f32 {
     static SIZE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
     *SIZE.get_or_init(|| {
@@ -812,6 +825,7 @@ impl Render for TerminalView {
             .flex()
             .flex_col()
             .bg(rgb(theme::background()))
+            .key_context(TERMINAL_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_key_down(cx.listener(|view, event: &KeyDownEvent, _window, cx| {
                 view.handle_key(event, cx);

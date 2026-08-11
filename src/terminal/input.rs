@@ -213,7 +213,8 @@ pub(crate) fn term_modifiers(modifiers: &Modifiers) -> termwiz::input::Modifiers
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui::{point, px};
+    use gpui::{point, px, Keystroke, Modifiers};
+    use termwiz::input::KeyCode;
 
     #[test]
     fn one_click_is_simple() {
@@ -373,6 +374,83 @@ mod tests {
                 LINE_HEIGHT
             ),
             None
+        );
+    }
+
+    // `term_key_code` maps a gpui `Keystroke` to a termwiz `KeyCode`. Named
+    // keys (Tab, Enter, Backspace, ...) must always map regardless of
+    // `keys_as_escape_codes`; character keys map only under Ctrl or that flag
+    // (board #31: Tab was being swallowed upstream by Root's focus-traversal
+    // binding, not here — these tests pin that the mapping itself is correct).
+
+    fn keystroke(key: &str) -> Keystroke {
+        Keystroke {
+            key: key.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn keystroke_with_ctrl(key: &str) -> Keystroke {
+        Keystroke {
+            key: key.to_string(),
+            modifiers: Modifiers::control(),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn tab_maps_to_keycode_tab_regardless_of_keys_as_escape_codes() {
+        // A bare Tab must always produce a structured KeyCode::Tab — never
+        // `None` (which would drop it) and never dependent on the kitty
+        // "report all keys" flag, because Tab is a named key, not a char.
+        assert_eq!(term_key_code(&keystroke("tab"), false), Some(KeyCode::Tab));
+        assert_eq!(term_key_code(&keystroke("tab"), true), Some(KeyCode::Tab));
+    }
+
+    #[test]
+    fn other_named_keys_always_map() {
+        // Named keys bypass the char-key modifier gate entirely.
+        assert_eq!(
+            term_key_code(&keystroke("enter"), false),
+            Some(KeyCode::Enter)
+        );
+        assert_eq!(
+            term_key_code(&keystroke("backspace"), false),
+            Some(KeyCode::Backspace)
+        );
+        assert_eq!(
+            term_key_code(&keystroke("escape"), false),
+            Some(KeyCode::Escape)
+        );
+        assert_eq!(
+            term_key_code(&keystroke("up"), false),
+            Some(KeyCode::UpArrow)
+        );
+    }
+
+    #[test]
+    fn bare_char_does_not_map_without_ctrl_or_escape_codes_flag() {
+        // A bare 'a' is printable text — it belongs to the text-input
+        // pipeline, so term_key_code returns None to avoid double-feeding.
+        assert_eq!(term_key_code(&keystroke("a"), false), None);
+    }
+
+    #[test]
+    fn ctrl_char_maps_to_keycode_char() {
+        // Ctrl+a is never printable text, so it maps to a structured key.
+        assert_eq!(
+            term_key_code(&keystroke_with_ctrl("a"), false),
+            Some(KeyCode::Char('a'))
+        );
+    }
+
+    #[test]
+    fn char_maps_under_keys_as_escape_codes_flag() {
+        // When the terminal negotiated kitty "report all keys", even bare
+        // printable chars are sent as structured keys.
+        assert_eq!(
+            term_key_code(&keystroke("a"), true),
+            Some(KeyCode::Char('a'))
         );
     }
 }
