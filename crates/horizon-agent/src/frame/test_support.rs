@@ -122,6 +122,10 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                     requested.resumed_from,
                 ));
             }
+            Event::ProviderRateLimited(rate_limited) => lines.push(format!(
+                "rate limited: status={:?} attempt={} backoff_ms={}",
+                rate_limited.status, rate_limited.attempt, rate_limited.backoff_ms,
+            )),
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),

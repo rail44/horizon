@@ -18,7 +18,7 @@ use crate::{
     config::RigAgentConfig,
     contract::{
         Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
-        ProviderRequestSent, ProviderRequestUsage, ToolCallId, ToolCallResult,
+        ProviderRateLimited, ProviderRequestSent, ProviderRequestUsage, ToolCallId, ToolCallResult,
     },
     prompt::{system_prompt, SessionEnvironment},
     tools::{definitions, Definition},
@@ -54,6 +54,12 @@ const PROVIDER_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// How many times one provider request may be sent when the provider keeps
 /// rejecting it before generating anything: the first send plus two retries.
+///
+/// Applies to 5xx gateway failures and transport-level failures. A 429
+/// (rate limit) is exempt: it is a pre-generation rejection where re-sending
+/// is always safe, so the harness paces on time (exponential backoff capped
+/// at [`PROVIDER_RETRY_MAX_BACKOFF`]) and retries indefinitely — the turn
+/// only ends via cancellation (`sleep_unless_cancelled`).
 pub(super) const PROVIDER_REQUEST_MAX_ATTEMPTS: u32 = 3;
 
 /// First backoff window; it doubles per attempt (~1s, ~2s, ~4s).
@@ -118,10 +124,7 @@ pub(super) struct TransientRejection {
     pub(super) status: Option<u16>,
     /// A `Retry-After` the provider named. rig surfaces no response headers,
     /// so this only fires when the provider repeats the hint in its error
-    /// body; absent, the exponential window below is used instead. A 429
-    /// body that names the concrete concurrency limit would be the natural
-    /// input for tuning the launch ceiling in `tools::explore::children`
-    /// dynamically -- deliberately not built now.
+    /// body; absent, the exponential window below is used instead.
     pub(super) retry_after: Option<Duration>,
     /// Whether a transport failure (`status: None`) occurred mid-stream —
     /// the response had started but a body decode failed (rig renders it
@@ -165,27 +168,43 @@ pub(super) enum Retried<T> {
 /// The retry decision, kept free of I/O so the classification is directly
 /// testable: `Some` exactly when this attempt may be sent again.
 ///
-/// Three independent gates, all of which must pass. The request must not
-/// have reached generation (anything after the provider started answering
-/// could be duplicated by a retry); the attempt budget must not be spent;
-/// and the failure must be one of the transient shapes above rather than a
-/// contract error or a stream timeout.
+/// Gates that must pass: the request must not have reached generation
+/// (anything after the provider started answering could be duplicated by a
+/// retry); and the failure must be one of the transient shapes above rather
+/// than a contract error or a stream timeout.
+///
+/// The attempt budget (`PROVIDER_REQUEST_MAX_ATTEMPTS`) applies to 5xx and
+/// transport failures. A 429 rate-limit rejection is exempt: re-sending is
+/// always safe before generation, so the harness paces on time and retries
+/// indefinitely rather than giving up after a fixed attempt count.
 pub(super) fn retryable_rejection(
     attempt: u32,
     durable_output_emitted: bool,
     message: &str,
 ) -> Option<TransientRejection> {
-    if durable_output_emitted || attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
+    if durable_output_emitted {
         return None;
     }
     if let Some(status) = rejected_status(message) {
-        return RETRYABLE_STATUSES
-            .contains(&status)
-            .then(|| TransientRejection {
-                status: Some(status),
-                retry_after: named_retry_after(message),
-                mid_stream: false,
-            });
+        if !RETRYABLE_STATUSES.contains(&status) {
+            return None;
+        }
+        // 429 is a pre-generation rate-limit: re-sending is always safe, so it
+        // retries on time rather than on an attempt count. 5xx stays under the
+        // budget — a 500 can be deterministic, and the budget bounds that cost.
+        if status != 429 && attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
+            return None;
+        }
+        return Some(TransientRejection {
+            status: Some(status),
+            retry_after: named_retry_after(message),
+            mid_stream: false,
+        });
+    }
+    // Transport-level failure (no status came back): bounded by the attempt
+    // budget, same as 5xx.
+    if attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
+        return None;
     }
     message
         .contains(TRANSPORT_FAILURE_MARKER)
@@ -283,6 +302,7 @@ pub(super) async fn sleep_unless_cancelled(delay: Duration, token: &Cancellation
 pub(super) async fn with_pre_generation_retry<T, F, Fut>(
     token: &CancellationToken,
     mut attempt: F,
+    mut on_retry: impl FnMut(u32, TransientRejection, Duration),
 ) -> Retried<T>
 where
     F: FnMut() -> Fut,
@@ -307,11 +327,12 @@ where
         // from its absence in the log; one line per retry is what makes it
         // legible next time.
         eprintln!(
-            "horizon-agent: provider rejected attempt {number}/{PROVIDER_REQUEST_MAX_ATTEMPTS} \
-             before any durable output ({}); retrying in {backoff:?}: {}",
+            "horizon-agent: provider rejected attempt {number} before any durable output \
+             ({}); retrying in {backoff:?}: {}",
             rejection.describe(),
             truncate_for_log(&message),
         );
+        on_retry(number, rejection, backoff);
         if !sleep_unless_cancelled(backoff, token).await {
             return Retried::Cancelled;
         }
@@ -520,24 +541,37 @@ async fn rig_openai_turn_with_retry(
     events_tx: &Sender<ProviderEvent>,
     token: &CancellationToken,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
-    let outcome = with_pre_generation_retry(token, || async {
-        let mut durable_output_emitted = false;
-        let result = rig_openai_turn_streaming(
-            config,
-            environment,
-            extra_sections,
-            prompt.clone(),
-            history.clone(),
-            events_tx.clone(),
-            token,
-            &mut durable_output_emitted,
-        )
-        .await;
-        Attempt {
-            result,
-            durable_output_emitted,
-        }
-    })
+    let outcome = with_pre_generation_retry(
+        token,
+        || async {
+            let mut durable_output_emitted = false;
+            let result = rig_openai_turn_streaming(
+                config,
+                environment,
+                extra_sections,
+                prompt.clone(),
+                history.clone(),
+                events_tx.clone(),
+                token,
+                &mut durable_output_emitted,
+            )
+            .await;
+            Attempt {
+                result,
+                durable_output_emitted,
+            }
+        },
+        |number, rejection, backoff| {
+            let _ = events_tx.send(
+                Event::ProviderRateLimited(ProviderRateLimited {
+                    status: rejection.status,
+                    attempt: number,
+                    backoff_ms: backoff.as_millis() as u64,
+                })
+                .into(),
+            );
+        },
+    )
     .await;
 
     match outcome {

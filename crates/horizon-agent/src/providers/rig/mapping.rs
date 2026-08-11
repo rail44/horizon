@@ -142,6 +142,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // (`clearing::cleared_call_ids_from_events`) so the *provider
             // view* comes out identical either way.
             | Event::HistoryCleared(_)
+            | Event::ProviderRateLimited(_)
             | Event::Exited(_)
             | Event::TurnEnded(_) => None,
         })

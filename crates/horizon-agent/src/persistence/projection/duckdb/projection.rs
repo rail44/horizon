@@ -133,6 +133,7 @@ impl Store {
             | Event::ApprovalResolved(_)
             | Event::ContinueTurnRequested(_)
             | Event::Error(_)
+            | Event::ProviderRateLimited(_)
             | Event::Exited(_) => Ok(()),
         }
     }

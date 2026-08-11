@@ -222,10 +222,33 @@ fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
         retryable_rejection(
             PROVIDER_REQUEST_MAX_ATTEMPTS,
             false,
-            &rejected_with("429 Too Many Requests", "slow down"),
+            &rejected_with("503 Service Unavailable", "slow down"),
         )
         .is_none(),
-        "the attempt budget is finite"
+        "the attempt budget is finite for 5xx"
+    );
+
+    // 429 is exempt from the attempt budget: it is a pre-generation
+    // rate-limit where re-sending is always safe, so the harness paces on
+    // time and retries indefinitely rather than giving up after a fixed
+    // count. The budget still bounds 5xx and transport failures above.
+    assert!(
+        retryable_rejection(
+            PROVIDER_REQUEST_MAX_ATTEMPTS,
+            false,
+            &rejected_with("429 Too Many Requests", "slow down"),
+        )
+        .is_some(),
+        "429 retries on time, not on an attempt count"
+    );
+    assert!(
+        retryable_rejection(
+            PROVIDER_REQUEST_MAX_ATTEMPTS + 100,
+            false,
+            &rejected_with("429 Too Many Requests", "slow down"),
+        )
+        .is_some(),
+        "429 never exhausts the attempt budget"
     );
 
     assert!(
@@ -280,23 +303,27 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
 
-    let outcome = with_pre_generation_retry(&token, || async {
-        attempts.set(attempts.get() + 1);
-        if attempts.get() == 1 {
-            Attempt {
-                result: Err(anyhow::anyhow!(rejected_with(
-                    "503 Service Unavailable",
-                    "upstream is unwell"
-                ))),
-                durable_output_emitted: false,
+    let outcome = with_pre_generation_retry(
+        &token,
+        || async {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                Attempt {
+                    result: Err(anyhow::anyhow!(rejected_with(
+                        "503 Service Unavailable",
+                        "upstream is unwell"
+                    ))),
+                    durable_output_emitted: false,
+                }
+            } else {
+                Attempt {
+                    result: Ok("the answer"),
+                    durable_output_emitted: true,
+                }
             }
-        } else {
-            Attempt {
-                result: Ok("the answer"),
-                durable_output_emitted: true,
-            }
-        }
-    })
+        },
+        |_, _, _| {},
+    )
     .await;
 
     assert!(matches!(outcome, Retried::Ok("the answer")));
@@ -310,16 +337,20 @@ async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying()
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
 
-    let outcome = with_pre_generation_retry::<(), _, _>(&token, || async {
-        attempts.set(attempts.get() + 1);
-        Attempt {
-            result: Err(anyhow::anyhow!(rejected_with(
-                "429 Too Many Requests",
-                "slow down"
-            ))),
-            durable_output_emitted: true,
-        }
-    })
+    let outcome = with_pre_generation_retry::<(), _, _>(
+        &token,
+        || async {
+            attempts.set(attempts.get() + 1);
+            Attempt {
+                result: Err(anyhow::anyhow!(rejected_with(
+                    "429 Too Many Requests",
+                    "slow down"
+                ))),
+                durable_output_emitted: true,
+            }
+        },
+        |_, _, _| {},
+    )
     .await;
 
     assert!(matches!(outcome, Retried::Failed(_)));
@@ -335,16 +366,20 @@ async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
     let attempts = std::cell::Cell::new(0u32);
 
     let started = std::time::Instant::now();
-    let outcome = with_pre_generation_retry::<(), _, _>(&token, || async {
-        attempts.set(attempts.get() + 1);
-        Attempt {
-            result: Err(anyhow::anyhow!(rejected_with(
-                "429 Too Many Requests",
-                "slow down"
-            ))),
-            durable_output_emitted: false,
-        }
-    })
+    let outcome = with_pre_generation_retry::<(), _, _>(
+        &token,
+        || async {
+            attempts.set(attempts.get() + 1);
+            Attempt {
+                result: Err(anyhow::anyhow!(rejected_with(
+                    "429 Too Many Requests",
+                    "slow down"
+                ))),
+                durable_output_emitted: false,
+            }
+        },
+        |_, _, _| {},
+    )
     .await;
 
     assert!(matches!(outcome, Retried::Cancelled));
@@ -354,6 +389,75 @@ async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
         "a cancelled turn must not wait out the backoff"
     );
     assert!(!sleep_unless_cancelled(Duration::from_secs(60), &token).await);
+}
+
+/// 429 retries past the attempt budget: a pre-generation rate-limit rejection
+/// is safe to re-send, so the harness paces on time rather than giving up
+/// after a fixed count. The loop accepts an attempt past MAX_ATTEMPTS, and
+/// the on-retry callback fires for every rejected attempt.
+#[tokio::test]
+async fn a_429_retries_past_the_attempt_budget() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let attempts = std::cell::Cell::new(0u32);
+    let retries = std::cell::Cell::new(0u32);
+
+    let outcome = with_pre_generation_retry(
+        &token,
+        || async {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() <= PROVIDER_REQUEST_MAX_ATTEMPTS {
+                Attempt {
+                    result: Err(anyhow::anyhow!(rejected_with(
+                        "429 Too Many Requests",
+                        "slow down"
+                    ))),
+                    durable_output_emitted: false,
+                }
+            } else {
+                Attempt {
+                    result: Ok("recovered"),
+                    durable_output_emitted: true,
+                }
+            }
+        },
+        |number, rejection, _backoff| {
+            assert_eq!(rejection.status, Some(429));
+            assert_eq!(number, attempts.get());
+            retries.set(retries.get() + 1);
+        },
+    )
+    .await;
+
+    assert!(matches!(outcome, Retried::Ok("recovered")));
+    assert_eq!(attempts.get(), PROVIDER_REQUEST_MAX_ATTEMPTS + 1);
+    assert_eq!(retries.get(), PROVIDER_REQUEST_MAX_ATTEMPTS);
+}
+
+/// 5xx still exhausts the attempt budget and fails: a 503 at the budget
+/// boundary is not retried, and the turn ends as Failed.
+#[tokio::test]
+async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let attempts = std::cell::Cell::new(0u32);
+
+    let outcome = with_pre_generation_retry::<(), _, _>(
+        &token,
+        || async {
+            attempts.set(attempts.get() + 1);
+            Attempt {
+                result: Err(anyhow::anyhow!(rejected_with(
+                    "503 Service Unavailable",
+                    "upstream is unwell"
+                ))),
+                durable_output_emitted: false,
+            }
+        },
+        |_, _, _| {},
+    )
+    .await;
+
+    assert!(matches!(outcome, Retried::Failed(_)));
+    assert_eq!(attempts.get(), PROVIDER_REQUEST_MAX_ATTEMPTS);
 }
 
 #[test]

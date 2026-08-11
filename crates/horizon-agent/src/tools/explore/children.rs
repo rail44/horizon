@@ -26,29 +26,6 @@ use crate::contract::SessionId;
 
 use super::ExplorationHost;
 
-/// How many provider streams one session may keep open at once, *counting
-/// the session's own turn*.
-///
-/// This is a provider-concurrency budget, not a policy quota. The
-/// 2026-07-28 amendment to `docs/agent-async-task-design.md` decision 5:
-/// the original cap of 3 children ignored the requester, so a session
-/// running its own turn plus three children opened four streams against one
-/// endpoint and earned a `429 Too many concurrent requests` that cost one
-/// child 10 requests of investigation
-/// (`docs/research/agent-harness-findings-97-2026-07-28.md`). Held small and
-/// static deliberately: a provider-side signal (`Retry-After`, or a 429 body
-/// naming the real limit -- see `providers::rig::completion::
-/// TransientRejection`) would be the input for tuning this dynamically, and
-/// that is not built.
-pub(crate) const MAX_CONCURRENT_PROVIDER_STREAMS: usize = 3;
-
-/// How many `task` children one requester may have in flight at once: the
-/// provider-stream ceiling minus the one stream the requester's own turn
-/// occupies. A launch past it fails fast rather than queueing -- the model
-/// needs to learn immediately that it is over budget, and a silent queue
-/// would make `task` look slow instead of full.
-pub(crate) const MAX_CONCURRENT_TASKS: usize = MAX_CONCURRENT_PROVIDER_STREAMS - 1;
-
 /// A child that has finished and whose result has not yet been delivered to
 /// its requester.
 #[derive(Clone, Debug)]
@@ -105,23 +82,6 @@ fn lock() -> std::sync::MutexGuard<'static, Registry> {
     registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
-
-/// `(session_id, description)` for every child of `requester` still
-/// running -- the cap check's input, and the list named in the
-/// over-cap error result so the model can decide what to wait for.
-pub(super) fn running_for(requester: SessionId) -> Vec<(SessionId, String)> {
-    let registry = lock();
-    let mut running = registry
-        .children
-        .iter()
-        .filter(|(_, child)| child.requester == requester && child.outcome.is_none())
-        .map(|(id, child)| (*id, child.description.clone()))
-        .collect::<Vec<_>>();
-    // HashMap iteration order is arbitrary; a stable order keeps the error
-    // message (and the test asserting it) deterministic.
-    running.sort_by_key(|(id, _)| id.as_uuid());
-    running
 }
 
 pub(super) fn register(

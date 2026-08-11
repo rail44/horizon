@@ -205,6 +205,11 @@ pub(crate) fn apply_agent_event_to_frame(
         Event::ProviderRequestFirstToken
         | Event::ProviderRequestFinished
         | Event::ProviderRequestUsage(_) => {}
+        Event::ProviderRateLimited(rate_limited) => {
+            frame
+                .items
+                .push(AgentFrameItem::ProviderRateLimited(rate_limited.clone()));
+        }
         Event::HistoryCleared(cleared) => {
             frame
                 .items

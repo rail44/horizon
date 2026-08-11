@@ -677,6 +677,19 @@
             "ContinueTurnRequested"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The provider rejected a pre-generation request with a transient\nstatus (429 rate limit, 5xx gateway error, or a transport failure)\nand the turn is retrying after a backoff. Emitted right before the\nbackoff sleep so the transcript shows the turn is pacing rather than\nstalled. Not a turn boundary — the turn is still in progress, and\nthis item is deliberately excluded from `is_turn_boundary_item`.",
+          "properties": {
+            "ProviderRateLimited": {
+              "$ref": "#/$defs/ProviderRateLimited"
+            }
+          },
+          "required": [
+            "ProviderRateLimited"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -994,6 +1007,38 @@
     },
     "ProviderId": {
       "type": "string"
+    },
+    "ProviderRateLimited": {
+      "description": "Payload for [`Event::ProviderRateLimited`]: the provider rejected a\npre-generation request with a transient status and the turn is waiting\nout a backoff before retrying. Emitted from the retry loop\n(`providers::rig::completion::with_pre_generation_retry`) right before\nthe backoff sleep, so the transcript shows the turn is pacing against\nthe provider's rate limit rather than stalled.",
+      "properties": {
+        "attempt": {
+          "description": "Which attempt this is (1-based). For 429 this climbs without bound;\nfor 5xx and transport failures it is bounded by\n`PROVIDER_REQUEST_MAX_ATTEMPTS`.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "backoff_ms": {
+          "description": "How long the turn will wait before retrying, in milliseconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "status": {
+          "description": "The HTTP status that caused the retry (429, 500, 502, 503, 504), or\n`None` for a transport-level failure.",
+          "format": "uint16",
+          "maximum": 65535,
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt",
+        "backoff_ms"
+      ],
+      "type": "object"
     },
     "ProviderRequestSent": {
       "description": "Payload for [`Event::ProviderRequestSent`]: the model id the provider was\nasked to complete against, so the persisted event log doesn't depend on\nseparately-stored config to answer \"which model was this turn waiting\non?\".",
