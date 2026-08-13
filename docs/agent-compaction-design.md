@@ -1,8 +1,13 @@
 # Compaction — 二層の文脈削減（Tier 1: 復元可能な clearing / Tier 2: 状態要約）
 
 Status: designed 2026-07-28（オーナー承認）。**Tier 1 は 2026-07-28 実装
-済み**（下記「Tier 1 実装記録」）。Tier 2 は未実装 — 計測後に着手（証拠の
-順序に忠実な段階導入）。
+済み**（下記「Tier 1 実装記録」）。**Tier 2 は着手せず保留続行（オーナー
+判断 2026-08-14、board #37 の field 実測を受けて）**: 現用モデル
+`syn:large:text` の申告窓は 512k、実測ピーク input は実効窓の 46.5%、
+context 起因エラーは 43 日間ゼロ。Tier 1 は閾値未達で正しく不発火
+（窓 262k の MiniMax-M3 では設計どおり発火 — 機構は健全）。コーディング
+用途の窓逼迫という Tier 2 の動機は実測上休眠。集計の詳細は board #37 の
+コメントに記録。
 
 証拠基盤: `docs/research/agent-compaction-prior-art-2026-07-28.md`（本
 設計の全判断の出典。以下「証拠 doc」）と
@@ -111,8 +116,10 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
   入口）でのみ走る。`WaitingForApproval` 中はリクエストを組み立てないので
   構造的に走らず、`Event::TurnEnded` は不変。
 
-未実施: 実測（T-callid 再走。死亡点の移動、発火回数・回収量、cache 損、
-recall 再取得率）。Tier 2 の着手判断はこの計測の後。
+実測は 2026-08-14 に field データで実施（board #37 — 冒頭 Status 参照）。
+T-callid 再走は Tier 2 正当化の目的では実施しない（オーナー判断
+2026-08-14）: field で窓逼迫自体が休眠と判明したため。Tier 1 の強制発火
+計測が将来必要になれば `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` で可能。
 
 ## Tier 2 — LLM 状態要約（最終段・生存保証）
 
