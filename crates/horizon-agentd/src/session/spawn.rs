@@ -63,7 +63,7 @@ fn resolve_and_announce_session_model(
 /// recomputes and validates its Git/path relationships; it never asks the
 /// fresh-spawn `isolate` path to create a second worktree.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn spawn_session_thread(
+pub(crate) fn spawn_session_thread(
     state: Arc<AgentdState>,
     session_id: SessionId,
     provider_id: ProviderId,

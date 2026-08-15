@@ -60,6 +60,7 @@
 
 mod hub;
 mod session;
+mod wake;
 mod worktree;
 
 use std::path::Path;
@@ -171,6 +172,21 @@ async fn main() -> anyhow::Result<()> {
     ]);
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
+
+    // Spawn the board wake subscriber — the v2 keeper wake mechanism
+    // (board #35). Subscribes to logd's board-event poke stream, applies the
+    // wake policy, and spawns a keeper session when the board changes.
+    // See `docs/board-keeper-design.md` and `wake` module docs.
+    {
+        let provider_id = state.providers.lock().unwrap().default_provider_id();
+        let workspace_root = std::env::current_dir().ok();
+        let action = Box::new(wake::SpawnKeeper::new(
+            state.clone(),
+            provider_id.clone(),
+            workspace_root.clone(),
+        ));
+        wake::spawn_subscriber(action, provider_id, workspace_root);
+    }
 
     run(listener, &socket_path, state).await
 }

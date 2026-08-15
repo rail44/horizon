@@ -283,12 +283,20 @@ impl AgentdState {
         }
     }
 
+    /// Returns whether `session_id` is currently live in this daemon's
+    /// registry. Used by the wake subscriber's `SpawnKeeper` action to detect
+    /// when a keeper session has finished (the entry is removed from
+    /// `sessions` when the session thread exits).
+    pub(crate) fn session_exists(&self, session_id: SessionId) -> bool {
+        self.sessions.lock().unwrap().contains_key(&session_id)
+    }
+
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
     /// was a live session to route it to. [`super::connection::Connection::route_command`]
     /// turns a miss into a log line; [`super::exploration::AgentdExplorationHost::terminate`]
     /// deliberately ignores one -- a task session that already
     /// ended on its own needs no shutdown.
-    pub(super) fn send_command(&self, session_id: SessionId, command: Command) -> bool {
+    pub(crate) fn send_command(&self, session_id: SessionId, command: Command) -> bool {
         let sender = self
             .sessions
             .lock()
