@@ -59,6 +59,7 @@ pub const ROLE_ALLOWED_TOOL_IDS: Option<&[&str]> = Some(&[
     "knowledge.read",
     "recall.search",
     "recall.read",
+    "memory.update",
 ]);
 
 /// No model override — the keeper uses the provider's configured model.
@@ -77,6 +78,13 @@ pub const ROLE_SKILL_IDS: &[&str] = &["board-keeper"];
 /// No forced wrap-up on cap — the keeper is interactive, not a one-shot \
 /// delegated report like the explore role.
 pub const ROLE_SUMMARIZE_ON_CAP: bool = false;
+
+/// The keeper is a *standing* role -- a long-lived, context-carrying agent
+/// that maintains a memory document across turns
+/// (`docs/standing-agent-memory-design.md`). This is what makes the keeper's
+/// sessions carry project context across the `board.read`/`board.comment`
+/// interactions they serve, rather than starting from zero each spawn.
+pub const ROLE_STANDING: bool = true;
 
 /// The keeper skill's `SKILL.md` source, embedded at compile time so \
 /// `horizon-agentd` can register it as an embedded skill without a Cargo \
@@ -107,6 +115,15 @@ mod tests {
         assert!(
             allowed.contains(&"board.comment"),
             "keeper must be able to comment on items"
+        );
+    }
+
+    #[test]
+    fn allowlist_includes_memory_update() {
+        let allowed = ROLE_ALLOWED_TOOL_IDS.expect("keeper must restrict its tools");
+        assert!(
+            allowed.contains(&"memory.update"),
+            "keeper is a standing role and must update its memory document"
         );
     }
 

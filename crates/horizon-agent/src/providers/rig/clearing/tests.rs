@@ -3,6 +3,7 @@ use rig_core::completion::message::{ToolCall, ToolFunction};
 use super::*;
 use crate::config::{resolve_clearing_threshold_pct, RigAgentConfig, DEFAULT_CLEARING_TRIGGER_PCT};
 use crate::contract::{SessionId, ToolCallRequest};
+use crate::tools::MemoryDocument;
 
 /// One token of tail budget is worth this many characters, per
 /// [`CLEARING_CHARS_PER_TOKEN`]. Spelled out here so the fixtures below read
@@ -238,7 +239,7 @@ fn non_tool_messages_are_structurally_out_of_scope() {
     let cleared = ClearedResults::from_occurrences(
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
-    let projected = history_for_provider_request(&history, &cleared);
+    let projected = history_for_provider_request(&history, &cleared, None);
 
     assert_eq!(projected[0], history[0]);
     assert_eq!(projected[1], history[1]);
@@ -253,7 +254,7 @@ fn clearing_preserves_every_tool_call_result_pair() {
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
     assert!(!cleared.is_empty());
-    let projected = history_for_provider_request(&history, &cleared);
+    let projected = history_for_provider_request(&history, &cleared, None);
 
     assert_eq!(projected.len(), history.len(), "no message is ever dropped");
     for (index, (before, after)) in history.iter().zip(&projected).enumerate() {
@@ -295,8 +296,8 @@ fn two_consecutive_request_builds_are_byte_identical() {
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
 
-    let first = history_for_provider_request(&history, &cleared);
-    let second = history_for_provider_request(&history, &cleared);
+    let first = history_for_provider_request(&history, &cleared, None);
+    let second = history_for_provider_request(&history, &cleared, None);
     assert_eq!(
         serde_json::to_string(&first).unwrap(),
         serde_json::to_string(&second).unwrap()
@@ -358,8 +359,18 @@ fn resume_replays_the_frozen_set_into_an_identical_projection() {
 
     assert_eq!(resumed.cleared(), live.cleared());
     assert_eq!(
-        serde_json::to_string(&history_for_provider_request(&history, resumed.cleared())).unwrap(),
-        serde_json::to_string(&history_for_provider_request(&history, live.cleared())).unwrap()
+        serde_json::to_string(&history_for_provider_request(
+            &history,
+            resumed.cleared(),
+            None
+        ))
+        .unwrap(),
+        serde_json::to_string(&history_for_provider_request(
+            &history,
+            live.cleared(),
+            None
+        ))
+        .unwrap()
     );
 }
 
@@ -395,7 +406,7 @@ fn the_placeholder_names_the_tool_the_key_argument_and_the_recovery_route() {
         )]),
         tool_result_message("call-0", 12_345),
     ];
-    let projected = history_for_provider_request(&history, &cleared_set(&["call-0"]));
+    let projected = history_for_provider_request(&history, &cleared_set(&["call-0"]), None);
     let text = tool_result_text(&projected[2]).expect("still a tool result");
 
     assert_eq!(
@@ -418,7 +429,8 @@ fn the_placeholder_falls_back_to_the_tool_id_and_then_to_nothing() {
         tool_result_message("call-0", 99),
         tool_result_message("orphan", 99),
     ];
-    let projected = history_for_provider_request(&history, &cleared_set(&["call-0", "orphan"]));
+    let projected =
+        history_for_provider_request(&history, &cleared_set(&["call-0", "orphan"]), None);
 
     assert!(tool_result_text(&projected[1])
         .unwrap()
@@ -441,9 +453,10 @@ fn a_long_key_argument_is_truncated_in_the_placeholder() {
         )]),
         tool_result_message("call-0", 5_000),
     ];
-    let text =
-        tool_result_text(&history_for_provider_request(&history, &cleared_set(&["call-0"]))[1])
-            .unwrap();
+    let text = tool_result_text(
+        &history_for_provider_request(&history, &cleared_set(&["call-0"]), None)[1],
+    )
+    .unwrap();
 
     assert!(text.contains(&format!("command=\"{}…\"", "z".repeat(120))));
     assert!(text.chars().count() < 300);
@@ -453,11 +466,11 @@ fn a_long_key_argument_is_truncated_in_the_placeholder() {
 fn an_uncleared_result_is_left_exactly_as_it_was() {
     let history = read_rounds(3, 100);
     assert_eq!(
-        history_for_provider_request(&history, &ClearedResults::default()),
+        history_for_provider_request(&history, &ClearedResults::default(), None),
         history
     );
     assert_eq!(
-        history_for_provider_request(&history, &cleared_set(&["not-in-this-history"])),
+        history_for_provider_request(&history, &cleared_set(&["not-in-this-history"]), None),
         history
     );
 }
@@ -494,7 +507,7 @@ fn a_result_reusing_a_cleared_call_id_after_the_freeze_is_never_replaced() {
         "the fresh body the model just asked for",
     ));
 
-    let projected = history_for_provider_request(&history, &cleared);
+    let projected = history_for_provider_request(&history, &cleared, None);
     assert!(
         tool_result_text(&projected[2])
             .unwrap()
@@ -530,7 +543,7 @@ fn a_pass_that_clears_two_occurrences_of_one_id_leaves_a_later_third_verbatim() 
     )]));
     history.push(Message::tool_result("dup", "fresh"));
 
-    let projected = history_for_provider_request(&history, &cleared);
+    let projected = history_for_provider_request(&history, &cleared, None);
     for index in [2, 4] {
         assert!(tool_result_text(&projected[index])
             .unwrap()
@@ -573,7 +586,7 @@ fn resume_replay_preserves_the_reuse_guard() {
         resumed.cleared(),
         &ClearedResults::from_occurrences([call_id("dup"), call_id("dup")])
     );
-    let projected = history_for_provider_request(&history, resumed.cleared());
+    let projected = history_for_provider_request(&history, resumed.cleared(), None);
     assert_eq!(
         tool_result_text(&projected[6]).unwrap(),
         "fresh",
@@ -608,7 +621,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
         )]),
         tool_result_message("task-1", report.chars().count()),
     ];
-    let projected = history_for_provider_request(&history, &cleared_set(&["task-1"]));
+    let projected = history_for_provider_request(&history, &cleared_set(&["task-1"]), None);
     assert!(tool_result_text(&projected[2])
         .unwrap()
         .starts_with("[cleared old tool result: task ("));
@@ -668,6 +681,7 @@ async fn a_session_over_the_threshold_runs_one_pass_and_keeps_turning() {
             Message::user(format!("round {round}")),
             &events_tx,
             &mut clearing,
+            None,
             || Message::assistant("ok"),
             &token,
         )
@@ -697,4 +711,103 @@ async fn a_session_over_the_threshold_runs_one_pass_and_keeps_turning() {
         Some(chars_for_tokens(4_000)),
         "canonical history keeps the original result body"
     );
+}
+
+// --- Standing-agent memory projection ---------------------------------------
+
+/// A non-empty memory document.
+fn memory_doc() -> MemoryDocument {
+    MemoryDocument {
+        goal: "Ship the memory feature".to_string(),
+        ..Default::default()
+    }
+}
+
+/// Extracts the text of a user text message (not a tool result).
+fn user_text(message: &Message) -> Option<String> {
+    let Message::User { content } = message else {
+        return None;
+    };
+    content.iter().find_map(|item| match item {
+        UserContent::Text(text) => Some(text.text.clone()),
+        _ => None,
+    })
+}
+
+/// Without a memory document, the projection returns the full history
+/// unchanged (when nothing is cleared).
+#[test]
+fn memory_projection_none_returns_full_history() {
+    let history = vec![
+        Message::user("turn 1"),
+        Message::assistant("reply 1"),
+        Message::user("turn 2"),
+        Message::assistant("reply 2"),
+    ];
+    let cleared = ClearedResults::default();
+    let projected = history_for_provider_request(&history, &cleared, None);
+    assert_eq!(projected.len(), history.len());
+}
+
+/// An empty memory document is skipped — the projection returns the full
+/// history, so the first turn (before any update) is not stripped.
+#[test]
+fn memory_projection_empty_document_skips_prepend() {
+    let history = vec![
+        Message::user("turn 1"),
+        Message::assistant("reply 1"),
+        Message::user("turn 2"),
+    ];
+    let cleared = ClearedResults::default();
+    let doc = MemoryDocument::default();
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    assert_eq!(projected.len(), history.len());
+}
+
+/// A non-empty memory document is prepended, and everything before the most
+/// recent turn-opening user message is dropped (replaced by the document).
+/// The tail (from the most recent user message onward) is kept verbatim.
+#[test]
+fn memory_projection_prepends_document_and_keeps_tail() {
+    let history = vec![
+        Message::user("turn 1"),
+        Message::assistant("reply 1"),
+        Message::user("turn 2"),
+        Message::assistant("reply 2"),
+    ];
+    let cleared = ClearedResults::default();
+    let doc = memory_doc();
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    // [memory document] + ["turn 2", "reply 2"]
+    assert_eq!(projected.len(), 3);
+    // First message is the rendered memory document.
+    let first = user_text(&projected[0]).expect("first message is user text");
+    assert!(first.contains("Current memory document"));
+    assert!(first.contains("Ship the memory feature"));
+    // Tail starts at "turn 2".
+    assert_eq!(user_text(&projected[1]).as_deref(), Some("turn 2"));
+}
+
+/// The memory projection composes with Tier 1 clearing: clearing is applied
+/// to the full history first (correct occurrence counting), then the old
+/// part is dropped and the memory document prepended. A cleared tool result
+/// in the tail is still blanked.
+#[test]
+fn memory_projection_composes_with_clearing() {
+    let history = vec![
+        Message::user("turn 1"),
+        tool_call_message(&[("call_1", "fs.read", serde_json::json!({}))]),
+        tool_result_message("call_1", chars_for_tokens(4_000)),
+        Message::user("turn 2"),
+    ];
+    let cleared = cleared_set(&["call_1"]);
+    let doc = memory_doc();
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    // [memory document] + ["turn 2"] — the old turn (including the cleared
+    // tool result) was dropped.
+    assert_eq!(projected.len(), 2);
+    assert!(user_text(&projected[0])
+        .unwrap()
+        .contains("Current memory document"));
+    assert_eq!(user_text(&projected[1]).as_deref(), Some("turn 2"));
 }

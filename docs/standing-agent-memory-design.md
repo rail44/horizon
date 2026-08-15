@@ -117,3 +117,79 @@ Tier 2 は窓圧力駆動(80%)の生存機構で、board #37 の実測により�
 - ツールスキーマの初期値は Tier 2 のテンプレートをそのまま使う。
 - 常設ロールのフラグ名・チェックポイントの実装形・「更新不要」の
   理由の粒度は実装時判断。
+
+## 実装記録(2026-08-15)
+
+v1 — セッション内の記憶機構(セッション跨ぎの種付けは #35 の wake 口 v2
+で別途)。実装コード(すべて `crates/horizon-agent`、特に明記ない限り):
+
+- **型付き `memory.update` ツール** — `tools/memory.rs`(新規):
+  `parse_update`(入力検証+`MemoryDigest` 構築)、`execute_auto`(純粋な
+  検証+確認、副作用なし)、`MemoryDocument`(7 フィールドの文書、
+  `apply`/`render`/`is_empty`)、`memory_document_from_events`(イベント
+  ログから文書を再構成する reducer)。カタログ定義は
+  `tools/catalog.rs`。ツール ID は `memory.update`、権限は
+  `AutoAllowRead`(監査付き書き込み、承認不要 — `knowledge.write`/
+  `board.comment` と同型)。
+- **フィールド単位の増分更新**: 各フィールドは `{op, content}` オブジェクト
+  で、`op` は `set`(訂正)/`append`(追記)/`clear`(削除)。全文再生成は
+  スキーマで構造的に不可能(変更するフィールドだけ指定する)。「更新不要」
+  は `no_update: {reason}` で宣言(フィールド操作と排他)。
+- **digest の永続はイベント**: `Event::MemoryDigest(MemoryDigest)` を
+  enum 末尾に additive 追加(`contract.rs`)。`MemoryDigest` は
+  `updates: Vec<MemoryFieldUpdate>` + `folded_log_range: Option` +
+  `no_update_reason: Option`。fold(`frame/fold.rs`)でフレームアイテムに
+  表示。resume は `memory_document_from_events` で再構成
+  (`providers/rig/history.rs` の `RigSessionHistory` に `memory_document`
+  フィールドを追加)。
+- **チェックポイント逃しイベント**: `Event::MemoryCheckpointMissed`
+  (unit variant、enum 末尾に additive 追加)。リマインダ後も更新がなければ
+  このイベントを残してターンを終える。
+- **常設ロールフラグ**: `RoleDefinition::standing: bool`(`roles.rs`)。
+  keeper は `horizon_board::keeper::ROLE_STANDING = true`。`memory.update`
+  は keeper の `ROLE_ALLOWED_TOOL_IDS` に追加。`rig_tool_definitions`
+  で `allowed_tool_ids == None`(ロールなし)のとき `memory.update` を非公開
+  にするフィルタを追加(コーディングセッションには見えない)。
+- **送信時投影**: `providers/rig/clearing.rs` の
+  `history_for_provider_request` に `memory: Option<&MemoryDocument>`
+  パラメータを追加。常設ロールで文書が非空のとき、Tier 1 clearing を
+  全履歴に適用した後、最も最近のターン開始ユーザメッセージ以降(tail)
+  だけを残し、文書を先頭に user-role メッセージとして挿入する
+  (`[brief][memory document][tail]`)。文書が空(最初のターン)のときは
+  全履歴をそのまま送る。Tier 1 との合成: clearing は全履歴に適用
+  (occurrence counting が正しい)した上で old part を破棄するので矛盾しない。
+  呼び出し点は `complete_rig_turn`(`completion.rs`)の 1 箇所のみ。
+- **ターン末チェックポイント**: `providers/rig/session/turn.rs` の
+  `handle_memory_checkpoint`(loop で実装、async recursion を回避)。
+  `run_turn` で `handle_truncation_recovery` の後に呼ぶ。常設ロールの
+  completing turn で `memory_satisfied` が false のときリマインダを 1 回
+  注入して再実行、それでも false なら `MemoryCheckpointMissed` を
+  emit して終了。`memory_satisfied`/`memory_reminded` は
+  `SessionLoopState` のフィールドで、`Command::UserMessage`/TaskWake で
+  リセット。`memory.update` の結果は `Command::ToolCallResult` arm で
+  検出し、`self.memory` に適用 + `MemoryDigest` イベント emit +
+  `memory_satisfied = true`。
+- **wire 影響**: `Event` に variant 2 つを末尾に additive 追加
+  (`MemoryDigest`/`MemoryCheckpointMissed`)。新しい `$defs` は
+  `MemoryDigest`/`MemoryField`/`MemoryOp`/`FoldedLogRange`/
+  `MemoryFieldUpdate`。`AGENT_PROTOCOL_VERSION` の bump は不要
+  (additive-only、`check-wire-schema.sh` が確認)。
+
+設計からの確定事項・実装判断:
+
+- **ツールハンドラは純粋**(host trait なし)。`board.comment` が
+  `BoardHost` 経由で外部ストアに書くのとは異なり、`memory.update` の
+  ハンドラは入力検証+確認のみ。状態更新(`MemoryDocument::apply`)と
+  イベント emit はセッションループ(`Command::ToolCallResult` arm)が
+  行う — ツール入力(`descriptor.args`)を `parse_update` で再解析して
+  `MemoryDigest` を構築し、適用+emit する。ハンドラとループが同じ
+  `parse_update` を使うので idempotent。
+- **tail 境界** = 最も最近の `UserContent::Text` を持つ `Message::User`
+  (ターン開始メッセージ)。それ以前は文書で置換。task notification で
+  開始したターンも同様(notification は user-role text として履歴に入る)。
+- **`MemoryCheckpointMissed` を独立イベントとした**: `MemoryDigest` に
+  第3の kind として統合せず、意味の明確さを優先。2 つの additive
+  variant はいずれも単純。
+- **単体テスト**: `tools/memory.rs`(スキーマ検証・fold 増分適用・
+  render・execute_auto)、`providers/rig/clearing/tests.rs`(投影の組み立て・
+  clearing との合成)。

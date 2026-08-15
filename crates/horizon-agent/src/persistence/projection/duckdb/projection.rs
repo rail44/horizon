@@ -135,6 +135,12 @@ impl Store {
             | Event::Error(_)
             | Event::ProviderRateLimited(_)
             | Event::Exited(_) => Ok(()),
+            // Standing-agent memory events: no dedicated projection table —
+            // the raw `agent_events` row is what the provider-view projection
+            // replays the document from
+            // (`tools::memory::memory_document_from_events`).
+            | Event::MemoryDigest(_)
+            | Event::MemoryCheckpointMissed => Ok(()),
         }
     }
 

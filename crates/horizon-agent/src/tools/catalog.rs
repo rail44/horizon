@@ -704,6 +704,115 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
+        Definition {
+            id: "memory.update".to_string(),
+            title: "Update Memory Document".to_string(),
+            description: "Update your memory document — the structured summary of project \
+                state that carries your context across turns. Each call edits individual \
+                fields incrementally (set/append/clear); never regenerate the whole document. \
+                Every turn must end with either a memory.update call or a `no_update` \
+                declaration — the harness enforces this checkpoint. Fields: goal, decisions, \
+                completed, in_progress, stuck, next_step, related (files and symbols). \
+                `folded_log_range` optionally records the raw event-log sequence range \
+                this update condenses, so recall.read can fetch the originals."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "goal": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string", "description": "Required for set/append; ignored for clear." }
+                        },
+                        "description": "The overarching goal this session is serving."
+                    },
+                    "decisions": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "Decisions made, with rationale."
+                    },
+                    "completed": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "Work that is done."
+                    },
+                    "in_progress": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "Work currently underway."
+                    },
+                    "stuck": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "What is blocked or unresolved, and why."
+                    },
+                    "next_step": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "The single next action to take."
+                    },
+                    "related": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["op"],
+                        "properties": {
+                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
+                            "content": { "type": "string" }
+                        },
+                        "description": "Files, symbols, and paths relevant to the current work."
+                    },
+                    "folded_log_range": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["from_seq", "to_seq"],
+                        "properties": {
+                            "from_seq": { "type": "integer", "minimum": 0 },
+                            "to_seq": { "type": "integer", "minimum": 0 }
+                        },
+                        "description": "Event-log sequence range of the raw exchanges this update condenses. Optional."
+                    },
+                    "no_update": {
+                        "type": "object",
+                        "additionalProperties": false,
+                        "required": ["reason"],
+                        "properties": {
+                            "reason": { "type": "string", "minLength": 1 }
+                        },
+                        "description": "Declare that no memory update is needed this turn, with a reason. Mutually exclusive with all field operations."
+                    }
+                }
+            }),
+            permission: ToolPermission::AutoAllowRead,
+        },
     ]
 }
 

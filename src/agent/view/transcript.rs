@@ -447,6 +447,26 @@ impl AgentTranscript {
                     cleared.recovered_chars,
                 ),
             )),
+            AgentFrameItem::MemoryDigest(digest) => {
+                if let Some(reason) = &digest.no_update_reason {
+                    Some(block(
+                        "memory",
+                        theme::text_subtle(),
+                        format!("no update — {reason}"),
+                    ))
+                } else {
+                    Some(block(
+                        "memory",
+                        theme::text_subtle(),
+                        format!("updated {} field(s)", digest.updates.len()),
+                    ))
+                }
+            }
+            AgentFrameItem::MemoryCheckpointMissed => Some(block(
+                "memory",
+                theme::text_subtle(),
+                "checkpoint missed — turn ended without a memory update".to_string(),
+            )),
             AgentFrameItem::ProviderRateLimited(rate_limited) => Some(block(
                 "throttled",
                 theme::text_subtle(),

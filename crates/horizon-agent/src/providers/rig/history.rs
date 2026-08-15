@@ -5,6 +5,7 @@ use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 
 use super::clearing::cleared_call_ids_from_events;
 use super::mapping::rig_messages_from_horizon_events;
+use crate::tools::{memory_document_from_events, MemoryDocument};
 
 /// Everything a resumed session has to rebuild from its persisted events:
 /// the canonical Rig history, plus the Tier 1 cleared set frozen by whatever
@@ -16,6 +17,10 @@ use super::mapping::rig_messages_from_horizon_events;
 pub(super) struct RigSessionHistory {
     pub(super) messages: Vec<Message>,
     pub(super) cleared_call_ids: Vec<ToolCallId>,
+    /// The standing-agent memory document replayed from the same events —
+    /// `None` when no `MemoryDigest` events were found (a non-standing session,
+    /// or a standing session that has never updated its memory).
+    pub(super) memory_document: Option<MemoryDocument>,
 }
 
 /// Loads this session's prior history (if any) as Rig messages, through the
@@ -53,6 +58,7 @@ pub(super) fn load_rig_session_history(
         return RigSessionHistory {
             messages: rig_messages_from_horizon_events(fallback_events),
             cleared_call_ids: cleared_call_ids_from_events(fallback_events),
+            memory_document: memory_document_from_events_if_nonempty(fallback_events),
         };
     };
 
@@ -68,7 +74,21 @@ pub(super) fn load_rig_session_history(
             RigSessionHistory {
                 messages: rig_messages_from_horizon_events(&events),
                 cleared_call_ids: cleared_call_ids_from_events(&events),
+                memory_document: memory_document_from_events_if_nonempty(&events),
             }
         })
         .unwrap_or_default()
+}
+
+/// Replays `MemoryDigest` events into a document, returning `None` when the
+/// result is empty (no digest events, or all were no-update declarations) so
+/// the session loop can skip the projection for a session that has never
+/// updated its memory.
+fn memory_document_from_events_if_nonempty(events: &[Event]) -> Option<MemoryDocument> {
+    let document = memory_document_from_events(events);
+    if document.is_empty() {
+        None
+    } else {
+        Some(document)
+    }
 }

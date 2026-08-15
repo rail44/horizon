@@ -58,6 +58,7 @@ use crate::config::{
     CLEARING_CHARS_PER_TOKEN, CLEARING_RECOVERY_FLOOR_TOKENS, CLEARING_TAIL_BUDGET_TOKENS,
 };
 use crate::contract::{Event, HistoryCleared, ToolCallId};
+use crate::tools::MemoryDocument;
 
 /// How much of a tool call's key argument the placeholder reproduces before
 /// truncating. Long enough to identify the call (a repository-relative path,
@@ -282,11 +283,40 @@ pub(super) fn plan_clearing_pass(
 pub(super) fn history_for_provider_request(
     history: &[Message],
     cleared: &ClearedResults,
+    memory: Option<&MemoryDocument>,
 ) -> Vec<Message> {
-    if cleared.is_empty() {
-        return history.to_vec();
+    let mut projected = if cleared.is_empty() {
+        history.to_vec()
+    } else {
+        project_cleared(history, cleared)
+    };
+
+    // Standing-role memory projection (`docs/standing-agent-memory-design.md`
+    // decision 1): replace everything before the current turn's opening
+    // user message with the current memory document, keeping the recent
+    // tail verbatim (Tier 1 clearing has already been applied above, on the
+    // full history, so occurrence counting is correct). The memory document
+    // is prepended as a user-role text message; an empty document (a session
+    // that has never updated) is skipped so the first turn sends its full
+    // history unchanged.
+    if let Some(doc) = memory {
+        if !doc.is_empty() {
+            let tail_start = tail_from_last_turn_open(&projected);
+            let memory_msg = Message::user(doc.render());
+            projected = std::iter::once(memory_msg)
+                .chain(projected[tail_start..].iter().cloned())
+                .collect();
+        }
     }
 
+    projected
+}
+
+/// The clearing-only projection (Tier 1): `history` with the content of every
+/// tool result in `cleared` replaced by a one-line reference placeholder.
+/// Extracted from [`history_for_provider_request`] so the memory projection
+/// composes on top of the already-cleared history without re-walking it.
+fn project_cleared(history: &[Message], cleared: &ClearedResults) -> Vec<Message> {
     let calls = tool_call_summaries(history);
     let mut seen: HashMap<ToolCallId, usize> = HashMap::new();
     let mut projected = history.to_vec();
@@ -350,6 +380,9 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
             | Event::ProviderRateLimited(_)
             | Event::Exited(_)
             | Event::TurnEnded(_) => None,
+            // Standing-agent memory events carry no cleared call-id set.
+            | Event::MemoryDigest(_)
+            | Event::MemoryCheckpointMissed => None,
         })
         .flatten()
         .collect()
@@ -510,6 +543,27 @@ fn tool_result_chars(result: &ToolResult) -> u64 {
             ToolResultContent::Image(_) => 0,
         })
         .sum()
+}
+
+/// Index of the most recent turn-opening user message in `history` — the first
+/// `Message::User` (scanning newest-to-oldest) whose content includes text
+/// rather than only tool results. Everything from this index onward is the
+/// "current turn's tail" the standing-agent memory projection keeps verbatim;
+/// everything before it is replaced by the memory document. Returns 0 when no
+/// such message exists (the whole history is the tail).
+fn tail_from_last_turn_open(history: &[Message]) -> usize {
+    for (index, message) in history.iter().enumerate().rev() {
+        let Message::User { content } = message else {
+            continue;
+        };
+        if content
+            .iter()
+            .any(|item| matches!(item, UserContent::Text(_)))
+        {
+            return index;
+        }
+    }
+    0
 }
 
 #[cfg(test)]

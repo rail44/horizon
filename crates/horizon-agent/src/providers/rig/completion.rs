@@ -452,6 +452,7 @@ pub(super) async fn complete_rig_turn(
     prompt: Message,
     events_tx: &Sender<ProviderEvent>,
     clearing: &mut ClearingState,
+    memory: Option<&crate::tools::MemoryDocument>,
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
@@ -473,7 +474,7 @@ pub(super) async fn complete_rig_turn(
             environment,
             extra_sections,
             &prompt,
-            history_for_provider_request(rig_history, clearing.cleared()),
+            history_for_provider_request(rig_history, clearing.cleared(), memory),
             events_tx,
             token,
         )
@@ -1129,6 +1130,12 @@ pub(super) fn rig_tool_definitions(
                 && (advertises_task || definition.id != crate::tools::TASK_OUTPUT_TOOL_ID)
                 && (exa_configured || definition.id != "web_search")
                 && (trusted_project || !is_knowledge_tool(&definition.id))
+                // `memory.update` is a standing-role-only tool: a role-less
+                // session (`allowed_tool_ids == None`, i.e. "all tools") must
+                // never see it, and non-standing roles don't list it in their
+                // allowlist so `allows` already excludes them. This filter
+                // closes the `None` gap.
+                && (allowed_tool_ids.is_some() || definition.id != "memory.update")
         })
         .map(rig_tool_definition_from_horizon)
         .collect()

@@ -98,6 +98,7 @@ pub(super) fn spawn_rig_session(
                 load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events);
             let rig_history = persisted.messages;
             let cleared_call_ids = persisted.cleared_call_ids;
+            let memory_document = persisted.memory_document;
             // Issue 012: when the DuckDB projection store is unavailable and
             // the JSONL event log also yielded no reconstructable history for
             // a resumed session (events were present but produced no
@@ -158,6 +159,7 @@ pub(super) fn spawn_rig_session(
                     role,
                     rig_history,
                     cleared_call_ids,
+                    memory_document,
                 )
                 .await;
                 state.run().await;

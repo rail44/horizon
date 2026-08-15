@@ -273,6 +273,33 @@ pub enum Event {
     /// stalled. Not a turn boundary — the turn is still in progress, and
     /// this item is deliberately excluded from `is_turn_boundary_item`.
     ProviderRateLimited(ProviderRateLimited),
+    /// One turn's incremental update to a standing agent's memory document
+    /// (`docs/standing-agent-memory-design.md`). A standing-role session
+    /// (one whose `RoleDefinition::standing` is true) must end every turn
+    /// either by calling the `memory.update` tool — producing this event with
+    /// the field-level operations applied — or by declaring no update is
+    /// needed, producing this event with `no_update_reason` set. Both satisfy
+    /// the turn-end checkpoint; a turn that does neither is reminded once and
+    /// then closed with a `MemoryCheckpointMissed` event if it still hasn't.
+    ///
+    /// Like `HistoryCleared`, this is a durable record the provider-view
+    /// projection consumes: a standing session's sent history is assembled as
+    /// `[brief][current memory document][recent tail]`, and the document is
+    /// reconstructed by replaying these events' field operations in order
+    /// (`tools::memory::memory_document_from_events`). The raw turn-by-turn
+    /// log stays in the event log untouched — `recall` can still reach it —
+    /// which is what makes the document's "re-fetch via recall" pointer honest.
+    MemoryDigest(MemoryDigest),
+    /// The turn-loop checkpoint for a standing-role session closed a turn that
+    /// did not update the memory document and did not declare no-update, even
+    /// after one reminder was injected (`docs/standing-agent-memory-design.md`
+    /// decision 2, checkpoint). Audit/transparency-only: visible in the
+    /// transcript as a marker that the agent skipped its memory checkpoint,
+    /// so an operator can see how often a standing model writes itself out of
+    /// its own continuity — the dogfood measurement the design defers quality
+    /// to. No frame item is needed beyond the marker; the turn still ends
+    /// `Completed` (the checkpoint is a structural gate, not an error).
+    MemoryCheckpointMissed,
 }
 
 /// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
@@ -285,6 +312,75 @@ pub enum Event {
 pub struct HistoryCleared {
     pub cleared_call_ids: Vec<ToolCallId>,
     pub recovered_chars: u64,
+}
+
+/// A structured field of the standing-agent memory document
+/// (`docs/standing-agent-memory-design.md`). The seven fields are the Tier 2
+/// compaction template verbatim — goal / decisions / completed / in-progress /
+/// stuck / next step / related files and symbols — carried on the wire as
+/// snake_case so they round-trip through the `memory.update` tool's JSON
+/// schema unchanged. All fields are free-text blocks; the template gives the
+/// structure, the agent gives the content.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MemoryField {
+    Goal,
+    Decisions,
+    Completed,
+    InProgress,
+    Stuck,
+    NextStep,
+    Related,
+}
+
+/// A field-level operation in a [`MemoryDigest`]. `Set` replaces the field's
+/// content, `Append` adds to it, and `Clear` empties it — the three operations
+/// the `memory.update` tool exposes, so the agent edits one field at a time
+/// rather than regenerating the whole document (full-document regeneration
+/// collapses under iteration: ACE 66.7→57.1%, codex#14589 13.7→6.9% —
+/// `docs/research/standing-agent-memory-evidence-2026-08-15.md` §2-1).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MemoryOp {
+    Set,
+    Append,
+    Clear,
+}
+
+/// A reference to the span of the raw event log the digest summarizes — so a
+/// reader (the agent itself, an operator, or #35's wake-side seeding) can
+/// `recall.read` the original turn-by-turn exchanges the document condenses.
+/// Sequence numbers are the event log's own ordering.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct FoldedLogRange {
+    pub from_seq: u64,
+    pub to_seq: u64,
+}
+
+/// One field-level update in a [`MemoryDigest`]: which field, which operation,
+/// and the content (ignored when `op` is `Clear`).
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryFieldUpdate {
+    pub field: MemoryField,
+    pub op: MemoryOp,
+    pub content: String,
+}
+
+/// Payload for [`Event::MemoryDigest`]: one turn's incremental edit to the
+/// standing agent's memory document. Replaying every `MemoryDigest` event's
+/// `updates` in log order reconstructs the current document exactly
+/// (`tools::memory::memory_document_from_events`) — the document is never
+/// carried as a whole, only as the per-turn diffs that built it, which is what
+/// keeps a long-running standing session's event log small under iteration.
+///
+/// Exactly one of `updates` (non-empty) or `no_update_reason` is set: the
+/// agent either applied field operations or declared no update was needed.
+/// `folded_log_range` is present only when `updates` is non-empty.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct MemoryDigest {
+    pub updates: Vec<MemoryFieldUpdate>,
+    pub folded_log_range: Option<FoldedLogRange>,
+    pub no_update_reason: Option<String>,
 }
 
 /// Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's
@@ -341,6 +437,8 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::Exited(_) => "exited",
         Event::TurnEnded(_) => "turn_ended",
         Event::ProviderRateLimited(_) => "provider_rate_limited",
+        Event::MemoryDigest(_) => "memory_digest",
+        Event::MemoryCheckpointMissed => "memory_checkpoint_missed",
     }
 }
 

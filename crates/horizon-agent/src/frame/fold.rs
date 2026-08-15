@@ -215,6 +215,14 @@ pub(crate) fn apply_agent_event_to_frame(
                 .items
                 .push(AgentFrameItem::HistoryCleared(cleared.clone()));
         }
+        Event::MemoryDigest(digest) => {
+            frame
+                .items
+                .push(AgentFrameItem::MemoryDigest(digest.clone()));
+        }
+        Event::MemoryCheckpointMissed => {
+            frame.items.push(AgentFrameItem::MemoryCheckpointMissed);
+        }
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
         // Operator-intervention audit records (`Event::ApprovalResolved` /
