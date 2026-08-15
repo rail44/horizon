@@ -1,7 +1,12 @@
 # Board Keeper — Package Design
 
-**Status:** v1 (manual launch). v2 destination: automatic wake-up from
-`horizon-logd`'s board-event watch.
+**Status:** v2 (automatic wake-up). The keeper wakes automatically when
+`horizon-logd`'s board-event watch fires — a subscriber task inside
+`horizon-agentd` applies the wake policy and spawns a keeper session when
+the board changes (board #35). The wake action is a swappable seam
+(`WakeAction` trait); the v1 implementation spawns a fresh keeper session
+per wake, and #36 (aggregated-context session resume) will plug a different
+implementation into the same seam.
 
 ## 1. Decision: board as a package, not just data
 
@@ -180,15 +185,35 @@ tool ids (`board.set_status`, etc.) and its own catalog entries.
 creating a session, through the existing role-specified session-creation
 path (the same path `config` and `explore` roles use). No new UI is needed.
 
-**v2 destination: automatic wake-up.** The keeper should wake automatically
-when the board changes — specifically, when `horizon-logd`'s board-event
-watch fires (a new comment or item is appended). This is **not built in v1**
-but is the intended evolution: `horizon-logd` already exposes a subscribe
-stream (`Store::subscribe`) that pokes on each appended event; a v2 keeper
-would subscribe to that stream and launch when an item needs attention. The
-manual launch in v1 proves out the role, skill, and tool design first; the
-automatic wake-up is a scheduling concern that can be added without changing
-the role definition or tools.
+**v2: automatic wake-up (implemented, board #35).** The keeper wakes
+automatically when the board changes. A daemon-lifetime subscriber task
+inside `horizon-agentd` (`crates/horizon-agentd/src/wake/`) subscribes to
+`horizon-logd`'s board-event poke stream (`Store::subscribe`), reads back
+events past its persisted cursor, and applies the wake policy:
+
+- **item-created** always wakes; **comment-added** wakes unless the author is
+  the keeper session itself (`session:<uuid>`, the author format
+  `board.comment`'s dispatch sets); **item-updated** never wakes.
+- Bursts are coalesced into a single wake (one wake per quiet period, with
+  all affected item ids and the seq range collected).
+- Multi-wake prevention: while a keeper session is running, events
+  accumulate but no second wake is triggered; after the keeper finishes, the
+  cursor catches up and a new wake fires if events accumulated.
+- The cursor (last-processed seq) is persisted to disk
+  (`<board-dir>/wake-cursor`), so a daemon restart re-subscribes from the
+  cursor and catches up on anything missed.
+
+The wake action is a **swappable seam** (`WakeAction` trait): the v1
+implementation (`SpawnKeeper`) spawns a fresh keeper session with a prompt
+pointing at the changed items/seq range. The future #36 (aggregated-context
+session resume) will plug a different implementation into this seam — one
+that resumes an existing session instead of spawning a new one. The
+subscriber and policy do not assume spawn; they call `WakeAction::wake` and
+await the returned done-future.
+
+The wake policy is a subscriber-side concern, not logd's job
+(`docs/logd-design.md` decision 8): logd notifies; the subscriber decides
+who to wake and when. No logd-side changes were needed.
 
 ## 6. Extraction premise
 
