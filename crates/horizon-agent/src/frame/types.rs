@@ -34,6 +34,16 @@ pub enum AgentFrameItem {
     /// results above it, so without the divider the session would look
     /// unchanged while the model's view of it changed.
     HistoryCleared(HistoryCleared),
+    /// A standing-agent memory checkpoint: one turn's incremental update to
+    /// the memory document (`Event::MemoryDigest`), or the harness's marker
+    /// that a standing turn ended without one (`Event::MemoryCheckpointMissed`).
+    /// Visible in the transcript so the digest's arrival — or its absence —
+    /// is not silent (`docs/standing-agent-memory-design.md` decision 1,
+    /// transparency).
+    MemoryDigest(MemoryDigest),
+    /// The turn-end checkpoint closed a standing turn without a memory update
+    /// or a no-update declaration, after one reminder (`Event::MemoryCheckpointMissed`).
+    MemoryCheckpointMissed,
     /// The provider rate-limited (or transiently rejected) a pre-generation
     /// request and the turn is waiting out a backoff before retrying.
     /// Visible but muted — the turn is still in progress. Deliberately not

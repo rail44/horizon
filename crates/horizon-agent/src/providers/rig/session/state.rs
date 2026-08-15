@@ -14,6 +14,7 @@ use crate::{
     contract::{Command, ProviderEvent, SessionId, ToolCallId, ToolCallResult},
     prompt::SessionEnvironment,
     roles::RoleDefinition,
+    tools::MemoryDocument,
 };
 
 use super::turn::{fold_batched_tool_result, BatchStep};
@@ -67,6 +68,20 @@ pub(crate) struct SessionLoopState {
     /// of folding into `rig_history` right away — see `halt_turn_loop`.
     pub(crate) pending_halt_result: Option<ToolCallResult>,
 
+    // --- Standing-agent memory (`docs/standing-agent-memory-design.md`) ----
+    /// The current memory document, maintained incrementally as
+    /// `memory.update` results arrive. Seeded from the event log at spawn;
+    /// the provider-view projection prepends it (replacing old history) for
+    /// standing roles. `None` for non-standing roles (no memory mechanism).
+    pub(crate) memory: Option<MemoryDocument>,
+    /// Whether the current user-turn's memory checkpoint is satisfied — i.e.
+    /// a `memory.update` call (Updated or Skipped) has landed this turn.
+    /// Reset to `false` when a new user message opens a turn.
+    pub(crate) memory_satisfied: bool,
+    /// Whether a checkpoint reminder has already been injected this turn —
+    /// bounds the checkpoint to at most one reminder, then a missed event.
+    pub(crate) memory_reminded: bool,
+
     // --- Read-only inputs (fixed for the session's lifetime) ------------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
@@ -91,6 +106,9 @@ impl Default for SessionLoopState {
             cancelled_call_ids: HashSet::new(),
             guard: TurnLoopGuard::new(0, 0),
             pending_halt_result: None,
+            memory: None,
+            memory_satisfied: false,
+            memory_reminded: false,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
             environment: SessionEnvironment::for_workspace_root(None),
@@ -116,9 +134,18 @@ impl SessionLoopState {
         role: Option<&'static RoleDefinition>,
         rig_history: Vec<Message>,
         cleared_call_ids: Vec<ToolCallId>,
+        memory_document: Option<MemoryDocument>,
     ) -> Self {
         let mut clearing = super::discover_clearing_state(&config).await;
         clearing.seed_cleared(cleared_call_ids);
+        // A standing role seeds its memory document from the event log; a
+        // non-standing role has no memory mechanism, so `memory` stays `None`
+        // and the projection skips the memory prepend entirely.
+        let memory = if role.is_some_and(|r| r.standing) {
+            Some(memory_document.unwrap_or_default())
+        } else {
+            None
+        };
         Self {
             session_id,
             commands: super::bridge_commands(commands_rx),
@@ -130,6 +157,9 @@ impl SessionLoopState {
             cancelled_call_ids: HashSet::new(),
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             pending_halt_result: None,
+            memory,
+            memory_satisfied: false,
+            memory_reminded: false,
             config,
             environment,
             extra_sections,
@@ -183,6 +213,8 @@ impl SessionLoopState {
                         self.rig_history.push(rig_tool_result_message(&result));
                     }
                     self.guard.reset();
+                    self.memory_satisfied = false;
+                    self.memory_reminded = false;
                     let _ = self.events_tx.send(
                         crate::contract::Event::StateChanged(
                             crate::contract::SessionState::Running,
@@ -241,6 +273,8 @@ impl SessionLoopState {
                     // guards below count/track only *tool-driven* turns since
                     // the last user message.
                     self.guard.reset();
+                    self.memory_satisfied = false;
+                    self.memory_reminded = false;
                     let _ = self.events_tx.send(
                         crate::contract::Event::StateChanged(
                             crate::contract::SessionState::Running,
@@ -281,6 +315,26 @@ impl SessionLoopState {
                         // silently dropped.
                         continue;
                     };
+
+                    // Standing-agent memory (`docs/standing-agent-memory-
+                    // design.md`): a `memory.update` result applies the
+                    // parsed digest to the session's memory document (the
+                    // tool handler already validated it and returned a
+                    // confirmation — this is the state-mutation half) and
+                    // emits the `MemoryDigest` event for persistence and
+                    // transcript display. Both `Updated` and `Skipped`
+                    // (no_update) satisfy the turn-end checkpoint.
+                    if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID {
+                        if let Some(memory) = self.memory.as_mut() {
+                            if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
+                                memory.apply(&digest);
+                                let _ = self
+                                    .events_tx
+                                    .send(crate::contract::Event::MemoryDigest(digest).into());
+                                self.memory_satisfied = true;
+                            }
+                        }
+                    }
 
                     // Doom-loop fingerprinting is per *result* (every call's
                     // outcome must be checked, not just the batch's last), so

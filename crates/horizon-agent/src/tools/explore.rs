@@ -640,7 +640,11 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     | Event::ApprovalResolved(_)
                     | Event::ContinueTurnRequested(_)
                     // Provider rate-limit pacing is not terminal.
-                    | Event::ProviderRateLimited(_) => {}
+                    | Event::ProviderRateLimited(_)
+                    // Standing-agent memory events are not terminal for a
+                    // task child (a standing role never spawns task children).
+                    | Event::MemoryDigest(_)
+                    | Event::MemoryCheckpointMissed => {}
                 }
             },
         }

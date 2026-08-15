@@ -690,6 +690,24 @@
             "ProviderRateLimited"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "One turn's incremental update to a standing agent's memory document\n(`docs/standing-agent-memory-design.md`). A standing-role session\n(one whose `RoleDefinition::standing` is true) must end every turn\neither by calling the `memory.update` tool — producing this event with\nthe field-level operations applied — or by declaring no update is\nneeded, producing this event with `no_update_reason` set. Both satisfy\nthe turn-end checkpoint; a turn that does neither is reminded once and\nthen closed with a `MemoryCheckpointMissed` event if it still hasn't.\n\nLike `HistoryCleared`, this is a durable record the provider-view\nprojection consumes: a standing session's sent history is assembled as\n`[brief][current memory document][recent tail]`, and the document is\nreconstructed by replaying these events' field operations in order\n(`tools::memory::memory_document_from_events`). The raw turn-by-turn\nlog stays in the event log untouched — `recall` can still reach it —\nwhich is what makes the document's \"re-fetch via recall\" pointer honest.",
+          "properties": {
+            "MemoryDigest": {
+              "$ref": "#/$defs/MemoryDigest"
+            }
+          },
+          "required": [
+            "MemoryDigest"
+          ],
+          "type": "object"
+        },
+        {
+          "const": "MemoryCheckpointMissed",
+          "description": "The turn-loop checkpoint for a standing-role session closed a turn that\ndid not update the memory document and did not declare no-update, even\nafter one reminder was injected (`docs/standing-agent-memory-design.md`\ndecision 2, checkpoint). Audit/transparency-only: visible in the\ntranscript as a marker that the agent skipped its memory checkpoint,\nso an operator can see how often a standing model writes itself out of\nits own continuity — the dogfood measurement the design defers quality\nto. No frame item is needed beyond the marker; the turn still ends\n`Completed` (the checkpoint is a structural gate, not an error).",
+          "type": "string"
         }
       ]
     },
@@ -755,6 +773,26 @@
         "DirectoryTree"
       ],
       "type": "string"
+    },
+    "FoldedLogRange": {
+      "description": "A reference to the span of the raw event log the digest summarizes — so a\nreader (the agent itself, an operator, or #35's wake-side seeding) can\n`recall.read` the original turn-by-turn exchanges the document condenses.\nSequence numbers are the event log's own ordering.",
+      "properties": {
+        "from_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "to_seq": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "from_seq",
+        "to_seq"
+      ],
+      "type": "object"
     },
     "HistoryCleared": {
       "description": "Payload for [`Event::HistoryCleared`]: exactly which tool calls' results\nthe pass froze into the session's cleared set, and how many characters of\ntool-result text that removed from every subsequent provider request.\n\n`cleared_call_ids` is in history order (oldest first) — the order the\npass walked — so a replayed set is byte-identical to the live one.",
@@ -949,6 +987,79 @@
     },
     "JsonValue": {
       "$comment": "any JSON value; on the binary (Postbag) wire it travels as its JSON text in one string"
+    },
+    "MemoryDigest": {
+      "description": "Payload for [`Event::MemoryDigest`]: one turn's incremental edit to the\nstanding agent's memory document. Replaying every `MemoryDigest` event's\n`updates` in log order reconstructs the current document exactly\n(`tools::memory::memory_document_from_events`) — the document is never\ncarried as a whole, only as the per-turn diffs that built it, which is what\nkeeps a long-running standing session's event log small under iteration.\n\nExactly one of `updates` (non-empty) or `no_update_reason` is set: the\nagent either applied field operations or declared no update was needed.\n`folded_log_range` is present only when `updates` is non-empty.",
+      "properties": {
+        "folded_log_range": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FoldedLogRange"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "no_update_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "updates": {
+          "items": {
+            "$ref": "#/$defs/MemoryFieldUpdate"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "updates"
+      ],
+      "type": "object"
+    },
+    "MemoryField": {
+      "description": "A structured field of the standing-agent memory document\n(`docs/standing-agent-memory-design.md`). The seven fields are the Tier 2\ncompaction template verbatim — goal / decisions / completed / in-progress /\nstuck / next step / related files and symbols — carried on the wire as\nsnake_case so they round-trip through the `memory.update` tool's JSON\nschema unchanged. All fields are free-text blocks; the template gives the\nstructure, the agent gives the content.",
+      "enum": [
+        "goal",
+        "decisions",
+        "completed",
+        "in_progress",
+        "stuck",
+        "next_step",
+        "related"
+      ],
+      "type": "string"
+    },
+    "MemoryFieldUpdate": {
+      "description": "One field-level update in a [`MemoryDigest`]: which field, which operation,\nand the content (ignored when `op` is `Clear`).",
+      "properties": {
+        "content": {
+          "type": "string"
+        },
+        "field": {
+          "$ref": "#/$defs/MemoryField"
+        },
+        "op": {
+          "$ref": "#/$defs/MemoryOp"
+        }
+      },
+      "required": [
+        "field",
+        "op",
+        "content"
+      ],
+      "type": "object"
+    },
+    "MemoryOp": {
+      "description": "A field-level operation in a [`MemoryDigest`]. `Set` replaces the field's\ncontent, `Append` adds to it, and `Clear` empties it — the three operations\nthe `memory.update` tool exposes, so the agent edits one field at a time\nrather than regenerating the whole document (full-document regeneration\ncollapses under iteration: ACE 66.7→57.1%, codex#14589 13.7→6.9% —\n`docs/research/standing-agent-memory-evidence-2026-08-15.md` §2-1).",
+      "enum": [
+        "set",
+        "append",
+        "clear"
+      ],
+      "type": "string"
     },
     "Message": {
       "properties": {

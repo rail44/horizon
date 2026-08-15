@@ -126,6 +126,27 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                 "rate limited: status={:?} attempt={} backoff_ms={}",
                 rate_limited.status, rate_limited.attempt, rate_limited.backoff_ms,
             )),
+            Event::MemoryDigest(digest) => {
+                if let Some(reason) = &digest.no_update_reason {
+                    lines.push(format!("memory: no update ({reason})"));
+                } else {
+                    let fields: Vec<&str> = digest
+                        .updates
+                        .iter()
+                        .map(|u| match u.field {
+                            MemoryField::Goal => "goal",
+                            MemoryField::Decisions => "decisions",
+                            MemoryField::Completed => "completed",
+                            MemoryField::InProgress => "in_progress",
+                            MemoryField::Stuck => "stuck",
+                            MemoryField::NextStep => "next_step",
+                            MemoryField::Related => "related",
+                        })
+                        .collect();
+                    lines.push(format!("memory: updated {}", fields.join(", ")));
+                }
+            }
+            Event::MemoryCheckpointMissed => lines.push("memory: checkpoint missed".to_string()),
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),

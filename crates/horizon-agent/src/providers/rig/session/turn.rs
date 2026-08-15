@@ -35,6 +35,9 @@ impl SessionLoopState {
     pub(crate) async fn run_turn(&mut self, prompt: Message, fallback: impl FnOnce() -> Message) {
         let outcome = self.run_cancellable_turn(prompt, fallback).await;
         if let Some(outcome) = self.handle_truncation_recovery(outcome).await {
+            let Some(outcome) = self.handle_memory_checkpoint(outcome).await else {
+                return;
+            };
             self.apply_turn_outcome(outcome);
         }
     }
@@ -83,6 +86,10 @@ impl SessionLoopState {
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let token = CancellationToken::new();
+        let memory = self
+            .memory
+            .as_ref()
+            .map(|doc| doc as &crate::tools::MemoryDocument);
         let turn = complete_rig_turn(
             &self.config,
             &self.environment,
@@ -91,6 +98,7 @@ impl SessionLoopState {
             prompt,
             &self.events_tx,
             &mut self.clearing,
+            memory,
             fallback,
             &token,
         );
@@ -253,6 +261,66 @@ impl SessionLoopState {
                 self.apply_turn_outcome(outcome);
                 return None;
             }
+        }
+    }
+
+    /// The turn-end memory checkpoint for standing-role sessions
+    /// (`docs/standing-agent-memory-design.md` decision 2). A standing turn
+    /// may only end by updating the memory document or explicitly declaring
+    /// no update — the structural prevention of the agent-way's biggest risk
+    /// (silent write-forgetfulness). This runs after truncation recovery and
+    /// before `apply_turn_outcome`, so it only fires on a turn that would
+    /// otherwise end `Completed` (not cancelled, not failed, no outstanding
+    /// tool calls).
+    ///
+    /// **Bounded**: at most one reminder is injected (setting
+    /// `memory_reminded`), then one re-run; if the re-run still ends without
+    /// a memory update, a `MemoryCheckpointMissed` event is emitted and the
+    /// turn ends. No infinite loop — the second visit to this method can only
+    /// satisfy (return) or miss (return), never remind again.
+    async fn handle_memory_checkpoint(
+        &mut self,
+        mut outcome: TurnCompletion,
+    ) -> Option<TurnCompletion> {
+        loop {
+            // Only standing roles have a memory checkpoint (`self.memory` is
+            // `Some` exclusively for standing roles — see `SessionLoopState::new`),
+            // and only a completing turn reaches it.
+            let is_completing =
+                !outcome.cancelled && !outcome.failed && outcome.requested_tool_call_ids.is_empty();
+            if self.memory.is_none() || !is_completing {
+                return Some(outcome);
+            }
+            if self.memory_satisfied {
+                return Some(outcome);
+            }
+            if !self.memory_reminded {
+                // First miss: inject a reminder and re-run the turn once.
+                self.memory_reminded = true;
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::Running).into());
+                let _ = self.events_tx.send(
+                    Event::MessageCommitted(AgentMessage {
+                        role: MessageRole::AutoContinue,
+                        text: MEMORY_CHECKPOINT_REMINDER.to_string(),
+                    })
+                    .into(),
+                );
+                outcome = self
+                    .run_cancellable_turn(Message::user(MEMORY_CHECKPOINT_REMINDER), || {
+                        deterministic_rig_response("memory checkpoint reminder")
+                    })
+                    .await;
+                // Loop back to re-evaluate (bounded: `memory_reminded` is
+                // now true, so the next iteration can only satisfy or miss).
+                continue;
+            }
+            // Already reminded, still not satisfied: record the miss and let
+            // the turn end. The event is visible in the transcript so an
+            // operator can see how often the model skips its own continuity.
+            let _ = self.events_tx.send(Event::MemoryCheckpointMissed.into());
+            return Some(outcome);
         }
     }
 
@@ -531,3 +599,11 @@ const CAP_SUMMARY_INSTRUCTION: &str = "You have reached the turn limit for this 
      and summarize, without calling any more tools: the relevant files you found (with paths and \
      line numbers), your best partial answer to the question you were asked, and what remains \
      unknown.";
+
+/// The reminder injected when a standing-role turn ends without a memory
+/// update or a no-update declaration (`docs/standing-agent-memory-design.md`
+/// decision 2, checkpoint). One chance; a second miss closes the turn with a
+/// `MemoryCheckpointMissed` event.
+const MEMORY_CHECKPOINT_REMINDER: &str = "You have not updated your memory document this turn. \
+     Before ending the turn, call memory.update to record what you learned (or declare no_update \
+     with a reason). The turn cannot end without one of these.";

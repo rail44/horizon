@@ -145,6 +145,12 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             | Event::ProviderRateLimited(_)
             | Event::Exited(_)
             | Event::TurnEnded(_) => None,
+            // Standing-agent memory events are consumed by the provider-view
+            // projection (`history_for_provider_request`), not by the raw
+            // history rebuild: the document is prepended there, and the
+            // checkpoint-miss marker is transparency-only.
+            | Event::MemoryDigest(_)
+            | Event::MemoryCheckpointMissed => None,
         })
         .collect();
     repair_replayed_message_pairing(messages)

@@ -95,6 +95,7 @@ fn run_gui() {
             horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
         skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
         summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+        standing: horizon_board::keeper::ROLE_STANDING,
     }]);
 
     let application = build_application();

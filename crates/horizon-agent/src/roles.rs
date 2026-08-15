@@ -97,6 +97,18 @@ pub struct RoleDefinition {
     /// whatever it found rather than a bare error
     /// (`docs/agent-explore-design.md`'s 2026-07-27 addendum).
     pub summarize_on_cap: bool,
+    /// Whether this is a *standing* role -- a long-lived, context-carrying
+    /// agent that maintains a memory document across turns
+    /// (`docs/standing-agent-memory-design.md`). A standing role's session
+    /// gets the `memory.update` tool, a turn-end checkpoint that forces it
+    /// to update (or explicitly skip) its memory each turn, and a
+    /// provider-view projection that prepends the current memory document
+    /// in place of the old turn-by-turn history. The keeper role
+    /// (`horizon_board::keeper`) is the first standing role; coding sessions
+    /// are not standing. Added for the keeper, which needed exactly this
+    /// one field the two prior roles didn't -- the third extension of this
+    /// struct after `iteration_cap` and `summarize_on_cap`.
+    pub standing: bool,
 }
 
 /// Horizon's configuration assistant: the first role -- the concrete
@@ -128,6 +140,7 @@ pub const CONFIG_ROLE: RoleDefinition = RoleDefinition {
     include_repository_instructions: false,
     skill_ids: &["horizon-config"],
     summarize_on_cap: false,
+    standing: false,
 };
 
 const CONFIG_ROLE_PROMPT_SECTION: &str = "You are Horizon's configuration assistant: you help \
@@ -195,6 +208,7 @@ pub(crate) const EXPLORE_ROLE: RoleDefinition = RoleDefinition {
     include_repository_instructions: true,
     skill_ids: &[],
     summarize_on_cap: true,
+    standing: false,
 };
 
 const EXPLORE_ROLE_PROMPT_SECTION: &str = "You are an exploration session: another agent asked \
@@ -437,6 +451,7 @@ mod tests {
             include_repository_instructions: false,
             skill_ids: &[],
             summarize_on_cap: false,
+            standing: false,
         }]);
         let role = resolve(&RoleId("test-external-role".to_string()))
             .expect("external role must resolve after registration");
@@ -462,6 +477,7 @@ mod tests {
             include_repository_instructions: false,
             skill_ids: &[],
             summarize_on_cap: false,
+            standing: false,
         }]);
         // Built-in roles must still be found.
         assert!(resolve(&RoleId("config".to_string())).is_some());

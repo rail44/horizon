@@ -166,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
             horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
         skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
         summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
+        standing: horizon_board::keeper::ROLE_STANDING,
     }]);
     horizon_agent::skills::register_external_skill_sources(vec![
         horizon_board::keeper::SKILL_SOURCE,

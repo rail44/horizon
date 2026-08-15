@@ -7,6 +7,7 @@ mod execution;
 pub(crate) mod explore;
 mod fs;
 mod knowledge;
+mod memory;
 mod network;
 mod processing;
 mod recall;
@@ -29,6 +30,13 @@ pub use explore::{ExplorationHost, StartedExploration};
 // same reason as `ExplorationHost` — `horizon-agentd` implements
 // `BoardHost` and installs it on every session's `ToolSessionState`.
 pub use board::BoardHost;
+// Standing-agent memory (`docs/standing-agent-memory-design.md`): the memory
+// document type, the event-log replay reducer, the tool-input parser, and the
+// tool id — re-exported `pub(crate)` so the rig session loop and the clearing
+// projection can reach them without `memory` itself being a `pub` module.
+pub(crate) use memory::{
+    memory_document_from_events, parse_update, MemoryDocument, TOOL_ID as MEMORY_UPDATE_TOOL_ID,
+};
 // The model-visible ids of that tool and its companion fetch tool, named
 // for the places outside `explore` that have to recognize them: dispatch
 // (`execution`), the prompt's delegation-routing block

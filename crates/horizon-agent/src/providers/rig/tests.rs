@@ -2844,14 +2844,21 @@ fn rig_tool_definitions_with_no_allow_list_returns_every_catalog_tool() {
 
     let definitions = rig_tool_definitions(None, true);
 
-    assert_eq!(definitions.len(), all.len());
-    for definition in &all {
+    // `memory.update` is deliberately excluded for a role-less session
+    // (no allow list = "all tools") — it is a standing-role-only tool.
+    let expected: Vec<_> = all.iter().filter(|d| d.id != "memory.update").collect();
+    assert_eq!(definitions.len(), expected.len());
+    for definition in &expected {
         assert!(
             definitions.iter().any(|d| d.name == definition.id),
             "expected `{}` to be present with no allow list",
             definition.id
         );
     }
+    assert!(
+        !definitions.iter().any(|d| d.name == "memory.update"),
+        "memory.update must not be advertised without an explicit allow list"
+    );
 }
 
 #[test]
