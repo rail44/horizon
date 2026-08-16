@@ -68,3 +68,4 @@ pub(crate) use self::connection::Connection;
 pub(crate) use self::resume::resume_persisted_sessions;
 pub(crate) use self::spawn::spawn_session_thread;
 pub(crate) use self::state::AgentdState;
+pub(crate) use self::subscription::SessionSubscription;

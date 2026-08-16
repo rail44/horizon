@@ -284,11 +284,34 @@ impl AgentdState {
     }
 
     /// Returns whether `session_id` is currently live in this daemon's
-    /// registry. Used by the wake subscriber's `SpawnKeeper` action to detect
-    /// when a keeper session has finished (the entry is removed from
-    /// `sessions` when the session thread exits).
+    /// registry. Used by the wake subscriber's actions to detect when a keeper
+    /// session has finished (the entry is removed from `sessions` when the
+    /// session thread exits).
     pub(crate) fn session_exists(&self, session_id: SessionId) -> bool {
         self.sessions.lock().unwrap().contains_key(&session_id)
+    }
+
+    /// Installs a dummy `SessionEntry` for `session_id` so `session_exists`
+    /// returns true. Test-only — used by the wake action's done-future tests to
+    /// simulate a live session without spawning a real one.
+    #[cfg(test)]
+    pub(crate) fn install_test_session(&self, session_id: SessionId) {
+        let (inbound_tx, _inbound_rx) = crossbeam_channel::unbounded::<Command>();
+        let (replay_tx, _replay_rx) =
+            crossbeam_channel::unbounded::<crossbeam_channel::Sender<Vec<Event>>>();
+        self.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: None,
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: None,
+                worktree: None,
+            },
+        );
     }
 
     /// Routes a `Command` to `session_id`'s thread, reporting whether there

@@ -61,23 +61,23 @@ pub(super) type SessionSubscriptions = Mutex<HashMap<SessionId, Sender<Event>>>;
 /// [`AgentdState::unsubscribe_from_session`] (which the `task` seam calls
 /// as part of terminating a child, so a subscription never outlives the
 /// session it observes).
-pub(super) struct SessionSubscription {
+pub(crate) struct SessionSubscription {
     /// The observed session -- carried so a subscriber never has to
     /// re-thread the id alongside the receiver.
-    pub(super) session_id: SessionId,
-    pub(super) events: Receiver<Event>,
+    pub(crate) session_id: SessionId,
+    pub(crate) events: Receiver<Event>,
 }
 
 impl AgentdState {
     /// Subscribes to `session_id`'s event stream -- see the module doc,
     /// including the "subscribe before spawning" ordering requirement.
-    pub(super) fn subscribe_to_session(&self, session_id: SessionId) -> SessionSubscription {
+    pub(crate) fn subscribe_to_session(&self, session_id: SessionId) -> SessionSubscription {
         let (tx, events) = unbounded();
         lock_unpoisoned(&self.session_subscriptions).insert(session_id, tx);
         SessionSubscription { session_id, events }
     }
 
-    pub(super) fn unsubscribe_from_session(&self, session_id: SessionId) {
+    pub(crate) fn unsubscribe_from_session(&self, session_id: SessionId) {
         lock_unpoisoned(&self.session_subscriptions).remove(&session_id);
     }
 
@@ -87,7 +87,7 @@ impl AgentdState {
     /// same ordered stream. Only `AgentWireEvent::Event` is mirrored: the
     /// other wire events are UI-facing ephemera (progress previews, the
     /// model chip) with nothing a subscriber could fold.
-    pub(super) fn publish_to_subscriber(&self, session_id: SessionId, event: &Event) {
+    pub(crate) fn publish_to_subscriber(&self, session_id: SessionId, event: &Event) {
         let mut subscriptions = lock_unpoisoned(&self.session_subscriptions);
         if subscriptions
             .get(&session_id)
@@ -98,7 +98,7 @@ impl AgentdState {
     }
 
     #[cfg(test)]
-    pub(super) fn has_subscriber(&self, session_id: SessionId) -> bool {
+    pub(crate) fn has_subscriber(&self, session_id: SessionId) -> bool {
         lock_unpoisoned(&self.session_subscriptions).contains_key(&session_id)
     }
 }

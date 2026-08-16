@@ -23,12 +23,15 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
-use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
+use crossbeam_channel::TryRecvError;
+
+use horizon_agent::contract::{Command, Event, ProviderId, SessionId, SessionState};
 use horizon_agent::persistence::event_log;
 use horizon_agent::roles::RoleId;
 
-use crate::session::{spawn_session_thread, AgentdState};
+use crate::session::{spawn_session_thread, AgentdState, SessionSubscription};
 
 /// Information about what changed on the board, passed to the wake action.
 /// The action uses this to construct the keeper's initial prompt.
@@ -92,6 +95,11 @@ impl WakeAction for SpawnKeeper {
         let session_id = SessionId::new();
         let keeper_author = format!("session:{}", session_id.as_uuid());
 
+        // Subscribe before spawning so the done future sees the wake prompt's
+        // turn events (the "subscribe before spawning" ordering requirement —
+        // see `subscription`'s module doc).
+        let subscription = self.state.subscribe_to_session(session_id);
+
         // Spawn the keeper session thread — same path
         // `AgentdExplorationHost::start` uses for exploration sessions.
         spawn_session_thread(
@@ -115,21 +123,16 @@ impl WakeAction for SpawnKeeper {
         {
             // The session thread ended before we could send the message
             // (rare race). The done future resolves immediately.
+            self.state.unsubscribe_from_session(session_id);
             return (keeper_author, Box::pin(async {}));
         }
 
-        // The done future polls `session_exists` until the keeper's thread
-        // exits (the entry is removed from `state.sessions` in
-        // `spawn_session_thread`'s thread body). This mirrors the completion
-        // check in `AgentdExplorationHost`'s test
-        // (`exploration.rs:185-189`).
-        let state = self.state.clone();
-        let done = Box::pin(async move {
-            let interval = std::time::Duration::from_millis(100);
-            while state.session_exists(session_id) {
-                tokio::time::sleep(interval).await;
-            }
-        });
+        // The done future resolves when the wake-injected turn ends
+        // (`StateChanged(WaitingForUser)` after `StateChanged(Running)`),
+        // not when the session thread exits — a standing session stays alive
+        // after its turn. This lets the subscriber deliver the next wake once
+        // the turn is done, even though the session is still alive.
+        let done = done_on_turn_end(self.state.clone(), session_id, subscription);
 
         (keeper_author, done)
     }
@@ -152,6 +155,73 @@ fn build_wake_prompt(info: &WakeInfo) -> String {
          and write context-restoring comments where appropriate.",
         info.first_seq, info.last_seq, items
     )
+}
+
+/// The poll interval for the done future's event-receiver loop. Short enough
+/// to resolve promptly after a turn ends, long enough to avoid busy-waiting.
+const DONE_POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Creates a done future that resolves when the wake-injected turn ends — the
+/// correct completion signal for the subscriber's multi-wake prevention.
+///
+/// The done future tracks a two-phase state machine over the session's event
+/// stream:
+///
+/// 1. **Waiting for start** — poll until `StateChanged(Running)` arrives (the
+///    wake prompt's turn has begun). This avoids resolving on a stale
+///    `WaitingForUser` from the session's initialization (which fires before
+///    the wake prompt is processed).
+/// 2. **Waiting for idle** — once `Running` has been seen, poll until
+///    `StateChanged(WaitingForUser)` or `StateChanged(Terminated)` arrives.
+///    `WaitingForUser` is the definitive "session is idle" signal: every
+///    turn-end path (`apply_turn_outcome`, `emit_cancelled_turn`,
+///    `halt_turn_loop`, truncation recovery, and the memory checkpoint's
+///    bounded re-run) funnels through it. `TurnEnded` alone is insufficient
+///    because the checkpoint may re-run the turn after emitting it.
+///
+/// The future also resolves immediately if the session exits entirely
+/// (`session_exists` becomes false) or the subscription's sender is dropped.
+///
+/// `subscription` must be installed *before* the wake prompt is sent (for a
+/// freshly spawned session: before `spawn_session_thread`) so the turn's
+/// `StateChanged(Running)` event is not missed.
+fn done_on_turn_end(
+    state: Arc<AgentdState>,
+    session_id: SessionId,
+    subscription: SessionSubscription,
+) -> DoneFuture {
+    let events = subscription.events;
+    Box::pin(async move {
+        let mut saw_running = false;
+        loop {
+            if !state.session_exists(session_id) {
+                state.unsubscribe_from_session(session_id);
+                return;
+            }
+            match events.try_recv() {
+                Ok(event) => match event {
+                    Event::StateChanged(SessionState::Running) => {
+                        saw_running = true;
+                    }
+                    Event::StateChanged(SessionState::WaitingForUser)
+                    | Event::StateChanged(SessionState::Terminated)
+                        if saw_running =>
+                    {
+                        state.unsubscribe_from_session(session_id);
+                        return;
+                    }
+                    _ => {}
+                },
+                Err(TryRecvError::Empty) => {
+                    tokio::time::sleep(DONE_POLL_INTERVAL).await;
+                }
+                Err(TryRecvError::Disconnected) => {
+                    state.unsubscribe_from_session(session_id);
+                    return;
+                }
+            }
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -184,9 +254,10 @@ fn build_wake_prompt(info: &WakeInfo) -> String {
 //    own accumulated memory.
 //
 // The keeper session's id is held in a `Mutex<Option<SessionId>>` shared
-// between the action and the done future, so the done future can clear it
-// when the session thread exits — making the next wake take the seed-spawn
-// path automatically.
+// between the action and the done future. The done future resolves on turn
+// end (not session exit — a standing session stays alive), so the done future
+// does NOT clear the id. Instead, the next `wake` call checks `session_exists`
+// and clears the stale id if the session was lost, taking the seed-spawn path.
 
 /// The v2 wake action: resumes a persistent keeper session, or seed-spawns a
 /// new one from the prior keeper's folded memory if the session was lost.
@@ -199,8 +270,9 @@ pub(crate) struct ResumeKeeper {
     /// the seed-spawn path then spawns with no history (cold start).
     event_log_path: Option<PathBuf>,
     /// The id of the keeper session this action is managing, if one is
-    /// currently live. Cleared by the done future when the session exits.
-    /// Shared so the done future (which the subscriber polls) can reset it.
+    /// currently live. Checked at the start of each `wake` call via
+    /// `session_exists` — a stale id (session lost) is cleared and the
+    /// seed-spawn path is taken.
     keeper_session: Arc<Mutex<Option<SessionId>>>,
 }
 
@@ -233,6 +305,11 @@ impl WakeAction for ResumeKeeper {
                 // its turn, which is forbidden (recorded measurement). So
                 // this send is always to an idle session.
                 let keeper_author = format!("session:{}", session_id.as_uuid());
+
+                // Subscribe before sending the prompt so the done future
+                // sees the turn's events.
+                let subscription = self.state.subscribe_to_session(session_id);
+
                 let prompt = build_wake_prompt(&info);
                 if !self
                     .state
@@ -240,29 +317,16 @@ impl WakeAction for ResumeKeeper {
                 {
                     // Race: the session ended between our check and the send.
                     // Fall through to the seed-spawn path.
+                    self.state.unsubscribe_from_session(session_id);
                     return self.seed_spawn(info);
                 }
 
-                // The done future resolves when the keeper's turn finishes
-                // AND the session thread has exited. But for a persistent
-                // session, the thread does NOT exit after one turn — it stays
-                // alive waiting for the next wake. So the done future for the
-                // resume path resolves when the session thread exits (the
-                // session was terminated/lost), which is the correct signal
-                // for the subscriber's multi-wake prevention: while the
-                // session is alive, the subscriber should not deliver another
-                // wake (it accumulates events instead).
-                let state = self.state.clone();
-                let keeper_session = self.keeper_session.clone();
-                let done = Box::pin(async move {
-                    let interval = std::time::Duration::from_millis(100);
-                    while state.session_exists(session_id) {
-                        tokio::time::sleep(interval).await;
-                    }
-                    // Clear the tracked session id — the next wake will
-                    // seed-spawn.
-                    *keeper_session.lock().unwrap() = None;
-                });
+                // The done future resolves when the wake-injected turn ends
+                // (StateChanged(WaitingForUser) after StateChanged(Running)),
+                // not when the session exits. A standing session stays alive
+                // after its turn — the subscriber can deliver the next wake
+                // once the turn is done, resuming the same session.
+                let done = done_on_turn_end(self.state.clone(), session_id, subscription);
                 return (keeper_author, done);
             }
             // The tracked session is gone. Clear the stale id.
@@ -276,11 +340,15 @@ impl WakeAction for ResumeKeeper {
 
 impl ResumeKeeper {
     /// Spawns a new keeper session, seeded with the most recent prior keeper
-    /// session's folded `MemoryDigest` sequence. Sets up the done future to
-    /// clear the tracked session id on exit.
+    /// session's folded `MemoryDigest` sequence. The done future resolves on
+    /// turn end, not session exit.
     fn seed_spawn(&self, info: WakeInfo) -> (String, DoneFuture) {
         let session_id = SessionId::new();
         let keeper_author = format!("session:{}", session_id.as_uuid());
+
+        // Subscribe before spawning so the done future sees the wake prompt's
+        // turn events (the "subscribe before spawning" ordering requirement).
+        let subscription = self.state.subscribe_to_session(session_id);
 
         // Fold the prior keeper's MemoryDigest events for the seed. These are
         // passed as `history` to `spawn_session_thread`, which threads them
@@ -310,18 +378,11 @@ impl ResumeKeeper {
             .send_command(session_id, Command::UserMessage { text: prompt })
         {
             *self.keeper_session.lock().unwrap() = None;
+            self.state.unsubscribe_from_session(session_id);
             return (keeper_author, Box::pin(async {}));
         }
 
-        let state = self.state.clone();
-        let keeper_session = self.keeper_session.clone();
-        let done = Box::pin(async move {
-            let interval = std::time::Duration::from_millis(100);
-            while state.session_exists(session_id) {
-                tokio::time::sleep(interval).await;
-            }
-            *keeper_session.lock().unwrap() = None;
-        });
+        let done = done_on_turn_end(self.state.clone(), session_id, subscription);
 
         (keeper_author, done)
     }
@@ -660,5 +721,139 @@ mod tests {
         let author1 = format!("session:{}", session_id.as_uuid());
         let author2 = format!("session:{}", session_id.as_uuid());
         assert_eq!(author1, author2);
+    }
+
+    // --- done-on-turn-end tests ----------------------------------------------
+
+    /// Installs a fake `SessionEntry` so `session_exists` returns true.
+    fn install_fake_session(state: &Arc<AgentdState>, session_id: SessionId) {
+        state.install_test_session(session_id);
+    }
+
+    /// The done future resolves when the wake-injected turn ends
+    /// (`StateChanged(WaitingForUser)` after `StateChanged(Running)`), NOT when
+    /// the session thread exits. This is the fix for the blocking bug: the old
+    /// done waited for `session_exists` to become false, but a standing session
+    /// stays alive — so the done never resolved and the subscriber could never
+    /// deliver a second wake.
+    #[tokio::test]
+    async fn done_on_turn_end_resolves_on_turn_end_not_session_exit() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let session_id = SessionId::new();
+        install_fake_session(&state, session_id);
+
+        let subscription = state.subscribe_to_session(session_id);
+        let done = done_on_turn_end(state.clone(), session_id, subscription);
+
+        // Simulate the session's turn: Running → TurnEnded → WaitingForUser.
+        // The done future should resolve after WaitingForUser, even though
+        // the session is still alive.
+        state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
+        );
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        // The done future should resolve within a reasonable time.
+        tokio::time::timeout(Duration::from_secs(2), done)
+            .await
+            .expect("done should resolve after turn end");
+
+        // The session is still alive — the done resolved on turn end, not
+        // session exit.
+        assert!(
+            state.session_exists(session_id),
+            "session must still be alive after done resolves"
+        );
+    }
+
+    /// A second wake can be delivered while the keeper session is still alive.
+    /// This is the scenario the blocking bug prevented: the old done future
+    /// never resolved (it waited for session exit), so the subscriber's
+    /// `keeper_done` stayed `Some` forever and all subsequent board events
+    /// accumulated without a second wake. With the fix, the done resolves on
+    /// turn end, the subscriber clears `keeper_done`, and the next wake
+    /// resumes the same session.
+    #[tokio::test]
+    async fn second_wake_delivered_while_session_alive() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let session_id = SessionId::new();
+        install_fake_session(&state, session_id);
+
+        // --- First wake: subscribe, simulate turn, done resolves ---
+        let subscription1 = state.subscribe_to_session(session_id);
+        let done1 = done_on_turn_end(state.clone(), session_id, subscription1);
+
+        state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
+        );
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), done1)
+            .await
+            .expect("first done should resolve after turn end");
+
+        // The session is still alive.
+        assert!(state.session_exists(session_id));
+
+        // --- Second wake: subscribe again, simulate another turn ---
+        // The subscriber would call `handle_keeper_finished` (clearing
+        // `keeper_done`) and then `trigger_wake` again. The second wake
+        // subscribes to the same session and waits for its turn.
+        let subscription2 = state.subscribe_to_session(session_id);
+        let done2 = done_on_turn_end(state.clone(), session_id, subscription2);
+
+        state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
+        );
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        tokio::time::timeout(Duration::from_secs(2), done2)
+            .await
+            .expect("second done should resolve after second turn end");
+
+        // The same session is still alive — no second session was spawned.
+        assert!(state.session_exists(session_id));
+    }
+
+    /// The done future does NOT resolve on a stale `WaitingForUser` from
+    /// initialization — it waits for `StateChanged(Running)` first. Without
+    /// this guard, a freshly spawned session's initial `WaitingForUser` would
+    /// resolve the done before the wake prompt's turn even starts.
+    #[tokio::test]
+    async fn done_on_turn_end_ignores_stale_waiting_for_user() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let session_id = SessionId::new();
+        install_fake_session(&state, session_id);
+
+        let subscription = state.subscribe_to_session(session_id);
+        let done = done_on_turn_end(state.clone(), session_id, subscription);
+
+        // Simulate initialization: WaitingForUser without a preceding Running.
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        // The done should NOT resolve yet — it hasn't seen Running.
+        let resolved = tokio::time::timeout(Duration::from_millis(200), &mut Box::pin(done)).await;
+        assert!(
+            resolved.is_err(),
+            "done must not resolve on stale WaitingForUser"
+        );
     }
 }
