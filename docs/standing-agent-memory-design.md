@@ -193,3 +193,42 @@ v1 — セッション内の記憶機構(セッション跨ぎの種付けは #3
 - **単体テスト**: `tools/memory.rs`(スキーマ検証・fold 増分適用・
   render・execute_auto)、`providers/rig/clearing/tests.rs`(投影の組み立て・
   clearing との合成)。
+
+## 実装記録: wake action v2(2026-08-16、board #39)
+
+v1(セッション内記憶機構)と #35(起床機構 v1 = 都度 spawn)の着地により、
+設計の次段を実装: `WakeAction` trait の v2 実装(`ResumeKeeper`)。
+
+- **再開パス**: 生存中の keeper セッションがあれば wake プロンプトを
+  `Command::UserMessage` で差し込む(新 spawn しない)。セッションの live
+  `MemoryDocument` と会話 tail がそのまま再利用される。#35 の単一飛行ガード
+  (subscriber の `keeper_done` future)により、走行中のセッションへの送信は
+  起きない — `Command::UserMessage` は走行中のターンを取り消すので厳禁
+  (実測済み)。
+- **種付けパス**: keeper セッションが失われていれば(agentd 再起動・
+  terminate 等)、event log から直近 keeper セッションの `MemoryDigest` イベント列
+  を fold し、その列を `history` として新 spawn する。`spawn_session_thread` →
+  `StartSession.history` → `load_rig_session_history` の `fallback_events` 経由で
+  `memory_document_from_events` が文書を再構成し、`SessionLoopState::memory` に
+  seed される。#36 の投影(`[memory document][tail]`)と整合: 新セッションの
+  最初の provider 送信で文書が user-role メッセージとして挿入される。
+- **直近 keeper セッションの特定**: event log の全 `Record` を走査し、
+  `role_id == "keeper"` でグループ化、最大 `sequence` を持つセッションを直近
+  とする(`resume_persisted_sessions` と同じ pattern)。そのセッションの
+  `Event::MemoryDigest` のみを sequence 順で返す(会話イベントは除外 — 新
+  セッションの履歴を汚染しない)。
+- **v1 は trait 実装として残置**: `SpawnKeeper` は `#[allow(dead_code)]` で
+  差し替え可能な口の意味を保つ。既定は v2(`ResumeKeeper`)に切り替え済み
+  (`main.rs`)。
+- **副次効果の解消**: (1) 記憶がセッションを跨いで持ち越される、(2) wake
+  ごとの detached セッション蓄積が起きない、(3) 自己 author フィルタの対象が
+  安定する(毎回同じ `session:<uuid>`)。
+- **DuckDB fallback の拡張**: `load_rig_session_history` の store-available
+  path で、DuckDB から得た `memory_document` が空のとき `fallback_events` から
+  seed するよう修正した(跨ぎ種付けの核心技术)。store がない / query 失敗の
+  ときも `fallback_events` に fall back する。
+- **単体テスト**: `wake/action.rs` に `prior_keeper_digests`(直近セッション
+  選択・非 keeper 除外・非 digest 除外・空ログ)と v2 副次効果
+  (単一セッションスロット・author 安定性)のテストを追加。
+- **wire 影響**: なし(既存の `Event::MemoryDigest` を消費するのみ)。
+

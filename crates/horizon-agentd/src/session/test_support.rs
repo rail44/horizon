@@ -11,7 +11,7 @@ use horizon_agent::wire::AgentWireEvent;
 
 use super::state::AgentdState;
 
-pub(super) fn judge_test_state() -> Arc<AgentdState> {
+pub(crate) fn judge_test_state() -> Arc<AgentdState> {
     let agent_config = AgentConfig::from_env_and_provider(None, None);
     Arc::new(AgentdState::new(
         ProviderRegistry::builtin_with_config(
@@ -62,7 +62,7 @@ pub(super) fn drain_events(
 /// env vars -- a developer's own `OPENAI_API_KEY` must never leak into
 /// this test's expectations). Tests observing sends subscribe the
 /// session id under test via [`Connection::subscribe_agent`].
-pub(super) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<AgentdState> {
+pub(crate) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<AgentdState> {
     let mut agent_config = AgentConfig::from_env_and_provider(None, None);
     agent_config.rig.openai_enabled = openai_enabled;
     agent_config.rig.model = model.to_string();
@@ -83,7 +83,7 @@ pub(super) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<Ag
 /// Like [`state_with_rig_config`], but with explicit `trusted_projects`
 /// entries — for the repository-trust gate's tests (owner decision
 /// 2026-08-05).
-pub(super) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> Arc<AgentdState> {
+pub(crate) fn state_with_trusted_projects(trusted: Vec<std::path::PathBuf>) -> Arc<AgentdState> {
     let agent_config = AgentConfig::from_env_and_provider(None, None);
     Arc::new(AgentdState::new(
         ProviderRegistry::builtin_with_config(

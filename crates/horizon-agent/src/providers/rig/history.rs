@@ -71,13 +71,34 @@ pub(super) fn load_rig_session_history(
                 .into_iter()
                 .map(|record| record.event)
                 .collect::<Vec<_>>();
+            // A cross-session seed (board #39's wake-action v2 seed-spawn
+            // path) supplies the prior keeper's MemoryDigest events as
+            // `fallback_events` even though this session's own DuckDB row
+            // set is empty. The messages/cleared-call-ids come from this
+            // session's own events (none for a fresh spawn); the memory
+            // document is the seed's, unless the session already has one.
+            let mut memory_document = memory_document_from_events_if_nonempty(&events);
+            if memory_document.is_none() {
+                memory_document = memory_document_from_events_if_nonempty(fallback_events);
+            }
             RigSessionHistory {
                 messages: rig_messages_from_horizon_events(&events),
                 cleared_call_ids: cleared_call_ids_from_events(&events),
-                memory_document: memory_document_from_events_if_nonempty(&events),
+                memory_document,
             }
         })
-        .unwrap_or_default()
+        .unwrap_or_else(|_| {
+            // DuckDB query failed: fall back entirely to `fallback_events`,
+            // same as the no-store path above.
+            if fallback_events.is_empty() {
+                return RigSessionHistory::default();
+            }
+            RigSessionHistory {
+                messages: rig_messages_from_horizon_events(fallback_events),
+                cleared_call_ids: cleared_call_ids_from_events(fallback_events),
+                memory_document: memory_document_from_events_if_nonempty(fallback_events),
+            }
+        })
 }
 
 /// Replays `MemoryDigest` events into a document, returning `None` when the

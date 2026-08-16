@@ -185,7 +185,7 @@ tool ids (`board.set_status`, etc.) and its own catalog entries.
 creating a session, through the existing role-specified session-creation
 path (the same path `config` and `explore` roles use). No new UI is needed.
 
-**v2: automatic wake-up (implemented, board #35).** The keeper wakes
+**v2: automatic wake-up (implemented, board #35 + #39).** The keeper wakes
 automatically when the board changes. A daemon-lifetime subscriber task
 inside `horizon-agentd` (`crates/horizon-agentd/src/wake/`) subscribes to
 `horizon-logd`'s board-event poke stream (`Store::subscribe`), reads back
@@ -205,11 +205,23 @@ events past its persisted cursor, and applies the wake policy:
 
 The wake action is a **swappable seam** (`WakeAction` trait): the v1
 implementation (`SpawnKeeper`) spawns a fresh keeper session with a prompt
-pointing at the changed items/seq range. The future #36 (aggregated-context
-session resume) will plug a different implementation into this seam — one
-that resumes an existing session instead of spawning a new one. The
-subscriber and policy do not assume spawn; they call `WakeAction::wake` and
-await the returned done-future.
+pointing at the changed items/seq range. The v2 implementation (`ResumeKeeper`,
+board #39) maintains a single persistent keeper session: on wake, it resumes
+the live session by sending the wake prompt, or — if the session was lost
+(agentd restart, terminate) — seed-spawns a new one from the most recent keeper
+session's folded `MemoryDigest` sequence (`docs/standing-agent-memory-
+design.md` §"#35との接続"). The subscriber and policy do not assume spawn;
+they call `WakeAction::wake` and await the returned done-future.
+
+The v2 resume model fixes three v1 gaps observed in the first real run
+(2026-08-16, session aeb87e9e): (1) memory is carried across wakes — the
+session's live `MemoryDocument` persists, so the keeper's context
+accumulates instead of resetting to zero; (2) detached sessions no longer
+accumulate one per wake — the single persistent session is reused; (3) the
+self-author filter's target is stable — always the same `session:<uuid>`
+across wakes, so the keeper reliably filters its own comments. v1
+(`SpawnKeeper`) is retained as the trait's fallback impl so the default can be
+swapped back if needed.
 
 The wake policy is a subscriber-side concern, not logd's job
 (`docs/logd-design.md` decision 8): logd notifies; the subscriber decides
