@@ -62,7 +62,7 @@ mod spawn;
 mod state;
 mod subscription;
 #[cfg(test)]
-mod test_support;
+pub(crate) mod test_support;
 
 pub(crate) use self::connection::Connection;
 pub(crate) use self::resume::resume_persisted_sessions;

@@ -14,8 +14,10 @@
 //!   multi-wake prevention). Unit-tested without sockets.
 //! - [`cursor`] — persists the last-processed seq to disk for restart
 //!   recovery.
-//! - [`action`] — the swappable `WakeAction` seam. v1 spawns a fresh keeper
-//!   session; #36 will plug a resume-with-aggregated-context impl here.
+//! - [`action`] — the swappable `WakeAction` seam. v1 (`SpawnKeeper`) spawns
+//!   a fresh keeper session; v2 (`ResumeKeeper`, the default since #39)
+//!   resumes a persistent session or seed-spawns from the prior keeper's
+//!   folded memory.
 //! - [`task`] — the async subscriber loop that ties the above together.
 //!
 //! The wake policy is a subscriber-side concern, not logd's job
@@ -27,5 +29,7 @@ pub(crate) mod cursor;
 pub(crate) mod policy;
 pub(crate) mod task;
 
+pub(crate) use action::ResumeKeeper;
+#[allow(unused_imports)]
 pub(crate) use action::SpawnKeeper;
 pub(crate) use task::spawn as spawn_subscriber;
