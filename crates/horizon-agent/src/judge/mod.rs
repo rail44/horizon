@@ -234,11 +234,12 @@ pub(crate) fn start_approval_gate(
     mut candidate: ApprovalCandidate,
     result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 ) -> ApprovalGate {
-    // Deterministic prefilter for Git metadata operations (owner decision
-    // 2026-08-03): commands carrying a dangerous shell or Git construct skip
-    // the judge and go straight to the human, with the detected construct
-    // named in the approval reason. Only plain Git metadata operations
-    // reach the judge.
+    // Deterministic prefilter for Git metadata operations. Owner decision
+    // 2026-08-17 (board #38): the prefilter no longer blocks any construct —
+    // every GitOperation-classified command passes to the judge in full.
+    // The HumanDirect branch is retained as a seam but is currently
+    // unreachable; the deterministic defense against host-escalation
+    // vectors moved to the sandbox grant shape (hooks/config exclusion).
     if let ApprovalKind::GitOperation { .. } = &candidate.approval.kind {
         let command = candidate
             .request
@@ -295,6 +296,7 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
                     path,
                     access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                     scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                    excluded_subpaths: Vec::new(),
                 })
                 .collect(),
             requested_domains: Vec::new(),
@@ -666,6 +668,7 @@ mod tests {
                 path: std::env::temp_dir().join("approved"),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::File,
+                excluded_subpaths: Vec::new(),
             },
         };
         // The judge is asked about the shaped grant approval would actually
@@ -676,6 +679,7 @@ mod tests {
             path: std::env::temp_dir(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         let context = trusted_approval_context(
             &ApprovalKind::FilesystemDenialRetry {
@@ -921,7 +925,10 @@ mod tests {
     }
 
     #[test]
-    fn git_prefilter_routes_dangerous_commands_to_human_even_with_judge() {
+    fn git_prefilter_passes_dangerous_commands_to_the_judge() {
+        // Owner decision 2026-08-17 (board #38): the prefilter no longer
+        // blocks dangerous constructs. A command carrying `-c` now reaches
+        // the judge (Pending) instead of going straight to the human.
         let path = temp_event_log("git-dangerous");
         let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
         let client: Arc<dyn ModelClient> = Arc::new(ScriptedClient::new(vec![Ok(
@@ -930,16 +937,18 @@ mod tests {
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
         let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
         let candidate = git_candidate("git -c core.hooksPath=/dev/null commit -m test");
-        let (tx, _rx) = crossbeam_channel::unbounded();
-        let gate = start_approval_gate(&tool_state, SessionId::new(), candidate, tx);
-        match gate {
-            ApprovalGate::Human(c) => assert!(
-                c.approval.reason.contains("Detected"),
-                "reason should name the detected construct: {}",
-                c.approval.reason
-            ),
-            _ => panic!("expected Human gate for a dangerous git command"),
-        }
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tool_state, SessionId::new(), candidate, tx),
+            ApprovalGate::Pending
+        );
+        let crate::tools::ToolCompletion::ApprovalJudged(judgment) = rx
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .expect("judge completion")
+        else {
+            panic!("unexpected completion");
+        };
+        assert_eq!(judgment.decision, JudgeDecision::AutoApprove);
         let _ = std::fs::remove_file(path);
     }
 

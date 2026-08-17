@@ -340,315 +340,38 @@ pub(super) fn tokenize(command: &str) -> Vec<ShellToken> {
 pub(crate) enum GitPrefilterVerdict {
     /// Skip the judge and ask the human directly. Carries a static
     /// description of the detected construct for the approval reason text.
+    ///
+    /// Currently never returned (owner decision 2026-08-17, board #38): the
+    /// prefilter passes every GitOperation to the judge. Retained as a seam
+    /// for a future Codex-style "safe-side widening" that might block certain
+    /// constructs without judge involvement.
+    #[allow(dead_code)]
     HumanDirect(&'static str),
     /// Let the enforcing judge evaluate the command.
     PassToJudge,
 }
 
-/// Git global options the prefilter always routes to the human: each can
-/// redirect execution to an arbitrary program or override the repository Git
-/// operates on.
-const PREFILTER_DANGEROUS_OPTIONS: &[&str] = &[
-    "-c",
-    "--config-env",
-    "--exec-path",
-    "--git-dir",
-    "--work-tree",
-    "--upload-pack",
-    "--receive-pack",
-];
-
-/// The `=`-form equivalents of [`PREFILTER_DANGEROUS_OPTIONS`].
-const PREFILTER_DANGEROUS_EQ_PREFIXES: &[&str] = &[
-    "--config-env=",
-    "--exec-path=",
-    "--git-dir=",
-    "--work-tree=",
-    "--upload-pack=",
-    "--receive-pack=",
-];
-
-/// Git subcommands that can execute arbitrary code or modify trust settings
-/// (hooks, config, filters, credential helpers). The judge handles routine
-/// metadata operations; these never bypass the human.
-const PREFILTER_DANGEROUS_SUBCOMMANDS: &[&str] = &[
-    "config",
-    "hook",
-    "filter-branch",
-    "filter-repo",
-    "credential",
-];
-
-/// URL-scheme prefixes that, when a token begins with one, mean a Git command
-/// names a remote by a raw URL (or `ext::`/`file::` transport) rather than a
-/// configured remote name. Such a URL can point at an attacker-controlled host,
-/// so the prefilter routes it to the human instead of letting the judge
-/// evaluate it.
-const PREFILTER_URL_SCHEMES: &[&str] =
-    &["ext::", "file::", "http://", "https://", "ssh://", "git://"];
-
-/// Per-segment classification used by [`git_prefilter`] (owner decision
-/// 2026-08-03: the prefilter analyzes commands segment-by-segment rather than
-/// rejecting every compound outright).
-///
-/// A GitOperation approval re-runs the **whole** command under a widened grant
-/// (`.git` + the worktree gitdir become writable). The safety invariant this
-/// design protects is: **no non-git segment may ride that widened grant** — a
-/// non-git command, or a git command carrying a dangerous construct, would
-/// run with `.git` write access it should never have (e.g. writing a hook for
-/// later host execution). The classification below encodes that invariant:
-///
-/// - `ReadOnly` — a read-only git command with no dangerous construct.
-/// - `MetadataWrite` — a metadata-writing git command with no dangerous
-///   construct (safe to run under the widened grant; the judge decides).
-/// - `Other` — anything else: a non-git command, an unrecognized shape, or a
-///   git command carrying a dangerous construct (dangerous options,
-///   dangerous subcommands, URL schemes, env-var prefix, unrecognized global
-///   options). Carries the static reason for the `HumanDirect` verdict.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum SegmentClass {
-    ReadOnly,
-    MetadataWrite,
-    Other(&'static str),
-}
-
-/// Classifies a single command segment for [`git_prefilter`].
-///
-/// This is the per-segment extraction of the single-segment analysis the
-/// prefilter used to run on the whole command: env-var prefix, dangerous
-/// global options, URL schemes, dangerous subcommands, and unknown global
-/// flags all yield `Other`; a plain read-only or metadata-writing subcommand
-/// yields `ReadOnly` or `MetadataWrite` respectively.
-fn classify_segment(words: &[String]) -> SegmentClass {
-    let Some(git_index) = git_executable_index(words) else {
-        return SegmentClass::Other("an unrecognized command shape");
-    };
-    // Environment-variable assignment prefix before `git` (VAR=x git ...).
-    for word in &words[..git_index] {
-        if is_assignment(word) {
-            return SegmentClass::Other("an environment-variable assignment prefix before `git`");
-        }
-    }
-    // Dangerous Git options anywhere after `git` (global or subcommand-level).
-    for arg in &words[git_index + 1..] {
-        if PREFILTER_DANGEROUS_OPTIONS.contains(&arg.as_str())
-            || PREFILTER_DANGEROUS_EQ_PREFIXES
-                .iter()
-                .any(|prefix| arg.starts_with(prefix))
-        {
-            return SegmentClass::Other(
-                "a Git option that can redirect execution or configuration \
-                 (-c, --config-env, --exec-path, --upload-pack, --receive-pack, \
-                 --git-dir, or --work-tree)",
-            );
-        }
-    }
-    // A directly-specified URL (any supported scheme) names an
-    // attacker-controllable host instead of a configured remote.
-    for arg in &words[git_index + 1..] {
-        if PREFILTER_URL_SCHEMES
-            .iter()
-            .any(|scheme| arg.starts_with(scheme))
-        {
-            return SegmentClass::Other(
-                "a Git command with a directly-specified URL \
-                 (ext::, file::, http://, https://, ssh://, or git://) \
-                 instead of a configured remote name",
-            );
-        }
-    }
-    // Walk the global options to find the subcommand, checking for dangerous
-    // subcommands and unknown global flags.
-    let mut index = git_index + 1;
-    while let Some(arg) = words.get(index).map(String::as_str) {
-        match arg {
-            "-C" | "--namespace" => index += 2,
-            value if value.starts_with("--namespace=") => index += 1,
-            "--no-pager"
-            | "--paginate"
-            | "--no-replace-objects"
-            | "--bare"
-            | "--literal-pathspecs"
-            | "--glob-pathspecs"
-            | "--noglob-pathspecs"
-            | "--icase-pathspecs"
-            | "--no-optional-locks"
-            | "--version"
-            | "--help" => index += 1,
-            value if value.starts_with('-') => {
-                return SegmentClass::Other("an unrecognized Git global option");
-            }
-            subcommand => {
-                if PREFILTER_DANGEROUS_SUBCOMMANDS.contains(&subcommand)
-                    || subcommand.starts_with("filter-")
-                {
-                    return SegmentClass::Other(
-                        "a Git subcommand that can execute arbitrary code or modify \
-                         trust settings (config, hook, filter-branch, filter-repo, \
-                         or credential)",
-                    );
-                }
-                return if READ_ONLY_SUBCOMMANDS.contains(&subcommand) {
-                    SegmentClass::ReadOnly
-                } else {
-                    SegmentClass::MetadataWrite
-                };
-            }
-        }
-    }
-    // `git` with no subcommand (e.g. bare `git` or `git --no-pager`). The
-    // detector treats this as read-only, so it only reaches the prefilter when
-    // another segment was metadata-writing; classify as metadata-writing so
-    // the judge sees it rather than silently treating it as harmless.
-    SegmentClass::MetadataWrite
-}
-
-/// Whether `words` is a leading `cd <path>` — exactly `cd` followed by a
-/// single path argument, no options. The prefilter allows this as a no-op
-/// prefix on the **first** segment only (owner decision 2026-08-03): `cd`
-/// itself does nothing here, and even if it pointed at a different repository
-/// the widened grant stays pinned to the session's repository, so the sandbox
-/// fail-closed rejects any cross-repository write.
-fn is_leading_cd(words: &[String]) -> bool {
-    words.len() == 2 && words.first().is_some_and(|w| w == "cd")
-}
-
 /// Determines whether a Git metadata operation may go to the enforcing judge
 /// or must be asked of a human directly.
 ///
-/// This is a cheap, deterministic first stage in front of the LLM judge
-/// (owner decision 2026-08-03): the handful of shell and Git constructs that
-/// can redirect execution or smuggle in arbitrary code always go to the
-/// human, while a plain `git commit` / `rebase` / `merge` / etc. passes to
-/// the judge for a verdict. The function is pure — it tokenizes the command
-/// string with the existing [`tokenize`] lexer and inspects the result, with
-/// no I/O and no access to the judge or the sandbox.
+/// Owner decision 2026-08-17 (board #38, evidence in
+/// `docs/research/shell-approval-evidence-2026-08-17.md`): the prefilter no
+/// longer blocks any shell or Git construct. Every GitOperation-classified
+/// command passes to the judge in full, so approval routing no longer varies
+/// with command syntax — a redirect, pipe, non-git segment, or dangerous
+/// option all reach the judge equally, the same as a plain `git commit`.
+/// The deterministic defense against host-escalation vectors (writes to
+/// `.git/hooks/` and `.git/config`) moved to the sandbox grant shape: the
+/// GitOperation extended grant excludes those subpaths, so even if the judge
+/// is deceived the worst case is writes to the ordinary `.git` interior
+/// (objects, refs — reflog-recoverable), not to hooks/config (which execute
+/// on the host outside the sandbox). See `docs/agent-approval-design.md`.
 ///
-/// # Per-segment analysis (owner decision 2026-08-03)
-///
-/// The command is split on the **sequential** separators (`&&`, `||`, `;`,
-/// newline) into segments, each classified independently:
-///
-/// - `(a)` read-only git — [`SegmentClass::ReadOnly`]
-/// - `(b)` metadata-writing git with no dangerous construct —
-///   [`SegmentClass::MetadataWrite`]
-/// - `(c)` anything else (non-git, or git with a dangerous construct) —
-///   [`SegmentClass::Other`] carrying a static reason.
-///
-/// Pipe (`|`), background (`&`), and subshell parens (`(` `)`) are **data
-/// crossing or code structuring**, not sequential execution — they route to
-/// the human immediately rather than being split (a widened `.git` grant
-/// would carry whatever code sits on the far side of a pipe or inside a
-/// subshell). Shell redirects (`>` `<`) and command substitution (`$(`
-/// backtick) are likewise immediate-`HumanDirect`; `tokenize` does not surface
-/// them as separators, so they are detected by the quote-aware
-/// [`contains_shell_redirect_or_substitution`] scan first.
-///
-/// As an exception, the **first** segment may be `cd <path>` (see
-/// [`is_leading_cd`]): it is a no-op here, and the grant stays pinned to the
-/// session's repository so the sandbox fail-closed rejects cross-repo writes.
-///
-/// Overall verdict:
-/// - any `(c)` segment → `HumanDirect` (the invariant: no non-git code rides
-///   the widened `.git` grant);
-/// - all segments `(a)` (+ optional leading `cd`) → `PassToJudge` — a
-///   read-only-only compound reaches the judge rather than the human;
-/// - any `(b)` with the rest all `(a)`/`(b)` (+ optional leading `cd`) →
-///   `PassToJudge`; the judge sees the full command text.
-pub(crate) fn git_prefilter(command: &str) -> GitPrefilterVerdict {
-    // Shell redirects (`>` `<`) and command substitution (`$(` backtick) are
-    // not surfaced as separators by `tokenize`; detect them first, quote-aware.
-    // These are data crossing / code structuring — never split on them.
-    if contains_shell_redirect_or_substitution(command) {
-        return GitPrefilterVerdict::HumanDirect("a shell redirect or command substitution");
-    }
-
-    // Walk the typed tokens, splitting only on the sequential separators
-    // (&& || ; newline). Pipe, background, and subshell parens route to the
-    // human instead of splitting a segment.
-    let mut segments: Vec<Vec<String>> = Vec::new();
-    let mut segment: Vec<String> = Vec::new();
-    for token in tokenize(command) {
-        match token {
-            ShellToken::Word(word) => segment.push(word),
-            ShellToken::Separator(Separator::And)
-            | ShellToken::Separator(Separator::Or)
-            | ShellToken::Separator(Separator::Semicolon)
-            | ShellToken::Separator(Separator::Newline) => {
-                segments.push(std::mem::take(&mut segment));
-            }
-            ShellToken::Separator(Separator::Pipe)
-            | ShellToken::Separator(Separator::Background)
-            | ShellToken::Separator(Separator::OpenParen)
-            | ShellToken::Separator(Separator::CloseParen) => {
-                return GitPrefilterVerdict::HumanDirect(
-                    "a shell pipe, background job, or subshell",
-                );
-            }
-        }
-    }
-    segments.push(std::mem::take(&mut segment));
-
-    let mut has_metadata_write = false;
-    for (index, words) in segments.iter().enumerate() {
-        // The first segment may be a leading `cd <path>` no-op.
-        if index == 0 && is_leading_cd(words) {
-            continue;
-        }
-        match classify_segment(words) {
-            SegmentClass::Other(reason) => {
-                return GitPrefilterVerdict::HumanDirect(reason);
-            }
-            SegmentClass::MetadataWrite => has_metadata_write = true,
-            SegmentClass::ReadOnly => {}
-        }
-    }
-    // `has_metadata_write` is true whenever the detector flagged this command
-    // as a GitOperation (that is why the prefilter runs at all); a read-only-only
-    // compound would not reach here because the detector returned false. The
-    // verdict is the same either way — `PassToJudge` — so the flag is only kept
-    // to make the intent legible: a metadata-writing segment is present and the
-    // judge should see the full command.
-    let _ = has_metadata_write;
+/// The function is retained as a seam: a future Codex-style "safe-side
+/// widening" (all segments read-only → auto, no judge needed) could be added
+/// here without touching the caller. Today it always returns `PassToJudge`.
+pub(crate) fn git_prefilter(_command: &str) -> GitPrefilterVerdict {
     GitPrefilterVerdict::PassToJudge
-}
-
-/// Detects shell redirects (`>`, `<`) and command substitution (`$(`,
-/// backtick) that `tokenize` does not surface as separators. Single-quoted
-/// content is skipped (literal in the shell); double-quoted content is scanned
-/// for `$(` and backtick, which the shell still expands there.
-fn contains_shell_redirect_or_substitution(command: &str) -> bool {
-    let mut chars = command.chars().peekable();
-    let mut quote = None;
-    while let Some(ch) = chars.next() {
-        match quote {
-            Some('\'') => {
-                if ch == '\'' {
-                    quote = None;
-                }
-            }
-            Some('"') => match ch {
-                '"' => quote = None,
-                '\\' => {
-                    chars.next();
-                }
-                '`' => return true,
-                '$' if chars.peek() == Some(&'(') => return true,
-                _ => {}
-            },
-            Some(_) => unreachable!(),
-            None => match ch {
-                '\'' | '"' => quote = Some(ch),
-                '\\' => {
-                    chars.next();
-                }
-                '>' | '<' | '`' => return true,
-                '$' if chars.peek() == Some(&'(') => return true,
-                _ => {}
-            },
-        }
-    }
-    false
 }
 
 /// Resolves the metadata directories a Git-writing command needs.
@@ -738,6 +461,16 @@ pub(crate) fn metadata_writable_roots(workspace_root: &Path) -> Result<Vec<PathB
     Ok(vec![git_dir, common_dir])
 }
 
+/// Subpaths within a resolved gitdir that a GitOperation extended grant
+/// excludes from writing, even though the parent tree is ReadWrite. These are
+/// the host-escalation vectors: `hooks/` executes arbitrary code on the next
+/// host-side git invocation, and `config` can set `core.fsmonitor`,
+///`core.pager`, credential helpers, etc. — all of which run outside the
+/// sandbox. Owner decision 2026-08-17, board #38; see
+/// `docs/agent-approval-design.md` and
+/// `docs/research/shell-approval-evidence-2026-08-17.md`.
+const GIT_METADATA_EXCLUDED_SUBPATHS: &[&str] = &["hooks", "config"];
+
 pub(crate) fn validated_metadata_grants(
     workspace_root: &Path,
     expected_roots: &[PathBuf],
@@ -751,12 +484,17 @@ pub(crate) fn validated_metadata_grants(
             "Git metadata roots changed after approval; refusing the stale grant".to_string(),
         );
     }
+    let excluded: Vec<PathBuf> = GIT_METADATA_EXCLUDED_SUBPATHS
+        .iter()
+        .map(PathBuf::from)
+        .collect();
     Ok(current
         .into_iter()
         .map(|path| FilesystemGrant {
             path,
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: excluded.clone(),
         })
         .collect())
 }
@@ -823,7 +561,12 @@ mod tests {
     }
 
     #[test]
-    fn prefilter_routes_dangerous_constructs_to_human_direct() {
+    fn prefilter_passes_dangerous_constructs_to_judge() {
+        // Owner decision 2026-08-17 (board #38): the prefilter no longer
+        // blocks any construct. Dangerous options, env-var prefixes, pipes,
+        // redirects, command substitution, non-git segments, and dangerous
+        // subcommands all pass to the judge in full — the deterministic
+        // defense moved to the grant shape (hooks/config exclusion).
         let dangerous = [
             // Dangerous global options.
             "git -c core.hooksPath=/dev/null commit -m x",
@@ -838,14 +581,13 @@ mod tests {
             "GIT_DIR=/tmp git commit -m x",
             "FOO=bar git commit -m x",
             "env FOO=bar git commit -m x",
-            // Pipe, redirect, and command substitution are data crossing / code
-            // structuring, not sequential execution — route to the human.
+            // Pipe, redirect, and command substitution now reach the judge.
             "git commit -m x | cat",
             "git log | head",
             "git commit -m x > log",
             "git log > f",
             "git commit -m \"$(whoami)\"",
-            // A non-git segment riding the widened .git grant.
+            // A non-git segment — the judge sees the full compound.
             "git commit -m x && cargo test",
             // A dangerous subcommand in a later segment.
             "git commit -m x && git config user.name x",
@@ -855,9 +597,10 @@ mod tests {
             "git filter-branch --all",
         ];
         for command in dangerous {
-            assert!(
-                matches!(git_prefilter(command), GitPrefilterVerdict::HumanDirect(_)),
-                "expected HumanDirect for: {command}"
+            assert_eq!(
+                git_prefilter(command),
+                GitPrefilterVerdict::PassToJudge,
+                "expected PassToJudge for: {command}"
             );
         }
     }
@@ -902,10 +645,10 @@ mod tests {
     }
 
     #[test]
-    fn prefilter_routes_schemed_urls_to_human_but_plain_fetch_to_judge() {
-        // A directly-specified URL (any scheme) names an attacker-controllable
-        // host and must go to the human; a fetch/pull naming a configured
-        // remote and branch passes to the judge.
+    fn prefilter_passes_schemed_urls_and_plain_fetch_to_judge() {
+        // Owner decision 2026-08-17: schemed URLs pass to the judge like
+        // everything else. The judge prompt explicitly tells the judge to
+        // escalate directly-specified URLs.
         let schemed = [
             "git fetch http://example.com/repo main",
             "git fetch https://example.com/repo main",
@@ -918,12 +661,13 @@ mod tests {
             "git fetch origin http://evil.com/x",
         ];
         for command in schemed {
-            assert!(
-                matches!(git_prefilter(command), GitPrefilterVerdict::HumanDirect(_)),
-                "expected HumanDirect for: {command}"
+            assert_eq!(
+                git_prefilter(command),
+                GitPrefilterVerdict::PassToJudge,
+                "expected PassToJudge for: {command}"
             );
         }
-        // Normal form — remote name + branch name — passes to the judge.
+        // Normal form — remote name + branch name — also passes to the judge.
         for command in ["git fetch origin main", "git pull origin main"] {
             assert_eq!(
                 git_prefilter(command),
@@ -931,6 +675,54 @@ mod tests {
                 "expected PassToJudge for: {command}"
             );
         }
+    }
+
+    #[test]
+    fn prefilter_passes_redirect_and_heredoc_compounds_to_judge() {
+        // Owner decision 2026-08-17 (board #38): commands with redirects,
+        // heredocs, pipes, and command substitution all reach the judge in
+        // full. The deterministic defense moved to the grant shape.
+        let compounds = [
+            // Redirect to $TMPDIR (the common commit-message pattern).
+            "cat > /tmp/msg.txt <<'EOF' && git commit -F /tmp/msg.txt",
+            // Pipe (read-only git piped to head).
+            "git log --oneline | head -5",
+            // Command substitution in the commit message.
+            "git commit -m \"$(date)\"",
+            // Redirect of git output.
+            "git status > /tmp/status.txt",
+            // Compound with a non-git segment.
+            "echo done && git add -A && git commit -m x",
+        ];
+        for command in compounds {
+            assert_eq!(
+                git_prefilter(command),
+                GitPrefilterVerdict::PassToJudge,
+                "expected PassToJudge for: {command}"
+            );
+        }
+    }
+
+    #[test]
+    fn validated_metadata_grants_exclude_hooks_and_config() {
+        // Owner decision 2026-08-17 (board #38): the GitOperation extended
+        // grant excludes hooks/ and config from writing — the
+        // host-escalation vectors. The exclusion is based on the resolved
+        // gitdir, not a literal `.git` path name.
+        let fixture = linked_worktree_fixture("exclusion");
+        let roots = metadata_writable_roots(&fixture.workspace).unwrap();
+        let grants = validated_metadata_grants(&fixture.workspace, &roots).unwrap();
+        assert_eq!(grants.len(), 2);
+        for grant in &grants {
+            assert_eq!(grant.access, FilesystemGrantAccess::ReadWrite);
+            assert_eq!(grant.scope, FilesystemGrantScope::DirectoryTree);
+            assert_eq!(
+                grant.excluded_subpaths,
+                vec![PathBuf::from("hooks"), PathBuf::from("config")],
+                "each metadata grant must exclude hooks and config"
+            );
+        }
+        fs::remove_dir_all(fixture.root).unwrap();
     }
 
     #[test]

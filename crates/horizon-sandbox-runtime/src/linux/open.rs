@@ -27,6 +27,13 @@ pub(crate) struct InitialCapability {
     pub(crate) path: PathBuf,
     pub(crate) access: AccessMode,
     pub(crate) is_file: bool,
+    /// Absolute paths within this capability's tree that are denied for
+    /// writing even though the parent is ReadWrite. Populated from
+    /// `FilesystemGrant.excluded_subpaths` (resolved against the grant
+    /// path). The supervisor checks these before sufficiency — a write to
+    /// an excluded path is denied regardless of the parent's access mode.
+    /// Owner decision 2026-08-17, board #38.
+    pub(crate) excluded_paths: Vec<PathBuf>,
 }
 
 enum InitialCapabilityMatch<'a> {
@@ -191,6 +198,27 @@ fn match_initial_capability<'a>(
     requested: AccessMode,
     initial_caps: &'a [InitialCapability],
 ) -> InitialCapabilityMatch<'a> {
+    // Owner decision 2026-08-17 (board #38): excluded subpaths deny writes
+    // even when a parent ReadWrite capability would otherwise be sufficient.
+    // This is the deterministic grant-shape defense against host-escalation
+    // vectors (`.git/hooks/`, `.git/config`) — the judge can be deceived, but
+    // the supervisor denies the write regardless. Read access is not denied;
+    // git needs to read config and hooks.
+    if requested != AccessMode::Read {
+        for capability in initial_caps {
+            if capability.is_file {
+                continue;
+            }
+            if path.starts_with(&capability.path) {
+                for excluded in &capability.excluded_paths {
+                    if path.starts_with(excluded) {
+                        return InitialCapabilityMatch::Insufficient(capability);
+                    }
+                }
+            }
+        }
+    }
+
     let mut best_covering = None;
     let mut best_sufficient = None;
     let mut best_covering_score = 0;
@@ -236,11 +264,13 @@ mod tests {
                 path: PathBuf::from("/workspace"),
                 access: AccessMode::Read,
                 is_file: false,
+                excluded_paths: Vec::new(),
             },
             InitialCapability {
                 path: PathBuf::from("/workspace/build"),
                 access: AccessMode::ReadWrite,
                 is_file: false,
+                excluded_paths: Vec::new(),
             },
         ];
         assert!(matches!(
@@ -259,10 +289,64 @@ mod tests {
             path: PathBuf::from("/workspace/file"),
             access: AccessMode::ReadWrite,
             is_file: true,
+            excluded_paths: Vec::new(),
         }];
         assert!(matches!(
             match_initial_capability(Path::new("/workspace/file/child"), AccessMode::Read, &caps),
             InitialCapabilityMatch::None
+        ));
+    }
+
+    #[test]
+    fn excluded_subpath_denies_write_even_when_parent_is_read_write() {
+        // Owner decision 2026-08-17 (board #38): a ReadWrite DirectoryTree
+        // grant can exclude subpaths so writes to them are denied by the
+        // seccomp supervisor even though the parent is sufficient. This is
+        // the deterministic grant-shape defense against host-escalation
+        // vectors (.git/hooks, .git/config).
+        let caps = vec![InitialCapability {
+            path: PathBuf::from("/repo/.git"),
+            access: AccessMode::ReadWrite,
+            is_file: false,
+            excluded_paths: vec![
+                PathBuf::from("/repo/.git/hooks"),
+                PathBuf::from("/repo/.git/config"),
+            ],
+        }];
+        // Writes to excluded subpaths are denied (Insufficient, not Sufficient).
+        assert!(matches!(
+            match_initial_capability(
+                Path::new("/repo/.git/hooks/pre-commit"),
+                AccessMode::Write,
+                &caps
+            ),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        assert!(matches!(
+            match_initial_capability(Path::new("/repo/.git/config"), AccessMode::Write, &caps),
+            InitialCapabilityMatch::Insufficient(_)
+        ));
+        // Reads to excluded subpaths are NOT denied (git reads config/hooks).
+        assert!(matches!(
+            match_initial_capability(Path::new("/repo/.git/config"), AccessMode::Read, &caps),
+            InitialCapabilityMatch::Sufficient
+        ));
+        // Writes to non-excluded subpaths under the parent are allowed.
+        assert!(matches!(
+            match_initial_capability(
+                Path::new("/repo/.git/objects/ab/cdef"),
+                AccessMode::Write,
+                &caps
+            ),
+            InitialCapabilityMatch::Sufficient
+        ));
+        assert!(matches!(
+            match_initial_capability(
+                Path::new("/repo/.git/refs/heads/main"),
+                AccessMode::Write,
+                &caps
+            ),
+            InitialCapabilityMatch::Sufficient
         ));
     }
 }

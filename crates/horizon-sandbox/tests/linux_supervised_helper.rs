@@ -92,6 +92,7 @@ fn exact_file_grant_allows_that_file_but_not_its_sibling() {
         path: target.canonicalize().expect("canonical target"),
         access: FilesystemGrantAccess::ReadWrite,
         scope: FilesystemGrantScope::File,
+        excluded_subpaths: Vec::new(),
     };
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],
@@ -136,6 +137,7 @@ fn directory_tree_grant_allows_creating_a_missing_suffix() {
         path: outside.canonicalize().expect("canonical outside"),
         access: FilesystemGrantAccess::ReadWrite,
         scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
     };
     let policy = horizon_sandbox::SandboxPolicy {
         writable_roots: vec![writable.clone()],

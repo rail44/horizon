@@ -395,6 +395,7 @@ mod tests {
                 path: PathBuf::from("/tmp/session-cache"),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             }],
         };
         let mut appender = Appender::new(
@@ -452,11 +453,13 @@ mod tests {
             path: PathBuf::from("/tmp/configured-tree"),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         let approved = horizon_sandbox::FilesystemGrant {
             path: PathBuf::from("/tmp/approved-tree"),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         let mut appender = Appender::new(writer.clone(), session_id, None, None)
             .with_session_context(PersistedSessionContext {

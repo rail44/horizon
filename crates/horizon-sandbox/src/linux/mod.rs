@@ -25,6 +25,7 @@ use crate::SandboxedChild;
 use std::ffi::OsString;
 #[cfg(not(test))]
 use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
 use std::process::Command;
 
 /// Runs inside the dedicated Linux helper binary, never in agentd.
@@ -40,6 +41,26 @@ pub fn execute_supervised_helper(
 ) -> Result<i32, SandboxError> {
     let caps =
         crate::caps::build_with_grants(&helper_policy.sandbox, &helper_policy.filesystem_grants)?;
+    // Resolve excluded subpaths from the grants into absolute paths, keyed by
+    // the grant's canonical path so the supervisor can attach them to the
+    // matching InitialCapability (owner decision 2026-08-17, board #38).
+    let excluded_by_path: Vec<(PathBuf, Vec<PathBuf>)> = helper_policy
+        .filesystem_grants
+        .iter()
+        .filter(|g| g.scope == crate::policy::FilesystemGrantScope::DirectoryTree)
+        .filter_map(|g| {
+            if g.excluded_subpaths.is_empty() {
+                return None;
+            }
+            let resolved = g.path.canonicalize().ok()?;
+            let excluded = g
+                .excluded_subpaths
+                .iter()
+                .map(|sub| resolved.join(sub))
+                .collect();
+            Some((resolved, excluded))
+        })
+        .collect();
     let mut command = Command::new(program);
     command.args(args);
 
@@ -56,9 +77,14 @@ pub fn execute_supervised_helper(
     // SAFETY: the helper receives ownership of this descriptor across exec;
     // no other Rust owner for it exists in the helper process.
     let writer = unsafe { horizon_sandbox_runtime::ReportWriter::from_raw_fd(report_fd) };
-    let outcome =
-        horizon_sandbox_runtime::execute(command, caps, loopback_connect, &[writer.as_raw_fd()])
-            .map_err(SandboxError::SupervisedRuntime)?;
+    let outcome = horizon_sandbox_runtime::execute(
+        command,
+        caps,
+        loopback_connect,
+        &[writer.as_raw_fd()],
+        &excluded_by_path,
+    )
+    .map_err(SandboxError::SupervisedRuntime)?;
     let exit_code = outcome.exit_code;
     writer
         .write(outcome)

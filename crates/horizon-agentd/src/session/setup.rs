@@ -125,6 +125,7 @@ fn grants_for_project(
             path,
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         })
         .filter(|grant| match horizon_sandbox::revalidate_grant(grant) {
             Ok(()) => true,
@@ -300,6 +301,7 @@ mod tests {
                 path: canonical_tree,
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             }]
         );
     }

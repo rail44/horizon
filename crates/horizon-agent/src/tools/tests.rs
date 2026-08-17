@@ -2382,6 +2382,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             path: cache.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         },
     };
     let grants = horizon_sandbox::suggest_grants(
@@ -2395,6 +2396,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             path: cache.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         }]
     );
 
@@ -2514,6 +2516,7 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
             path: granted.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         }]);
     let session_id = SessionId::new();
     let live_state = LiveState::new();
@@ -2705,6 +2708,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
             path: cache.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         },
     };
     let grants = horizon_sandbox::suggest_grants(
@@ -2828,6 +2832,7 @@ fn filesystem_grant_snapshot_drops_a_grant_whose_target_stopped_being_enforceabl
         path: tree.canonicalize().unwrap(),
         access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
         scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
     };
     tool_state.approve_filesystem_grants(&[grant]).unwrap();
     assert_eq!(tool_state.filesystem_grants_snapshot().len(), 1);
@@ -2849,6 +2854,7 @@ fn an_overbroad_grant_is_never_stored_even_if_an_approval_names_it() {
         path: std::path::PathBuf::from("/usr"),
         access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
         scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
     };
     assert!(tool_state.approve_filesystem_grants(&[refused]).is_err());
     assert!(tool_state.filesystem_grants_snapshot().is_empty());

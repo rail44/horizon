@@ -823,6 +823,7 @@ mod tests {
                     .expect("parent exists"),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             },
         }
     }
@@ -867,6 +868,7 @@ mod tests {
                 path: canonical,
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             }]
         );
     }
@@ -883,6 +885,7 @@ mod tests {
                 path: std::path::PathBuf::from("/outside"),
                 access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
                 scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             },
         };
 

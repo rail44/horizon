@@ -49,6 +49,7 @@ pub fn execute(
     mut capabilities: CapabilitySet,
     loopback_connect: Vec<SocketAddr>,
     close_in_child: &[RawFd],
+    excluded_by_path: &[(std::path::PathBuf, Vec<std::path::PathBuf>)],
 ) -> Result<SupervisedOutcome, ExecuteError> {
     require_single_threaded()?;
     become_child_subreaper()?;
@@ -148,6 +149,11 @@ pub fn execute(
             path: capability.resolved.clone(),
             access: capability.access,
             is_file: capability.is_file,
+            excluded_paths: excluded_by_path
+                .iter()
+                .find(|(base, _)| *base == capability.resolved)
+                .map(|(_, excluded)| excluded.clone())
+                .unwrap_or_default(),
         })
         .collect::<Vec<_>>();
     supervise_process_tree(
