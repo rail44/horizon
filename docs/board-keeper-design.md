@@ -198,10 +198,15 @@ events past its persisted cursor, and applies the wake policy:
   all affected item ids and the seq range collected).
 - Multi-wake prevention: while a keeper session is running, events
   accumulate but no second wake is triggered; after the keeper finishes, the
-  cursor catches up and a new wake fires if events accumulated.
-- The cursor (last-processed seq) is persisted to disk
+  cursor advances to the completed wake's seq range and a new wake fires if
+  events accumulated.
+- The cursor (last-**delivered** seq) is persisted to disk
   (`<board-dir>/wake-cursor`), so a daemon restart re-subscribes from the
-  cursor and catches up on anything missed.
+  cursor and catches up on anything missed. The cursor only advances when a
+  wake's delivery completes (the keeper's turn ends), not when events are
+  merely read — so a restart mid-accumulate re-reads the undelivered events
+  instead of losing them (board #40). The last keeper's author string is
+  persisted alongside the cursor, so the self-author filter survives restart.
 
 The wake action is a **swappable seam** (`WakeAction` trait): the v1
 implementation (`SpawnKeeper`) spawns a fresh keeper session with a prompt

@@ -9,12 +9,15 @@
 //!
 //! ## Restart recovery
 //!
-//! The cursor (last-processed seq) is persisted to disk
-//! ([`super::cursor`]). On daemon restart, the task loads the cursor and
-//! re-subscribes from `since = Some(cursor)`. The first poke from logd is
-//! the current-seq reply; if it exceeds the cursor, the task reads back the
-//! missed events from the JSONL file and processes them before continuing
-//! with live pokes.
+//! The cursor (last-**delivered** seq) is persisted to disk
+//! ([`super::cursor`]). The cursor only advances when a wake's delivery
+//! completes (the keeper's turn ends), not when events are merely read —
+//! so a restart mid-accumulate re-reads the undelivered events instead of
+//! losing them (board #40). On daemon restart, the task loads the cursor
+//! and re-subscribes from `since = Some(cursor)`. The first poke from logd
+//! is the current-seq reply; if it exceeds the cursor, the task reads back
+//! the missed events from the JSONL file and processes them before
+//! continuing with live pokes.
 //!
 //! ## Stream reconnection
 //!
@@ -61,7 +64,15 @@ pub(crate) fn spawn(
 
         let events_path = store.path().to_path_buf();
         let cursor_file = cursor::cursor_path(&events_path);
-        let initial_cursor = cursor_file.as_ref().map(|p| cursor::load(p)).unwrap_or(0);
+        let initial_state =
+            cursor_file
+                .as_ref()
+                .map(|p| cursor::load(p))
+                .unwrap_or(cursor::CursorState {
+                    cursor: 0,
+                    keeper_author: None,
+                });
+        let initial_cursor = initial_state.cursor;
 
         eprintln!("horizon-agentd: board wake subscriber starting (cursor={initial_cursor})");
 
@@ -69,10 +80,9 @@ pub(crate) fn spawn(
             store,
             events_path,
             cursor_file,
-            state: WakeState::new(initial_cursor),
+            state: WakeState::new(initial_state.cursor, initial_state.keeper_author),
             action,
             keeper_done: None,
-            keeper_author: None,
         };
         runner.run().await;
     });
@@ -97,8 +107,6 @@ struct SubscriberRunner {
     action: Box<dyn WakeAction>,
     /// The in-flight keeper's completion future, if a keeper is running.
     keeper_done: Option<DoneFuture>,
-    /// The in-flight keeper's author string (for the policy's self-filter).
-    keeper_author: Option<String>,
 }
 
 impl SubscriberRunner {
@@ -185,7 +193,7 @@ impl SubscriberRunner {
     }
 
     /// Feeds a batch of `(seq, Envelope)` pairs into the policy and acts on
-    /// the resulting decision. Persists the cursor whenever it advances.
+    /// the resulting decision.
     async fn feed_and_act(&mut self, envelopes: Vec<(u64, Envelope)>) {
         if envelopes.is_empty() {
             return;
@@ -193,9 +201,9 @@ impl SubscriberRunner {
 
         let decision = self.state.feed(&envelopes);
 
-        // Persist the cursor after every batch — even if no wake is triggered,
-        // the cursor advanced past non-relevant events.
-        self.persist_cursor();
+        // The cursor does not advance in `feed` — it only advances when a
+        // wake's delivery completes (handle_keeper_finished). So there is
+        // nothing to persist here.
 
         match decision {
             WakeDecision::Wake {
@@ -226,8 +234,7 @@ impl SubscriberRunner {
             last_seq,
         };
         let (author, done) = self.action.wake(info);
-        self.state.keeper_started(author.clone());
-        self.keeper_author = Some(author);
+        self.state.keeper_started(author);
         self.keeper_done = Some(done);
     }
 
@@ -236,8 +243,11 @@ impl SubscriberRunner {
     /// running (the policy's `keeper_finished` may return an immediate Wake).
     async fn handle_keeper_finished(&mut self) {
         self.keeper_done = None;
-        self.keeper_author = None;
         let decision = self.state.keeper_finished();
+        // Persist the cursor now — keeper_finished advanced it to the
+        // completed wake's last_seq, and keeper_author (still set) is
+        // persisted alongside it so the self-author filter survives restart.
+        self.persist_cursor();
         match decision {
             WakeDecision::Wake {
                 items,
@@ -250,10 +260,18 @@ impl SubscriberRunner {
         }
     }
 
-    /// Persists the current cursor to disk.
+    /// Persists the current cursor and keeper_author to disk. Called after a
+    /// wake's delivery completes — the only point at which the cursor
+    /// advances.
     fn persist_cursor(&self) {
         if let Some(path) = &self.cursor_file {
-            cursor::save(path, self.state.cursor());
+            cursor::save(
+                path,
+                &cursor::CursorState {
+                    cursor: self.state.cursor(),
+                    keeper_author: self.state.keeper_author().map(String::from),
+                },
+            );
         }
     }
 }

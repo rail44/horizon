@@ -97,9 +97,13 @@ fn session_author(author: &str) -> Option<&str> {
 ///    returns to Idle.
 #[derive(Debug, Clone)]
 pub(crate) struct WakeState {
-    /// The last-processed seq (the cursor). Persisted across daemon restarts
-    /// so the subscriber can re-subscribe from this point and catch up on
-    /// anything missed while the daemon was down.
+    /// The last-**delivered** seq — the seq of the last event whose
+    /// wake-triggered turn has ended. Persisted across daemon restarts so
+    /// the subscriber can re-subscribe from this point and catch up on
+    /// anything missed while the daemon was down. Unlike the old
+    /// "consumption" cursor, this only advances when a wake's delivery
+    /// completes ([`Self::keeper_finished`]), so a restart mid-accumulate
+    /// re-reads the undelivered events instead of losing them (board #40).
     cursor: u64,
     /// Whether a keeper session is currently running (wake in flight). While
     /// true, new events accumulate but do not trigger a wake.
@@ -109,9 +113,16 @@ pub(crate) struct WakeState {
     pending_items: Vec<u64>,
     pending_first_seq: Option<u64>,
     pending_last_seq: Option<u64>,
-    /// The author string of the currently-running keeper session
-    /// (`session:<uuid>`), used to filter self-authored comments.
+    /// The author string of the most recent keeper session
+    /// (`session:<uuid>`), used to filter self-authored comments. Persists
+    /// across `keeper_finished` (not cleared) so the last keeper's own
+    /// comments are filtered even after its turn ends — closing the None
+    /// window (#41 residual). A prior keeper (different uuid) still wakes.
     keeper_author: Option<String>,
+    /// The `last_seq` of the most recently emitted wake — the seq the cursor
+    /// will advance to when that wake's delivery completes. Set by
+    /// [`Self::drain_pending`], consumed by [`Self::keeper_finished`].
+    delivered_last_seq: Option<u64>,
 }
 
 /// The outcome of feeding events into [`WakeState`].
@@ -130,23 +141,32 @@ pub(crate) enum WakeDecision {
 }
 
 impl WakeState {
-    /// Creates a new state with the given starting cursor (the last-processed
-    /// seq, loaded from persistence on restart).
-    pub(crate) fn new(cursor: u64) -> Self {
+    /// Creates a new state with the given starting cursor (the last-delivered
+    /// seq, loaded from persistence on restart) and the last keeper's author
+    /// (also from persistence, so the self-author filter survives restart).
+    pub(crate) fn new(cursor: u64, keeper_author: Option<String>) -> Self {
         Self {
             cursor,
             keeper_running: false,
             pending_items: Vec::new(),
             pending_first_seq: None,
             pending_last_seq: None,
-            keeper_author: None,
+            keeper_author,
+            delivered_last_seq: None,
         }
     }
 
-    /// The current cursor (last-processed seq). Persist this to disk so a
+    /// The current cursor (last-delivered seq). Persist this to disk so a
     /// daemon restart can re-subscribe from here.
     pub(crate) fn cursor(&self) -> u64 {
         self.cursor
+    }
+
+    /// The most recent keeper's author string (`session:<uuid>`), if any
+    /// keeper has ever run. Persisted alongside the cursor so the
+    /// self-author filter survives a restart.
+    pub(crate) fn keeper_author(&self) -> Option<&str> {
+        self.keeper_author.as_deref()
     }
 
     /// Records that a keeper session has started. The `keeper_author` is the
@@ -157,12 +177,23 @@ impl WakeState {
         self.keeper_author = Some(keeper_author);
     }
 
-    /// Records that the keeper session has finished. If events accumulated
-    /// while it was running, emits a [`WakeDecision::Wake`] immediately (the
-    /// cursor has already advanced past them). Otherwise returns to idle.
+    /// Records that the keeper session's wake-triggered turn has finished
+    /// (delivery completed). Advances the cursor to the delivered wake's
+    /// `last_seq` — the events in that range are now confirmed delivered and
+    /// will not be re-read on restart. If events accumulated while the keeper
+    /// was running, emits a new [`WakeDecision::Wake`] immediately.
+    ///
+    /// Does **not** clear `keeper_author`: the last keeper's author stays set
+    /// so its own comments are filtered even after the turn ends (closing the
+    /// None window, #41 residual). A new keeper's `keeper_started`
+    /// overwrites it; a prior keeper (different uuid) still wakes.
     pub(crate) fn keeper_finished(&mut self) -> WakeDecision {
         self.keeper_running = false;
-        self.keeper_author = None;
+        // Advance the cursor to the completed wake's last_seq — delivery is
+        // confirmed. This is the only place the cursor advances.
+        if let Some(last) = self.delivered_last_seq {
+            self.cursor = last;
+        }
         if self.pending_items.is_empty() {
             WakeDecision::Pending
         } else {
@@ -183,16 +214,19 @@ impl WakeState {
     /// Envelopes whose seq is at or below the cursor are silently skipped
     /// (already processed). This makes the feed idempotent against re-reads.
     pub(crate) fn feed(&mut self, envelopes: &[(u64, Envelope)]) -> WakeDecision {
+        // Track the highest seq examined in this batch — used to extend
+        // pending_last_seq to cover the full burst (including trailing
+        // non-relevant events). The cursor itself does NOT advance here;
+        // it only advances on delivery completion (keeper_finished), so a
+        // restart re-reads undelivered events instead of losing them
+        // (board #40).
+        let mut last_examined = self.cursor;
         for &(seq, ref env) in envelopes {
-            // Skip already-processed events (idempotent re-reads).
+            // Skip already-delivered events (idempotent re-reads).
             if seq <= self.cursor {
                 continue;
             }
-            // Advance the cursor past every event we examine, regardless of
-            // whether it triggers a wake — the cursor tracks *consumption*,
-            // not *wake decisions*. A non-wake-relevant event (e.g.
-            // item-updated) is still "seen" and should not be re-examined.
-            self.cursor = seq;
+            last_examined = seq;
 
             if event_is_wake_relevant(&env.event, self.keeper_author.as_deref()) {
                 self.accumulate(seq, &env.event);
@@ -204,7 +238,7 @@ impl WakeState {
         // non-relevant) — the keeper examines the range, not just the
         // individual relevant events.
         if !self.pending_items.is_empty() {
-            self.pending_last_seq = Some(self.cursor);
+            self.pending_last_seq = Some(last_examined);
         }
 
         // v1: no quiet period — if we have pending events and no keeper is
@@ -232,12 +266,16 @@ impl WakeState {
     }
 
     /// Drains the pending set into a [`WakeDecision::Wake`], clearing it.
+    /// Records the wake's `last_seq` in `delivered_last_seq` — the cursor
+    /// will advance to it when this wake's delivery completes
+    /// ([`Self::keeper_finished`]).
     fn drain_pending(&mut self) -> WakeDecision {
         let first = self.pending_first_seq.unwrap_or(self.cursor);
         let last = self.pending_last_seq.unwrap_or(self.cursor);
         let items = std::mem::take(&mut self.pending_items);
         self.pending_first_seq = None;
         self.pending_last_seq = None;
+        self.delivered_last_seq = Some(last);
         WakeDecision::Wake {
             items,
             first_seq: first,
@@ -301,7 +339,7 @@ mod tests {
 
     #[test]
     fn item_created_wakes_when_idle() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let decision = state.feed(&[row(1, item_created(1))]);
         assert_eq!(
             decision,
@@ -315,7 +353,7 @@ mod tests {
 
     #[test]
     fn comment_from_external_author_wakes() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let decision = state.feed(&[row(1, comment(1, "owner"))]);
         assert_eq!(
             decision,
@@ -329,7 +367,7 @@ mod tests {
 
     #[test]
     fn comment_from_keeper_self_is_filtered() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let keeper_author = "session:abc-123".to_string();
         state.keeper_started(keeper_author.clone());
 
@@ -337,13 +375,14 @@ mod tests {
         let decision = state.feed(&[row(1, comment(2, &keeper_author))]);
         assert_eq!(decision, WakeDecision::Pending);
 
-        // Cursor still advances past the filtered event.
-        assert_eq!(state.cursor(), 1);
+        // Cursor does not advance — feed tracks consumption for the wake
+        // range, but the cursor only advances on delivery completion.
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
     fn comment_from_different_session_wakes_even_when_keeper_running() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         state.keeper_started("session:keeper-uuid".to_string());
 
         // A comment from a different session (owner, integrator, or another
@@ -366,18 +405,18 @@ mod tests {
 
     #[test]
     fn item_updated_never_wakes() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let decision = state.feed(&[row(1, item_updated(1))]);
         assert_eq!(decision, WakeDecision::Pending);
-        // Cursor still advances.
-        assert_eq!(state.cursor(), 1);
+        // Cursor does not advance on read — only on delivery completion.
+        assert_eq!(state.cursor(), 0);
     }
 
     // -- cursor advance tests -------------------------------------------------
 
     #[test]
-    fn cursor_advances_past_non_relevant_events() {
-        let mut state = WakeState::new(0);
+    fn non_relevant_event_does_not_block_wake() {
+        let mut state = WakeState::new(0, None);
         // item-updated at seq 1 (non-relevant), item-created at seq 2.
         let decision = state.feed(&[row(1, item_updated(1)), row(2, item_created(2))]);
         assert_eq!(
@@ -388,12 +427,13 @@ mod tests {
                 last_seq: 2,
             }
         );
-        assert_eq!(state.cursor(), 2);
+        // Cursor does not advance on feed — only on delivery completion.
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
     fn already_processed_seq_is_skipped() {
-        let mut state = WakeState::new(3);
+        let mut state = WakeState::new(3, None);
         // Feeding events at seqs 1-3 (all at or below cursor) should be no-op.
         let decision = state.feed(&[
             row(1, item_created(1)),
@@ -405,10 +445,40 @@ mod tests {
     }
 
     #[test]
+    fn cursor_advances_on_delivery_not_read() {
+        // Feed events — a wake is emitted, but the cursor does NOT advance
+        // yet: delivery has not completed.
+        let mut state = WakeState::new(0, None);
+        let decision = state.feed(&[
+            row(1, item_created(1)),
+            row(2, item_updated(1)),
+            row(3, comment(1, "owner")),
+            row(4, item_created(2)),
+            row(5, item_updated(2)),
+        ]);
+        assert_eq!(
+            decision,
+            WakeDecision::Wake {
+                items: vec![1, 2],
+                first_seq: 1,
+                last_seq: 5,
+            }
+        );
+        // Cursor stays at 0 — the wake's delivery has not completed.
+        assert_eq!(state.cursor(), 0);
+
+        // Delivery completes — cursor advances to the wake's last_seq.
+        state.keeper_started("session:keeper".to_string());
+        let after = state.keeper_finished();
+        assert_eq!(after, WakeDecision::Pending);
+        assert_eq!(state.cursor(), 5);
+    }
+
+    #[test]
     fn cursor_persists_across_restart() {
-        // Simulate: process up to seq 5, then "restart" with a fresh state
-        // initialized from the persisted cursor.
-        let mut state = WakeState::new(0);
+        // Full delivery cycle: feed → wake → keeper runs → keeper finishes →
+        // cursor advances to 5.
+        let mut state = WakeState::new(0, None);
         state.feed(&[
             row(1, item_created(1)),
             row(2, item_updated(1)),
@@ -416,12 +486,16 @@ mod tests {
             row(4, item_created(2)),
             row(5, item_updated(2)),
         ]);
+        state.keeper_started("session:keeper".to_string());
+        state.keeper_finished();
         let persisted_cursor = state.cursor();
         assert_eq!(persisted_cursor, 5);
 
-        // Restart: new state from the persisted cursor. Events at seqs 1-5
-        // are skipped; a new event at seq 6 wakes.
-        let mut restarted = WakeState::new(persisted_cursor);
+        // Restart: new state from the persisted cursor and keeper_author.
+        // Events at seqs 1-5 are skipped (already delivered); a new event at
+        // seq 6 wakes.
+        let mut restarted =
+            WakeState::new(persisted_cursor, state.keeper_author().map(String::from));
         let decision = restarted.feed(&[row(6, comment(1, "owner"))]);
         assert_eq!(
             decision,
@@ -433,11 +507,112 @@ mod tests {
         );
     }
 
+    // -- board #40: cursor does not advance past undelivered events ---------
+
+    /// The core #40 scenario: a wake is triggered, the keeper starts running,
+    /// more events accumulate, then the daemon restarts before the keeper's
+    /// turn ends. The cursor never advanced, so on restart all events are
+    /// re-read and coalesced into ONE wake — no duplicate wakes, no lost
+    /// events.
+    #[test]
+    fn restart_redelivers_undelivered_accumulated_events() {
+        let mut state = WakeState::new(0, None);
+
+        // First event triggers a wake. Cursor stays at 0 (delivery incomplete).
+        let d1 = state.feed(&[row(1, item_created(1))]);
+        assert_eq!(
+            d1,
+            WakeDecision::Wake {
+                items: vec![1],
+                first_seq: 1,
+                last_seq: 1,
+            }
+        );
+        assert_eq!(state.cursor(), 0);
+
+        // Keeper starts; more events accumulate while it runs.
+        state.keeper_started("session:K1".to_string());
+        let d2 = state.feed(&[row(2, item_created(2)), row(3, comment(2, "owner"))]);
+        assert_eq!(d2, WakeDecision::Pending);
+        assert_eq!(state.cursor(), 0);
+
+        // --- Daemon restarts here ---
+        // The cursor was never persisted past 0 (delivery never completed).
+        // On restart, the subscriber re-reads from cursor 0 and re-feeds
+        // all events. The coalesce logic accumulates them into ONE wake.
+        let mut restarted = WakeState::new(0, state.keeper_author().map(String::from));
+        let d3 = restarted.feed(&[
+            row(1, item_created(1)),
+            row(2, item_created(2)),
+            row(3, comment(2, "owner")),
+        ]);
+        // One coalesced wake for all three events — not three separate wakes.
+        assert_eq!(
+            d3,
+            WakeDecision::Wake {
+                items: vec![1, 2],
+                first_seq: 1,
+                last_seq: 3,
+            }
+        );
+        // Cursor still at 0 until this new wake's delivery completes.
+        assert_eq!(restarted.cursor(), 0);
+    }
+
+    /// The self-author filter survives restart: the persisted keeper_author
+    /// filters the last keeper's own past comments during re-read, so no
+    /// extra self-wake (the None-window fix, #41 residual).
+    #[test]
+    fn keeper_author_survives_restart_and_filters_self_comments() {
+        let mut state = WakeState::new(0, None);
+
+        // External event triggers a wake.
+        state.feed(&[row(1, comment(1, "owner"))]);
+        state.keeper_started("session:K1".to_string());
+
+        // K1 comments on item 1 while running — filtered (self-authored).
+        let d = state.feed(&[row(2, comment(1, "session:K1"))]);
+        assert_eq!(d, WakeDecision::Pending);
+
+        // Keeper finishes; cursor advances to the wake's last_seq (1 — the
+        // filtered comment at seq 2 is NOT in the wake's range).
+        state.keeper_finished();
+        assert_eq!(state.cursor(), 1);
+
+        // keeper_author is NOT cleared — it persists as Some("session:K1").
+        assert_eq!(state.keeper_author(), Some("session:K1"));
+
+        // --- Daemon restarts ---
+        // The persisted cursor is 1; the persisted keeper_author is
+        // "session:K1". On re-read, K1's comment at seq 2 is re-read but
+        // filtered (author matches keeper_author). No extra wake.
+        let mut restarted = WakeState::new(1, state.keeper_author().map(String::from));
+        let d2 = restarted.feed(&[row(2, comment(1, "session:K1"))]);
+        assert_eq!(d2, WakeDecision::Pending);
+        assert_eq!(restarted.cursor(), 1);
+    }
+
+    /// After keeper_finished, keeper_author stays set. A self-comment read
+    /// back after the turn ends is filtered — no extra wake (the None-window
+    /// fix in the non-restart case).
+    #[test]
+    fn keeper_author_not_cleared_after_finish_filters_late_self_comment() {
+        let mut state = WakeState::new(0, None);
+        state.feed(&[row(1, item_created(1))]);
+        state.keeper_started("session:K1".to_string());
+        state.keeper_finished();
+        assert_eq!(state.keeper_author(), Some("session:K1"));
+
+        // A late read-back of K1's own comment is filtered.
+        let d = state.feed(&[row(2, comment(1, "session:K1"))]);
+        assert_eq!(d, WakeDecision::Pending);
+    }
+
     // -- coalesce tests -------------------------------------------------------
 
     #[test]
     fn burst_of_events_coalesces_into_one_wake() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         // Three items created in one batch — should produce one wake with all
         // three item ids and the full seq range.
         let decision = state.feed(&[
@@ -457,7 +632,7 @@ mod tests {
 
     #[test]
     fn mixed_relevant_and_irrelevant_events_coalesce_relevant_only() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let decision = state.feed(&[
             row(1, item_updated(1)),     // not relevant
             row(2, item_created(2)),     // relevant
@@ -472,12 +647,12 @@ mod tests {
                 last_seq: 4,
             }
         );
-        assert_eq!(state.cursor(), 4);
+        assert_eq!(state.cursor(), 0);
     }
 
     #[test]
     fn duplicate_item_ids_deduplicated_in_wake() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         let decision = state.feed(&[
             row(1, comment(1, "owner")),
             row(2, comment(1, "integrator")),
@@ -497,7 +672,7 @@ mod tests {
 
     #[test]
     fn no_wake_while_keeper_running() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         state.keeper_started("session:keeper".to_string());
 
         // Events arrive while the keeper is running — accumulate, no wake.
@@ -518,7 +693,7 @@ mod tests {
 
     #[test]
     fn keeper_finishes_with_no_pending_returns_to_idle() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         state.keeper_started("session:keeper".to_string());
         let after = state.keeper_finished();
         assert_eq!(after, WakeDecision::Pending);
@@ -527,7 +702,7 @@ mod tests {
 
     #[test]
     fn wake_after_keeper_finishes_includes_accumulated_range() {
-        let mut state = WakeState::new(0);
+        let mut state = WakeState::new(0, None);
         // First wake (idle).
         let d1 = state.feed(&[row(1, item_created(1))]);
         assert_eq!(
