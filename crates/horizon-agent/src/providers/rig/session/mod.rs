@@ -99,6 +99,7 @@ pub(super) fn spawn_rig_session(
             let rig_history = persisted.messages;
             let cleared_call_ids = persisted.cleared_call_ids;
             let memory_document = persisted.memory_document;
+            let seed_from_fallback = persisted.seed_from_fallback;
             // Issue 012: when the DuckDB projection store is unavailable and
             // the JSONL event log also yielded no reconstructable history for
             // a resumed session (events were present but produced no
@@ -147,6 +148,13 @@ pub(super) fn spawn_rig_session(
                 .into(),
             );
             let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+
+            // Board #41 observation (4): emit an observable event when the
+            // session was seeded from a prior keeper's MemoryDigest sequence,
+            // so the event log proves the seed was applied.
+            if seed_from_fallback {
+                let _ = events_tx.send(Event::MemorySeeded.into());
+            }
 
             runtime.block_on(async {
                 let mut state = state::SessionLoopState::new(

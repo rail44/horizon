@@ -150,7 +150,8 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // history rebuild: the document is prepended there, and the
             // checkpoint-miss marker is transparency-only.
             | Event::MemoryDigest(_)
-            | Event::MemoryCheckpointMissed => None,
+            | Event::MemoryCheckpointMissed
+            | Event::MemorySeeded => None,
         })
         .collect();
     repair_replayed_message_pairing(messages)

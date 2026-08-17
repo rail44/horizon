@@ -140,7 +140,8 @@ impl Store {
             // replays the document from
             // (`tools::memory::memory_document_from_events`).
             | Event::MemoryDigest(_)
-            | Event::MemoryCheckpointMissed => Ok(()),
+            | Event::MemoryCheckpointMissed
+            | Event::MemorySeeded => Ok(()),
         }
     }
 

@@ -300,6 +300,15 @@ pub enum Event {
     /// to. No frame item is needed beyond the marker; the turn still ends
     /// `Completed` (the checkpoint is a structural gate, not an error).
     MemoryCheckpointMissed,
+    /// A standing-agent session was seeded from a prior keeper session's
+    /// folded `MemoryDigest` sequence at startup (the wake-action v2
+    /// seed-spawn path, board #39/#41). Emitted once, right after the init
+    /// `StateChanged(WaitingForUser)`, so the event log proves the seed was
+    /// applied — the startup events are otherwise identical to a fresh
+    /// spawn (`Created` + `Assistant`-role init + `WaitingForUser`).
+    /// Audit/observability-only: no frame item, no projection beyond the
+    /// event log row.
+    MemorySeeded,
 }
 
 /// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
@@ -439,6 +448,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::ProviderRateLimited(_) => "provider_rate_limited",
         Event::MemoryDigest(_) => "memory_digest",
         Event::MemoryCheckpointMissed => "memory_checkpoint_missed",
+        Event::MemorySeeded => "memory_seeded",
     }
 }
 

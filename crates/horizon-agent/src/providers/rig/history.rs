@@ -21,6 +21,12 @@ pub(super) struct RigSessionHistory {
     /// `None` when no `MemoryDigest` events were found (a non-standing session,
     /// or a standing session that has never updated its memory).
     pub(super) memory_document: Option<MemoryDocument>,
+    /// `true` when the memory document was built from `fallback_events`
+    /// (a cross-session seed, board #39/#41) rather than from this
+    /// session's own DuckDB events. Only set in the store path, where the
+    /// session's own empty event set confirms this is a fresh spawn being
+    /// seeded — not a same-session resume.
+    pub(super) seed_from_fallback: bool,
 }
 
 /// Loads this session's prior history (if any) as Rig messages, through the
@@ -59,6 +65,7 @@ pub(super) fn load_rig_session_history(
             messages: rig_messages_from_horizon_events(fallback_events),
             cleared_call_ids: cleared_call_ids_from_events(fallback_events),
             memory_document: memory_document_from_events_if_nonempty(fallback_events),
+            seed_from_fallback: false,
         };
     };
 
@@ -78,13 +85,16 @@ pub(super) fn load_rig_session_history(
             // session's own events (none for a fresh spawn); the memory
             // document is the seed's, unless the session already has one.
             let mut memory_document = memory_document_from_events_if_nonempty(&events);
+            let memory_from_fallback = memory_document.is_none();
             if memory_document.is_none() {
                 memory_document = memory_document_from_events_if_nonempty(fallback_events);
             }
+            let seed_from_fallback = memory_from_fallback && memory_document.is_some();
             RigSessionHistory {
                 messages: rig_messages_from_horizon_events(&events),
                 cleared_call_ids: cleared_call_ids_from_events(&events),
                 memory_document,
+                seed_from_fallback,
             }
         })
         .unwrap_or_else(|_| {
@@ -97,6 +107,7 @@ pub(super) fn load_rig_session_history(
                 messages: rig_messages_from_horizon_events(fallback_events),
                 cleared_call_ids: cleared_call_ids_from_events(fallback_events),
                 memory_document: memory_document_from_events_if_nonempty(fallback_events),
+                seed_from_fallback: false,
             }
         })
 }

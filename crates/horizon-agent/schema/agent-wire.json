@@ -708,6 +708,11 @@
           "const": "MemoryCheckpointMissed",
           "description": "The turn-loop checkpoint for a standing-role session closed a turn that\ndid not update the memory document and did not declare no-update, even\nafter one reminder was injected (`docs/standing-agent-memory-design.md`\ndecision 2, checkpoint). Audit/transparency-only: visible in the\ntranscript as a marker that the agent skipped its memory checkpoint,\nso an operator can see how often a standing model writes itself out of\nits own continuity — the dogfood measurement the design defers quality\nto. No frame item is needed beyond the marker; the turn still ends\n`Completed` (the checkpoint is a structural gate, not an error).",
           "type": "string"
+        },
+        {
+          "const": "MemorySeeded",
+          "description": "A standing-agent session was seeded from a prior keeper session's\nfolded `MemoryDigest` sequence at startup (the wake-action v2\nseed-spawn path, board #39/#41). Emitted once, right after the init\n`StateChanged(WaitingForUser)`, so the event log proves the seed was\napplied — the startup events are otherwise identical to a fresh\nspawn (`Created` + `Assistant`-role init + `WaitingForUser`).\nAudit/observability-only: no frame item, no projection beyond the\nevent log row.",
+          "type": "string"
         }
       ]
     },
