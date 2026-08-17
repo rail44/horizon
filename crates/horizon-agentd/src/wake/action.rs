@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use crossbeam_channel::TryRecvError;
 
-use horizon_agent::contract::{Command, Event, ProviderId, SessionId, SessionState};
+use horizon_agent::contract::{Command, Event, MessageRole, ProviderId, SessionId, SessionState};
 use horizon_agent::persistence::event_log;
 use horizon_agent::roles::RoleId;
 
@@ -128,7 +128,7 @@ impl WakeAction for SpawnKeeper {
         }
 
         // The done future resolves when the wake-injected turn ends
-        // (`StateChanged(WaitingForUser)` after `StateChanged(Running)`),
+        // (`StateChanged(WaitingForUser)` after `MessageCommitted(User)`),
         // not when the session thread exits — a standing session stays alive
         // after its turn. This lets the subscriber deliver the next wake once
         // the turn is done, even though the session is still alive.
@@ -167,12 +167,18 @@ const DONE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// The done future tracks a two-phase state machine over the session's event
 /// stream:
 ///
-/// 1. **Waiting for start** — poll until `StateChanged(Running)` arrives (the
-///    wake prompt's turn has begun). This avoids resolving on a stale
-///    `WaitingForUser` from the session's initialization (which fires before
-///    the wake prompt is processed).
-/// 2. **Waiting for idle** — once `Running` has been seen, poll until
-///    `StateChanged(WaitingForUser)` or `StateChanged(Terminated)` arrives.
+/// 1. **Waiting for the wake prompt** — poll until `MessageCommitted` with
+///    `MessageRole::User` arrives. This event is emitted *only* by the
+///    `Command::UserMessage` arm (the wake prompt's turn), never by
+///    `Command::Initialize` (which emits a synthetic `Running →
+///    WaitingForUser` bounce with no message) or by the session's pre-loop
+///    init (which commits an `Assistant`-role message). Anchoring on
+///    `MessageCommitted(User)` — not on the first `StateChanged(Running)` —
+///    prevents the done from resolving on the init bounce's `WaitingForUser`
+///    before the real wake turn starts (board #41).
+/// 2. **Waiting for idle** — once the wake prompt's `MessageCommitted(User)`
+///    has been seen, poll until `StateChanged(WaitingForUser)` or
+///    `StateChanged(Terminated)` arrives.
 ///    `WaitingForUser` is the definitive "session is idle" signal: every
 ///    turn-end path (`apply_turn_outcome`, `emit_cancelled_turn`,
 ///    `halt_turn_loop`, truncation recovery, and the memory checkpoint's
@@ -183,8 +189,8 @@ const DONE_POLL_INTERVAL: Duration = Duration::from_millis(50);
 /// (`session_exists` becomes false) or the subscription's sender is dropped.
 ///
 /// `subscription` must be installed *before* the wake prompt is sent (for a
-/// freshly spawned session: before `spawn_session_thread`) so the turn's
-/// `StateChanged(Running)` event is not missed.
+/// freshly spawned session: before `spawn_session_thread`) so the wake
+/// prompt's `MessageCommitted(User)` event is not missed.
 fn done_on_turn_end(
     state: Arc<AgentdState>,
     session_id: SessionId,
@@ -192,7 +198,7 @@ fn done_on_turn_end(
 ) -> DoneFuture {
     let events = subscription.events;
     Box::pin(async move {
-        let mut saw_running = false;
+        let mut saw_wake_prompt = false;
         loop {
             if !state.session_exists(session_id) {
                 state.unsubscribe_from_session(session_id);
@@ -200,12 +206,12 @@ fn done_on_turn_end(
             }
             match events.try_recv() {
                 Ok(event) => match event {
-                    Event::StateChanged(SessionState::Running) => {
-                        saw_running = true;
+                    Event::MessageCommitted(m) if m.role == MessageRole::User => {
+                        saw_wake_prompt = true;
                     }
                     Event::StateChanged(SessionState::WaitingForUser)
                     | Event::StateChanged(SessionState::Terminated)
-                        if saw_running =>
+                        if saw_wake_prompt =>
                     {
                         state.unsubscribe_from_session(session_id);
                         return;
@@ -322,7 +328,7 @@ impl WakeAction for ResumeKeeper {
                 }
 
                 // The done future resolves when the wake-injected turn ends
-                // (StateChanged(WaitingForUser) after StateChanged(Running)),
+                // (`StateChanged(WaitingForUser)` after `MessageCommitted(User)`),
                 // not when the session exits. A standing session stays alive
                 // after its turn — the subscriber can deliver the next wake
                 // once the turn is done, resuming the same session.
@@ -357,6 +363,12 @@ impl ResumeKeeper {
         // up: since a fresh session has no DuckDB events of its own, the
         // fallback's `memory_document_from_events` produces the seed document.
         let seed_history = self.fold_prior_keeper_memory();
+
+        eprintln!(
+            "[wake] seed_spawn: new keeper session {} seeded with {} MemoryDigest event(s) from prior keeper",
+            session_id.as_uuid(),
+            seed_history.len()
+        );
 
         *self.keeper_session.lock().unwrap() = Some(session_id);
 
@@ -745,10 +757,21 @@ mod tests {
         let subscription = state.subscribe_to_session(session_id);
         let done = done_on_turn_end(state.clone(), session_id, subscription);
 
-        // Simulate the session's turn: Running → TurnEnded → WaitingForUser.
-        // The done future should resolve after WaitingForUser, even though
-        // the session is still alive.
+        // Simulate the wake prompt's turn: Running → MessageCommitted(User) →
+        // TurnEnded → WaitingForUser. The done future should resolve after
+        // WaitingForUser, even though the session is still alive.
+        // `MessageCommitted(User)` is the signal that the wake prompt's turn
+        // has started (board #41: `Command::Initialize` emits a spurious
+        // `Running → WaitingForUser` with no message, so the done must gate
+        // on the user-role commit, not on `Running`).
         state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "wake prompt".to_string(),
+            }),
+        );
         state.publish_to_subscriber(
             session_id,
             &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
@@ -791,6 +814,13 @@ mod tests {
         state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
         state.publish_to_subscriber(
             session_id,
+            &Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "wake prompt 1".to_string(),
+            }),
+        );
+        state.publish_to_subscriber(
+            session_id,
             &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
         );
         state.publish_to_subscriber(
@@ -815,6 +845,13 @@ mod tests {
         state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
         state.publish_to_subscriber(
             session_id,
+            &Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "wake prompt 2".to_string(),
+            }),
+        );
+        state.publish_to_subscriber(
+            session_id,
             &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
         );
         state.publish_to_subscriber(
@@ -831,9 +868,10 @@ mod tests {
     }
 
     /// The done future does NOT resolve on a stale `WaitingForUser` from
-    /// initialization — it waits for `StateChanged(Running)` first. Without
-    /// this guard, a freshly spawned session's initial `WaitingForUser` would
-    /// resolve the done before the wake prompt's turn even starts.
+    /// initialization — it waits for `MessageCommitted(User)` (the wake
+    /// prompt's turn-start signal) first. Without this guard, a freshly
+    /// spawned session's initial `WaitingForUser` would resolve the done
+    /// before the wake prompt's turn even starts.
     #[tokio::test]
     async fn done_on_turn_end_ignores_stale_waiting_for_user() {
         let state = crate::session::test_support::state_with_rig_config(false, "test");
@@ -843,17 +881,80 @@ mod tests {
         let subscription = state.subscribe_to_session(session_id);
         let done = done_on_turn_end(state.clone(), session_id, subscription);
 
-        // Simulate initialization: WaitingForUser without a preceding Running.
+        // Simulate initialization: WaitingForUser without a preceding
+        // MessageCommitted(User).
         state.publish_to_subscriber(
             session_id,
             &Event::StateChanged(SessionState::WaitingForUser),
         );
 
-        // The done should NOT resolve yet — it hasn't seen Running.
+        // The done should NOT resolve yet — it hasn't seen the wake prompt.
         let resolved = tokio::time::timeout(Duration::from_millis(200), &mut Box::pin(done)).await;
         assert!(
             resolved.is_err(),
             "done must not resolve on stale WaitingForUser"
         );
+    }
+
+    /// Regression test for board #41: the done future must NOT resolve on the
+    /// `Command::Initialize` arm's spurious `Running → WaitingForUser` bounce,
+    /// which fires before the wake prompt's turn. The old `saw_running` guard
+    /// latched on the init `Running` and then resolved on the init
+    /// `WaitingForUser` — before the real wake turn's `Running` was ever seen.
+    /// The fix gates on `MessageCommitted(User)` instead, which `Initialize`
+    /// never emits.
+    #[tokio::test]
+    async fn done_on_turn_end_ignores_init_bounce() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let session_id = SessionId::new();
+        install_fake_session(&state, session_id);
+
+        let subscription = state.subscribe_to_session(session_id);
+        let mut done = done_on_turn_end(state.clone(), session_id, subscription);
+
+        // Phase 1: the Command::Initialize arm's spurious bounce.
+        // Running → WaitingForUser with NO MessageCommitted(User) in between.
+        state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        // The done must NOT resolve on the init bounce — it hasn't seen the
+        // wake prompt's MessageCommitted(User) yet. Use `select!` with
+        // `done.as_mut()` so the future is only borrowed (not consumed) and
+        // remains available for phase 2.
+        tokio::select! {
+            _ = done.as_mut() => panic!("done must not resolve on init-bounce Running → WaitingForUser"),
+            _ = tokio::time::sleep(Duration::from_millis(200)) => {}
+        };
+
+        // Phase 2: the wake prompt's real turn.
+        // Running → MessageCommitted(User) → TurnEnded → WaitingForUser.
+        state.publish_to_subscriber(session_id, &Event::StateChanged(SessionState::Running));
+        state.publish_to_subscriber(
+            session_id,
+            &Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "wake prompt".to_string(),
+            }),
+        );
+        state.publish_to_subscriber(
+            session_id,
+            &Event::TurnEnded(horizon_agent::contract::TurnEndReason::Completed),
+        );
+        state.publish_to_subscriber(
+            session_id,
+            &Event::StateChanged(SessionState::WaitingForUser),
+        );
+
+        // Now the done should resolve — the wake prompt's turn has ended.
+        tokio::time::timeout(Duration::from_secs(2), done)
+            .await
+            .expect(
+                "done should resolve after the wake turn's WaitingForUser, not the init bounce",
+            );
+
+        assert!(state.session_exists(session_id));
     }
 }

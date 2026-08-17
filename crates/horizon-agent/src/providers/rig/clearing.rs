@@ -382,7 +382,8 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
             | Event::TurnEnded(_) => None,
             // Standing-agent memory events carry no cleared call-id set.
             | Event::MemoryDigest(_)
-            | Event::MemoryCheckpointMissed => None,
+            | Event::MemoryCheckpointMissed
+            | Event::MemorySeeded => None,
         })
         .flatten()
         .collect()

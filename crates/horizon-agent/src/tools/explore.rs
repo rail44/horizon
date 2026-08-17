@@ -644,7 +644,8 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     // Standing-agent memory events are not terminal for a
                     // task child (a standing role never spawns task children).
                     | Event::MemoryDigest(_)
-                    | Event::MemoryCheckpointMissed => {}
+                    | Event::MemoryCheckpointMissed
+                    | Event::MemorySeeded => {}
                 }
             },
         }
