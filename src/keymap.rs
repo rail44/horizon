@@ -142,6 +142,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "reload-config" => Some(CommandId::ReloadConfig),
         "manage-sessions" => Some(CommandId::OpenSessionManager),
         "open-board" => Some(CommandId::OpenBoard),
+        "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
         _ => None,
     }
 }

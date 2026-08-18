@@ -33,7 +33,7 @@ use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_component::text::TextView;
 use gpui_component::{h_flex, v_flex, IndexPath};
-use horizon_board::{Item, Position, Store, StoreError, SubscribeStream};
+use horizon_board::{tree_order, Item, Position, Store, StoreError, SubscribeStream};
 
 use crate::theme;
 
@@ -51,6 +51,18 @@ fn filter_items(items: &[Item], query: &str) -> Vec<Item> {
         .filter(|item| query.is_empty() || item.title.to_ascii_lowercase().contains(&query))
         .cloned()
         .collect()
+}
+
+/// Flattens `items` into parent→child tree order for display, returning the
+/// display list and a parallel depth vector. When `top_level_only` is true,
+/// only roots (items with no visible parent — `None` or an orphan) are
+/// returned, all at depth 0. Delegates to [`horizon_board::tree_order`] for
+/// the ordering logic; this wrapper converts references to owned `Item`s.
+fn flatten_with_depth(items: &[Item], top_level_only: bool) -> (Vec<Item>, Vec<usize>) {
+    let ordered = tree_order(items, top_level_only);
+    let filtered = ordered.iter().map(|(item, _)| (*item).clone()).collect();
+    let depths = ordered.iter().map(|(_, depth)| *depth).collect();
+    (filtered, depths)
 }
 
 /// The "updated" signal for a row: the timestamp of the item's latest
@@ -310,6 +322,17 @@ fn select_first_row_on_open<D: ListDelegate>(
 struct BoardListDelegate {
     all: Vec<Item>,
     filtered: Vec<Item>,
+    /// Display depth per row in `filtered`, parallel to it. 0 for top-level
+    /// items, incremented for each level of nesting under a parent. Rebuilt
+    /// alongside `filtered` by `rederive`.
+    depths: Vec<usize>,
+    /// Whether to show only top-level items (the "roadmap view") or the full
+    /// parent→child tree. Toggled by `BoardPaneView::toggle_expansion`.
+    top_level_only: bool,
+    /// The last search query passed to `perform_search`, saved so `rederive`
+    /// can re-filter when the toggle changes without needing access to the
+    /// `ListState`'s internal query state.
+    last_query: String,
     selected: Option<IndexPath>,
     loading: bool,
     /// Back-reference to the pane view, set after construction so that the
@@ -331,6 +354,9 @@ impl BoardListDelegate {
         Self {
             all: Vec::new(),
             filtered: Vec::new(),
+            depths: Vec::new(),
+            top_level_only: false,
+            last_query: String::new(),
             selected: None,
             loading: true,
             view: None,
@@ -338,12 +364,22 @@ impl BoardListDelegate {
         }
     }
 
+    /// Re-derives `filtered` and `depths` from `all` using the current
+    /// `last_query` and `top_level_only`. The single place that rebuilds the
+    /// display list — called after every load, search, and toggle.
+    fn rederive(&mut self) {
+        let matched = filter_items(&self.all, &self.last_query);
+        let (filtered, depths) = flatten_with_depth(&matched, self.top_level_only);
+        self.filtered = filtered;
+        self.depths = depths;
+    }
+
     /// Replaces the loaded items (after the off-thread read returns) and
-    /// clears the loading state. Re-derives `filtered` for an empty query.
+    /// clears the loading state. Re-derives `filtered` and `depths`.
     fn set_loaded(&mut self, items: Vec<Item>) {
-        self.filtered = filter_items(&items, "");
         self.all = items;
         self.loading = false;
+        self.rederive();
     }
 
     fn item_at(&self, index: IndexPath) -> Option<&Item> {
@@ -364,7 +400,8 @@ impl ListDelegate for BoardListDelegate {
         _window: &mut Window,
         cx: &mut Context<ListState<Self>>,
     ) -> Task<()> {
-        self.filtered = filter_items(&self.all, query);
+        self.last_query = query.to_string();
+        self.rederive();
         cx.notify();
         Task::ready(())
     }
@@ -376,6 +413,7 @@ impl ListDelegate for BoardListDelegate {
         cx: &mut Context<ListState<Self>>,
     ) -> Option<Self::Item> {
         let item = self.filtered.get(index.row)?;
+        let depth = self.depths.get(index.row).copied().unwrap_or(0);
         let mut title_color = theme::text_primary();
         let mut id_color = theme::text_muted();
         let mut status_color = theme::text_muted();
@@ -409,6 +447,7 @@ impl ListDelegate for BoardListDelegate {
                     .id(("board-item", item.id))
                     .relative()
                     .items_center()
+                    .pl(px(depth as f32 * 16.0))
                     .gap_2()
                     .py_0p5()
                     .on_drag(
@@ -926,6 +965,18 @@ impl BoardPaneView {
         cx.notify();
     }
 
+    /// Toggles the board list between top-level-only (the "roadmap view")
+    /// and the expanded parent→child tree. Re-derives the display list in
+    /// place — no store read needed.
+    pub(crate) fn toggle_expansion(&mut self, cx: &mut Context<Self>) {
+        self.list.update(cx, |list, cx| {
+            let delegate = list.delegate_mut();
+            delegate.top_level_only = !delegate.top_level_only;
+            delegate.rederive();
+            cx.notify();
+        });
+    }
+
     fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let BoardPaneMode::Detail {
             item,
@@ -1375,7 +1426,7 @@ mod tests {
 
     use super::{
         board_confirm_transition, board_root_dir, drop_half_for_row, drop_position_from_half,
-        filter_items, format_timestamp, item_updated, parse_new_item, DropHalf,
+        filter_items, flatten_with_depth, format_timestamp, item_updated, parse_new_item, DropHalf,
     };
     use gpui::{bounds, point, px, size};
     use horizon_board::{Comment, Item, Store};
@@ -1426,6 +1477,36 @@ mod tests {
         assert_eq!(filter_items(&items, "zzz").len(), 0);
         // Rank order is preserved (the store already sorts by rank).
         assert_eq!(filter_items(&items, "")[0].id, 1);
+    }
+
+    #[test]
+    fn flatten_with_depth_groups_children_under_parent() {
+        let mut parent = item2(1, "parent");
+        parent.rank = "a".to_string();
+        let mut child = item2(2, "child");
+        child.rank = "b".to_string();
+        child.parent = Some(1);
+        let items = vec![parent, child];
+        let (filtered, depths) = flatten_with_depth(&items, false);
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(depths[0], 0);
+        assert_eq!(filtered[1].id, 2);
+        assert_eq!(depths[1], 1);
+    }
+
+    #[test]
+    fn flatten_with_depth_top_level_only_hides_children() {
+        let mut parent = item2(1, "parent");
+        parent.rank = "a".to_string();
+        let mut child = item2(2, "child");
+        child.rank = "b".to_string();
+        child.parent = Some(1);
+        let items = vec![parent, child];
+        let (filtered, depths) = flatten_with_depth(&items, true);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, 1);
+        assert_eq!(depths[0], 0);
     }
 
     #[test]

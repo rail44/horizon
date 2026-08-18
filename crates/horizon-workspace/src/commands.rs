@@ -36,6 +36,12 @@ pub enum CommandId {
     /// keybinding (see `keymap::command_for`'s `"open-board"` entry for an
     /// optional user binding).
     OpenBoard,
+    /// Toggles the board pane between top-level-only (the "roadmap view")
+    /// and the expanded parent→child tree (children indented under their
+    /// parent). No-op unless the active pane is a board pane. Palette-only --
+    /// no default keybinding (see `keymap::command_for`'s
+    /// `"toggle-board-expansion"` entry for an optional user binding).
+    ToggleBoardExpansion,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -222,6 +228,14 @@ pub fn core_commands() -> Vec<CommandSpec> {
             description: "Browse the task board and post owner comments.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::ToggleBoardExpansion,
+            title: "Toggle Board Expansion",
+            category: CommandCategory::Workspace,
+            description: "Switch the board between top-level-only (roadmap) and expanded \
+                          child view.",
+            destructive: false,
+        },
     ]
 }
 
@@ -240,7 +254,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReloadTerminalRuntime
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig
-        | CommandId::OpenBoard => true,
+        | CommandId::OpenBoard
+        | CommandId::ToggleBoardExpansion => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` (closing a tab's last pane must go
         // through closing the tab itself instead), closing the
@@ -296,7 +311,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 18);
+        assert_eq!(commands.len(), 19);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -321,6 +336,8 @@ mod tests {
         assert_eq!(commands[16].title, "Open Terminal in Session Directory");
         assert_eq!(commands[17].id, CommandId::OpenBoard);
         assert_eq!(commands[17].title, "Open Board");
+        assert_eq!(commands[18].id, CommandId::ToggleBoardExpansion);
+        assert_eq!(commands[18].title, "Toggle Board Expansion");
     }
 
     #[test]

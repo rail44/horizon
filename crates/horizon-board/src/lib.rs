@@ -44,5 +44,5 @@ pub use store::{ListResult, Position, Store, StoreError, SubscribeStream};
 // there from this crate's `store`). These were crate-internal when the write
 // path lived here; now the daemon needs them.
 pub use event::{read as read_events, BoardEvent, Envelope, ReadReport, SCHEMA, VERSION};
-pub use model::{fold, is_closed_status, sorted_by_rank};
+pub use model::{fold, is_closed_status, sorted_by_rank, tree_order};
 pub use rank::between as rank_between;
