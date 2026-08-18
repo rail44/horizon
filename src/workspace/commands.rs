@@ -54,6 +54,17 @@ impl WorkspaceShell {
         self.agent_sessions.get(&session_id).cloned()
     }
 
+    /// The active board pane, when the active pane is a board pane. Board
+    /// panes are session-less, so this is a direct `panes` lookup (no
+    /// session-id indirection, unlike `active_agent_session`).
+    fn active_board_pane(&self) -> Option<Entity<crate::board_pane::BoardPaneView>> {
+        let pane_id = self.workspace.cursor_pane_id()?;
+        match self.panes.get(&pane_id)? {
+            PaneView::Cached(CachedPaneLeaf::Board(view)) => Some(view.clone()),
+            _ => None,
+        }
+    }
+
     /// Re-pushes the live theme's terminal color scheme to every running
     /// terminal session, so OSC 10/11/12 query replies reflect a live
     /// theme apply instead of each session's spawn-time snapshot. Called
@@ -112,6 +123,11 @@ impl WorkspaceShell {
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
             CommandId::OpenBoard => self.open_board_pane(window, cx),
+            CommandId::ToggleBoardExpansion => {
+                if let Some(view) = self.active_board_pane() {
+                    view.update(cx, |view, cx| view.toggle_expansion(cx));
+                }
+            }
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
                     let pending = session.read(cx).pending_approval_call_ids();

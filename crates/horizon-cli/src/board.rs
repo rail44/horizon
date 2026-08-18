@@ -9,7 +9,7 @@
 
 use std::io::Write;
 
-use horizon_board::{Item, ListResult, Position, Store, StoreError};
+use horizon_board::{tree_order, Item, ListResult, Position, Store, StoreError};
 
 /// If `args[0]` is `"board"`, dispatches the board subcommand family and
 /// returns `Some(exit_code)`. Returns `None` when this isn't a board
@@ -28,9 +28,11 @@ Usage: horizon board <command> [options]
 Commands:
   add <title> [--body <text>] [--parent <id>] [--after <id> | --before <id> | --top]
       Create a new item. Default position is the bottom of the queue.
-  list [--status <s>] [--all]
-      List items in rank order (closed items hidden by default; --all shows
-      them). Always shows all existing statuses.
+  list [--status <s>] [--all] [--top]
+      List items as a parent→child tree (children indented under their parent,
+      rank order within each level). Closed items hidden by default; --all shows
+      them. --top shows top-level items only (roadmap view). Always shows all
+      existing statuses.
   show <id>
       Show all fields and comments for one item.
   comment <id> --author <author> <text>
@@ -255,7 +257,7 @@ async fn dispatch(
             if json {
                 print_list_json(stdout, &result);
             } else {
-                print_list_human(stdout, &result);
+                print_list_human(stdout, &result, top);
             }
             Ok(())
         }
@@ -458,6 +460,26 @@ fn print_item_brief(stdout: &mut impl Write, item: &Item) {
     }
 }
 
+/// Like [`print_item_brief`] but indented by `depth` levels (two spaces per
+/// level) for the tree view. At depth 0 the output is identical to
+/// `print_item_brief`.
+fn print_item_at_depth(stdout: &mut impl Write, item: &Item, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let status_display = if item.status.is_empty() {
+        "—"
+    } else {
+        &item.status
+    };
+    let _ = writeln!(
+        stdout,
+        "{indent}#{:<3} [{:<12}] {}",
+        item.id, status_display, item.title
+    );
+    if !item.assignee.is_empty() {
+        let _ = writeln!(stdout, "{indent}     assigned: {}", item.assignee);
+    }
+}
+
 fn print_item_full(stdout: &mut impl Write, item: &Item) {
     let _ = writeln!(stdout, "Item #{}", item.id);
     let _ = writeln!(stdout, "  title:    {}", item.title);
@@ -503,12 +525,12 @@ fn print_item_full(stdout: &mut impl Write, item: &Item) {
     }
 }
 
-fn print_list_human(stdout: &mut impl Write, result: &ListResult) {
+fn print_list_human(stdout: &mut impl Write, result: &ListResult, top: bool) {
     if result.items.is_empty() {
         let _ = writeln!(stdout, "(no items)");
     } else {
-        for item in &result.items {
-            print_item_brief(stdout, item);
+        for (item, depth) in tree_order(&result.items, top) {
+            print_item_at_depth(stdout, item, depth);
         }
     }
     if !result.statuses.is_empty() {
