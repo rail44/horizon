@@ -2283,6 +2283,135 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     fs::remove_dir_all(fixture_root).unwrap();
 }
 
+/// Owner decision 2026-08-17 (board #38): the GitOperation extended grant
+/// excludes `hooks` and `config` from writing. This end-to-end test verifies
+/// that a compound command containing writes to both `.git/config` and
+/// `.git/hooks/` — which now reaches the judge after the prefilter reduction —
+/// is denied those writes under the extended grant, while the same approved
+/// execution's normal `git commit` (objects/refs writes) succeeds. The
+/// exclusion is based on the resolved gitdir, not a literal `.git` path name.
+#[cfg(target_os = "linux")]
+#[test]
+fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
+    assert!(
+        horizon_sandbox::is_available(),
+        "the Linux Git containment test requires an engaged sandbox"
+    );
+    let (fixture_root, worktree) = linked_git_worktree("git-exclusion");
+    fs::write(worktree.join("change.txt"), "exclusion test\n").unwrap();
+
+    // Resolve the metadata roots to compute the config/hooks paths the way
+    // Horizon does — through the resolved gitdir, not a literal `.git` name.
+    let roots = crate::tools::metadata_writable_roots(&worktree).expect("resolve metadata roots");
+    assert_eq!(roots.len(), 2, "linked worktree has two metadata roots");
+    // The common dir (second root) contains config and hooks.
+    let common_dir = &roots[1];
+    let config_path = common_dir.join("config");
+    let hook_path = common_dir.join("hooks").join("pre-commit");
+    let original_config = fs::read_to_string(&config_path).unwrap();
+
+    // Compound command: try to write to config and hooks (denied by the
+    // exclusion), then do a normal commit (objects/refs writes, allowed).
+    // `;` ensures the commit runs even after the denied writes fail with
+    // EPERM — this is the scenario the prefilter reduction enables: the
+    // judge sees the full compound command, not just the git segment.
+    let command = format!(
+        "echo evil > {}; echo '#!/bin/sh' > {}; git add -A; git commit -m horizon-exclusion-test",
+        config_path.display(),
+        hook_path.display()
+    );
+
+    let tool_state = ToolSessionState::new(worktree.clone()).with_isolated_worktree(true);
+    let session_id = SessionId::new();
+    let live_state = LiveState::new();
+    let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
+    register_session_runtime(
+        session_id,
+        tool_state.clone(),
+        live_state.clone(),
+        bash_results_tx,
+    );
+
+    let call_id = ToolCallId("sandboxed-git-exclusion".to_string());
+    let request = ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({ "command": command }).into(),
+        occurrence_id: None,
+    };
+
+    // The compound command includes `git commit` → requires_metadata_write
+    // is true → GitOperation candidate. The prefilter (now always
+    // PassToJudge) lets it reach the approval path.
+    assert_eq!(
+        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
+        Execution::RequiresApproval
+    );
+    let events = crate::policy::horizon_events_for_provider_event(
+        &Event::ToolCallRequested(request.clone()),
+        &tool_state,
+        session_id,
+    );
+    let approval = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ApprovalRequested(approval) => Some(approval.clone()),
+            _ => None,
+        })
+        .expect("metadata-writing Git must request its command-scoped grant");
+    assert!(
+        matches!(&approval.kind, ApprovalKind::GitOperation { .. }),
+        "must derive a GitOperation candidate"
+    );
+    let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
+    let outcome =
+        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
+    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+
+    let completion = bash_results_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("sandboxed Git completion");
+
+    // The sandbox denies writes to config and hooks (excluded subpaths).
+    // This surfaces as FilesystemDenied (the denials are grantable — a
+    // narrow File grant for the denied path could satisfy them) or Finished
+    // (if the denials are classified as ungrantable). Either way, the
+    // command's stdout is carried in the result.
+    let result = match completion {
+        BashCompletion::Finished(result) => result,
+        BashCompletion::FilesystemDenied { result, .. } => {
+            // Expected: the sandbox caught and denied the config/hooks
+            // writes. The result carries the command's stdout.
+            result
+        }
+        other => panic!("expected Finished or FilesystemDenied, got {other:?}"),
+    };
+    assert_eq!(result.output["sandboxed"], true);
+
+    // The config file must not have been modified — the exclusion denied
+    // the write even though the parent `.git` tree is ReadWrite.
+    assert_eq!(
+        fs::read_to_string(&config_path).unwrap(),
+        original_config,
+        "config must not be modified — the exclusion denied the write"
+    );
+    // The hooks file must not have been created.
+    assert!(
+        !hook_path.exists(),
+        "hooks/pre-commit must not exist — the exclusion denied the write"
+    );
+    // The commit must have succeeded — objects/refs writes are NOT excluded.
+    let log = run_fixture_git(&worktree, &["log", "-1", "--format=%s"]);
+    assert_eq!(
+        String::from_utf8_lossy(&log.stdout).trim(),
+        "horizon-exclusion-test",
+        "the commit must succeed — objects/refs are not excluded"
+    );
+
+    unregister_session_runtime(session_id);
+    fs::remove_dir_all(fixture_root).unwrap();
+}
+
 /// Historical event logs can still contain the pre-narrow-grant retry kind.
 /// It must remain deserializable but can never turn an approval into an
 /// unsandboxed execution.
