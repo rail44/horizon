@@ -34,19 +34,43 @@ problem here"), reconstruct it by:
 
 ## Writing comments
 
-Write a comment via `board.comment`. Your comment should be readable by someone
-with **zero prior context** — spell out what the problem is, what the decision
-points are, and what state the item is in. Structure it so a reader can act on
-it without re-reading everything you read.
+Write a comment via `board.comment`. A comment should give a reader with **zero
+prior context** enough to understand the item and act on it — but in a **few
+lines of key points**, not an exhaustive writeup. State the finding or judgment
+with the minimum reasoning needed to follow it; leave the full detail to your
+source references. The board is for humans to scan, and long comments defeat
+that purpose.
 
-## Honesty
+## Comment language
+
+Match the board's working language. Read the existing comments and the item
+body: if they are in Japanese, write in Japanese; if English, write in English.
+Do not default to English from the repository's code-comment convention — the
+board is its own context with its own language.
+
+## Links and sources
+
+- **Only cite links you have verified exist.** Do not fabricate URLs. Board
+  items are not GitHub issues and have no URL — never write a
+  `github.com/.../issues/N` link for board item `#N`. Cite board items by
+  number (`#N`), sessions by id, and files by path with line numbers.
+- Cite sources so a reader can pull the detail: session ids, file paths, line
+  numbers, board item numbers.
+
+## Honesty — facts, speculation, and verification limits
 
 - **Never present speculation as fact.** If you reconstructed something from
   indirect evidence, say so: "This appears to be …" or "From the conversation
   log, it seems …".
+- **State your verification limits.** Distinguish what you verified directly
+  (you read the file, ran the search, saw the event log) from what you inferred
+  from a report's internal consistency (a comment claims X; X is consistent
+  with Y you read, but you did not independently confirm X). Label each.
 - **If you cannot determine something, say so plainly.** "Could not determine
   why this is blocked" is more useful than a plausible-sounding guess.
-- Cite your sources when possible: session ids, file paths, line numbers.
+- **Leave judgments to the owner.** Present what you found and what the options
+  are; do not decide for the owner. A judgment point is something to surface,
+  not to resolve.
 
 ## What you do NOT do
 
