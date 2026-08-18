@@ -26,15 +26,17 @@
 //! (`docs/logd-design.md` decision 3); correctness lives in the cursor.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_board::{Envelope, Store};
 
-use horizon_agent::contract::ProviderId;
+use horizon_agent::contract::{ProviderId, SessionId};
 
 use super::action::{DoneFuture, WakeAction, WakeInfo};
 use super::cursor;
 use super::policy::{WakeDecision, WakeState};
+use crate::session::AgentdState;
 
 /// The backoff duration for reconnecting to logd after a stream break.
 const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
@@ -45,10 +47,17 @@ const RECONNECT_BACKOFF: Duration = Duration::from_secs(2);
 /// resolved (the daemon's cwd is not in a git repo), the task logs a message
 /// and returns without spawning — the daemon runs fine without the wake
 /// subscriber, just without automatic keeper wake-up.
+///
+/// `state` is used to wait for [`AgentdState::wait_until_resume_ready`] before
+/// processing any board events — without this gate, a wake could fire before
+/// `spawn_resume_task` has finished restoring the prior keeper session into
+/// the registry, causing a seed-spawn that orphans the resumed session
+/// (board #42).
 pub(crate) fn spawn(
     action: Box<dyn WakeAction>,
     _provider_id: ProviderId,
     workspace_root: Option<PathBuf>,
+    state: Arc<AgentdState>,
 ) {
     tokio::spawn(async move {
         let store = match resolve_store(&workspace_root) {
@@ -71,10 +80,32 @@ pub(crate) fn spawn(
                 .unwrap_or(cursor::CursorState {
                     cursor: 0,
                     keeper_author: None,
+                    keeper_session: None,
                 });
+
+        // Restore the persisted keeper session slot from the cursor file so
+        // the action can resume it after a restart instead of seed-spawning a
+        // duplicate (board #42). The slot is parsed from a bare UUID string;
+        // an unparseable value is treated as "no slot" (the cursor file was
+        // corrupt or hand-edited).
+        let keeper_session = initial_state
+            .keeper_session
+            .as_deref()
+            .and_then(|s| uuid::Uuid::parse_str(s).ok())
+            .map(SessionId::from_uuid);
+        action.set_persisted_keeper_session(keeper_session);
+
         let initial_cursor = initial_state.cursor;
 
         eprintln!("horizon-agentd: board wake subscriber starting (cursor={initial_cursor})");
+
+        // Wait for `spawn_resume_task` to finish restoring persisted sessions
+        // into the registry before processing any board events. Without this
+        // gate, a wake that fires before resume completes would not find the
+        // prior keeper session in `session_exists`, take the seed-spawn path,
+        // and orphan the resumed session (board #42). The hub's
+        // `list_agents`/`attach_agent` already block on the same gate.
+        state.wait_until_resume_ready().await;
 
         let mut runner = SubscriberRunner {
             store,
@@ -260,9 +291,11 @@ impl SubscriberRunner {
         }
     }
 
-    /// Persists the current cursor and keeper_author to disk. Called after a
-    /// wake's delivery completes — the only point at which the cursor
-    /// advances.
+    /// Persists the current cursor, keeper_author, and keeper_session to disk.
+    /// Called after a wake's delivery completes — the only point at which the
+    /// cursor advances. The keeper session slot is persisted alongside so the
+    /// next restart can resume it instead of seed-spawning a duplicate (board
+    /// #42).
     fn persist_cursor(&self) {
         if let Some(path) = &self.cursor_file {
             cursor::save(
@@ -270,6 +303,7 @@ impl SubscriberRunner {
                 &cursor::CursorState {
                     cursor: self.state.cursor(),
                     keeper_author: self.state.keeper_author().map(String::from),
+                    keeper_session: self.action.keeper_session_uuid(),
                 },
             );
         }

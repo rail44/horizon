@@ -293,10 +293,16 @@ impl AgentdState {
 
     /// Installs a dummy `SessionEntry` for `session_id` so `session_exists`
     /// returns true. Test-only — used by the wake action's done-future tests to
-    /// simulate a live session without spawning a real one.
+    /// simulate a live session without spawning a real one. Returns the
+    /// `inbound` channel's receiver so tests that exercise `send_command` (e.g.
+    /// the resume-path wake test) can keep it alive; tests that don't call
+    /// `send_command` can drop it.
     #[cfg(test)]
-    pub(crate) fn install_test_session(&self, session_id: SessionId) {
-        let (inbound_tx, _inbound_rx) = crossbeam_channel::unbounded::<Command>();
+    pub(crate) fn install_test_session(
+        &self,
+        session_id: SessionId,
+    ) -> crossbeam_channel::Receiver<Command> {
+        let (inbound_tx, inbound_rx) = crossbeam_channel::unbounded::<Command>();
         let (replay_tx, _replay_rx) =
             crossbeam_channel::unbounded::<crossbeam_channel::Sender<Vec<Event>>>();
         self.sessions.lock().unwrap().insert(
@@ -312,6 +318,7 @@ impl AgentdState {
                 worktree: None,
             },
         );
+        inbound_rx
     }
 
     /// Routes a `Command` to `session_id`'s thread, reporting whether there
