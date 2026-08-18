@@ -54,6 +54,22 @@ pub(crate) type DoneFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
 /// future that resolves when the keeper is done (for multi-wake prevention).
 pub(crate) trait WakeAction: Send + Sync {
     fn wake(&self, info: WakeInfo) -> (String, DoneFuture);
+
+    /// Returns the current keeper session's id as a bare UUID string, if one
+    /// is live. Used by the subscriber to persist the slot alongside the
+    /// cursor at delivery completion (board #42). The default returns `None` —
+    /// v1 `SpawnKeeper` doesn't track sessions.
+    fn keeper_session_uuid(&self) -> Option<String> {
+        None
+    }
+
+    /// Sets the persisted keeper session slot, loaded from the cursor file on
+    /// restart. The action uses this to initialize its tracked session so it
+    /// can resume it instead of seed-spawning a duplicate (board #42). The
+    /// default is a no-op — v1 `SpawnKeeper` doesn't track sessions.
+    fn set_persisted_keeper_session(&self, session: Option<SessionId>) {
+        let _ = session;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,6 +357,17 @@ impl WakeAction for ResumeKeeper {
 
         // --- Seed-spawn path ---
         self.seed_spawn(info)
+    }
+
+    fn keeper_session_uuid(&self) -> Option<String> {
+        self.keeper_session
+            .lock()
+            .unwrap()
+            .map(|s| s.as_uuid().to_string())
+    }
+
+    fn set_persisted_keeper_session(&self, session: Option<SessionId>) {
+        *self.keeper_session.lock().unwrap() = session;
     }
 }
 
@@ -738,8 +765,10 @@ mod tests {
     // --- done-on-turn-end tests ----------------------------------------------
 
     /// Installs a fake `SessionEntry` so `session_exists` returns true.
+    /// The returned receiver is dropped — the existing done-future tests
+    /// never call `send_command`, so a disconnected channel is harmless.
     fn install_fake_session(state: &Arc<AgentdState>, session_id: SessionId) {
-        state.install_test_session(session_id);
+        let _ = state.install_test_session(session_id);
     }
 
     /// The done future resolves when the wake-injected turn ends
@@ -956,5 +985,115 @@ mod tests {
             );
 
         assert!(state.session_exists(session_id));
+    }
+
+    // --- v2 keeper session slot persistence tests (board #42) ---------------
+
+    /// `set_persisted_keeper_session` sets the slot, and
+    /// `keeper_session_uuid` reads it back as a bare UUID string — the
+    /// round-trip the subscriber performs at startup (load from cursor → set
+    /// on action) and at delivery completion (read from action → write to
+    /// cursor).
+    #[test]
+    fn keeper_session_uuid_round_trips_through_set_persisted() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let action = ResumeKeeper::new(
+            state,
+            ProviderId("builtin.agent.rig".to_string()),
+            None,
+            None,
+        );
+        // Initially None — new() doesn't set it; the task sets it from the
+        // cursor file at startup.
+        assert!(action.keeper_session_uuid().is_none());
+
+        let session_id = SessionId::new();
+        action.set_persisted_keeper_session(Some(session_id));
+        assert_eq!(
+            action.keeper_session_uuid().as_deref(),
+            Some(session_id.as_uuid().to_string().as_str())
+        );
+
+        action.set_persisted_keeper_session(None);
+        assert!(action.keeper_session_uuid().is_none());
+    }
+
+    /// After a daemon restart, the persisted keeper session slot is restored
+    /// from the cursor file and set on the action. If that session is still
+    /// alive (resumed by `resume_persisted_sessions`), `wake` takes the resume
+    /// path — reusing the existing session instead of seed-spawning a
+    /// duplicate (board #42).
+    #[tokio::test]
+    async fn wake_resumes_persisted_keeper_session_when_alive() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let keeper_id = SessionId::new();
+        // Keep the inbound receiver alive so send_command succeeds — the
+        // resume path sends a UserMessage to the existing session.
+        let _inbound_rx = state.install_test_session(keeper_id);
+
+        // Simulate a restart: the cursor file had the keeper's session id,
+        // and resume_persisted_sessions restored it into the registry.
+        let action = ResumeKeeper::new(
+            state.clone(),
+            ProviderId("builtin.agent.rig".to_string()),
+            None,
+            None,
+        );
+        action.set_persisted_keeper_session(Some(keeper_id));
+
+        let info = WakeInfo {
+            items: vec![1],
+            first_seq: 1,
+            last_seq: 1,
+        };
+        let (author, done) = action.wake(info);
+
+        // The resume path reuses the existing session's id, so the author
+        // matches — no seed-spawn happened.
+        assert_eq!(author, format!("session:{}", keeper_id.as_uuid()));
+        // The session is still alive — it was resumed, not replaced.
+        assert!(state.session_exists(keeper_id));
+
+        drop(done);
+    }
+
+    /// When the persisted keeper session is truly gone (terminated before
+    /// restart, so `resume_persisted_sessions` skipped it), `wake` clears the
+    /// stale slot and takes the seed-spawn path — spawning a fresh keeper
+    /// rather than trying to message a dead session (board #42).
+    #[tokio::test]
+    async fn wake_seed_spawns_when_persisted_keeper_session_is_gone() {
+        let state = crate::session::test_support::state_with_rig_config(false, "test");
+        let lost_keeper_id = SessionId::new();
+        // Don't install the session — it was lost (terminated before restart).
+
+        let action = ResumeKeeper::new(
+            state.clone(),
+            ProviderId("builtin.agent.rig".to_string()),
+            None,
+            None,
+        );
+        action.set_persisted_keeper_session(Some(lost_keeper_id));
+
+        // The slot is set but the session doesn't exist.
+        assert_eq!(
+            action.keeper_session_uuid().as_deref(),
+            Some(lost_keeper_id.as_uuid().to_string().as_str())
+        );
+
+        let info = WakeInfo {
+            items: vec![1],
+            first_seq: 1,
+            last_seq: 1,
+        };
+        let (author, done) = action.wake(info);
+
+        // The seed-spawn path mints a new SessionId, so the author is a
+        // different uuid — the stale slot was cleared and a new session was
+        // spawned.
+        assert_ne!(author, format!("session:{}", lost_keeper_id.as_uuid()));
+        assert!(author.starts_with("session:"));
+
+        drop(done);
     }
 }

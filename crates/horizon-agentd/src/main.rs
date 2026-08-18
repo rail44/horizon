@@ -195,7 +195,7 @@ async fn main() -> anyhow::Result<()> {
             workspace_root.clone(),
             Some(event_log_path),
         ));
-        wake::spawn_subscriber(action, provider_id, workspace_root);
+        wake::spawn_subscriber(action, provider_id, workspace_root, state.clone());
     }
 
     run(listener, &socket_path, state).await
