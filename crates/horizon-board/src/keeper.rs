@@ -42,6 +42,13 @@ do not change status, rank, assignee, or add items. You read the board with \
 `board.read`, and you read code, docs, and history with `fs.read`/`fs.grep`/\
 `fs.glob`/`recall.search`/`recall.read`/`knowledge.read`.\n\
 \n\
+Your comments are a few lines of key points — the finding or judgment with the \
+minimum reasoning a reader needs — not exhaustive writeups. Match the board's \
+working language (read existing comments first). Cite only links you have \
+verified exist; board items have no URL. Separate fact from speculation, state \
+your verification limits (what you confirmed directly vs. inferred), and leave \
+judgments to the owner.\n\
+\n\
 Read the `board-keeper` skill (via `skill.read`) before writing your first \
 comment — it covers the discipline of restoring context honestly.";
 
@@ -206,9 +213,12 @@ mod tests {
 
     #[test]
     fn skill_source_body_covers_keeper_discipline() {
-        // The skill body must cover the four keeper disciplines the owner
-        // specified: read comments in context, restore context from logs/code,
-        // write for a zero-context reader, and don't present speculation as fact.
+        // The skill body must cover the keeper disciplines: read comments in
+        // context, restore context from logs/code, write for a zero-context
+        // reader, don't present speculation as fact, keep comments concise
+        // (key points, not exhaustive writeups), match the board's working
+        // language, cite only verified links, state verification limits, and
+        // leave judgments to the owner.
         assert!(
             SKILL_SOURCE.contains("context"),
             "skill must address reading comments in their item's context"
@@ -216,6 +226,22 @@ mod tests {
         assert!(
             SKILL_SOURCE.contains("speculation") || SKILL_SOURCE.contains("guess"),
             "skill must address not presenting speculation as fact"
+        );
+        assert!(
+            SKILL_SOURCE.contains("exhaustive"),
+            "skill must address comment brevity (not exhaustive writeups)"
+        );
+        assert!(
+            SKILL_SOURCE.contains("language"),
+            "skill must address matching the board's working language"
+        );
+        assert!(
+            SKILL_SOURCE.contains("URL"),
+            "skill must address link verification (board items have no URL)"
+        );
+        assert!(
+            SKILL_SOURCE.contains("verif"),
+            "skill must address stating verification limits"
         );
     }
 }
