@@ -78,11 +78,22 @@ pub enum FilesystemGrantScope {
 }
 
 /// A canonical, enforceable filesystem grant for a fresh sandbox.
+///
+/// `excluded_subpaths` names relative subpaths within a `DirectoryTree`
+/// grant that remain read-only even though the parent tree is writable. The
+/// seccomp supervisor (Linux) denies writes to these subpaths before checking
+/// capability sufficiency, so a ReadWrite grant on `.git/` can exclude
+/// `.git/hooks/` and `.git/config/` — the host-escalation vectors a deceived
+/// judge could otherwise enable. On macOS (no seccomp supervisor) the field
+/// is advisory. Owner decision 2026-08-17, board #38; see
+/// `docs/agent-approval-design.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct FilesystemGrant {
     pub path: PathBuf,
     pub access: FilesystemGrantAccess,
     pub scope: FilesystemGrantScope,
+    #[serde(default)]
+    pub excluded_subpaths: Vec<PathBuf>,
 }
 
 /// A mediated attempt and the smallest enforceable grant that can satisfy it.

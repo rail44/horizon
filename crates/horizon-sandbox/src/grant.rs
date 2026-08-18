@@ -208,6 +208,7 @@ fn shared_tree_grant(
         path: ancestor,
         access,
         scope: FilesystemGrantScope::DirectoryTree,
+        excluded_subpaths: Vec::new(),
     })
 }
 
@@ -283,6 +284,7 @@ pub(crate) fn resolve_denial(
         path,
         access,
         scope,
+        excluded_subpaths: Vec::new(),
     };
     // The same clamp [`revalidate_grant`] applies after approval, applied
     // here so the two can never disagree. Without it, an attempt whose
@@ -660,6 +662,7 @@ mod tests {
             path: root.canonicalize().unwrap(),
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         assert!(revalidate_grant(&grant).is_ok());
         fs::remove_dir_all(root).expect("remove test directory");
@@ -672,6 +675,7 @@ mod tests {
             path: root.canonicalize().unwrap(),
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         fs::remove_dir_all(&root).expect("remove test directory");
         assert!(matches!(
@@ -689,6 +693,7 @@ mod tests {
             path: target.canonicalize().unwrap(),
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         assert!(revalidate_grant(&grant).is_ok());
 
@@ -708,6 +713,7 @@ mod tests {
             path: PathBuf::from("/usr"),
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         assert!(matches!(
             revalidate_grant(&grant),
@@ -736,6 +742,7 @@ mod tests {
                 path: cache.canonicalize().unwrap(),
                 access: FilesystemGrantAccess::ReadWrite,
                 scope: FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             }]
         );
         fs::remove_dir_all(root).expect("remove test directory");
@@ -765,6 +772,7 @@ mod tests {
                 path: cache.canonicalize().unwrap(),
                 access: FilesystemGrantAccess::ReadWrite,
                 scope: FilesystemGrantScope::DirectoryTree,
+                excluded_subpaths: Vec::new(),
             }],
             "two attempts under one cache directory must collapse to that directory"
         );

@@ -148,8 +148,24 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
              stash, branch (within the horizon/ namespace), tag, or a fetch or pull \
              (specifying a remote name and a branch name) on the current repository. \
              A sequence of such plain git operations joined by `&&` or `;` (or a \
-             leading `cd` followed by one) is equally routine. Escalate if it does \
-             anything unexpected or suspicious.\n\n",
+             leading `cd` followed by one) is equally routine.\n\
+             \n\
+             Always escalate (do not auto-approve) if the command includes any of:\n\
+             - `git config`, `git hook`, `git filter-branch`, `git filter-repo`, or\n\
+             `git credential` — these can execute arbitrary code or modify trust\n\
+             settings.\n\
+             - Git global options that can redirect execution or override the\n\
+             repository: `-c`, `--config-env`, `--exec-path`, `--git-dir`,\n\
+             `--work-tree`, `--upload-pack`, or `--receive-pack`.\n\
+             - A directly-specified URL (`ext::`, `file::`, `http://`, `https://`,\n\
+             `ssh://`, or `git://`) instead of a configured remote name.\n\
+             - Shell pipes, redirects, command substitution, or subshells — a\n\
+             non-git command riding the widened metadata grant could write hooks\n\
+             or config for later host execution.\n\
+             - A non-git command segment (e.g. `cargo`, `make`, `echo`) chained\n\
+             with the git operation.\n\
+             \n\
+             Escalate if it does anything else unexpected or suspicious.\n\n",
         );
     }
 
@@ -318,6 +334,7 @@ mod tests {
             path: "/outside/build".into(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         }];
 
         let content = user_content(&input);

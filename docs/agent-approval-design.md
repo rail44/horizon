@@ -358,6 +358,43 @@ product-owned API. Decisions:
   repository). The judge prompt notes that a sequence of plain git operations
   joined by `&&` or `;` is equally routine. The recognizer that decides whether
   a command is a GitOperation at all was already per-segment and is unchanged.
+- **Grant-shape exclusion replaces prefilter blocking** (owner approval
+  2026-08-17, board #38, based on evidence in
+  `docs/research/shell-approval-evidence-2026-08-17.md`): the per-segment
+  prefilter's `HumanDirect` blocking of redirects, pipes, non-git segments,
+  dangerous options, dangerous subcommands, and URL schemes is retired —
+  every GitOperation-classified command now passes to the judge in full, so
+  approval routing no longer varies with command syntax. The deterministic
+  defense against host-escalation vectors (writes to `.git/hooks/` and
+  `.git/config`, which execute on the host outside the sandbox) moved to the
+  sandbox grant shape: the GitOperation extended grant carries
+  `excluded_subpaths` (`hooks`, `config`) that the Linux seccomp supervisor
+  denies for writes even when the parent `.git` tree is ReadWrite. The
+  exclusion is based on the resolved gitdir (worktree pointer → gitdir + common
+  dir, already resolved by `metadata_writable_roots`), not a literal `.git`
+  path name — the Cursor CVE (fix v3.0.0) showed literal matching is broken by
+  renamed git dirs and bare repos. `FilesystemGrant` grew an
+  `excluded_subpaths: Vec<PathBuf>` field (additive, `#[serde(default)]`) for
+  this; the Linux seccomp supervisor's `match_initial_capability` checks
+  excluded paths before sufficiency (reads are not denied — git reads
+  config/hooks). macOS has no seccomp supervisor, so the field is advisory
+  there (consistent with the existing Linux/macOS backend asymmetry). The
+  prefilter function is retained as a seam (returns `PassToJudge` for all
+  inputs) for a future Codex-style "safe-side widening" (all segments read-only
+  → auto, no judge needed). The judge prompt now explicitly names
+  config/hook/filter-branch/filter-repo/credential, dangerous global options
+  (-c/--config-env/--git-dir/--exec-path/--upload-pack/--receive-pack), URL
+  schemes, pipes/redirects/command substitution, and non-git segments as
+  escalate cases — previously these were blocked before the judge saw them.
+  Evidence: Claude Code and OpenAI Codex both run the same two-layer design
+  (LLM reads the full command, sandbox denies hooks/config writes) in
+  production; deterministic shell parsing as a boundary is a CVE source
+  (Gemini CLI, Cursor); LLM judges alone are also insufficient (prompt
+  injection ~90% success). The proposal this implements was accepted by the
+  owner; the design judgment (grant-shape exclusion as the mechanism, resolved
+  gitdir as the basis, prefilter reduction rather than removal) was the
+  integrator's, distinguished per the #38 thread's lesson on labeling accepted
+  proposals vs. owner design decisions.
 - **Spike** (owner decision): build the thin API + per-OS composition
   directly from the start — no ai-jail stopgap (writing the thin layer
   is the spike). Deliverable: prototype + tests

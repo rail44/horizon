@@ -278,6 +278,7 @@ mod tests {
             path: Path::new("/proc").to_path_buf(),
             access: FilesystemGrantAccess::Read,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         assert!(matches!(
             build_with_grants(&base, &[protected]),
@@ -288,6 +289,7 @@ mod tests {
             path: Path::new("/").to_path_buf(),
             access: FilesystemGrantAccess::ReadWrite,
             scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
         };
         assert!(matches!(
             build_with_grants(&base, &[root_write]),
