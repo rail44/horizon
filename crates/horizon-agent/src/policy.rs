@@ -339,6 +339,12 @@ pub fn horizon_events_for_provider_event(
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
         match crate::tools::permission_for_tool(&request.tool_id) {
+            // Clippy nightly suggests collapsing the nested `if` into a
+            // match guard, but a guard would leave a non-escaping
+            // auto-allowed call matching no arm (there is deliberately no
+            // catch-all, so the match would not even compile) — the nested
+            // `if` is the correct shape.
+            #[allow(clippy::collapsible_match)]
             Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
                 // An fs read whose path escapes the workspace root is a
                 // boundary crossing — emit an `ApprovalRequested` so the
