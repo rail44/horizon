@@ -12,20 +12,22 @@
 //!   wire's `changed_rows`. Same stamp ⇒ same row content ⇒ the cached
 //!   items repaint as-is; a bumped stamp re-shapes just that row.
 //! - **Per frame ([`CacheEpoch`])**: everything a cached item *bakes in*
-//!   besides row content — resolved colors. Text color rides inside each
-//!   `ShapedLine`'s decoration runs and each geometric glyph's `fg`, and
-//!   color resolution reads the live theme scheme plus the frame's OSC
+//!   besides row content — resolved colors, and the font metrics the
+//!   shaping ran under. Text color rides inside each `ShapedLine`'s
+//!   decoration runs and each geometric glyph's `fg`, and color
+//!   resolution reads the live theme scheme plus the frame's OSC
 //!   palette overrides, so a `Reload Config` theme swap or an OSC 4/10/11
 //!   override change must drop every row at once. The epoch is compared
 //!   at the top of each paint; on mismatch the whole cache clears —
 //!   deliberately the simplest invalidation shape.
 //!
-//! Font and cell metrics are *not* an epoch axis: `[ui] font_family` /
-//! `[terminal] font_size` (and the line height derived from it) are
-//! startup-only `OnceLock`s (see AGENTS.md's Configuration section — a
-//! change needs a full restart), so a cached `ShapedLine` can never
-//! outlive its metrics. Window scale factor is applied at paint time,
-//! not baked into shaping, so DPI changes need no axis either.
+//! The font size rides in the epoch too: a cached `ShapedLine` bakes in
+//! font + font size + cell metrics, and the `Increase/Decrease/Reset
+//! Font Size` commands move the live size at runtime (see
+//! `crate::terminal::font_size`), so a size change must clear every row
+//! the same way a theme swap does. (`font_family` itself is still
+//! startup-only, so it needs no axis.) Window scale factor is applied
+//! at paint time, not baked into shaping, so DPI changes need no axis.
 //!
 //! Memory is bounded naturally: `begin_frame` sizes the row table to the
 //! visible viewport, so the cache never holds more than one screenful of
@@ -60,6 +62,12 @@ pub(super) struct CacheEpoch {
     /// override-only change arrives with no `changed_rows`, so it must
     /// invalidate here, not per row.
     pub(super) palette_overrides: Vec<(u16, [u8; 3])>,
+    /// The terminal font size, in px, the cached items were shaped under
+    /// (`crate::terminal::font_size()` at paint time). A
+    /// `ShapedLine`/geometric glyph bakes in font + size + cell metrics,
+    /// so the `Increase/Decrease/Reset Font Size` commands must drop
+    /// every row at once, like a theme swap.
+    pub(super) font_size: f32,
 }
 
 /// One item of a row's shaped text layer, positioned by starting column.
@@ -185,6 +193,7 @@ mod tests {
         CacheEpoch {
             theme: TerminalColorScheme::default(),
             palette_overrides: Vec::new(),
+            font_size: 13.0,
         }
     }
 
@@ -276,6 +285,22 @@ mod tests {
         let mut recolored = epoch();
         recolored.theme.foreground.r = recolored.theme.foreground.r.wrapping_add(1);
         cache.begin_frame(recolored, 2);
+        assert_eq!(col_of(cache.get_or_shape(0, 7, || items(2))), 2);
+        assert_eq!(col_of(cache.get_or_shape(1, 7, || items(2))), 2);
+    }
+
+    #[test]
+    fn a_font_size_change_clears_every_row() {
+        let mut cache = ShapedLineCache::new();
+        cache.begin_frame(epoch(), 2);
+        cache.get_or_shape(0, 7, || items(1));
+        cache.get_or_shape(1, 7, || items(1));
+
+        let resized = CacheEpoch {
+            font_size: 14.0,
+            ..epoch()
+        };
+        cache.begin_frame(resized, 2);
         assert_eq!(col_of(cache.get_or_shape(0, 7, || items(2))), 2);
         assert_eq!(col_of(cache.get_or_shape(1, 7, || items(2))), 2);
     }

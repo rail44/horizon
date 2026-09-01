@@ -31,7 +31,10 @@
 # Applied at startup only, with two exceptions: [theme]/[theme.ansi] and
 # [keybindings] apply live via the "Reload Config" command; [provider]
 # applies via "Reload Agent Runtime" (a fresh horizon-agentd process,
-# no full UI restart). [terminal]/[ui] need a full UI restart.
+# no full UI restart). [terminal]/[ui] need a full UI restart -- though
+# [terminal] font_size also has runtime-only zoom commands (see the
+# [keybindings] section below) that move the live size without touching
+# this file.
 #
 # Secrets never go here. OPENAI_API_KEY and the web-search adapter's
 # EXA_API_KEY are environment-only; there is no field for either in this file.
@@ -105,7 +108,10 @@ font_size = 13.0
 # deny-tool-call, cancel-agent-turn, reload-agent-runtime,
 # reload-terminal-runtime (restarts horizon-terminald -- destructive: every
 # terminal session ends), reload-config,
-# manage-sessions (opens the session manager modal). The reserved pseudo-command
+# manage-sessions (opens the session manager modal), increase-font-size /
+# decrease-font-size / reset-font-size (move the live terminal font size;
+# already bound by default to the macOS-standard zoom chords cmd+= /
+# cmd+- / cmd+0, so an entry here overrides that default). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and
 # overrides the chord that opens the command palette. Unbound by default:
@@ -126,6 +132,8 @@ font_size = 13.0
 # "ctrl+shift+p" = "open-palette"
 # "ctrl+'" = "workspace-mode"
 # "ctrl+." = "cancel-agent-turn"
+# Font-size example: rebind zoom-in from its built-in default chord.
+# "ctrl+plus" = "increase-font-size"
 
 # ---------------------------------------------------------------------------
 # [theme] — the app's one color scheme. Since 2026-07-16

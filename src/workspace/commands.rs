@@ -128,6 +128,28 @@ impl WorkspaceShell {
                     view.update(cx, |view, cx| view.toggle_expansion(cx));
                 }
             }
+            // The font-size commands mutate the shell crate's live font
+            // store (`terminal::font_size_store`) and refresh the window:
+            // the next paint recomputes cell metrics from the new size,
+            // resizes the PTY grid when cols/rows moved, and the shape
+            // cache drops its rows via `CacheEpoch::font_size`. No-op
+            // (no refresh) at a clamp bound or an already-configured
+            // size, so holding the chord doesn't thrash repaints.
+            CommandId::IncreaseFontSize => {
+                if crate::terminal::adjust_font_size(crate::terminal::FONT_SIZE_STEP) {
+                    window.refresh();
+                }
+            }
+            CommandId::DecreaseFontSize => {
+                if crate::terminal::adjust_font_size(-crate::terminal::FONT_SIZE_STEP) {
+                    window.refresh();
+                }
+            }
+            CommandId::ResetFontSize => {
+                if crate::terminal::reset_font_size() {
+                    window.refresh();
+                }
+            }
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
                     let pending = session.read(cx).pending_approval_call_ids();

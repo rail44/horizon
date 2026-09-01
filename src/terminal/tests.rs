@@ -8,6 +8,38 @@ use super::{
 };
 
 #[test]
+fn font_size_commands_move_clamp_and_reset() {
+    // The live font store is process-global (one `RwLock` per test
+    // binary), so this test is self-contained: it always leaves the size
+    // where it found it, for whatever test order runs around it.
+    use super::{adjust_font_size, font_size, reset_font_size, MAX_FONT_SIZE, MIN_FONT_SIZE};
+
+    let start = font_size();
+
+    // A real move reports "changed" (the command layer refreshes only on
+    // a real move) and lands on the new value.
+    assert!(adjust_font_size(1.0));
+    assert_eq!(font_size(), start + 1.0);
+
+    // Reset restores the startup-configured size, and resetting an
+    // already-configured size is a no-op.
+    assert!(reset_font_size());
+    assert_eq!(font_size(), start);
+    assert!(!reset_font_size());
+
+    // Clamped at both bounds, and a clamp is a no-op (no refresh).
+    assert!(adjust_font_size(MAX_FONT_SIZE * 2.0));
+    assert_eq!(font_size(), MAX_FONT_SIZE);
+    assert!(!adjust_font_size(1.0));
+    assert!(adjust_font_size(-MAX_FONT_SIZE * 4.0));
+    assert_eq!(font_size(), MIN_FONT_SIZE);
+    assert!(!adjust_font_size(-1.0));
+
+    assert!(reset_font_size());
+    assert_eq!(font_size(), start);
+}
+
+#[test]
 fn stack_parses_primary_and_fallbacks() {
     let resolved =
         font_from_stack("Iosevka Nerd Font Mono, Symbols Nerd Font Mono, Noto Sans Mono CJK JP");

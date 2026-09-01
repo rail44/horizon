@@ -6,6 +6,7 @@
 //! the set live (see its own doc comment for the unbind mechanism).
 
 use gpui::*;
+use horizon_workspace::commands::CommandId;
 
 use super::{RunCommand, MODE_CONTEXT, SESSION_MANAGER_CONTEXT};
 use crate::keymap;
@@ -94,6 +95,50 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
             "secondary-shift-t",
             super::TerminateSessionSubtree,
             Some(SESSION_MANAGER_CONTEXT),
+        ),
+        // Built-in default font-size chords (the macOS-standard zoom set):
+        // dispatched through `RunCommand` rather than a per-command action
+        // type, so a `[keybindings]` entry can still rebind them -- the
+        // config layer below is pushed later, and later bindings win
+        // precedence at the same (global) context depth. All three are
+        // fixed otherwise (not part of `dynamic_keystrokes`): like the
+        // mode-navigation chords above, they survive a `Reload Config`.
+        // `cmd-+`/`cmd-shift-=` are the physically-distinct chords users
+        // reach for zoom-in alongside `cmd-=` (the shifted `=` key).
+        KeyBinding::new(
+            "cmd-=",
+            super::RunCommand {
+                id: CommandId::IncreaseFontSize,
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "cmd-+",
+            super::RunCommand {
+                id: CommandId::IncreaseFontSize,
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "cmd-shift-=",
+            super::RunCommand {
+                id: CommandId::IncreaseFontSize,
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "cmd--",
+            super::RunCommand {
+                id: CommandId::DecreaseFontSize,
+            },
+            None,
+        ),
+        KeyBinding::new(
+            "cmd-0",
+            super::RunCommand {
+                id: CommandId::ResetFontSize,
+            },
+            None,
         ),
     ];
 

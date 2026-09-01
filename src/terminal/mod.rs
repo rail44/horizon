@@ -46,9 +46,12 @@ use crate::input_trace::input_trace;
 use crate::theme;
 
 // Font values come from config.toml ([ui].font_family, [terminal].
-// font_size) and are startup-only, like the Floem shell. `line_height` is
+// font_size). `font_family` is startup-only, like the Floem shell.
+// `font_size` starts at its configured value but is runtime-mutable: the
+// `Increase/Decrease/Reset Font Size` commands move the live value (see
+// `font_size_store`/`adjust_font_size` below). `line_height` is
 // no longer file-configurable (2026-07-18 config-narrowing wave) -- it's
-// always derived from font_size, see `line_height` below.
+// always derived from the live font_size, see `line_height` below.
 //
 // `font_family` is a CSS-style comma-separated font stack (as used by the
 // retired Floem shell): the first entry is the primary family, the rest
@@ -97,6 +100,17 @@ pub(crate) fn resolved_font() -> Font {
 /// `src/theme/scheme.rs`'s `config_example_toml_matches_its_documented_defaults`.
 pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
 
+/// The px step `Increase Font Size`/`Decrease Font Size` move the live
+/// size by.
+pub(crate) const FONT_SIZE_STEP: f32 = 1.0;
+
+/// The smallest size the font-size commands can reach, in px -- below
+/// this the grid is unreadable rather than merely small.
+pub(crate) const MIN_FONT_SIZE: f32 = 5.0;
+
+/// The largest size the font-size commands can reach, in px.
+pub(crate) const MAX_FONT_SIZE: f32 = 40.0;
+
 /// Key context applied to the terminal pane's root `div` so workspace-wide
 /// bindings scoped to the enclosing `Root`/`Workspace` contexts can be
 /// overridden here. Specifically, gpui-component's `Root` binds bare
@@ -110,22 +124,68 @@ pub(crate) const DEFAULT_FONT_SIZE: f32 = 13.0;
 /// terminal's key encoder as `0x09`.
 pub(crate) const TERMINAL_CONTEXT: &str = "Terminal";
 
+/// The startup-configured font size: `[terminal] font_size`, or
+/// [`DEFAULT_FONT_SIZE`] when unset -- what [`reset_font_size`] restores
+/// to. `horizon_config::load()` stays the startup snapshot (its cache is
+/// deliberately bypassed by `reload()`), so this is stable for the
+/// process lifetime unless Horizon itself relaunches.
+pub(crate) fn configured_font_size() -> f32 {
+    horizon_config::load()
+        .terminal
+        .font_size
+        .unwrap_or(DEFAULT_FONT_SIZE)
+}
+
+/// The live font size store, in px. A `RwLock` rather than the old
+/// startup-only `OnceLock` so the `Increase/Decrease/Reset Font Size`
+/// commands can move it without a restart -- the same
+/// "live app-wide state" shape as `theme::scheme_store`. Every reader
+/// (paint-time cell metrics, PTY resize math, the agent transcript's
+/// text size) calls [`font_size`] per use, so a change lands on the
+/// next repaint; the shape cache drops its rows via `CacheEpoch::font_size`.
+pub(crate) fn font_size_store() -> &'static std::sync::RwLock<f32> {
+    static STORE: std::sync::OnceLock<std::sync::RwLock<f32>> = std::sync::OnceLock::new();
+    STORE.get_or_init(|| std::sync::RwLock::new(configured_font_size()))
+}
+
 pub(crate) fn font_size() -> f32 {
-    static SIZE: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *SIZE.get_or_init(|| {
-        horizon_config::load()
-            .terminal
-            .font_size
-            .unwrap_or(DEFAULT_FONT_SIZE)
-    })
+    *font_size_store().read().unwrap()
+}
+
+/// Moves the live font size by `delta` px, clamped to
+/// [`MIN_FONT_SIZE`, [`MAX_FONT_SIZE`]]. Returns whether anything
+/// changed, so the command layer only refreshes the window on a real
+/// move (a clamp at either bound is a no-op).
+pub(crate) fn adjust_font_size(delta: f32) -> bool {
+    let store = font_size_store();
+    let mut size = store.write().unwrap();
+    let next = (*size + delta).clamp(MIN_FONT_SIZE, MAX_FONT_SIZE);
+    if (next - *size).abs() < f32::EPSILON {
+        return false;
+    }
+    *size = next;
+    true
+}
+
+/// Restores the startup-configured font size. Returns whether anything
+/// changed, mirroring [`adjust_font_size`].
+pub(crate) fn reset_font_size() -> bool {
+    let store = font_size_store();
+    let mut size = store.write().unwrap();
+    let configured = configured_font_size();
+    if (*size - configured).abs() < f32::EPSILON {
+        return false;
+    }
+    *size = configured;
+    true
 }
 
 fn line_height() -> f32 {
     // `[terminal] line_height` was retired in the 2026-07-18
     // config-narrowing wave (see AGENTS.md's "Configuration" section):
-    // line height is now always this fixed formula, no file override.
-    static HEIGHT: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *HEIGHT.get_or_init(|| (font_size() * 18.0 / 13.0).round())
+    // line height is always this fixed formula over the live font size,
+    // no file override.
+    (font_size() * 18.0 / 13.0).round()
 }
 
 /// Alpha for the selection overlay quad (`paint_terminal`'s
@@ -1062,6 +1122,7 @@ fn paint_terminal(
             CacheEpoch {
                 theme: theme::terminal_color_scheme(),
                 palette_overrides: frame.palette_overrides.clone(),
+                font_size: f32::from(font_size),
             },
             scrollback.window.lines.len(),
         );
@@ -1100,6 +1161,7 @@ fn paint_terminal(
         CacheEpoch {
             theme: theme::terminal_color_scheme(),
             palette_overrides: frame.palette_overrides.clone(),
+            font_size: f32::from(font_size),
         },
         size.rows as usize,
     );
