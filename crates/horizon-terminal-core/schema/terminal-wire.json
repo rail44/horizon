@@ -969,6 +969,14 @@
           ],
           "default": null,
           "description": "SGR 58 underline color. `None` means the client draws the underline\nwith the span's own `fg`. Only ever `Some` while `underline` is not\n[`TerminalUnderline::None`] — a color set on a cell that is not\nunderlined is presentation-dead and normalized away at frame build."
+        },
+        "url": {
+          "default": null,
+          "description": "OSC 8 hyperlink URI covering this span's cells, carried verbatim\nfrom the escape sequence (`core::render` reads it off the alacritty\ncell; the client decides whether the scheme is openable). Part of\nthe span-merge key (`core::render::SpanStyle`), so a span never\nmixes two URIs. `#[serde(default)]`: a peer predating the field\ndecodes it as `None`, the plain-text default.",
+          "type": [
+            "string",
+            "null"
+          ]
         }
       },
       "required": [

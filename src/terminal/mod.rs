@@ -37,8 +37,9 @@ use horizon_terminal_core::{
 };
 
 use self::input::{
-    cell_from_position, selection_kind_from_clicks, term_key_code, term_modifiers,
-    terminal_mouse_button, terminal_mouse_modifiers, viewport_pixel_delta, ScrollAccumulator,
+    cell_from_position, is_openable_url, selection_kind_from_clicks, term_key_code, term_modifiers,
+    terminal_mouse_button, terminal_mouse_modifiers, url_from_lines, viewport_pixel_delta,
+    ScrollAccumulator,
 };
 use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
 use crate::input_trace::input_trace;
@@ -248,10 +249,46 @@ impl TerminalView {
         ))
     }
 
+    /// The OSC 8 hyperlink under a pixel position, if any — the painted
+    /// surface answers: a held scrollback window while one is visible (its
+    /// fractional paint offset shifts row boundaries, so it folds into the
+    /// row pick), the live frame otherwise.
+    fn hyperlink_at(&self, position: Point<Pixels>, cx: &App) -> Option<String> {
+        let metrics = self.metrics.get()?;
+        let session = self.session.read(cx);
+        let row_units = f32::from(position.y - metrics.origin.y) / f32::from(metrics.line_height);
+        let col = (f32::from(position.x - metrics.origin.x) / f32::from(metrics.cell_width))
+            .max(0.0)
+            .floor() as usize;
+        if let Some(scrollback) = session.visible_scrollback(self.last_size.get().rows as usize) {
+            let row = (row_units + scrollback.fractional_row).max(0.0).floor() as usize;
+            return url_from_lines(&scrollback.window.lines[scrollback.range.clone()], row, col);
+        }
+        url_from_lines(
+            &session.frame.as_ref()?.lines,
+            row_units.max(0.0).floor() as usize,
+            col,
+        )
+    }
+
     fn handle_mouse_down(&mut self, event: &MouseDownEvent, cx: &mut Context<Self>) {
         let Some(point) = self.cell_at(event.position) else {
             return;
         };
+        // Cmd+click on a hyperlink opens it with the OS before mouse
+        // reporting or selection can claim the click: a link activation must
+        // never reach the attached application (where Cmd is not even
+        // representable — `terminal_mouse_modifiers` drops it), while every
+        // other click keeps its existing behavior. The scheme allow-list is
+        // enforced here, at the open boundary.
+        if event.button == MouseButton::Left && event.modifiers.platform {
+            if let Some(url) = self.hyperlink_at(event.position, cx) {
+                if is_openable_url(&url) {
+                    cx.open_url(&url);
+                    return;
+                }
+            }
+        }
         if self.mouse_reporting(cx) {
             let Some(button) = terminal_mouse_button(event.button) else {
                 return;
@@ -1343,6 +1380,16 @@ fn shape_row_items(
                     })
                 }
             };
+            // An OSC 8 hyperlink renders underlined even on unstyled text so
+            // links are discoverable without hover state; an explicit SGR 4
+            // style wins (its color and wavy shape are preserved).
+            let underline = underline.or_else(|| {
+                span.url.as_ref().map(|_| UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(fg),
+                    wavy: false,
+                })
+            });
             let strikethrough = span.strikethrough.then(|| StrikethroughStyle {
                 thickness: px(1.0),
                 color: Some(fg),
@@ -1462,6 +1509,9 @@ fn dump_frame(frame: &TerminalFrame) -> String {
                 if let Some(color) = span.underline_color {
                     let _ = write!(out, " underline_color={color:?}");
                 }
+            }
+            if let Some(url) = &span.url {
+                let _ = write!(out, " url={url}");
             }
             let _ = writeln!(out);
         }

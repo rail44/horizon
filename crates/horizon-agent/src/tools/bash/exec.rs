@@ -590,7 +590,7 @@ pub(super) fn run_sandboxed(
         network: network_policy,
     };
 
-    let mut sandboxed = match horizon_sandbox::spawn_with_filesystem_grants(
+    let sandboxed = match horizon_sandbox::spawn_with_filesystem_grants(
         cmd,
         &policy,
         filesystem_grants,
@@ -608,6 +608,11 @@ pub(super) fn run_sandboxed(
             );
         }
     };
+    // The binding is only mutated on Linux (`supervisor_report.take()`
+    // below), so the `mut` lives on a cfg'd re-bind and macOS stays
+    // warning-free under `-D warnings`.
+    #[cfg(target_os = "linux")]
+    let mut sandboxed = sandboxed;
     #[cfg(target_os = "linux")]
     let supervisor_report = sandboxed
         .supervisor_report

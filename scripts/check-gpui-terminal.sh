@@ -100,13 +100,16 @@ terminald_socket="$out/terminald.sock"
 terminald_binary="$(dirname "$binary")/horizon-terminald"
 
 marker="HORIZON_GPUI_CHECK_MARKER"
+# An OSC 8 hyperlink URI the driven printf emits; the dump's span table
+# records it as `url=<uri>` (see `dump_frame` in src/terminal/mod.rs).
+hyperlink_url="url=https://example.com/horizon-check"
 # A single line, typed verbatim as PTY input (this script never
 # shell-escapes it further -- it becomes literal keystrokes at the pty's
-# own shell prompt): prints the marker, then a 256-color (indexed) span
-# and a truecolor span. printf's format string interprets \033 as the
-# actual ESC byte, matching the escape-sequence style used elsewhere in
-# this project's manual verification.
-drive_cmd="printf '${marker}\\n\\033[38;5;208mINDEXED208\\033[0m\\n\\033[38;2;10;20;30mTRUECOLOR\\033[0m\\n'"
+# own shell prompt): prints the marker, then a 256-color (indexed) span,
+# a truecolor span, and an OSC 8 hyperlink span. printf's format string
+# interprets \033 as the actual ESC byte, matching the escape-sequence
+# style used elsewhere in this project's manual verification.
+drive_cmd="printf '${marker}\\n\\033[38;5;208mINDEXED208\\033[0m\\n\\033[38;2;10;20;30mTRUECOLOR\\033[0m\\n\\033]8;;https://example.com/horizon-check\\033\\\\LINK\\033]8;;\\033\\\\\\n'"
 
 app_pid=""
 cleanup() {
@@ -139,6 +142,7 @@ deadline=$((SECONDS + wait_secs))
 marker_ok=0
 indexed_ok=0
 truecolor_ok=0
+hyperlink_ok=0
 while ((SECONDS < deadline)); do
   if ! kill -0 "$app_pid" 2>/dev/null; then
     echo "app exited before the drive script produced output; see $app_log" >&2
@@ -148,7 +152,8 @@ while ((SECONDS < deadline)); do
     grep -qF -- "$marker" "$dump" && marker_ok=1 || marker_ok=0
     grep -qF -- "Indexed(208)" "$dump" && indexed_ok=1 || indexed_ok=0
     grep -qF -- "Rgb([" "$dump" && truecolor_ok=1 || truecolor_ok=0
-    if [[ "$marker_ok" == "1" && "$indexed_ok" == "1" && "$truecolor_ok" == "1" ]]; then
+    grep -qF -- "$hyperlink_url" "$dump" && hyperlink_ok=1 || hyperlink_ok=0
+    if [[ "$marker_ok" == "1" && "$indexed_ok" == "1" && "$truecolor_ok" == "1" && "$hyperlink_ok" == "1" ]]; then
       break
     fi
   fi
@@ -172,6 +177,12 @@ if [[ "$truecolor_ok" == "1" ]]; then
   echo "OK: truecolor span present (Rgb([...]))"
 else
   echo "FAIL: truecolor span (Rgb([) not found in dump: $dump" >&2
+  fail=1
+fi
+if [[ "$hyperlink_ok" == "1" ]]; then
+  echo "OK: OSC 8 hyperlink span present ($hyperlink_url)"
+else
+  echo "FAIL: OSC 8 hyperlink span ($hyperlink_url) not found in dump: $dump" >&2
   fail=1
 fi
 
