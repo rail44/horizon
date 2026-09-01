@@ -244,6 +244,7 @@ fn a_worst_case_scroll_window_stays_under_the_events_cap() {
         strikethrough: true,
         underline: TerminalUnderline::Curl,
         underline_color: Some(TerminalColor::Rgb([7, 8, 9])),
+        url: None,
     };
 
     for columns in [80usize, 200, 500, 1000] {

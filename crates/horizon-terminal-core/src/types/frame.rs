@@ -114,6 +114,14 @@ pub struct TerminalSpan {
     /// underlined is presentation-dead and normalized away at frame build.
     #[serde(default)]
     pub underline_color: Option<TerminalColor>,
+    /// OSC 8 hyperlink URI covering this span's cells, carried verbatim
+    /// from the escape sequence (`core::render` reads it off the alacritty
+    /// cell; the client decides whether the scheme is openable). Part of
+    /// the span-merge key (`core::render::SpanStyle`), so a span never
+    /// mixes two URIs. `#[serde(default)]`: a peer predating the field
+    /// decodes it as `None`, the plain-text default.
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 /// The underline styles of SGR 4's colon sub-parameters (`4:0`..`4:5`),
@@ -223,6 +231,7 @@ impl TerminalFrame {
                     strikethrough: false,
                     underline: TerminalUnderline::None,
                     underline_color: None,
+                    url: None,
                 }],
             })
             .collect();

@@ -252,7 +252,17 @@ fn styled_rows<'a>(
         // frame as semantic metadata (`TerminalFrame::selection`), so spans
         // stay pure content and dragging a selection changes no rows -- goal
         // 2 of `docs/terminal-protocol-goals.md`.
-        let style = SpanStyle::from_cell(cell.fg, cell.bg, cell.flags, cell.underline_color());
+        // The OSC 8 URI alacritty already parsed onto the cell rides the
+        // style as part of the span-merge key, so linked and unlinked text
+        // never share a span (and two different URIs never merge either).
+        let hyperlink = cell.hyperlink();
+        let style = SpanStyle::from_cell(
+            cell.fg,
+            cell.bg,
+            cell.flags,
+            cell.underline_color(),
+            hyperlink.as_ref().map(|link| link.uri()),
+        );
         let columns = cell_width(cell.c, cell.flags);
         if cell.flags.contains(Flags::HIDDEN) {
             // SGR 8 (conceal) hides the glyph but the cell still occupies its
@@ -308,21 +318,26 @@ fn palette_overrides(term: &Term<EventSink>) -> Vec<(u16, [u8; 3])> {
 /// documented there applies on top) and the source of every style field on
 /// the produced [`TerminalSpan`].
 #[derive(Clone, Copy, Eq, PartialEq)]
-struct SpanStyle {
+struct SpanStyle<'a> {
     fg: TerminalColor,
     bg: TerminalColor,
     italic: bool,
     strikethrough: bool,
     underline: TerminalUnderline,
     underline_color: Option<TerminalColor>,
+    /// The cell's OSC 8 URI, borrowed from the grid (see `styled_rows`'s
+    /// read). Part of the merge key: a span carries at most one URI, so
+    /// linked text is never fused with plain or different-linked neighbors.
+    url: Option<&'a str>,
 }
 
-impl SpanStyle {
+impl<'a> SpanStyle<'a> {
     fn from_cell(
         fg: AnsiColor,
         bg: AnsiColor,
         flags: Flags,
         underline_color: Option<AnsiColor>,
+        url: Option<&'a str>,
     ) -> Self {
         let underline = underline_kind(flags);
         Self {
@@ -338,6 +353,7 @@ impl SpanStyle {
             underline_color: (underline != TerminalUnderline::None)
                 .then(|| underline_color.map(convert_color))
                 .flatten(),
+            url,
         }
     }
 
@@ -348,6 +364,7 @@ impl SpanStyle {
             && span.strikethrough == self.strikethrough
             && span.underline == self.underline
             && span.underline_color == self.underline_color
+            && span.url.as_deref() == self.url
     }
 
     fn span(&self, text: String, columns: usize) -> TerminalSpan {
@@ -360,6 +377,7 @@ impl SpanStyle {
             strikethrough: self.strikethrough,
             underline: self.underline,
             underline_color: self.underline_color,
+            url: self.url.map(str::to_string),
         }
     }
 }
@@ -402,7 +420,7 @@ fn underline_kind(flags: Flags) -> TerminalUnderline {
 /// combining-char cells, and a run that ends in a zero-width char never
 /// accepts printables), so `last.columns == chars * columns` below says
 /// exactly "the run's width class equals this cell's width".
-fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: SpanStyle) {
+fn push_styled_cell(line: &mut TerminalLine, ch: char, columns: usize, style: SpanStyle<'_>) {
     if let Some(last) = line.spans.last_mut() {
         if columns == 0 && style.matches(last) {
             last.text.push(ch);

@@ -2539,6 +2539,7 @@ fn plain_span(text: String, columns: usize) -> TerminalSpan {
         strikethrough: false,
         underline: TerminalUnderline::None,
         underline_color: None,
+        url: None,
     }
 }
 
@@ -2835,4 +2836,82 @@ fn text_input_encodes_as_keyless_csi_u() {
 fn text_input_falls_back_to_raw_utf8_without_flags() {
     let core = TerminalCore::new(TerminalSize::new(20, 4));
     assert_eq!(core.text_input("日"), "日".as_bytes().to_vec());
+}
+
+/// OSC 8 hyperlinks ride the frame: the URI alacritty parses onto each
+/// cell surfaces on the span covering those cells, and disappears once
+/// the link is closed (`OSC 8 ; ; ST`).
+#[test]
+fn osc8_hyperlink_carries_its_uri_on_the_span() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    core.write_vt(b"\x1b]8;;https://example.com/a\x1b\\link\x1b]8;;\x1b\\ plain");
+
+    let frame = core.snapshot_frame();
+    let row = &frame.lines[0];
+    let linked = row
+        .spans
+        .iter()
+        .find(|span| span.text.contains("link"))
+        .expect("linked text spans the row");
+    assert_eq!(linked.url.as_deref(), Some("https://example.com/a"));
+    let plain = row
+        .spans
+        .iter()
+        .find(|span| span.text.contains("plain"))
+        .expect("plain text spans the row");
+    assert_eq!(plain.url, None);
+
+    // The URI survives the wire unchanged (serde round trip).
+    assert_serde_round_trip(linked.clone());
+}
+
+/// The URI is part of the span-merge key: adjacent cells sharing one URI
+/// fuse into a single span, but two different URIs with otherwise
+/// identical styling must never merge — a span carrying two URIs would
+/// make the click target ambiguous.
+#[test]
+fn url_is_part_of_the_span_merge_key() {
+    let mut core = TerminalCore::new(TerminalSize::new(40, 4));
+    core.write_vt(
+        b"\x1b]8;;https://a\x1b\\AB\x1b]8;;https://b\x1b\\CD\x1b]8;;https://a\x1b\\EF\x1b]8;;\x1b\\",
+    );
+
+    let spans = &core.snapshot_frame().lines[0].spans;
+    let texts: Vec<(&str, Option<&str>)> = spans
+        .iter()
+        .filter(|span| !span.text.is_empty())
+        .map(|span| (span.text.as_str(), span.url.as_deref()))
+        .collect();
+    assert_eq!(
+        texts,
+        vec![
+            ("AB", Some("https://a")),
+            ("CD", Some("https://b")),
+            ("EF", Some("https://a")),
+        ]
+    );
+}
+
+/// The scrollback window path shares `styled_rows`, so history rows carry
+/// their URIs too — links stay openable in scrolled-back output.
+#[test]
+fn scrollback_window_spans_carry_osc8_uris() {
+    let mut core = TerminalCore::with_scrollback(TerminalSize::new(40, 2), 10);
+    core.write_vt(b"top\r\n");
+    core.write_vt(b"\x1b]8;;https://example.com/h\x1b\\history\x1b]8;;\x1b\\\r\n");
+    core.write_vt(b"tail");
+
+    // `history` scrolled off the 2-row screen; anchor 1 looks back one line.
+    let window = core.snapshot_window(1, 2);
+    let line = window
+        .lines
+        .iter()
+        .find(|line| line.spans.iter().any(|span| span.text.contains("history")))
+        .expect("the linked history row is inside the served window");
+    let span = line
+        .spans
+        .iter()
+        .find(|span| span.text.contains("history"))
+        .unwrap();
+    assert_eq!(span.url.as_deref(), Some("https://example.com/h"));
 }
