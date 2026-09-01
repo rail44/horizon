@@ -142,6 +142,37 @@ pub(crate) fn terminal_mouse_modifiers(modifiers: &Modifiers) -> TerminalMouseMo
     }
 }
 
+/// The OSC 8 URI of the span covering `col` on `row`, if any — the
+/// click-target lookup behind Cmd+click (`TerminalView::handle_mouse_down`).
+/// `row` indexes the *painted* line list (live frame rows, or a held
+/// scrollback window's served slice); `col` is a 0-based cell column.
+/// Spans tile the row by `columns`, so a single column walk answers.
+pub(crate) fn url_from_lines(
+    lines: &[horizon_terminal_core::TerminalLine],
+    row: usize,
+    col: usize,
+) -> Option<String> {
+    let line = lines.get(row)?;
+    let mut start = 0usize;
+    for span in &line.spans {
+        let end = start.saturating_add(span.columns);
+        if (start..end).contains(&col) {
+            return span.url.clone();
+        }
+        start = end;
+    }
+    None
+}
+
+/// The open-with-the-OS allow-list for terminal hyperlinks. Only http(s):
+/// is opened: OSC 8 lets the *remote* side name arbitrary URIs
+/// (`file://`, custom app schemes), and the terminal must not become a
+/// remote code-execution primitive by proxy.
+pub(crate) fn is_openable_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://")
+}
+
 /// Named/function keys always map; character keys map when Ctrl is held
 /// (never text) or when the session negotiated kitty's "report all keys
 /// as escape codes" (`keys_as_escape_codes`, mirrored on the frame) —
@@ -452,5 +483,64 @@ mod tests {
             term_key_code(&keystroke("a"), true),
             Some(KeyCode::Char('a'))
         );
+    }
+
+    // `url_from_lines` is the Cmd+click target lookup: the painted line
+    // list is walked by column, and only the covering span's URI answers.
+
+    use horizon_terminal_core::{NamedColor, TerminalColor, TerminalUnderline};
+
+    fn line(
+        spans: Vec<horizon_terminal_core::TerminalSpan>,
+    ) -> horizon_terminal_core::TerminalLine {
+        horizon_terminal_core::TerminalLine { spans }
+    }
+
+    fn span(text: &str, columns: usize, url: Option<&str>) -> horizon_terminal_core::TerminalSpan {
+        horizon_terminal_core::TerminalSpan {
+            text: text.to_string(),
+            columns,
+            fg: TerminalColor::Named(NamedColor::Foreground),
+            bg: TerminalColor::Named(NamedColor::Background),
+            italic: false,
+            strikethrough: false,
+            underline: TerminalUnderline::None,
+            underline_color: None,
+            url: url.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn url_lookup_finds_the_span_covering_the_cell() {
+        let lines = vec![line(vec![
+            span("pre ", 4, None),
+            span("link", 4, Some("https://example.com/a")),
+            span(" post", 5, None),
+        ])];
+        assert_eq!(
+            url_from_lines(&lines, 0, 4),
+            Some("https://example.com/a".to_string())
+        );
+        assert_eq!(
+            url_from_lines(&lines, 0, 7),
+            Some("https://example.com/a".to_string())
+        );
+        assert_eq!(url_from_lines(&lines, 0, 0), None);
+        assert_eq!(url_from_lines(&lines, 0, 8), None);
+        // Off-grid rows and columns answer nothing.
+        assert_eq!(url_from_lines(&lines, 1, 0), None);
+        assert_eq!(url_from_lines(&lines, 0, 99), None);
+    }
+
+    #[test]
+    fn only_http_schemes_are_openable() {
+        assert!(is_openable_url("https://example.com/x?y=1"));
+        assert!(is_openable_url("HTTP://EXAMPLE.COM"));
+        // The remote side names the URI — everything else stays inert.
+        assert!(!is_openable_url("file:///etc/passwd"));
+        assert!(!is_openable_url("x-man-page://ls"));
+        assert!(!is_openable_url("javascript:alert(1)"));
+        assert!(!is_openable_url("ftp://example.com"));
+        assert!(!is_openable_url("not a url"));
     }
 }
