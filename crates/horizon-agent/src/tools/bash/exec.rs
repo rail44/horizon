@@ -590,6 +590,10 @@ pub(super) fn run_sandboxed(
         network: network_policy,
     };
 
+    // `supervisor_report` -- the only thing that ever mutates this
+    // binding -- exists on Linux alone (`SandboxedChild`'s cfg'd field),
+    // so on other targets the `mut` is inert.
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
     let mut sandboxed = match horizon_sandbox::spawn_with_filesystem_grants(
         cmd,
         &policy,

@@ -339,7 +339,13 @@ pub fn horizon_events_for_provider_event(
     let mut events = vec![event.clone()];
     if let Event::ToolCallRequested(request) = event {
         match crate::tools::permission_for_tool(&request.tool_id) {
-            Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
+            // The guard lifts the boundary-crossing check out of the arm
+            // body (clippy::collapsible_match). The arm right after keeps
+            // the match exhaustive for contained reads, which stay
+            // event-free exactly as the nested `if` left them.
+            Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi)
+                if call_escapes_root(tool_state, &request.tool_id, &request.input) =>
+            {
                 // An fs read whose path escapes the workspace root is a
                 // boundary crossing — emit an `ApprovalRequested` so the
                 // judge/human gate can decide. `tools::execution`'s
@@ -348,31 +354,30 @@ pub fn horizon_events_for_provider_event(
                 // execution path stay in sync (the same two-call-site
                 // invariant the `RequireApproval` arm below already
                 // maintains via its own `classify_call`).
-                if call_escapes_root(tool_state, &request.tool_id, &request.input) {
-                    let path = request
-                        .input
-                        .get("path")
-                        .or_else(|| request.input.get("base_path"))
-                        .and_then(Value::as_str)
-                        .expect("call_escapes_root only returns true for a valid string path");
-                    let verb = match request.tool_id.as_str() {
-                        "fs.grep" => "search",
-                        "fs.glob" => "find files in",
-                        _ => "read",
-                    };
-                    events.push(Event::ApprovalRequested(ApprovalRequest {
-                        call_id: request.call_id.clone(),
-                        occurrence_id: request.occurrence_id.clone(),
-                        reason: format!(
-                            "`{}` requested to {verb} `{path}`, which is outside the \
-                             session's workspace root. Allow this?",
-                            request.tool_id
-                        ),
-                        kind: ApprovalKind::Standard,
-                    }));
-                    events.push(Event::StateChanged(SessionState::WaitingForApproval));
-                }
+                let path = request
+                    .input
+                    .get("path")
+                    .or_else(|| request.input.get("base_path"))
+                    .and_then(Value::as_str)
+                    .expect("call_escapes_root only returns true for a valid string path");
+                let verb = match request.tool_id.as_str() {
+                    "fs.grep" => "search",
+                    "fs.glob" => "find files in",
+                    _ => "read",
+                };
+                events.push(Event::ApprovalRequested(ApprovalRequest {
+                    call_id: request.call_id.clone(),
+                    occurrence_id: request.occurrence_id.clone(),
+                    reason: format!(
+                        "`{}` requested to {verb} `{path}`, which is outside the \
+                         session's workspace root. Allow this?",
+                        request.tool_id
+                    ),
+                    kind: ApprovalKind::Standard,
+                }));
+                events.push(Event::StateChanged(SessionState::WaitingForApproval));
             }
+            Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {}
             Some(ToolPermission::RequireApproval) => {
                 let classification = classify_call(
                     &request.tool_id,
