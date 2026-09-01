@@ -282,6 +282,75 @@ fn close_visible_pane_detaches_when_another_pane_remains() {
 }
 
 #[test]
+fn close_cursor_pane_closes_the_cursor_pane_not_the_focus() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.visible_pane_id(0).expect("first pane");
+    let second = workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+    // `split_active` dives into the new pane; reset focus to the first so
+    // the cursor and focus start on different panes.
+    workspace.activate_visible_pane(0);
+    workspace.enter_workspace_mode();
+    workspace.move_cursor(Direction::Right);
+    assert_eq!(workspace.cursor_pane_id(), Some(second));
+
+    assert!(workspace.close_cursor_pane());
+
+    assert_eq!(workspace.visible_pane_ids(), vec![first]);
+    assert!(
+        workspace.is_active_pane(first),
+        "the focused pane must survive a cursor-targeted close"
+    );
+}
+
+#[test]
+fn close_cursor_pane_targets_the_focused_pane_outside_the_mode() {
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    let second = workspace.split_active(PaneKind::Terminal, Some(session_id));
+    assert!(workspace.is_active_pane(second));
+
+    assert!(workspace.close_cursor_pane());
+
+    assert_eq!(workspace.visible_panes().len(), 1);
+    assert!(!workspace.session_is_referenced(session_id));
+    assert_eq!(workspace.detached_session_count(), 1);
+}
+
+#[test]
+fn close_cursor_pane_keeps_the_last_pane_and_the_mode_untouched() {
+    let mut workspace = Workspace::mvp();
+    let only = workspace.visible_pane_id(0).expect("initial pane");
+    workspace.enter_workspace_mode();
+    workspace.move_cursor(Direction::Right);
+
+    assert!(!workspace.close_cursor_pane());
+
+    assert_eq!(workspace.visible_pane_ids(), vec![only]);
+    assert!(
+        workspace.is_workspace_mode_active(),
+        "an inert close must not cancel workspace mode"
+    );
+    assert_eq!(workspace.cursor_pane_id(), Some(only));
+}
+
+#[test]
+fn close_cursor_pane_reports_a_closed_session_less_pane() {
+    let mut workspace = Workspace::mvp();
+    let view_pane =
+        workspace.split_active_tab_with_view(ViewKind::ThemeSettings, SplitAxis::Horizontal);
+    // The split dives into the view pane, so the cursor seeds there.
+    workspace.enter_workspace_mode();
+    assert_eq!(workspace.cursor_pane_id(), Some(view_pane));
+
+    assert!(
+        workspace.close_cursor_pane(),
+        "a session-less pane still counts as closed -- the no-op signal \
+         must stay reserved for the last-pane guard"
+    );
+    assert_eq!(workspace.visible_panes().len(), 1);
+}
+
+#[test]
 fn detached_session_summaries_list_unattached_sessions() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();

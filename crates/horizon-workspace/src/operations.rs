@@ -384,10 +384,10 @@ impl Workspace {
     /// caller that already knows the exact pane rather than a visible
     /// index, per `docs/recursive-layout-design.md`'s slice 2 (the
     /// recursive renderer builds panes by `PaneId`, not visible index).
-    /// No production caller uses this path today: the GPUI shell's only
-    /// close entry point is `CommandId::CloseActivePane`, which goes
-    /// through `close_active_pane` instead. Same last-pane-in-the-tab
-    /// guard.
+    /// No production caller uses this path today: the GPUI shell's close
+    /// entry point (`CommandId::CloseActivePane`) goes through
+    /// `close_cursor_pane`, which resolves the target itself. Same
+    /// last-pane-in-the-tab guard.
     pub fn close_pane(&mut self, pane_id: PaneId) -> Option<SessionId> {
         if self.visible_pane_ids().len() <= 1 {
             return None;
@@ -398,6 +398,27 @@ impl Workspace {
 
     pub fn close_active_pane(&mut self) -> Option<SessionId> {
         self.close_visible_pane(self.active_visible_index())
+    }
+
+    /// Close the pane the workspace-mode cursor points at -- the design's
+    /// "commands act on the cursor" target (`docs/workspace-mode-design.md`),
+    /// resolved exactly like `terminate_active_session` resolves through
+    /// `cursor_session_id`: the free-floating cursor while the mode is
+    /// active, the focused pane otherwise (`cursor_pane_id`'s fallback).
+    /// Returns whether a pane was detached, so callers can tell a real
+    /// close apart from the last-pane-in-the-tab guard's no-op -- a
+    /// `SessionId`-returning close can't express that distinction, since a
+    /// successfully closed session-less pane (a view pane) also yields
+    /// `None`.
+    pub fn close_cursor_pane(&mut self) -> bool {
+        let Some(pane_id) = self.cursor_pane_id() else {
+            return false;
+        };
+        if self.visible_pane_ids().len() <= 1 {
+            return false;
+        }
+        self.detach_pane(pane_id);
+        true
     }
 
     pub fn close_active_tab(&mut self) -> Vec<SessionId> {
