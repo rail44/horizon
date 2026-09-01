@@ -409,6 +409,19 @@ impl WorkspaceShell {
         cx.notify();
     }
 
+    /// Cycles to the next tab. While workspace mode is active the shell
+    /// root keeps focus -- the mode's dispatch home. Handing focus to the
+    /// newly active pane here would put the focused node under the
+    /// `Terminal` context, whose deeper `tab` → `NoAction` binding
+    /// (`bindings::derive_bindings`, board #31) shadows `WorkspaceMode`'s
+    /// `tab` → `NextTab` at resolution, so every Tab after the first would
+    /// fall through to the pane's `on_key_down` and reach the PTY as
+    /// `0x09` instead of cycling. The dive into the pane is
+    /// `mode_commit`/`mode_cancel`'s job when the mode ends; PTY-level
+    /// focus still follows the model's (new) active pane via
+    /// `sync_terminal_focus`. The non-mode branch is defensive: `NextTab`
+    /// is only bound in [`MODE_CONTEXT`], so it can't normally fire while
+    /// the mode is off.
     fn next_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.restoring_workspace {
             return;
@@ -417,7 +430,13 @@ impl WorkspaceShell {
         if count > 1 {
             let next = (self.workspace.active_tab_index() + 1) % count;
             self.workspace.activate_tab_index(next);
-            self.focus_active(window, cx);
+            if self.workspace.is_workspace_mode_active() {
+                window.focus(&self.focus_handle, cx);
+                self.sync_terminal_focus(window, cx);
+                self.persist_workspace();
+            } else {
+                self.focus_active(window, cx);
+            }
         }
         cx.notify();
     }
