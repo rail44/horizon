@@ -35,12 +35,13 @@ scripts/check-gpui-terminal.sh [--binary <path>] [--out <dir>] [--force-kill]
 ```
 
 Builds nothing itself — build first (`cargo build --workspace`). It
-launches the binary with the taps, types a marker plus 256-color and
-truecolor samples, polls the dump up to ~10s, and asserts marker,
-`Indexed(208)`, and `Spec(Rgb` appear. It refuses to run while another
-`horizon` process exists unless `--force-kill` is passed — never force
-it when the owner may be running Horizon. Its workspace state is isolated
-under the output directory.
+launches the binary with the taps, types a marker plus 256-color,
+truecolor, and OSC 8 hyperlink samples, polls the dump up to ~10s, and
+asserts marker, `Indexed(208)`, `Rgb([`, and
+`url=https://example.com/horizon-check` appear. It refuses to run while
+another `horizon` process exists unless `--force-kill` is passed — never
+force it when the owner may be running Horizon. Its workspace state is
+isolated under the output directory.
 
 Caveats:
 - Pixel output is NOT verified — frame dumps prove the model/paint
