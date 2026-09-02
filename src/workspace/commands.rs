@@ -283,11 +283,23 @@ impl WorkspaceShell {
         if self.restoring_workspace {
             return;
         }
+        // Close before exiting workspace mode, mirroring the
+        // `TerminateActiveSession` arm: the close target is the pane the
+        // cursor sits on (`Workspace::close_cursor_pane`, resolving
+        // through `cursor_pane_id` per the design's "commands act on the
+        // cursor" rule), and `exit_workspace_mode` clears the cursor
+        // first, which would silently revert the target to whichever pane
+        // still holds keyboard focus.
+        if !self.workspace.close_cursor_pane() {
+            // Guarded no-op (a single-pane tab): leave the mode and its
+            // cursor untouched. Exiting the mode on an inert `x` read as
+            // "x did nothing AND the mode turned off".
+            return;
+        }
+        // The model detached the pane's session; `reconcile` keeps the
+        // session alive as detached and drops only the pane's view (see
+        // `session_lifecycle::reconcile`).
         self.workspace.exit_workspace_mode();
-        // The model detaches the session; in M2 the view (and its PTY)
-        // simply drops with it — close-vs-terminate parity needs the M3
-        // Registry.
-        self.workspace.close_active_pane();
         self.reconcile(window, cx);
         self.focus_active(window, cx);
     }
