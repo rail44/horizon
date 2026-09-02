@@ -42,6 +42,20 @@ pub enum CommandId {
     /// no default keybinding (see `keymap::command_for`'s
     /// `"toggle-board-expansion"` entry for an optional user binding).
     ToggleBoardExpansion,
+    /// Moves the live terminal font size up one step (the shell crate's
+    /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
+    /// and the agent transcript's base text size without a restart.
+    /// Bound by default to the macOS-standard zoom chords (see the shell
+    /// crate's `workspace::bindings`); a `[keybindings]` entry can
+    /// override via `"increase-font-size"`.
+    IncreaseFontSize,
+    /// The counterpart of [`CommandId::IncreaseFontSize`]: one step down,
+    /// clamped. Default chord / override id: `"decrease-font-size"`.
+    DecreaseFontSize,
+    /// Restores the startup-configured font size (`[terminal] font_size`
+    /// or the built-in default), ending a zoom session. Default chord /
+    /// override id: `"reset-font-size"`.
+    ResetFontSize,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -236,6 +250,27 @@ pub fn core_commands() -> Vec<CommandSpec> {
                           child view.",
             destructive: false,
         },
+        CommandSpec {
+            id: CommandId::IncreaseFontSize,
+            title: "Increase Font Size",
+            category: CommandCategory::Workspace,
+            description: "Increase the terminal and agent transcript font size.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::DecreaseFontSize,
+            title: "Decrease Font Size",
+            category: CommandCategory::Workspace,
+            description: "Decrease the terminal and agent transcript font size.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::ResetFontSize,
+            title: "Reset Font Size",
+            category: CommandCategory::Workspace,
+            description: "Restore the startup-configured default font size.",
+            destructive: false,
+        },
     ]
 }
 
@@ -255,7 +290,10 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::OpenSessionManager
         | CommandId::ReloadConfig
         | CommandId::OpenBoard
-        | CommandId::ToggleBoardExpansion => true,
+        | CommandId::ToggleBoardExpansion
+        | CommandId::IncreaseFontSize
+        | CommandId::DecreaseFontSize
+        | CommandId::ResetFontSize => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` (closing a tab's last pane must go
         // through closing the tab itself instead), closing the
@@ -311,7 +349,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 19);
+        assert_eq!(commands.len(), 22);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -338,6 +376,12 @@ mod tests {
         assert_eq!(commands[17].title, "Open Board");
         assert_eq!(commands[18].id, CommandId::ToggleBoardExpansion);
         assert_eq!(commands[18].title, "Toggle Board Expansion");
+        assert_eq!(commands[19].id, CommandId::IncreaseFontSize);
+        assert_eq!(commands[19].title, "Increase Font Size");
+        assert_eq!(commands[20].id, CommandId::DecreaseFontSize);
+        assert_eq!(commands[20].title, "Decrease Font Size");
+        assert_eq!(commands[21].id, CommandId::ResetFontSize);
+        assert_eq!(commands[21].title, "Reset Font Size");
     }
 
     #[test]

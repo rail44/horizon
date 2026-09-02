@@ -143,6 +143,9 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "manage-sessions" => Some(CommandId::OpenSessionManager),
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
+        "increase-font-size" => Some(CommandId::IncreaseFontSize),
+        "decrease-font-size" => Some(CommandId::DecreaseFontSize),
+        "reset-font-size" => Some(CommandId::ResetFontSize),
         _ => None,
     }
 }
@@ -289,6 +292,18 @@ mod tests {
         assert_eq!(
             command_for("manage-sessions"),
             Some(CommandId::OpenSessionManager)
+        );
+        assert_eq!(
+            command_for("increase-font-size"),
+            Some(CommandId::IncreaseFontSize)
+        );
+        assert_eq!(
+            command_for("decrease-font-size"),
+            Some(CommandId::DecreaseFontSize)
+        );
+        assert_eq!(
+            command_for("reset-font-size"),
+            Some(CommandId::ResetFontSize)
         );
     }
 

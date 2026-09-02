@@ -209,7 +209,12 @@ spawn-time provider for its whole lifetime. `Reload Agent Runtime` is
 now scoped to agent-code reloads (a fresh `horizon-agentd` process
 re-reads the file; no full UI restart needed) and no longer the way to
 pick up a `[provider]` edit. `[terminal]`/`[ui]` are read once at
-UI startup and need a full restart. See `config.example.toml` at the repo
+UI startup and need a full restart -- with one runtime exception: the
+`Increase/Decrease/Reset Font Size` commands (palette / `increase-font-size`
+et al. keybinding ids / built-in `cmd+=`/`cmd+-`/`cmd+0` chords) move the
+live `[terminal] font_size` state (the shell crate's `terminal::font_size_store`)
+without touching the file; `Reset Font Size` restores the startup-configured
+value. See `config.example.toml` at the repo
 root for every knob, and `crates/horizon-config` for the loader (the
 single file-schema/parse/path-resolution owner; `horizon-agentd` depends
 on it directly, and `horizon-agent` takes the resolved `[provider]` values
