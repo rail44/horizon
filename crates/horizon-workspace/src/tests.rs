@@ -351,6 +351,77 @@ fn close_cursor_pane_reports_a_closed_session_less_pane() {
 }
 
 #[test]
+fn close_cursor_pane_or_tab_closes_only_the_pane_when_others_remain() {
+    let mut workspace = Workspace::mvp();
+    let first = workspace.visible_pane_id(0).expect("first pane");
+    let second_session = SessionId::new();
+    let second = workspace.split_active(PaneKind::Terminal, Some(second_session));
+    // `split_active` dives into the new pane, so the mode's cursor seeds there.
+    workspace.enter_workspace_mode();
+    assert_eq!(workspace.cursor_pane_id(), Some(second));
+
+    assert_eq!(
+        workspace.close_cursor_pane_or_tab(),
+        CloseCursorOutcome::ClosedPane(Some(second_session))
+    );
+
+    assert_eq!(workspace.visible_pane_ids(), vec![first]);
+    assert_eq!(workspace.tab_count(), 1);
+    assert!(!workspace.session_is_referenced(second_session));
+    assert_eq!(workspace.detached_session_count(), 1);
+}
+
+#[test]
+fn close_cursor_pane_or_tab_closes_the_tab_on_its_last_pane() {
+    // The fall-through that replaced the old silent no-op: with the
+    // cursor pane the tab's last one, `x`'s operation closes the whole tab.
+    let mut workspace = Workspace::mvp();
+    let only_session = workspace.active_terminal_session_id().expect("session");
+    workspace.enter_workspace_mode();
+
+    assert_eq!(
+        workspace.close_cursor_pane_or_tab(),
+        CloseCursorOutcome::ClosedTab(vec![only_session])
+    );
+
+    assert_eq!(workspace.tab_count(), 0);
+    assert_eq!(workspace.visible_panes().len(), 0);
+    assert!(!workspace.session_is_referenced(only_session));
+    assert_eq!(workspace.detached_session_count(), 1);
+    assert!(workspace.to_persisted_json().is_ok());
+}
+
+#[test]
+fn close_cursor_pane_or_tab_on_last_pane_activates_the_neighbor_tab() {
+    let mut workspace = Workspace::mvp();
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let second_session = SessionId::new();
+    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+    workspace.enter_workspace_mode();
+
+    assert_eq!(
+        workspace.close_cursor_pane_or_tab(),
+        CloseCursorOutcome::ClosedTab(vec![second_session])
+    );
+
+    assert_eq!(workspace.tab_count(), 1);
+    assert_eq!(workspace.active_terminal_session_id(), Some(first_session));
+    assert!(workspace.session_is_referenced(first_session));
+    assert!(!workspace.session_is_referenced(second_session));
+}
+
+#[test]
+fn close_cursor_pane_or_tab_is_inert_on_a_zero_tab_workspace() {
+    let mut workspace = Workspace::mvp();
+    workspace.close_tab_index(0);
+
+    assert_eq!(
+        workspace.close_cursor_pane_or_tab(),
+        CloseCursorOutcome::Noop
+    );
+}
+
+#[test]
 fn detached_session_summaries_list_unattached_sessions() {
     let mut workspace = Workspace::mvp();
     let session_id = SessionId::new();

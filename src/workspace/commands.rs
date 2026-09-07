@@ -7,7 +7,7 @@
 use gpui::*;
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
-use horizon_workspace::{SessionId, Workspace};
+use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
 
 use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
@@ -285,20 +285,28 @@ impl WorkspaceShell {
         }
         // Close before exiting workspace mode, mirroring the
         // `TerminateActiveSession` arm: the close target is the pane the
-        // cursor sits on (`Workspace::close_cursor_pane`, resolving
+        // cursor sits on (`Workspace::close_cursor_pane_or_tab`, resolving
         // through `cursor_pane_id` per the design's "commands act on the
         // cursor" rule), and `exit_workspace_mode` clears the cursor
         // first, which would silently revert the target to whichever pane
         // still holds keyboard focus.
-        if !self.workspace.close_cursor_pane() {
-            // Guarded no-op (a single-pane tab): leave the mode and its
-            // cursor untouched. Exiting the mode on an inert `x` read as
-            // "x did nothing AND the mode turned off".
+        //
+        // A last-pane tab falls through to closing the tab itself (the
+        // model operation's job), so the only inert `x` left is a missing
+        // cursor (zero tabs) -- and that alone must leave the mode and its
+        // cursor untouched. Exiting the mode on an inert `x` read as
+        // "x did nothing AND the mode turned off".
+        if matches!(
+            self.workspace.close_cursor_pane_or_tab(),
+            CloseCursorOutcome::Noop
+        ) {
             return;
         }
-        // The model detached the pane's session; `reconcile` keeps the
-        // session alive as detached and drops only the pane's view (see
-        // `session_lifecycle::reconcile`).
+        // Either the pane's session or the closed tab's sessions were
+        // detached by the model; `reconcile` keeps detached sessions alive
+        // and drops only their pane views (see
+        // `session_lifecycle::reconcile`). Same postlude as
+        // `CommandId::CloseActiveTab`.
         self.workspace.exit_workspace_mode();
         self.reconcile(window, cx);
         self.focus_active(window, cx);

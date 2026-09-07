@@ -18,6 +18,7 @@ pub mod snapshot;
 pub mod types;
 
 pub use mode::Direction;
+pub use operations::CloseCursorOutcome;
 pub use persistence::{
     InventoryError, InventoryReconcile, SessionInventory, WorkspaceStateError,
     WORKSPACE_STATE_VERSION,
