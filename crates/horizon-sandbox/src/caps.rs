@@ -19,9 +19,12 @@
 use crate::error::SandboxError;
 use crate::policy::{
     FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope, NetworkPolicy, ReadableScope,
-    SandboxPolicy,
+    SandboxPolicy, UnixSocketConnectScope,
 };
-use nono::{AccessMode, CapabilitySet, NetworkMode, SignalMode};
+use nono::{
+    AccessMode, CapabilitySet, CapabilitySource, NetworkMode, SignalMode, SocketScope,
+    UnixSocketCapability, UnixSocketMode,
+};
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
 
@@ -136,9 +139,31 @@ pub(crate) fn build_with_grants(
         NetworkPolicy::Proxied {
             proxy_addr,
             loopback_connect,
+            unix_socket_connect,
         } => {
             for endpoint in loopback_connect {
                 validate_loopback_endpoint(*endpoint)?;
+            }
+            for grant in unix_socket_connect {
+                if !grant.path.is_absolute() {
+                    return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+                }
+                let resolved =
+                    std::fs::canonicalize(&grant.path).unwrap_or_else(|_| grant.path.clone());
+                caps.add_unix_socket(UnixSocketCapability {
+                    original: grant.path.clone(),
+                    resolved,
+                    scope: match grant.scope {
+                        UnixSocketConnectScope::File => SocketScope::File,
+                        UnixSocketConnectScope::DirChildren => SocketScope::DirChildren,
+                    },
+                    mode: if grant.allow_bind {
+                        UnixSocketMode::ConnectBind
+                    } else {
+                        UnixSocketMode::Connect
+                    },
+                    source: CapabilitySource::System,
+                });
             }
             caps.set_network_mode(NetworkMode::ProxyOnly {
                 port: validated_proxy_port(*proxy_addr)?,
@@ -256,6 +281,7 @@ fn require_exists(path: &Path) -> Result<(), SandboxError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::policy::UnixSocketConnectGrant;
 
     fn policy(writable_roots: Vec<std::path::PathBuf>, network: NetworkPolicy) -> SandboxPolicy {
         SandboxPolicy {
@@ -304,6 +330,7 @@ mod tests {
             NetworkPolicy::Proxied {
                 proxy_addr: "127.0.0.1:43123".parse().unwrap(),
                 loopback_connect: Vec::new(),
+                unix_socket_connect: Vec::new(),
             },
         ))
         .unwrap();
@@ -324,6 +351,7 @@ mod tests {
                 build(&policy(vec![], NetworkPolicy::Proxied {
                     proxy_addr: addr,
                     loopback_connect: Vec::new(),
+                    unix_socket_connect: Vec::new(),
                 })),
                 Err(SandboxError::InvalidProxyEndpoint(rejected)) if rejected == addr
             ));
@@ -338,6 +366,7 @@ mod tests {
                 build(&policy(vec![], NetworkPolicy::Proxied {
                     proxy_addr: "127.0.0.1:43123".parse().unwrap(),
                     loopback_connect: vec![addr],
+                    unix_socket_connect: Vec::new(),
                 })),
                 Err(SandboxError::InvalidLoopbackEndpoint(rejected)) if rejected == addr
             ));
@@ -351,6 +380,7 @@ mod tests {
             NetworkPolicy::Proxied {
                 proxy_addr: "127.0.0.1:43123".parse().unwrap(),
                 loopback_connect: vec!["127.0.0.1:4226".parse().unwrap()],
+                unix_socket_connect: Vec::new(),
             },
         ))
         .unwrap();
@@ -361,6 +391,68 @@ mod tests {
                 bind_ports: Vec::new(),
             }
         );
+    }
+
+    #[test]
+    fn proxied_unix_socket_grants_map_to_connect_only_capabilities() {
+        let caps = build(&policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                loopback_connect: Vec::new(),
+                unix_socket_connect: vec![UnixSocketConnectGrant {
+                    path: Path::new("/var/run/agent.sock").to_path_buf(),
+                    scope: UnixSocketConnectScope::File,
+                    allow_bind: false,
+                }],
+            },
+        ))
+        .unwrap();
+        let sockets = caps.unix_socket_capabilities();
+        assert_eq!(sockets.len(), 1);
+        assert_eq!(sockets[0].original, Path::new("/var/run/agent.sock"));
+        assert_eq!(sockets[0].mode, UnixSocketMode::Connect);
+    }
+
+    #[test]
+    fn proxied_unix_socket_grants_allow_bind_only_when_requested() {
+        let caps = build(&policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                loopback_connect: Vec::new(),
+                unix_socket_connect: vec![UnixSocketConnectGrant {
+                    path: Path::new("/Users/me/.gnupg").to_path_buf(),
+                    scope: UnixSocketConnectScope::DirChildren,
+                    allow_bind: true,
+                }],
+            },
+        ))
+        .unwrap();
+        let sockets = caps.unix_socket_capabilities();
+        assert_eq!(sockets.len(), 1);
+        assert_eq!(sockets[0].mode, UnixSocketMode::ConnectBind);
+        assert!(matches!(sockets[0].scope, SocketScope::DirChildren));
+    }
+
+    #[test]
+    fn proxied_unix_socket_grants_reject_relative_paths() {
+        assert!(matches!(
+            build(&policy(
+                vec![],
+                NetworkPolicy::Proxied {
+                    proxy_addr: "127.0.0.1:43123".parse().unwrap(),
+                    loopback_connect: Vec::new(),
+                    unix_socket_connect: vec![UnixSocketConnectGrant {
+                        path: Path::new("relative.sock").to_path_buf(),
+                        scope: UnixSocketConnectScope::File,
+                        allow_bind: false,
+                    }],
+                },
+            )),
+            Err(SandboxError::UnsupportedGrantTarget(path))
+                if path == Path::new("relative.sock")
+        ));
     }
 
     #[test]
