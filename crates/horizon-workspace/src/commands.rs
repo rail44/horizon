@@ -295,9 +295,11 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
-        // Unlike `CloseActivePane` (closing a tab's last pane must go
-        // through closing the tab itself instead), closing the
-        // workspace's last tab is allowed -- it leaves a valid, empty
+        // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
+        // closing the tab when the pane is the last one
+        // (`Workspace::close_cursor_pane_or_tab`), but a palette-invoked
+        // pane command must not implicitly close the tab -- closing the
+        // workspace's last tab is allowed: it leaves a valid, empty
         // workspace (2026-07-18 owner clarification), not something to
         // guard against.
         CommandId::CloseActiveTab => state.tab_count > 0,

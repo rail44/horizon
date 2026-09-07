@@ -191,7 +191,9 @@ duplicate binding table for the pane-independent subset (in practice
 just `:`, since `t`/`a`/`s`/`x`/`tab`/hjkl/Enter/Esc are all either
 already pane-independent through the *same* mechanism (`t`/`a` open the
 view chooser, which doesn't need an existing pane either) or naturally
-inert with zero tabs through their own existing guards (`s`/`x`/`tab`),
+inert with zero tabs through their own existing guards (`s`/`x`/`tab`;
+`x` also falls through to closing the tab when the cursor pane is the
+tab's last one since 2026-09-07, via `Workspace::close_cursor_pane_or_tab`),
 so there was nothing left for a separate context to carry that the
 existing one doesn't already cover once it's reachable.
 

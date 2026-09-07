@@ -4,6 +4,23 @@ use super::types::{
 };
 use crate::SessionId;
 
+/// What [`Workspace::close_cursor_pane_or_tab`] actually did -- the shell
+/// mirrors the pane-close vs. tab-close lifecycle off this, and the
+/// payloads let tests pin the exact detached sessions.
+#[derive(Debug, PartialEq, Eq)]
+pub enum CloseCursorOutcome {
+    /// Detached the cursor pane; its tab stays open. `Some` only when the
+    /// pane carried a session -- a session-less view pane yields `None`,
+    /// the same distinction `close_cursor_pane`'s bool draws.
+    ClosedPane(Option<SessionId>),
+    /// The cursor pane was its tab's last pane, so the whole tab closed
+    /// instead; carries the tab's now-detached sessions.
+    ClosedTab(Vec<SessionId>),
+    /// Nothing to act on: no cursor to resolve (zero tabs). The only
+    /// inert signal left -- callers must leave the mode untouched on it.
+    Noop,
+}
+
 impl Workspace {
     pub fn mvp() -> Self {
         let session_id = SessionId::new();
@@ -419,6 +436,25 @@ impl Workspace {
         }
         self.detach_pane(pane_id);
         true
+    }
+
+    /// `x`'s model operation (`docs/workspace-mode-design.md`'s
+    /// "commands act on the cursor"): close the pane the cursor points
+    /// at, falling through to closing the whole tab when that pane is the
+    /// tab's last one -- `command_enabled`'s `CloseActivePane` note
+    /// ("closing a tab's last pane must go through closing the tab
+    /// itself") applied to the mode's close key, so `x` never dead-ends
+    /// on a single-pane tab the way `close_cursor_pane`'s guard did.
+    /// Only a missing cursor (zero tabs) stays inert; see
+    /// [`CloseCursorOutcome`] for what each variant asks of the caller.
+    pub fn close_cursor_pane_or_tab(&mut self) -> CloseCursorOutcome {
+        let Some(pane_id) = self.cursor_pane_id() else {
+            return CloseCursorOutcome::Noop;
+        };
+        if self.visible_pane_ids().len() > 1 {
+            return CloseCursorOutcome::ClosedPane(self.detach_pane(pane_id));
+        }
+        CloseCursorOutcome::ClosedTab(self.close_tab_index(self.active_tab_index()))
     }
 
     pub fn close_active_tab(&mut self) -> Vec<SessionId> {
