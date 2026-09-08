@@ -413,6 +413,7 @@ fn one_report_contains_filesystem_and_network_denials() {
         network: horizon_sandbox::NetworkPolicy::Proxied {
             proxy_addr,
             loopback_connect: Vec::new(),
+            unix_socket_connect: Vec::new(),
         },
     };
     let mut command = Command::new("/bin/sh");
@@ -477,6 +478,7 @@ fn run_network_probe_with_loopback(
         network: horizon_sandbox::NetworkPolicy::Proxied {
             proxy_addr,
             loopback_connect: loopback_connect.to_vec(),
+            unix_socket_connect: Vec::new(),
         },
     };
     let mut command = Command::new(NETWORK_PROBE);

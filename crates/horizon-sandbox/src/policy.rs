@@ -38,6 +38,14 @@ pub enum ReadableScope {
 /// by full `SocketAddr` equality -- never by a looser `is_loopback && port`
 /// rule -- so a same-port decoy on another loopback address stays denied
 /// (see the enforcement layer's module doc for the rationale).
+///
+/// `Proxied` also carries [`UnixSocketConnectGrant`]s: agent-facing IPC
+/// the sandboxed command needs to do its job (ssh-agent for SSH remotes,
+/// gpg-agent's on-demand sockets for signed commits) that plain filesystem
+/// grants do not imply -- a unix-socket `connect(2)` is a network
+/// operation in both enforcement layers, not a file read. Empty by
+/// default; the bash tool populates it (see
+/// `horizon-agent/src/tools/bash/exec.rs`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NetworkPolicy {
     Disabled,
@@ -45,7 +53,37 @@ pub enum NetworkPolicy {
         proxy_addr: SocketAddr,
         #[serde(default)]
         loopback_connect: Vec<SocketAddr>,
+        #[serde(default)]
+        unix_socket_connect: Vec<UnixSocketConnectGrant>,
     },
+}
+
+/// One unix-socket `connect(2)` allowance riding on a `Proxied` network
+/// policy. Mapped to nono's `UnixSocketCapability` (connect-mode) by
+/// `caps::build_with_grants` on both OS backends.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnixSocketConnectGrant {
+    pub path: PathBuf,
+    pub scope: UnixSocketConnectScope,
+    /// Also allow `bind(2)` on the granted path -- needed when the
+    /// sandboxed command itself spawns the socket's server (gpg-agent
+    /// binds `~/.gnupg/S.gpg-agent` on demand). Pure clients (ssh-agent)
+    /// use `false`, which deliberately leaves `bind(2)` denied.
+    pub allow_bind: bool,
+}
+
+/// Match scope for [`UnixSocketConnectGrant`]. Mirrors nono's
+/// `SocketScope`, kept as our own type so the policy surface does not
+/// expose the third-party enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnixSocketConnectScope {
+    /// Exactly `path` (the socket file itself, e.g. ssh-agent's launchd
+    /// socket).
+    File,
+    /// Any direct child of `path` -- gpg-agent creates its sockets
+    /// (`S.gpg-agent`, `S.keyboxd`) on demand under the GPG home, so the
+    /// children must be granted without granting the tree as sockets.
+    DirChildren,
 }
 
 /// A command's sandbox policy: writable roots, readable scope, network

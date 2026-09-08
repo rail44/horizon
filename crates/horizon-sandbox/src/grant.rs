@@ -544,8 +544,15 @@ mod tests {
         use std::os::unix::fs::symlink;
 
         let root = test_dir("protected-symlink");
-        let attempted = root.join("proc-link");
-        symlink("/proc", &attempted).expect("create symlink");
+        let attempted = root.join("dev-link");
+        // `/dev`, not `/proc`: the target must EXIST for `resolve_denial`'s
+        // canonicalization to resolve the symlink onto the protected prefix
+        // at all -- `/proc` exists only on Linux, so a dangling `/proc`
+        // symlink fails `canonicalize` on macOS and the assertion sees the
+        // wrong error kind (`InvalidRoot`). `/dev` is protected on both
+        // platforms and exists on both, so the invariant under test -- a
+        // symlink onto a protected target is refused -- holds everywhere.
+        symlink("/dev", &attempted).expect("create symlink");
 
         assert!(matches!(
             resolve_denial(attempted.clone(), FilesystemGrantAccess::Read),

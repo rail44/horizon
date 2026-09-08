@@ -116,6 +116,15 @@ max-threads = 1
 # denying non-granted ports and all binds. Under containment the sandbox
 # cannot nest another sandbox (EBUSY) and the loopback binds are refused --
 # the integrator's full gate runs them outside containment.
+#
+# macOS setuid-exec denial --
+# `test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)`.
+# Reads the child's nice value back via `/bin/ps`, which is setuid on macOS
+# (`-rwsr-xr-x`), and the Seatbelt profile denies exec'ing setuid binaries:
+# the child dies with `bash: /bin/ps: Operation not permitted` (exit 126)
+# before the assertion even runs. Reproduced with the workspace's changes
+# stashed (2026-09-07), so it is the containment boundary, not a regression.
+# The nice-value behavior itself is covered by the integrator's full gate.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -143,5 +152,6 @@ default-filter = '''
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
         + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
+        + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)
     )
 '''
