@@ -96,45 +96,47 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
             super::TerminateSessionSubtree,
             Some(SESSION_MANAGER_CONTEXT),
         ),
-        // Built-in default font-size chords (the macOS-standard zoom set):
+        // Built-in default font-size chords, bound through gpui's
+        // `secondary` modifier (cmd on macOS, ctrl on Linux/Windows) so
+        // this one fixed set is the platform-native zoom set everywhere:
         // dispatched through `RunCommand` rather than a per-command action
         // type, so a `[keybindings]` entry can still rebind them -- the
         // config layer below is pushed later, and later bindings win
         // precedence at the same (global) context depth. All three are
         // fixed otherwise (not part of `dynamic_keystrokes`): like the
         // mode-navigation chords above, they survive a `Reload Config`.
-        // `cmd-+`/`cmd-shift-=` are the physically-distinct chords users
-        // reach for zoom-in alongside `cmd-=` (the shifted `=` key).
+        // `secondary-+`/`secondary-shift-=` are the physically-distinct
+        // chords users reach for zoom-in alongside the bare `=` key.
         KeyBinding::new(
-            "cmd-=",
+            "secondary-=",
             super::RunCommand {
                 id: CommandId::IncreaseFontSize,
             },
             None,
         ),
         KeyBinding::new(
-            "cmd-+",
+            "secondary-+",
             super::RunCommand {
                 id: CommandId::IncreaseFontSize,
             },
             None,
         ),
         KeyBinding::new(
-            "cmd-shift-=",
+            "secondary-shift-=",
             super::RunCommand {
                 id: CommandId::IncreaseFontSize,
             },
             None,
         ),
         KeyBinding::new(
-            "cmd--",
+            "secondary--",
             super::RunCommand {
                 id: CommandId::DecreaseFontSize,
             },
             None,
         ),
         KeyBinding::new(
-            "cmd-0",
+            "secondary-0",
             super::RunCommand {
                 id: CommandId::ResetFontSize,
             },

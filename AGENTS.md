@@ -211,7 +211,8 @@ re-reads the file; no full UI restart needed) and no longer the way to
 pick up a `[provider]` edit. `[terminal]`/`[ui]` are read once at
 UI startup and need a full restart -- with one runtime exception: the
 `Increase/Decrease/Reset Font Size` commands (palette / `increase-font-size`
-et al. keybinding ids / built-in `cmd+=`/`cmd+-`/`cmd+0` chords) move the
+et al. keybinding ids / built-in `secondary+=`/`secondary+-`/`secondary+0`
+chords -- cmd on macOS, ctrl on Linux/Windows) move the
 live `[terminal] font_size` state (the shell crate's `terminal::font_size_store`)
 without touching the file; `Reset Font Size` restores the startup-configured
 value. See `config.example.toml` at the repo
