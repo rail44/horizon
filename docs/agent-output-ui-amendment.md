@@ -1010,3 +1010,26 @@ deviation rather than asking for a mock update):
   message row — hiding reasoning deltas does not and cannot remove it;
   stripping it would be a display-time decision on the `Message` arm, not
   this one.
+- **Streaming-thinking loading indicator kept as a breathing-dot row
+  (2026-09-10, same-day owner feedback on the hide-in-full decision;
+  form owner-reviewed).** Hiding reasoning entirely left the pane
+  indistinguishable from an idle one during long thinking phases — the
+  exact "looks hung" problem the 2026-07-13 visibility restore had
+  solved, minus its content leak. The compromise:
+  `build_transcript_rows` re-admits a `ReasoningDelta` only while it is
+  the open turn's latest item (nothing has streamed after it and the
+  turn hasn't ended), and `render_item` renders that row in the running
+  card's own visual language — a `theme::accent()` dot breathing
+  through a 1.6s triangle-wave opacity cycle (gpui `Animation`,
+  `ease_in_out`) beside a semibold accent "thinking…" label, no delta
+  text ever displayed. Form provenance: the agent's first cut (a
+  `gpui_component::spinner::Spinner` loader icon) was reviewed and
+  passed over by the owner as too terminal-flavored for a GUI app; the
+  running-card-mirroring dot is the owner's pick from the alternatives
+  shown. The indicator is an activity marker, not content: any
+  subsequent item (assistant text, tool call) or the turn end retires
+  it, and mid-turn-replayed/historical reasoning still projects no row.
+  The hide-in-full pin above keeps passing unchanged for every non-tail
+  and ended case; the carve-out is pinned by
+  `thinking_shows_an_indicator_row_only_while_it_is_the_open_tail`
+  (`src/agent/view/transcript.rs`).
