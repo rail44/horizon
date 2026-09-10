@@ -5,8 +5,9 @@
 //! `equal_tab_width`), the pure `mode_key_context_active` (whether the
 //! root's key context should be `MODE_CONTEXT` this render -- see its own
 //! doc comment), the mode/tab/pane action handlers (`toggle_mode`,
-//! `mode_move`, `mode_commit`, `mode_cancel`, `next_tab`, `activate_tab`,
-//! `activate_pane`) that only the `Render` impl below dispatches into, and
+//! `mode_move`, `mode_commit`, `mode_cancel`, `next_tab`/`prev_tab`,
+//! `activate_tab`, `activate_pane`) that only the `Render` impl below
+//! dispatches into, and
 //! the split-handle drag pipeline (`SplitDrag`, `begin_split_drag`/
 //! `update_split_drag`/`end_split_drag`, the pure pairwise clamp
 //! `pairwise_resize_weights` and its `effective_container_px` pixel
@@ -27,8 +28,8 @@ use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis};
 
 use super::{
     ClosePane, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight, ModeMoveUp,
-    NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, RunCommand, SplitPane,
-    TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell, MODE_CONTEXT,
+    NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab, RunCommand,
+    SplitPane, TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell, MODE_CONTEXT,
     SESSION_MANAGER_CONTEXT,
 };
 use crate::theme;
@@ -349,6 +350,15 @@ fn mode_key_context_active(is_workspace_mode_active: bool, modal_open: bool) -> 
     is_workspace_mode_active && !modal_open
 }
 
+/// Index arithmetic behind `next_tab`/`prev_tab`: `delta` steps around the
+/// tab strip, wrapping at both ends (`rem_euclid` keeps negative sums in
+/// range, so Shift+Tab from the first tab lands on the last one). Callers
+/// guard the `count <= 1` no-op case; this only does the math. Pure so
+/// it's unit-testable without a window.
+fn cycle_tab_index(active: usize, count: usize, delta: isize) -> usize {
+    (active as isize + delta).rem_euclid(count as isize) as usize
+}
+
 impl WorkspaceShell {
     /// Whether any control-surface modal (palette, view chooser, session
     /// manager) currently has the shell's attention -- the same predicate
@@ -409,26 +419,27 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    /// Cycles to the next tab. While workspace mode is active the shell
-    /// root keeps focus -- the mode's dispatch home. Handing focus to the
-    /// newly active pane here would put the focused node under the
-    /// `Terminal` context, whose deeper `tab` → `NoAction` binding
-    /// (`bindings::derive_bindings`, board #31) shadows `WorkspaceMode`'s
-    /// `tab` → `NextTab` at resolution, so every Tab after the first would
-    /// fall through to the pane's `on_key_down` and reach the PTY as
-    /// `0x09` instead of cycling. The dive into the pane is
-    /// `mode_commit`/`mode_cancel`'s job when the mode ends; PTY-level
-    /// focus still follows the model's (new) active pane via
-    /// `sync_terminal_focus`. The non-mode branch is defensive: `NextTab`
-    /// is only bound in [`MODE_CONTEXT`], so it can't normally fire while
-    /// the mode is off.
-    fn next_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    /// Cycles tabs by `delta` steps: `+1` is `NextTab` (Tab), `-1` is
+    /// `PrevTab` (Shift+Tab) -- both bound only in [`MODE_CONTEXT`]. While
+    /// workspace mode is active the shell root keeps focus -- the mode's
+    /// dispatch home. Handing focus to the newly active pane here would
+    /// put the focused node under the `Terminal` context, whose deeper
+    /// `tab`/`shift-tab` → `NoAction` bindings (`bindings::derive_bindings`,
+    /// board #31) shadow `WorkspaceMode`'s at resolution, so every Tab or
+    /// Shift+Tab after the first would fall through to the pane's
+    /// `on_key_down` and reach the PTY as `0x09` instead of cycling. The
+    /// dive into the pane is `mode_commit`/`mode_cancel`'s job when the
+    /// mode ends; PTY-level focus still follows the model's (new) active
+    /// pane via `sync_terminal_focus`. The non-mode branch is defensive:
+    /// neither action is bound outside [`MODE_CONTEXT`], so neither can
+    /// normally fire while the mode is off.
+    fn cycle_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
         if self.restoring_workspace {
             return;
         }
         let count = self.workspace.tab_count();
         if count > 1 {
-            let next = (self.workspace.active_tab_index() + 1) % count;
+            let next = cycle_tab_index(self.workspace.active_tab_index(), count, delta);
             self.workspace.activate_tab_index(next);
             if self.workspace.is_workspace_mode_active() {
                 window.focus(&self.focus_handle, cx);
@@ -439,6 +450,16 @@ impl WorkspaceShell {
             }
         }
         cx.notify();
+    }
+
+    fn next_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_tab(1, window, cx);
+    }
+
+    /// Shift+Tab: cycle to the previous tab (wrapping from the first tab
+    /// to the last), the reverse direction of `next_tab`.
+    fn prev_tab(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.cycle_tab(-1, window, cx);
     }
 
     fn activate_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
@@ -1065,6 +1086,9 @@ impl Render for WorkspaceShell {
             .on_action(cx.listener(|shell, _: &NextTab, window, cx| {
                 shell.next_tab(window, cx);
             }))
+            .on_action(cx.listener(|shell, _: &PrevTab, window, cx| {
+                shell.prev_tab(window, cx);
+            }))
             .on_action(cx.listener(|shell, _: &OpenPalette, window, cx| {
                 shell.open_palette(window, cx);
             }))
@@ -1233,8 +1257,8 @@ mod tests {
     use horizon_workspace::PaneId;
 
     use super::{
-        effective_container_px, effective_scrim_pattern, equal_tab_width, mode_key_context_active,
-        pairwise_resize_weights, pane_border_role, pane_scrim_alpha,
+        cycle_tab_index, effective_container_px, effective_scrim_pattern, equal_tab_width,
+        mode_key_context_active, pairwise_resize_weights, pane_border_role, pane_scrim_alpha,
         workspace_mode_blocked_by_restore, PaneBorderRole, SCRIM_DIM_ALPHA,
     };
 
@@ -1401,5 +1425,28 @@ mod tests {
         // open regardless of whether the mode itself is active.
         assert!(!mode_key_context_active(true, true));
         assert!(!mode_key_context_active(false, true));
+    }
+
+    #[test]
+    fn cycle_tab_index_steps_forward_wrapping_at_the_end() {
+        assert_eq!(cycle_tab_index(1, 3, 1), 2);
+        assert_eq!(cycle_tab_index(2, 3, 1), 0);
+    }
+
+    #[test]
+    fn cycle_tab_index_steps_backward_wrapping_at_the_start() {
+        // Shift+Tab from the first tab lands on the last one; `rem_euclid`
+        // keeps negative sums in range (and copes with multi-step deltas).
+        assert_eq!(cycle_tab_index(1, 3, -1), 0);
+        assert_eq!(cycle_tab_index(0, 3, -1), 2);
+        assert_eq!(cycle_tab_index(0, 3, -4), 2);
+    }
+
+    #[test]
+    fn cycle_tab_index_swaps_for_a_two_tab_strip() {
+        assert_eq!(cycle_tab_index(0, 2, 1), 1);
+        assert_eq!(cycle_tab_index(0, 2, -1), 1);
+        assert_eq!(cycle_tab_index(1, 2, 1), 0);
+        assert_eq!(cycle_tab_index(1, 2, -1), 0);
     }
 }
