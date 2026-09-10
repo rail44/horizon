@@ -54,7 +54,7 @@ const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
 /// capturing stderr, mirroring `theme::warnings`' own
 /// `theme_color_warnings`/`theme_ansi_warnings` split.
 fn collect_warnings(contents: &str) -> Vec<String> {
-    let Ok(toml::Value::Table(root)) = contents.parse::<toml::Value>() else {
+    let Ok(root) = toml::from_str::<toml::Table>(contents) else {
         // Defensive only: every caller already confirmed `contents` parses
         // as `RawConfig` before reaching this function.
         return Vec::new();

@@ -33,7 +33,7 @@ libc = "0.2"
 # backends) inside a tiny exec helper, since nono's macOS `apply_auto`
 # restricts the *whole calling process* rather than a single thread (see
 # `macos/mod.rs`'s module doc).
-nono = "0.68"
+nono = "0.76"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 horizon-sandbox-runtime = { path = "../horizon-sandbox-runtime" }

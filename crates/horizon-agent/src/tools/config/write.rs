@@ -24,7 +24,7 @@ pub(super) fn execute(
         return error_output("config.write requires a `content` string argument");
     };
 
-    if let Err(error) = toml::from_str::<toml::Value>(content) {
+    if let Err(error) = toml::from_str::<toml::Table>(content) {
         return error_output(format!("`content` is not valid TOML: {error}"));
     }
 

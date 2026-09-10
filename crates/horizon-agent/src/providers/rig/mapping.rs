@@ -1,16 +1,14 @@
-use std::collections::HashSet;
-
-use rig_core::completion::{
-    message::{ToolCall, ToolFunction, UserContent},
-    AssistantContent, Message,
-};
-use rig_core::OneOrMany;
+use std::collections::{HashMap, HashSet};
 
 use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
     ProviderSide, ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use crate::tools::cancelled_tool_call_result;
+use rig_core::completion::{
+    message::{ToolCall, ToolFunction, UserContent},
+    AssistantContent, Message,
+};
 
 #[cfg(test)]
 use rig_core::completion::ToolDefinition;
@@ -105,6 +103,18 @@ pub(super) fn horizon_tool_definition_from_rig(
 }
 
 pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
+    // rig 0.42 requires the *executed* tool name on every tool result
+    // (`Message::tool_result`'s `name` argument), so index each result's
+    // call id to the `tool_id` its `ToolCallRequested` announced.
+    let tool_names: HashMap<String, String> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCallRequested(request) => {
+                Some((request.call_id.0.clone(), request.tool_id.clone()))
+            }
+            _ => None,
+        })
+        .collect();
     let messages = events
         .iter()
         .filter_map(|event| match event {
@@ -115,7 +125,13 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             Event::ToolCallRequested(request) => {
                 Some(Message::from(rig_tool_call_from_request(request)))
             }
-            Event::ToolCallFinished(result) => Some(rig_tool_result_message(result)),
+            Event::ToolCallFinished(result) => Some(rig_tool_result_message(
+                result,
+                tool_names
+                    .get(result.call_id.0.as_str())
+                    .map(String::as_str)
+                    .unwrap_or(""),
+            )),
             Event::Error(error) => Some(Message::assistant(format!("error: {}", error.message))),
             Event::StateChanged(_)
             | Event::ReasoningDelta(_)
@@ -215,6 +231,28 @@ pub(super) fn repair_replayed_message_pairing(messages: Vec<Message>) -> Vec<Mes
         }
     }
 
+    // rig 0.42 requires the executed tool name on every tool result; pair
+    // each announced call id with the tool name that announced it so
+    // synthesized cancelled results can carry it too.
+    let tool_call_names: HashMap<String, String> = messages
+        .iter()
+        .filter_map(|message| match message {
+            Message::Assistant { content, .. } => Some(
+                content
+                    .iter()
+                    .filter_map(|item| match item {
+                        AssistantContent::ToolCall(call) => {
+                            Some((call.id.as_str().to_string(), call.function.name.clone()))
+                        }
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>(),
+            ),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+
     let mut announced: HashSet<String> = HashSet::new();
     let mut unanswered: Vec<String> = Vec::new();
     let mut dropped: Vec<String> = Vec::new();
@@ -251,7 +289,12 @@ pub(super) fn repair_replayed_message_pairing(messages: Vec<Message>) -> Vec<Mes
                     }
                 }
                 if let Some((id, content)) = pending {
-                    close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+                    close_unanswered_calls(
+                        &mut repaired,
+                        &mut unanswered,
+                        &mut synthesized,
+                        &tool_call_names,
+                    );
                     repaired.push(Message::Assistant { id, content });
                 }
                 for call_id in call_ids {
@@ -262,12 +305,22 @@ pub(super) fn repair_replayed_message_pairing(messages: Vec<Message>) -> Vec<Mes
                 }
             }
             other => {
-                close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+                close_unanswered_calls(
+                    &mut repaired,
+                    &mut unanswered,
+                    &mut synthesized,
+                    &tool_call_names,
+                );
                 repaired.push(other);
             }
         }
     }
-    close_unanswered_calls(&mut repaired, &mut unanswered, &mut synthesized);
+    close_unanswered_calls(
+        &mut repaired,
+        &mut unanswered,
+        &mut synthesized,
+        &tool_call_names,
+    );
 
     // Diagnosable on agentd's stderr, the channel `horizon-agentd`'s own
     // resume fixups already report through: a repair that fired silently
@@ -298,11 +351,16 @@ fn close_unanswered_calls(
     repaired: &mut Vec<Message>,
     unanswered: &mut Vec<String>,
     synthesized: &mut Vec<String>,
+    tool_call_names: &HashMap<String, String>,
 ) {
     for call_id in unanswered.drain(..) {
-        repaired.push(rig_tool_result_message(&cancelled_tool_call_result(
-            ToolCallId(call_id.clone()),
-        )));
+        repaired.push(rig_tool_result_message(
+            &cancelled_tool_call_result(ToolCallId(call_id.clone())),
+            tool_call_names
+                .get(&call_id)
+                .map(String::as_str)
+                .unwrap_or(""),
+        ));
         synthesized.push(call_id);
     }
 }
@@ -316,11 +374,11 @@ fn announced_tool_call_ids(message: &Message) -> Vec<String> {
     }
 }
 
-fn announced_tool_call_ids_in(content: &OneOrMany<AssistantContent>) -> Vec<String> {
+fn announced_tool_call_ids_in(content: &[AssistantContent]) -> Vec<String> {
     content
         .iter()
         .filter_map(|item| match item {
-            AssistantContent::ToolCall(call) => Some(call.id.clone()),
+            AssistantContent::ToolCall(call) => Some(call.id.as_str().to_string()),
             _ => None,
         })
         .collect()
@@ -340,15 +398,23 @@ fn answered_tool_call_id(message: &Message) -> Option<&str> {
     {
         return None;
     }
-    match content.first_ref() {
-        UserContent::ToolResult(result) => Some(result.id.as_str()),
+    match content.first() {
+        Some(UserContent::ToolResult(result)) => Some(result.call.as_str()),
         _ => None,
     }
 }
 
 pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
     ToolCallRequest {
-        call_id: ToolCallId(call.call_id.unwrap_or(call.id)),
+        // The old `call_id.unwrap_or(id)` resolution, on rig 0.42's shapes:
+        // the provider-issued id when the call carries one, rig's
+        // correlation handle otherwise.
+        call_id: ToolCallId(
+            call.provider
+                .as_ref()
+                .map(|p| p.call_id.clone())
+                .unwrap_or_else(|| call.id.as_str().to_string()),
+        ),
         tool_id: call.function.name,
         input: call.function.arguments.into(),
         // Mint a fresh `OccurrenceId` here -- the upstream provider only
@@ -369,8 +435,8 @@ pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Val
         "version": RIG_PROVIDER_PAYLOAD_VERSION,
         "rig": {
             "tool_call": {
-                "id": call.id.clone(),
-                "call_id": call.call_id.clone(),
+                "id": call.id.as_str(),
+                "call_id": call.provider.as_ref().map(|p| p.call_id.clone()),
                 "signature": call.signature.clone(),
                 "additional_params": call.additional_params.clone(),
                 "function": {
@@ -392,18 +458,23 @@ fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
     let mut arguments = request.input.0.clone();
     super::completion::replay_safe_tool_arguments(&mut arguments);
     ToolCall::new(
-        request.call_id.0.clone(),
+        rig_core::message::ToolCallId::new_or_mint(request.call_id.0.clone()),
         ToolFunction::new(request.tool_id.clone(), arguments),
     )
 }
 
-pub(super) fn rig_tool_result_message(result: &ToolCallResult) -> Message {
-    Message::tool_result(result.call_id.0.clone(), result.output.to_string())
+/// `tool_id` is the executed tool's id -- rig 0.42 requires it on every
+/// tool result (`Message::tool_result`'s `name`; several wires key the
+/// replay on it). Callers source it from the `ToolCallRequested` that
+/// announced the call: the `tool_names` index, the pending-tool-call
+/// descriptors, or the result-producing context.
+pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) -> Message {
+    Message::tool_result(result.call_id.0.clone(), tool_id, result.output.to_string())
 }
 
 pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     ToolCall::new(
-        "rig-workspace-snapshot-1".to_string(),
+        rig_core::message::ToolCallId::new_or_mint("rig-workspace-snapshot-1"),
         ToolFunction::new("workspace.snapshot".to_string(), serde_json::json!({})),
     )
 }
@@ -420,7 +491,7 @@ pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
     (1..=count)
         .map(|index| {
             ToolCall::new(
-                format!("rig-multi-snapshot-{index}"),
+                rig_core::message::ToolCallId::new_or_mint(format!("rig-multi-snapshot-{index}")),
                 ToolFunction::new(
                     "workspace.snapshot".to_string(),
                     serde_json::json!({ "n": index }),
@@ -433,7 +504,7 @@ pub(super) fn rig_multi_snapshot_calls(count: usize) -> Vec<ToolCall> {
 #[cfg(test)]
 pub(super) fn rig_workspace_snapshot_call_with_provider_metadata() -> ToolCall {
     ToolCall {
-        call_id: Some("provider-call-1".to_string()),
+        provider: rig_core::message::ProviderCallId::new("provider-call-1"),
         signature: Some("signature-1".to_string()),
         additional_params: Some(serde_json::json!({
             "provider": "rig",

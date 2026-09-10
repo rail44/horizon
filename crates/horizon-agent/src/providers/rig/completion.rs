@@ -10,7 +10,6 @@ use rig_core::{
     },
     providers::openai,
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
-    OneOrMany,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -711,7 +710,7 @@ async fn rig_openai_turn_streaming(
             StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
                 reasoning_buffer.push(reasoning);
             }
-            StreamedAssistantContent::Reasoning(reasoning) => {
+            StreamedAssistantContent::Reasoning { reasoning, .. } => {
                 reasoning_buffer.flush();
                 let text = reasoning.display_text();
                 if !text.is_empty() {
@@ -774,13 +773,17 @@ async fn rig_openai_turn_streaming(
                 }
             },
             StreamedAssistantContent::Final(response) => {
-                let usage = provider_request_usage_event_from_openai_final(&response);
+                let usage = provider_request_usage_event_from_stream_final(&response);
                 if let Event::ProviderRequestUsage(usage) = &usage {
                     input_tokens = Some(usage.input_tokens);
                     output_tokens = Some(usage.output_tokens);
                 }
                 let _ = events_tx.send(usage.into());
             }
+            // rig 0.42 surfaces unrecognized stream chunks as `Unknown`;
+            // Horizon's contract has no representation for them, so they are
+            // skipped (the terminal `StreamFinal` still carries the outcome).
+            StreamedAssistantContent::Unknown(_) => {}
         }
     }
 
@@ -854,32 +857,32 @@ async fn rig_openai_turn_streaming(
     ))
 }
 
-pub(super) fn provider_request_usage_event_from_openai_final(
-    response: &openai::completion::streaming::StreamingCompletionResponse,
+pub(super) fn provider_request_usage_event_from_stream_final(
+    final_record: &rig_core::streaming::StreamFinal,
 ) -> Event {
-    let usage = &response.usage;
-    let input_tokens = saturating_u64(usage.prompt_tokens);
-    let total_tokens = saturating_u64(usage.total_tokens);
+    // rig's normalized `Usage` already folds the provider's per-field
+    // reporting (OpenAI's `prompt_tokens` and
+    // `prompt_tokens_details.cached_tokens` included) into plain counters.
+    let usage = &final_record.usage;
+    let input_tokens = usage.input_tokens;
+    let total_tokens = usage.total_tokens;
     Event::ProviderRequestUsage(ProviderRequestUsage {
         input_tokens,
         output_tokens: total_tokens.saturating_sub(input_tokens),
         total_tokens,
-        cached_input_tokens: usage
-            .prompt_tokens_details
-            .as_ref()
-            .map(|details| saturating_u64(details.cached_tokens))
-            .unwrap_or_default(),
+        cached_input_tokens: usage.cached_input_tokens,
     })
 }
 
 /// Detects output-cap truncation by comparing the provider-reported output
 /// token count against the configured ceiling (`config.max_output_tokens`).
 ///
-/// `stop_reason`/`finish_reason` is not available: rig 0.39 parses
-/// `finish_reason` (including `Length`) internally but discards it after
-/// using it only for tool-call detection, and the streaming terminal element
-/// (`StreamingCompletionResponse`) carries only `usage`. So truncation must
-/// be *inferred* from the token count.
+/// rig 0.42's streaming terminal element (`StreamFinal`) does carry a
+/// normalized `finish_reason`, but adopting it here is a behavior change this
+/// migration deliberately defers: the token-count heuristic below was
+/// validated against live traffic, and switching the detector to
+/// `finish_reason` deserves its own measured change. So truncation stays
+/// *inferred* from the token count.
 ///
 /// The heuristic is `output_tokens == Some(cap)`: the turn produced exactly
 /// as many tokens as the ceiling allowed. Measurement backs this up — across
@@ -901,10 +904,6 @@ pub(super) fn provider_request_usage_event_from_openai_final(
 ///    zero usage would be missed the same way.
 pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancelled: bool) -> bool {
     !cancelled && output_tokens == Some(cap)
-}
-
-fn saturating_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// OpenAI defaults this to true, but Horizon also supports configurable
@@ -987,7 +986,7 @@ pub(super) fn replay_safe_tool_arguments(arguments: &mut serde_json::Value) {
 
 /// Applies [`replay_safe_tool_arguments`] to every tool call in an
 /// assistant history message.
-pub(super) fn make_tool_call_arguments_replay_safe(content: &mut OneOrMany<AssistantContent>) {
+pub(super) fn make_tool_call_arguments_replay_safe(content: &mut [AssistantContent]) {
     for item in content.iter_mut() {
         if let AssistantContent::ToolCall(call) = item {
             replay_safe_tool_arguments(&mut call.function.arguments);
@@ -1009,8 +1008,9 @@ pub(super) fn partial_assistant_message(
     }
     content.extend(tool_calls.into_iter().map(AssistantContent::ToolCall));
 
-    let mut content = OneOrMany::many(content)
-        .unwrap_or_else(|_| OneOrMany::one(AssistantContent::Text(Text::new(String::new()))));
+    if content.is_empty() {
+        content.push(AssistantContent::Text(Text::new(String::new())));
+    }
     make_tool_call_arguments_replay_safe(&mut content);
 
     Message::Assistant {
@@ -1029,14 +1029,14 @@ pub(super) fn deterministic_rig_response(text: &str) -> Message {
     } else if lower.contains("snapshot") {
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+            content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
         }
     } else {
         Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::Text(Text::new(format!(
+            content: vec![AssistantContent::Text(Text::new(format!(
                 "rig-core fallback response: {text}"
-            )))),
+            )))],
         }
     }
 }
@@ -1055,7 +1055,7 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
     if result.output.get("loop_again") == Some(&serde_json::Value::Bool(true)) {
         return Message::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+            content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
         };
     }
     // Same idea, but for a parallel batch: requests another
@@ -1071,23 +1071,20 @@ pub(super) fn deterministic_tool_result_response(result: &ToolCallResult) -> Mes
     }
     Message::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text::new(format!(
+        content: vec![AssistantContent::Text(Text::new(format!(
             "Tool result received for {}.",
             result.call_id.0
-        )))),
+        )))],
     }
 }
 
 fn multi_tool_call_message(count: usize) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::many(
-            rig_multi_snapshot_calls(count)
-                .into_iter()
-                .map(AssistantContent::ToolCall)
-                .collect::<Vec<_>>(),
-        )
-        .expect("multi_tool_call_message is only ever called with count >= 1"),
+        content: rig_multi_snapshot_calls(count)
+            .into_iter()
+            .map(AssistantContent::ToolCall)
+            .collect(),
     }
 }
 

@@ -3,8 +3,9 @@
 This crate is a reduced local extraction of the supervised-runtime boundary
 from [nolabs-ai/nono](https://github.com/nolabs-ai/nono):
 
-- release: `v0.68.0`
-- commit: `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`
+- derivation base: release `v0.68.0`, commit `00692e8c7846c6ee00ad6239d1be3b9e9b8d5dea`
+- upstream reviewed against: `v0.76.0` (commit `c706d38b7d69bbcc1b2d9fcf7285e15c6e24fb5d`),
+  see "Adoption review" below
 - license: Apache License 2.0
 - source files:
   - `crates/nono-cli/src/exec_strategy.rs`
@@ -53,6 +54,26 @@ send syscalls, and `io_uring_setup`; local unnamed Unix stream/seqpacket IPC
 remains available, while remote IP routes and named/abstract Unix sockets are
 recorded and denied. macOS Seatbelt unified-log recovery remains explicitly
 best-effort.
+
+## Adoption review (v0.68.0 -> v0.76.0, 2026-09)
+
+This crate is a derived implementation, not a synced vendored copy: upstream is
+reviewed for selective adoption, not tracked. The v0.68.0 -> v0.76.0 diff of
+the three source files above was reviewed per the procedure below.
+
+- The library plumbing this crate consumes (`recv_notif`, `apply_seccomp`,
+  `SeccompOpts::external_tcp`, the `notif_*` helpers, `SupervisorSocket`,
+  `ApprovalBackend`) is unchanged in signature, so the exact `nono` pin moved
+  to `=0.76.0` on that basis.
+- Upstream's seccomp filter installation, notification validation,
+  child-memory reads, descriptor injection, and Linux fork-safety logic are
+  unchanged in this range. (Upstream's only fork-safety change, a macOS
+  thread-budget bump, does not apply: this crate validates strictly
+  single-threaded startup rather than a budget.)
+- Two upstream improvements identified but not yet ported, pending
+  CI-verified Linux testing of the helper: recording a denial audit entry
+  when the approval backend errors, and draining pending network
+  notifications after the child is reaped before returning.
 
 ## Update procedure
 

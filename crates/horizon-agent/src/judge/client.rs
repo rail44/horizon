@@ -5,7 +5,8 @@
 //! the acting model.
 //!
 //! `logit_bias`/`logprobs` have no first-class builder methods in rig-core
-//!0.39 (confirmed by the research doc against the vendored source) -- both
+//!0.42 (this held for 0.39 too, per the research doc against the vendored
+//! source) -- both
 //! reach the wire through `CompletionRequestBuilder::additional_params`,
 //! which is `#[serde(flatten)]`-merged directly into the OpenAI-shaped
 //! request JSON by the provider's own request struct. This module never
@@ -34,9 +35,10 @@ pub(super) struct RawCompletionRequest {
 }
 
 /// A stage's parsed-enough response: the assistant's text content, and the
-/// raw `logprobs` JSON if the endpoint returned one (opaque -- rig itself
-/// doesn't type this, see the module doc on `providers::rig::completion`'s
-/// own `Choice.logprobs: Option<serde_json::Value>`).
+/// raw `logprobs` JSON if the endpoint returned one (opaque -- rig 0.42
+/// exposes the provider's serialized raw response as the untyped
+/// `CompletionResponse::raw: serde_json::Value`, and this reads
+/// `choices[0].logprobs` out of it).
 #[derive(Clone, Debug, Default)]
 pub(super) struct RawCompletionResponse {
     pub(super) text: String,
@@ -162,10 +164,11 @@ impl ModelClient for RigModelClient {
             })
             .unwrap_or_default();
         let logprobs = response
-            .raw_response
-            .choices
-            .first()
-            .and_then(|choice| choice.logprobs.clone());
+            .raw
+            .get("choices")
+            .and_then(|choices| choices.get(0))
+            .and_then(|choice| choice.get("logprobs"))
+            .cloned();
 
         Ok(RawCompletionResponse { text, logprobs })
     }
