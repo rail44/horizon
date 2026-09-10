@@ -366,11 +366,15 @@ impl Workspace {
 
         self.panes.retain(|pane| pane.id != pane_id);
         let mut empty_tabs = Vec::new();
-        for tab in &mut self.tabs {
+        let mut removed_active_tab_index = None;
+        for (index, tab) in self.tabs.iter_mut().enumerate() {
             if let Some(mut root) = tab.root.without_pane(pane_id) {
                 root.flatten();
                 tab.root = root;
             } else {
+                if tab.id == self.active_tab {
+                    removed_active_tab_index = Some(index);
+                }
                 empty_tabs.push(tab.id);
                 continue;
             }
@@ -380,7 +384,17 @@ impl Workspace {
         }
         self.tabs.retain(|tab| !empty_tabs.contains(&tab.id));
         if !self.tabs.iter().any(|tab| tab.id == self.active_tab) {
-            if let Some(tab) = self.tabs.first() {
+            // The active tab is gone. If this call is what emptied it,
+            // reactivate the tab that shifted into its slot -- the same
+            // neighbor rule `close_tab_index` applies on the x-key path --
+            // so a tab closed by its terminal exiting lands on the same tab
+            // an explicit close would have (this used to jump to the first
+            // tab). For an id that was already dangling before this call,
+            // keep the old first-tab fallback.
+            let next_index = removed_active_tab_index
+                .unwrap_or(0)
+                .min(self.tabs.len().saturating_sub(1));
+            if let Some(tab) = self.tabs.get(next_index) {
                 self.active_tab = tab.id;
             }
         }
