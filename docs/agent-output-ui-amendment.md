@@ -987,3 +987,39 @@ deviation rather than asking for a mock update):
   (turn model overrides session model on divergence) is decided and
   tested ahead of that command existing, but nothing today can produce
   the divergence it handles.
+
+- **Transcript text made selectable and copyable (2026-08-06).** The
+  transcript was paint-only — no mouse selection, no copy path for any
+  message. Everything now rides gpui-component's window-level text
+  selection (rev `0775df3`'s `TextView::selectable` + `Root`'s
+  `TextSelectionController`, which this shell already hosts via
+  `main.rs`'s `Root::new`): mouse drag selects, highlights, and cmd-c
+  copies (`Root`'s `cmd-c`→`Copy` binding dispatches to whichever
+  handler sits under the focused view; the TextView's own `Copy` action
+  reads the window selection, and a click on transcript text moves focus
+  to its TextView so cmd-c lands there). Assistant markdown/delta rows
+  just gain `.selectable(true)`. Plain-text rows (user messages, thinking
+  tails, error/exited/memory/throttle/context one-liners) — previously
+  bare `div().child(String)` divs the selection layer cannot see — now
+  render through the same TextView pipeline with their text passed
+  through `escape_markdown` first (backslash before every ASCII
+  punctuation character, CommonMark's exact escapable set), so GFM can
+  never reinterpret text that was not written as markdown (`*`, `#`,
+  fences, list markers, HTML all stay literal) while the parser strips
+  the escapes and renders the text verbatim. Copying works across
+  adjacent rows: `Root::window_selected_text` merges every selected
+  TextView's per-view text top-to-bottom, newline-joined. Two
+  deliberate residuals: (1) collapsed tool-call/receipt rows and
+  expanded line bodies stay non-selectable — their lines are
+  single-line `text_ellipsis` divs by design (truncation, not wrapping,
+  per the C.1 overflow idiom), and routing them through TextView would
+  change that contract; a selectable-body path can build on this
+  foundation later. (2) A drag anchored on blank transcript space keeps
+  the composer focused, and the composer's `InputState::copy` swallows
+  an empty-selection cmd-c without propagating — so cmd-c in that one
+  flow copies nothing until the transcript's TextView is focused (press
+  on any message text does that). Compensating for the selection
+  layer's focus claim, `AgentView`'s root listens for a left mouse-up
+  that leaves nothing selected (the plain click-to-read case) and hands
+  focus back to the composer, so reading the transcript never strands
+  the keyboard; a real selection keeps the TextView focused for cmd-c.

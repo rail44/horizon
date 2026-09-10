@@ -15,6 +15,7 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::StyledExt as _;
+use gpui_component::WindowExt as _;
 use horizon_agent::contract::ToolCallId;
 
 use super::session::AgentSession;
@@ -207,7 +208,7 @@ impl Focusable for AgentView {
 }
 
 impl Render for AgentView {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .size_full()
             .flex()
@@ -224,6 +225,20 @@ impl Render for AgentView {
             .font(crate::terminal::resolved_font())
             .text_size(px(crate::terminal::font_size()))
             .track_focus(&self.focus_handle)
+            // Transcript presses focus the pressed TextView (gpui-component's
+            // window text selection claims focus on mouse-down), so a click
+            // that never selected anything -- the plain "click to read"
+            // case -- hands the keyboard back to the composer; a real drag
+            // selection keeps the transcript focused so cmd-c copies it
+            // (the TextView's own Copy action reads the window selection).
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseUpEvent, window, cx| {
+                    if window.selected_text(cx).trim().is_empty() {
+                        window.focus(&this.focus_handle, cx);
+                    }
+                }),
+            )
             // The wrapper gets a definite flex allocation first; the cached
             // transcript then fills those exact bounds. Auto-grow composer and
             // status remain outside the cache and keep intrinsic sizing.

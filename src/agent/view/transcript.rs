@@ -253,7 +253,11 @@ impl AgentTranscript {
         item: &AgentFrameItem,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let block = |label: &str, label_color: Hsla, text: String| {
+        // Plain-text bodies render through the same selectable TextView
+        // pipeline the assistant markdown uses so every transcript row's text
+        // is selectable and copyable; `escape_markdown` keeps the text
+        // verbatim (no GFM construct reinterpretation).
+        let block = |label: &str, label_color: Hsla, id: (&'static str, usize), text: String| {
             div()
                 .flex()
                 .flex_col()
@@ -265,10 +269,10 @@ impl AgentTranscript {
                         .child(label.to_string()),
                 )
                 .child(
-                    div()
+                    TextView::markdown(id, escape_markdown(&text))
+                        .selectable(true)
                         .text_size(px(crate::terminal::font_size()))
-                        .text_color(theme::text_primary())
-                        .child(text),
+                        .text_color(theme::text_primary()),
                 )
                 .into_any_element()
         };
@@ -289,6 +293,7 @@ impl AgentTranscript {
                     )
                     .child(
                         TextView::markdown(id, text)
+                            .selectable(true)
                             .text_size(px(crate::terminal::font_size()))
                             .text_color(theme::text_primary()),
                     )
@@ -314,7 +319,12 @@ impl AgentTranscript {
                         message.text.clone(),
                     ))
                 } else {
-                    Some(block(label, color, message.text.clone()))
+                    Some(block(
+                        label,
+                        color,
+                        ("user-message", index),
+                        message.text.clone(),
+                    ))
                 }
             }
             AgentFrameItem::AssistantTextDelta(delta) => Some(markdown_block(
@@ -341,7 +351,12 @@ impl AgentTranscript {
                 } else {
                     tail_text
                 };
-                Some(block("thinking…", theme::text_subtle(), text))
+                Some(block(
+                    "thinking…",
+                    theme::text_subtle(),
+                    ("thinking", index),
+                    text,
+                ))
             }
             // Retired the raw-JSON `tool`/`tool result` dumps this arm and
             // the one below used to fall back to (owner feedback
@@ -431,6 +446,7 @@ impl AgentTranscript {
                 Some(block(
                     "tool (preparing)",
                     theme::text_subtle(),
+                    ("tool-preparing", index),
                     format!("{verb} … ({} bytes streamed)", progress.bytes),
                 ))
             }
@@ -441,6 +457,7 @@ impl AgentTranscript {
             AgentFrameItem::HistoryCleared(cleared) => Some(block(
                 "context",
                 theme::text_subtle(),
+                ("context", index),
                 format!(
                     "cleared {} old tool result(s) (~{} chars) — recoverable via recall",
                     cleared.cleared_call_ids.len(),
@@ -452,12 +469,14 @@ impl AgentTranscript {
                     Some(block(
                         "memory",
                         theme::text_subtle(),
+                        ("memory", index),
                         format!("no update — {reason}"),
                     ))
                 } else {
                     Some(block(
                         "memory",
                         theme::text_subtle(),
+                        ("memory", index),
                         format!("updated {} field(s)", digest.updates.len()),
                     ))
                 }
@@ -465,11 +484,13 @@ impl AgentTranscript {
             AgentFrameItem::MemoryCheckpointMissed => Some(block(
                 "memory",
                 theme::text_subtle(),
+                ("memory", index),
                 "checkpoint missed — turn ended without a memory update".to_string(),
             )),
             AgentFrameItem::ProviderRateLimited(rate_limited) => Some(block(
                 "throttled",
                 theme::text_subtle(),
+                ("throttled", index),
                 format!(
                     "provider {} — retrying in {}.{:03}s (attempt {})",
                     rate_limited
@@ -481,12 +502,18 @@ impl AgentTranscript {
                     rate_limited.attempt,
                 ),
             )),
-            AgentFrameItem::Error(error) => {
-                Some(block("error", theme::danger(), format!("{error:?}")))
-            }
-            AgentFrameItem::Exited(reason) => {
-                Some(block("exited", theme::text_muted(), format!("{reason:?}")))
-            }
+            AgentFrameItem::Error(error) => Some(block(
+                "error",
+                theme::danger(),
+                ("error", index),
+                format!("{error:?}"),
+            )),
+            AgentFrameItem::Exited(reason) => Some(block(
+                "exited",
+                theme::text_muted(),
+                ("exited", index),
+                format!("{reason:?}"),
+            )),
             AgentFrameItem::ToolCallStarted(_) => None,
             // Consumed by turn grouping (`turns::group_into_turns`) into
             // the turn's receipt line; never reaches this per-item path in
@@ -1113,6 +1140,30 @@ fn accent_tint(alpha: f32) -> Hsla {
     theme::accent().alpha(alpha)
 }
 
+/// Escape plain transcript text for verbatim rendering through
+/// `TextView::markdown` (the selectable-text pipeline the assistant messages
+/// already use). Backslash-escaping every ASCII punctuation character keeps
+/// GFM constructs -- headings, emphasis, fences, list markers, tables, HTML
+/// -- from reinterpreting text that was never written as markdown (a user
+/// prompt's `*`, an error line's `1.`); CommonMark resolves each escape back
+/// to the literal character, so the painted text is unchanged. Newlines pass
+/// through untouched and render as line breaks (the renderer pushes a `"\n"`
+/// inline text node for its own `<br>`, so embedded newlines in a paragraph's
+/// text take the same path).
+fn escape_markdown(text: &str) -> String {
+    let mut escaped = String::with_capacity(text.len());
+    for ch in text.chars() {
+        // `char::is_ascii_punctuation` is exactly CommonMark's escapable set
+        // (`!"#$%&'()*+,-./:;<=>?@[\]^_`{|}~`), so every escape it emits is
+        // one the parser strips, and nothing else is touched.
+        if ch.is_ascii_punctuation() {
+            escaped.push('\\');
+        }
+        escaped.push(ch);
+    }
+    escaped
+}
+
 /// The running card's header label for the three in-flight
 /// `SessionState`s (`state_indicates_turn_in_flight`'s own set) — any
 /// other state falls back to the generic label defensively, since this
@@ -1136,7 +1187,7 @@ mod tests {
     use super::super::super::turns::test_support::{
         assistant_delta, tool_finished, tool_requested, tool_started, user_message,
     };
-    use super::{build_transcript_rows, BurstPresentation, TranscriptRow};
+    use super::{build_transcript_rows, escape_markdown, BurstPresentation, TranscriptRow};
 
     fn turn_end() -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
@@ -1185,5 +1236,32 @@ mod tests {
             build_transcript_rows(&before).0,
             build_transcript_rows(&after).0
         );
+    }
+
+    #[test]
+    fn escape_markdown_neutralizes_gfm_construct_prefixes() {
+        assert_eq!(escape_markdown("# not a heading"), "\\# not a heading");
+        assert_eq!(escape_markdown("- not a list"), "\\- not a list");
+        assert_eq!(escape_markdown("1. not ordered"), "1\\. not ordered");
+        assert_eq!(escape_markdown("*not emphasis*"), "\\*not emphasis\\*");
+        assert_eq!(escape_markdown("a|b"), "a\\|b");
+        assert_eq!(escape_markdown("<script>"), "\\<script\\>");
+    }
+
+    #[test]
+    fn escape_markdown_preserves_plain_text_and_newlines() {
+        assert_eq!(
+            escape_markdown("just words 日本語 🎉"),
+            "just words 日本語 🎉"
+        );
+        assert_eq!(escape_markdown("two\nlines"), "two\nlines");
+    }
+
+    #[test]
+    fn escape_markdown_keeps_backslashes_verbatim() {
+        // A literal backslash must come back as a literal backslash, not be
+        // consumed as an escape of the character that follows it.
+        assert_eq!(escape_markdown("C:\\Users\\tmp"), "C\\:\\\\Users\\\\tmp");
+        assert_eq!(escape_markdown("path\\*glob"), "path\\\\\\*glob");
     }
 }
