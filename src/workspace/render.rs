@@ -316,6 +316,14 @@ const EQUAL_WIDTH_GAP_PX: f32 = 2.0;
 /// same fallback content-sized tabs already rely on today.
 const EQUAL_WIDTH_MIN_TAB_PX: f32 = 40.0;
 
+/// Never size a tab above this, however few are open or however wide the
+/// window is -- an even split across a wide strip with one or two tabs
+/// stretched a long title into a wall of text filling the viewport. The
+/// cap leaves the track's remainder empty (tabs lay out from the left)
+/// and the label truncates inside the capped width instead; short titles
+/// keep centering within it, so nothing changes for tabs that already fit.
+const EQUAL_WIDTH_MAX_TAB_PX: f32 = 240.0;
+
 /// One equal-width tab's share of `strip_width` (the tab strip's measured
 /// viewport width -- it spans the window edge to edge, see
 /// [`WorkspaceShell::render_tab_strip`]'s `.w_full()`), after subtracting
@@ -328,7 +336,12 @@ fn equal_tab_width(strip_width: Pixels, tab_count: usize) -> Pixels {
     }
     let gaps = EQUAL_WIDTH_GAP_PX * tab_count.saturating_sub(1) as f32;
     let usable = (f32::from(strip_width) - EQUAL_WIDTH_CHROME_ALLOWANCE_PX - gaps).max(0.0);
-    px((usable / tab_count as f32).max(EQUAL_WIDTH_MIN_TAB_PX))
+    // The even share, clamped into [floor, cap]: the floor keeps a narrow
+    // window's tabs clickable (the strip scrolls instead), the cap keeps a
+    // wide window's few tabs from swallowing the whole strip. Both bounds
+    // are positive constants, so the input can never be NaN.
+    let share = usable / tab_count as f32;
+    px(share.clamp(EQUAL_WIDTH_MIN_TAB_PX, EQUAL_WIDTH_MAX_TAB_PX))
 }
 
 fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
@@ -514,18 +527,39 @@ impl WorkspaceShell {
                 shell.activate_tab(*index, window, cx);
             }))
             .children(tabs.into_iter().map(|tab| {
-                let label = Tab::new()
-                    .label(format!("{} {}", tab.index + 1, tab.title))
-                    // gpui-component's `Tab` already clips overflowing
-                    // content (`overflow_hidden()`/`whitespace_nowrap()`
-                    // on its inner label row, verified in the vendored
-                    // `tab.rs`) but never marks the clip with an ellipsis;
-                    // add that so a long title reads as truncated rather
-                    // than cut off mid-character. `Tab: Styled` proxies
-                    // straight into the same inner `div` its own render
-                    // keeps building on, and nothing later in that render
-                    // touches `text_overflow`, so this survives.
-                    .text_ellipsis();
+                // The title lives in this wrapper rather than in a bare
+                // `Tab::label(...)`, because of how the vendored `Tab`
+                // lays its label out: inside an `inner_content` h_flex
+                // that is `justify_center` + `overflow_hidden`
+                // (gpui-component `tab.rs`). A bare string child there is
+                // a flex item whose automatic minimum size is its
+                // min-content width -- and under the row's
+                // `whitespace_nowrap` that is the *whole* line -- so it
+                // never shrinks to the tab's width. Centered and then
+                // clipped, the label lost both ends and showed the
+                // middle of the title with no ellipsis. This wrapper's
+                // explicit `min_w_0()` zeroes the flex item's minimum
+                // size (taffy honors a set `min_size` over the
+                // min-content default), making the wrapper the item that
+                // actually shrinks; the text inside it is then measured
+                // against a definite width, the only condition under
+                // which gpui applies `text_overflow` truncation -- hence
+                // a head-anchored label with a trailing ellipsis. Same
+                // shape as the running-card rows' truncation pattern
+                // (`src/agent/view/rows.rs`) and gpui-component's own
+                // dock tab title (`dock/tab_panel.rs`). No index number:
+                // the position is visible from the tab's place in the
+                // strip, and the number crowded the title it prefixed.
+                // `aria_label` keeps the accessible name `label()` used
+                // to provide, now that the visible text is our child.
+                let label = Tab::new().aria_label(tab.title.clone()).child(
+                    div()
+                        .min_w_0()
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(tab.title),
+                );
                 if EQUAL_WIDTH_TABS {
                     // `Tab`'s own `Styled` impl mutates the same `div`
                     // its `RenderOnce::render` finishes building, so a
@@ -1281,6 +1315,14 @@ mod tests {
         // `tabs-inner`'s existing `overflow_x_scroll()` instead, same as
         // content-sized tabs already do when they don't fit.
         assert_eq!(equal_tab_width(px(100.0), 10), px(40.0));
+    }
+
+    #[test]
+    fn equal_tab_width_never_rises_above_the_cap() {
+        // A wide window with two tabs: the even split (475px each) would
+        // let one long title fill the viewport, so the cap wins and the
+        // track's remainder simply stays empty.
+        assert_eq!(equal_tab_width(px(1000.0), 2), px(240.0));
     }
 
     #[test]
