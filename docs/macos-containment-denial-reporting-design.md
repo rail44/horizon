@@ -201,9 +201,44 @@ collector path.
   by the sampled-descendant filter and short windows. Accepted.
 - All-or-nothing keychain exposure on approval (documented in the reason
   text; per-service granularity waits on an upstream nono API).
-- `log show` query cost on failing calls (~hundreds of ms) — measured after
-  landing; a session-long `log stream` (SessionNetworkProxy pattern) is the
-  fallback if it regresses short commands.
+
+## Runtime amendment (owner's machine, 2026-09-10 evening)
+
+The v1 collector queried the *datastore* (`log show --last <window>`) once,
+at command exit. Runtime verification of the full loop failed: every
+failing sandboxed command returned empty denials. Measured, reproduced, and
+narrowed to the datastore path:
+
+- A `security`-family keychain lookup denied inside the sandbox (seatbelt
+  `deny mach-lookup com.apple.SecurityServer`, OSStatus -50 at the caller)
+  was **live** in `log stream` the same second (18:25:56) but invisible to
+  `log show` queries run a minute after a comparable denial (18:19 missed a
+  18:18:24 record while surfacing a 18:18:56 one), and only visible to a
+  later query (~18:40). `man log` documents no timing for when records move
+  from the documented "inflight" state into the datastore; it does document
+  loss events (`--loss`) and that `log show` reads the datastore.
+- Under load the datastore path also degraded to minutes-long scans (a
+  2-minute-window `log show` took 6m19s): every sandboxed command emits
+  per-process `/dev/dtracehelper` + `/dev/tty` denies, so cargo/clippy/nextest
+  runs flood the log with hundreds of records per minute.
+
+The collector therefore reads the **live** path: one process-shared
+`log stream` subscription (`denials.rs`'s `shared_stream`), records buffered
+with receipt times, and `collect()` folds the run's window against the
+sampled pid set -- the datastore is off the critical path entirely. If the
+subscription dies mid-run, `collect` fails (soft-degrade annotation) instead
+of reporting a silent gap as absence.
+
+New residual risks: the very first command after the host process starts can
+beat the subscription's attach (tens of ms); a sub-250ms-lived descendant can
+still miss every pid sample (pre-existing, unchanged); the shared buffer is
+capped drop-oldest (noise dominates). Verification recipe (owner, outside the
+sandbox): run `log stream --style compact --predicate 'sender == "kernel" AND
+eventMessage CONTAINS "Sandbox:"'` writing to a *file*, fire `touch
+/Library/<probe>` from a sandboxed command, and confirm the record lands in
+the file within ~a second -- that also verifies the pipe flushes per record
+(untested from inside; the alternative if it does not is wrapping the child
+in `script -q /dev/null` to force a line-buffered tty).
 
 ## Test plan
 
