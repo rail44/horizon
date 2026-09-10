@@ -15,7 +15,6 @@
 mod agent;
 mod board_pane;
 mod control_plane;
-mod ime_forward;
 mod input_trace;
 mod keymap;
 mod palette;
