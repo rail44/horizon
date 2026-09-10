@@ -63,6 +63,11 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
 # Nothing else in the graph depends on them, so they carry an explicit rev
 # pin. Bump deliberately: update the rev below, then
 # `cargo update -p gpui-component -p gpui-kit-assets`.
+# `TextSelection` (the window text-selection queries) lives in `gpui-base`,
+# gpui-component's foundation crate -- `WindowExt::selected_text` is now just
+# a deprecated wrapper around it. Same rev pin as gpui-component above; bump
+# the two together.
+gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 horizon-agent = { path = "crates/horizon-agent" }
