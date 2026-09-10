@@ -775,6 +775,46 @@ fn terminate_session_removes_session_and_attachments() {
 }
 
 #[test]
+fn terminate_session_on_the_active_tab_activates_the_neighbor_tab() {
+    // A terminal exiting closes its tab through `terminate_session` ->
+    // `detach_pane`, which must pick the same next active tab as the x-key
+    // path (`close_tab_index`, see
+    // `close_cursor_pane_or_tab_on_last_pane_activates_the_neighbor_tab`):
+    // the tab that shifts into the removed slot, not the first tab.
+    let mut workspace = Workspace::mvp();
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let middle_session = SessionId::new();
+    workspace.open_tab(PaneKind::Terminal, Some(middle_session));
+    let exiting_session = SessionId::new();
+    workspace.open_tab(PaneKind::Terminal, Some(exiting_session));
+
+    assert!(workspace.terminate_session(exiting_session));
+
+    assert_eq!(workspace.tab_count(), 2);
+    assert_eq!(workspace.active_tab_index(), 1);
+    assert_eq!(workspace.active_terminal_session_id(), Some(middle_session));
+    assert!(workspace.session_is_referenced(first_session));
+    assert!(workspace.session_is_referenced(middle_session));
+    assert!(!workspace.session_is_referenced(exiting_session));
+}
+
+#[test]
+fn terminate_session_on_the_last_tab_falls_back_to_the_left_neighbor() {
+    // Neighbor-rule edge case, matching `close_tab_index`: removing the
+    // rightmost tab clamps to the new last tab.
+    let mut workspace = Workspace::mvp();
+    let first_session = workspace.active_terminal_session_id().expect("session");
+    let second_session = SessionId::new();
+    workspace.open_tab(PaneKind::Terminal, Some(second_session));
+
+    assert!(workspace.terminate_session(second_session));
+
+    assert_eq!(workspace.tab_count(), 1);
+    assert_eq!(workspace.active_tab_index(), 0);
+    assert_eq!(workspace.active_terminal_session_id(), Some(first_session));
+}
+
+#[test]
 fn terminate_active_session_returns_removed_session() {
     let mut workspace = Workspace::mvp();
     let first_session = workspace.active_terminal_session_id().expect("session");
