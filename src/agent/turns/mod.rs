@@ -43,10 +43,10 @@ pub(crate) use tool_call::*;
 pub(crate) use horizon_agent::transcript::segment_bursts;
 pub(crate) use horizon_agent::transcript::{
     aggregate_changes, aggregate_receipt, build_tool_call_views, cap_lines_head, cap_lines_tail,
-    cap_thinking_text, classify, contains_user_message, edit_entries, group_into_turns,
-    is_approval_still_pending, latest_turn_model, progress, reconstruct_line_diff,
-    running_row_expandable, str_field, ApprovalState, DiffLine, DiffLineKind, FileChange,
-    ReceiptAggregate, ToolCallKind, ToolCallView, TurnEnd, THINKING_TAIL_LINES,
+    classify, contains_user_message, edit_entries, group_into_turns, is_approval_still_pending,
+    latest_turn_model, progress, reconstruct_line_diff, running_row_expandable, str_field,
+    ApprovalState, DiffLine, DiffLineKind, FileChange, ReceiptAggregate, ToolCallKind,
+    ToolCallView, TurnEnd,
 };
 
 /// `1 {singular}` / `{count} {plural}`. Shared by `receipt::receipt_prose`
@@ -80,6 +80,13 @@ pub(crate) mod test_support {
 
     pub(crate) fn assistant_delta(text: &str) -> AgentFrameItem {
         AgentFrameItem::AssistantTextDelta(MessageDelta {
+            role: MessageRole::Assistant,
+            text: text.to_string(),
+        })
+    }
+
+    pub(crate) fn reasoning_delta(text: &str) -> AgentFrameItem {
+        AgentFrameItem::ReasoningDelta(MessageDelta {
             role: MessageRole::Assistant,
             text: text.to_string(),
         })
