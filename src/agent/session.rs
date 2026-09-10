@@ -54,6 +54,13 @@ pub(crate) struct AgentSession {
     /// via [`derive_title_from_items`]), or `None` until one exists. The
     /// `Some` guard is what makes derivation run exactly once.
     derived_title: Option<String>,
+    /// Whether the model-based title refinement (see
+    /// [`AgentSession::refine_title_with_model`]) has already been fired
+    /// for this attach: at most one summarizer call per session per
+    /// attach, whatever its outcome -- a failed call stays failed (the
+    /// raw first-message title is already in place, so a retry buys
+    /// nothing but more calls).
+    title_refine_attempted: bool,
     /// Reports the derived title to the shell, which folds it into the
     /// workspace model (`Workspace::set_session_derived_title` via
     /// `wire_session_title_updates`) -- the agent side of the terminal's
@@ -95,8 +102,11 @@ impl AgentSession {
                     // first user message fixes "what this session is about",
                     // and a resumed session's replayed transcript surfaces
                     // that same message, so the re-derived title matches the
-                    // one persistence kept.
+                    // one persistence kept. The raw title ships immediately;
+                    // the model-refined replacement is fired right after
+                    // (`refine_title_with_model`), once per attach.
                     session.derive_title_from_first_user_message();
+                    session.refine_title_with_model(cx);
                     // Stale-death recovery (backlog #35): an event
                     // arriving means the runtime is reachable again.
                     session.link.mark_reachable();
@@ -118,6 +128,7 @@ impl AgentSession {
             tasks: Vec::new(),
             session_id,
             derived_title: None,
+            title_refine_attempted: false,
             title_tx,
             link: RuntimeLink::new(handle.sender(), cx),
             notify_coalescer: NotifyCoalescer::default(),
@@ -141,6 +152,46 @@ impl AgentSession {
         let _ = self
             .title_tx
             .unbounded_send((self.session_id, Some(derived)));
+    }
+
+    /// Replaces the raw first-message title with a model-summarized one,
+    /// at most once per attach. The raw title (above) always ships first
+    /// so the tab is never untitled while the call is in flight; this
+    /// fires the background summarizer and pushes its result through the
+    /// same `title_tx` when it lands. Fire-and-forget with a total
+    /// fallback: any failure -- no `OPENAI_API_KEY`, timeout, transport
+    /// error, unusable reply -- is a silent no-op that leaves the raw
+    /// title showing. A resumed session's replay re-derives the raw
+    /// title (overwriting the persisted refined one) and then re-runs
+    /// this, so the refined title is re-derived per attach rather than
+    /// distinguished in persistence -- one cheap small-model call, and no
+    /// new title-provenance state.
+    fn refine_title_with_model(&mut self, cx: &mut Context<Self>) {
+        if self.title_refine_attempted || self.derived_title.is_none() {
+            return;
+        }
+        let Some(first_message) = first_user_message_text(&self.frame.items) else {
+            return;
+        };
+        self.title_refine_attempted = true;
+        let session_id = self.session_id;
+        let title_tx = self.title_tx.clone();
+        cx.background_executor()
+            .spawn(async move {
+                // The model's reply is untrusted text: it goes through the
+                // same sanitizer (control-char collapse, whitespace
+                // collapse, 40-char clamp) every other title source runs
+                // through, so a chatty or over-long reply can never reach
+                // the tab strip unclamped.
+                let summary = horizon_agent::summarize::summarize_session_title(
+                    title_base_url().as_deref(),
+                    &first_message,
+                );
+                if let Some(title) = summary.and_then(|text| derive_session_title(&text)) {
+                    let _ = title_tx.unbounded_send((session_id, Some(title)));
+                }
+            })
+            .detach();
     }
 
     /// The event pump's coalesced `cx.notify()`: leading edge fires
@@ -263,18 +314,44 @@ fn apply_task_progress(tasks: &mut Vec<TaskProgress>, progress: TaskProgress) {
     }
 }
 
+/// The transcript's first real user message text -- the same selection
+/// rule [`derive_title_from_items`] applies (blank messages are skipped,
+/// as are system-authored ones) -- but *unclamped*: this is the
+/// summarizer's input, not a tab label. `None` while no usable message
+/// exists yet.
+fn first_user_message_text(items: &[AgentFrameItem]) -> Option<String> {
+    items.iter().find_map(|item| match item {
+        AgentFrameItem::Message(message) if message.role == MessageRole::User => {
+            // `derive_session_title` returning `Some` is exactly the
+            // "this text would survive as a title" predicate, reused
+            // here so both paths skip the same messages.
+            derive_session_title(&message.text).map(|_| message.text.clone())
+        }
+        _ => None,
+    })
+}
+
 /// The title text for a transcript: the first user-authored message whose
 /// text survives [`derive_session_title`] (blank messages are skipped, as
 /// are system-authored ones -- [`MessageRole::TaskNotification`] and the
 /// other injected roles deliberately never title a tab), or `None` while
 /// no such message exists yet.
 fn derive_title_from_items(items: &[AgentFrameItem]) -> Option<String> {
-    items.iter().find_map(|item| match item {
-        AgentFrameItem::Message(message) if message.role == MessageRole::User => {
-            derive_session_title(&message.text)
-        }
-        _ => None,
-    })
+    first_user_message_text(items).and_then(|text| derive_session_title(&text))
+}
+
+/// The base URL for the title summarizer's provider call, resolved with
+/// the same precedence the agent runtime itself uses
+/// (`crates/horizon-agent/src/config.rs`'s `resolve_base_url`):
+/// `OPENAI_BASE_URL` wins over the config file's `[provider].base_url`;
+/// `None` lets rig use its own default. The app-side twin of what
+/// `horizon-agentd` feeds `JudgeHandle::new` -- the summarizer runs in
+/// this process, and agentd inherits this same environment, so both see
+/// the same provider.
+fn title_base_url() -> Option<String> {
+    std::env::var("OPENAI_BASE_URL")
+        .ok()
+        .or_else(|| horizon_config::load().provider.base_url.clone())
 }
 
 #[cfg(test)]
@@ -285,7 +362,7 @@ mod tests {
     // sends plain tests through gpui's async harness instead (whose
     // expansion blows the crate's macro recursion limit).
     use super::derive_title_from_items;
-    use super::{apply_task_progress, TaskProgress, TaskProgressState};
+    use super::{apply_task_progress, first_user_message_text, TaskProgress, TaskProgressState};
     use horizon_agent::contract::{Message, MessageRole, SessionId};
     use horizon_agent::frame::AgentFrameItem;
 
@@ -375,6 +452,34 @@ mod tests {
         assert_eq!(
             derive_title_from_items(&items),
             Some("real ask".to_string())
+        );
+    }
+
+    #[test]
+    fn first_user_message_text_is_the_unclamped_source_message() {
+        // The summarizer's input must be the raw message -- a 40-char
+        // clamp here would summarize the already-truncated label instead
+        // of what the user actually asked.
+        let long = "please investigate ".repeat(20);
+        let items = vec![task_notification("task done"), user_message(&long)];
+        assert_eq!(first_user_message_text(&items), Some(long.clone()));
+        assert!(derive_title_from_items(&items).unwrap().chars().count() < long.chars().count());
+    }
+
+    #[test]
+    fn first_user_message_text_follows_the_same_skip_rules_as_the_title() {
+        let items = vec![
+            user_message("   "),
+            task_notification("task done"),
+            user_message("real ask"),
+        ];
+        assert_eq!(
+            first_user_message_text(&items),
+            Some("real ask".to_string())
+        );
+        assert_eq!(
+            first_user_message_text(&[task_notification("task done")]),
+            None
         );
     }
 

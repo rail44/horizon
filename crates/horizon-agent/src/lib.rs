@@ -26,6 +26,7 @@ pub mod registry;
 pub mod roles;
 pub mod runtime_panic;
 pub mod skills;
+pub mod summarize;
 pub mod tools;
 pub mod transcript;
 pub mod wire;
