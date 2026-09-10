@@ -79,6 +79,7 @@ actions!(
         SplitPane,
         ClosePane,
         NextTab,
+        PrevTab,
         OpenPalette,
         // Session-manager row actions
         // (`docs/session-relationship-design.md` decision 4b) -- scoped to
