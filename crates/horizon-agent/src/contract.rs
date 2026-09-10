@@ -478,6 +478,48 @@ pub struct ProviderEvent {
     /// (re)attach (`wire::AgentWireEvent::SessionModel`) -- see
     /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
     pub session_model: Option<String>,
+    /// Live progress of one of this session's background `task` children,
+    /// set only via [`ProviderEvent::task_progress`] -- the same ephemeral
+    /// sidecar shape as `tool_call_progress` above: `event` is an unused
+    /// placeholder whenever this is `Some`, and the fold excludes it from
+    /// both the frame and the persisted event log. Emitted by the daemon's
+    /// task watcher (`wire::AgentWireEvent::TaskProgress`), never by a
+    /// provider.
+    pub task_progress: Option<TaskProgress>,
+}
+
+/// Live progress of one background `task` child, observed by the daemon and
+/// forwarded to the requester's attached client. Purely a UI feedback signal:
+/// never folded into conversation history and never persisted — see
+/// [`ProviderEvent::task_progress`]. A child's completion is *also* recorded
+/// durably as a `MessageRole::TaskNotification` message; the [`Self::state`]
+/// transition here only retires the client's live progress row.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct TaskProgress {
+    /// The child session whose progress this describes — the same id the
+    /// `task` tool call's started receipt carries, so a client can join the
+    /// live row against the transcript's own `task` tool-call record.
+    pub task_session_id: SessionId,
+    /// The child's launch description (the `task` input's `description`),
+    /// carried so the client can label the row without re-reading history.
+    pub description: String,
+    pub state: TaskProgressState,
+    /// What the child was last observed doing: the tool id of its most
+    /// recent `ToolCallRequested` (e.g. `"fs.grep"`), or `None` while it is
+    /// reasoning between tools.
+    pub activity: Option<String>,
+    /// When the child was launched, epoch milliseconds — lets a client show
+    /// elapsed time that survives re-attach.
+    pub started_at_epoch_ms: u64,
+}
+
+/// [`TaskProgress::state`] — a child is either running or has reached *some*
+/// terminal state. The terminal flavor (completed / failed / capped) is the
+/// notification's business, not the live row's.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub enum TaskProgressState {
+    Running,
+    Finished,
 }
 
 /// Tool-call-argument-streaming progress observed mid-turn, before the
@@ -508,6 +550,7 @@ impl ProviderEvent {
             provider_payload: None,
             tool_call_progress: None,
             session_model: None,
+            task_progress: None,
         }
     }
 
@@ -517,6 +560,7 @@ impl ProviderEvent {
             provider_payload: Some(provider_payload),
             tool_call_progress: None,
             session_model: None,
+            task_progress: None,
         }
     }
 
@@ -530,6 +574,7 @@ impl ProviderEvent {
             provider_payload: None,
             tool_call_progress: Some(progress),
             session_model: None,
+            task_progress: None,
         }
     }
 
@@ -542,6 +587,21 @@ impl ProviderEvent {
             provider_payload: None,
             tool_call_progress: None,
             session_model: Some(model),
+            task_progress: None,
+        }
+    }
+
+    /// Wraps live background-task progress for delivery over the same
+    /// channel -- see [`TaskProgress`] and [`Self::task_progress`]'s field
+    /// doc comment. `event` is the same unused placeholder
+    /// [`Self::tool_call_progress`] uses.
+    pub fn task_progress(progress: TaskProgress) -> Self {
+        Self {
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            tool_call_progress: None,
+            session_model: None,
+            task_progress: Some(progress),
         }
     }
 }
@@ -1021,6 +1081,24 @@ pub enum ApprovalKind {
     /// them only to this call (including any chained containment retry), and
     /// keeps the command inside the sandbox.
     GitOperation { writable_roots: Vec<PathBuf> },
+    /// A sandboxed `bash` call was refused mach-lookup to one or more macOS
+    /// security services (`docs/macos-containment-denial-reporting-design.md`)
+    /// -- the macOS counterpart of [`ApprovalKind::FilesystemDenialRetry`]:
+    /// the call already ran, and the evidence is the kernel's own unified-log
+    /// denial record. A deny forwards `prior_result` as-is; an approve
+    /// records the service set for this session and reruns the SAME call
+    /// still sandboxed. The enforcement behind the grant is nono's
+    /// security-service group as a whole (all-or-nothing -- the seatbelt
+    /// profile has no per-service granularity), which the request's reason
+    /// text states to the approver. The service names here are the
+    /// primitive (`mach-lookup` targets); no resource concept is defined
+    /// over them. Appended last (2026-09-10) so the wire schema's oneOf
+    /// indices for existing variants stay put -- same append-only discipline
+    /// the other persisted enums here follow.
+    MachServiceGrant {
+        services: Vec<String>,
+        prior_result: ToolCallResult,
+    },
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

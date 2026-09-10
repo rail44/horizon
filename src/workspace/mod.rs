@@ -79,6 +79,7 @@ actions!(
         SplitPane,
         ClosePane,
         NextTab,
+        PrevTab,
         OpenPalette,
         // Session-manager row actions
         // (`docs/session-relationship-design.md` decision 4b) -- scoped to
@@ -355,6 +356,12 @@ pub(crate) struct WorkspaceShell {
     // PTY-side shell exit can notify the shell to terminate that workspace
     // session -- see the `terminal_exit_rx` pump spawned in `new`.
     terminal_exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+    // Handed to every `TerminalSession::spawn`/`AgentSession::new` (cloned
+    // per session) so a content-derived title (a terminal's OSC 0/2 title,
+    // an agent's first user message) reaches the workspace model -- the
+    // `session_title_rx` pump spawned in `new`
+    // (`wire_session_title_updates`).
+    session_title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
 }
 
 impl WorkspaceShell {
@@ -375,6 +382,7 @@ impl WorkspaceShell {
             &socket_path,
         );
         let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
+        let (session_title_tx, session_title_rx) = futures::channel::mpsc::unbounded();
         let mut shell = Self {
             workspace,
             workspace_state,
@@ -404,6 +412,7 @@ impl WorkspaceShell {
             active_split_drag: None,
             last_focused_terminal: None,
             terminal_exit_tx,
+            session_title_tx,
         };
         // Window activation/deactivation doesn't otherwise touch the
         // model, so it needs its own observer alongside `focus_active`'s
@@ -416,6 +425,7 @@ impl WorkspaceShell {
         shell.wire_host_tools(agentd.responder(), host_tool_rx, cx);
         shell.wire_workspace_root_updates(workspace_root_rx, cx);
         shell.wire_terminal_exit(terminal_exit_rx, cx);
+        shell.wire_session_title_updates(session_title_rx, cx);
         if shell.restoring_workspace {
             shell.spawn_workspace_restore(agentd, terminald, cx);
         } else {

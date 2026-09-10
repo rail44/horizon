@@ -27,7 +27,9 @@ use std::path::PathBuf;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::contract::{Event, JsonValue, ProviderId, RequestId, SessionId, ToolCallProgress};
+use crate::contract::{
+    Event, JsonValue, ProviderId, RequestId, SessionId, TaskProgress, ToolCallProgress,
+};
 use crate::roles::RoleId;
 
 mod hub;
@@ -71,6 +73,14 @@ pub enum AgentWireEvent {
     /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
     /// "the edge exists only via isolation").
     WorkspaceRootResolved(WorkspaceRootResolved),
+    /// Live progress of one of this session's background `task` children —
+    /// the daemon-side task watcher mirroring what the child was last
+    /// observed doing. Ephemeral like [`ToolCallProgress`]: a completion is
+    /// recorded durably as a `MessageRole::TaskNotification` message; this
+    /// event only drives the client's live progress rows. Not emitted while
+    /// no client is attached, and not replayed on attach — a re-attached
+    /// client sees a child's row again at its next activity.
+    TaskProgress(TaskProgress),
 }
 
 /// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.

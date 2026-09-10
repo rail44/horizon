@@ -11,13 +11,15 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use gpui::*;
-use horizon_agent::contract::{Command, ToolCallId};
-use horizon_agent::frame::AgentFrame;
+use horizon_agent::contract::{Command, MessageRole, TaskProgress, TaskProgressState, ToolCallId};
+use horizon_agent::frame::{AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
+use horizon_workspace::SessionId;
 
 use crate::runtime::{
     event_stream, AgentSessionHandle, NotifyCoalescer, NotifyDecision, RuntimeLink,
 };
+use crate::title::derive_session_title;
 
 pub(crate) struct AgentSession {
     pub(crate) frame: AgentFrame,
@@ -31,12 +33,32 @@ pub(crate) struct AgentSession {
     /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum for the precedence between the two.
     pub(crate) model: Option<String>,
+    /// Live background-`task` rows, in launch order: one entry per child
+    /// still running, as last observed via `ProviderEvent::task_progress`
+    /// (`wire::AgentWireEvent::TaskProgress`). Ephemeral by design — never
+    /// rebuilt from the frame on re-attach, so a re-attached client sees a
+    /// child's row again at its next activity. Read by the pane's
+    /// background-tasks strip.
+    pub(crate) tasks: Vec<TaskProgress>,
     _wire: AgentSessionHandle,
     /// The command channel to `horizon-agentd` plus its reachability
     /// bookkeeping. Its notify pump forwards to the existing
     /// `cx.observe(&session, ...)` in the view (`view.rs`), which already
     /// re-renders on any notify from this entity.
     link: RuntimeLink<Command>,
+    /// The workspace session id this agent belongs to -- the title side of
+    /// the terminal's same-named field: used to report the derived title
+    /// below to the shell.
+    session_id: SessionId,
+    /// The one content-derived tab title (the first real user message,
+    /// via [`derive_title_from_items`]), or `None` until one exists. The
+    /// `Some` guard is what makes derivation run exactly once.
+    derived_title: Option<String>,
+    /// Reports the derived title to the shell, which folds it into the
+    /// workspace model (`Workspace::set_session_derived_title` via
+    /// `wire_session_title_updates`) -- the agent side of the terminal's
+    /// same-named channel.
+    title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
     /// Gates the event pump's `cx.notify()` calls to the terminal-parity
     /// ~60Hz window. Plain `mut` state, no `Cell`: unlike the link's
     /// reachability, it is only touched under `Entity::update`.
@@ -47,14 +69,34 @@ impl AgentSession {
     /// Wraps a freshly started (or attached) session handle: pumps its
     /// event stream through the live fold onto this entity. The pump task
     /// is owned by the entity — it ends when the entity drops.
-    pub(crate) fn new(handle: AgentSessionHandle, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        handle: AgentSessionHandle,
+        session_id: SessionId,
+        title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut events = event_stream(handle.events());
         let live = LiveState::with_disabled_persistence();
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 let apply = this.update(cx, |session: &mut AgentSession, cx| {
-                    session.frame = live.extend_provider_events(std::iter::once(event));
-                    session.model = live.session_model();
+                    // Ephemeral live-task progress never reaches the fold —
+                    // handed there it would land as its placeholder event
+                    // (see `ProviderEvent::task_progress`). Applied to the
+                    // running-task list instead, then dropped.
+                    let mut event = event;
+                    if let Some(progress) = event.task_progress.take() {
+                        session.apply_task_progress(progress);
+                    } else {
+                        session.frame = live.extend_provider_events(std::iter::once(event));
+                        session.model = live.session_model();
+                    }
+                    // Title derivation runs only until it produces one: the
+                    // first user message fixes "what this session is about",
+                    // and a resumed session's replayed transcript surfaces
+                    // that same message, so the re-derived title matches the
+                    // one persistence kept.
+                    session.derive_title_from_first_user_message();
                     // Stale-death recovery (backlog #35): an event
                     // arriving means the runtime is reachable again.
                     session.link.mark_reachable();
@@ -73,10 +115,32 @@ impl AgentSession {
         Self {
             frame: AgentFrame::empty(),
             model: None,
+            tasks: Vec::new(),
+            session_id,
+            derived_title: None,
+            title_tx,
             link: RuntimeLink::new(handle.sender(), cx),
             notify_coalescer: NotifyCoalescer::default(),
             _wire: handle,
         }
+    }
+
+    /// Fixes this session's tab title from the transcript's first real
+    /// user message ("what was asked"), exactly once: the `derived_title`
+    /// guard keeps later turns from retitling the tab, and a session with
+    /// no usable user message yet keeps its default title until one
+    /// arrives.
+    fn derive_title_from_first_user_message(&mut self) {
+        if self.derived_title.is_some() {
+            return;
+        }
+        let Some(derived) = derive_title_from_items(&self.frame.items) else {
+            return;
+        };
+        self.derived_title = Some(derived.clone());
+        let _ = self
+            .title_tx
+            .unbounded_send((self.session_id, Some(derived)));
     }
 
     /// The event pump's coalesced `cx.notify()`: leading edge fires
@@ -114,6 +178,15 @@ impl AgentSession {
     /// on every call (no caching), mirroring the call sites this replaces.
     pub(crate) fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
         horizon_agent::frame::actionable_pending_approval_call_ids_in(&self.frame.items)
+    }
+
+    /// Applies one live task-progress event to the running-task row list —
+    /// a running observation upserts the child's row (preserving launch
+    /// order), a finished one retires it. Deliberately pure over the row
+    /// list (see [`apply_task_progress`]) so the upsert/retire table is
+    /// unit-testable without a runtime.
+    fn apply_task_progress(&mut self, progress: TaskProgress) {
+        apply_task_progress(&mut self.tasks, progress);
     }
 
     /// Whether the session's current turn is actively running (as opposed
@@ -167,5 +240,150 @@ impl AgentSession {
     /// The explicit destructive half of close-vs-terminate.
     pub(crate) fn shutdown(&self) {
         self.link.dispatch(Command::Shutdown);
+    }
+}
+
+/// The running-task row list's upsert/retire table, free-standing so tests
+/// can drive it without a GPUI runtime: a running observation upserts the
+/// child's row in place (preserving launch order — the strip lists tasks in
+/// the order they were launched), a finished one retires the row. A finish
+/// for an unknown child is a no-op (its row never shipped, or already went).
+fn apply_task_progress(tasks: &mut Vec<TaskProgress>, progress: TaskProgress) {
+    match progress.state {
+        TaskProgressState::Running => match tasks
+            .iter_mut()
+            .find(|row| row.task_session_id == progress.task_session_id)
+        {
+            Some(row) => *row = progress,
+            None => tasks.push(progress),
+        },
+        TaskProgressState::Finished => {
+            tasks.retain(|row| row.task_session_id != progress.task_session_id);
+        }
+    }
+}
+
+/// The title text for a transcript: the first user-authored message whose
+/// text survives [`derive_session_title`] (blank messages are skipped, as
+/// are system-authored ones -- [`MessageRole::TaskNotification`] and the
+/// other injected roles deliberately never title a tab), or `None` while
+/// no such message exists yet.
+fn derive_title_from_items(items: &[AgentFrameItem]) -> Option<String> {
+    items.iter().find_map(|item| match item {
+        AgentFrameItem::Message(message) if message.role == MessageRole::User => {
+            derive_session_title(&message.text)
+        }
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    // `super::*` is avoided here for the same reason `src/terminal/tests.rs`
+    // records: the parent module's `use gpui::*` glob-exports gpui's own
+    // `test` attribute macro, which shadows the built-in `#[test]` and
+    // sends plain tests through gpui's async harness instead (whose
+    // expansion blows the crate's macro recursion limit).
+    use super::derive_title_from_items;
+    use super::{apply_task_progress, TaskProgress, TaskProgressState};
+    use horizon_agent::contract::{Message, MessageRole, SessionId};
+    use horizon_agent::frame::AgentFrameItem;
+
+    fn progress(id: SessionId, state: TaskProgressState, activity: Option<&str>) -> TaskProgress {
+        TaskProgress {
+            task_session_id: id,
+            description: "investigate the flaky test".to_string(),
+            state,
+            activity: activity.map(str::to_string),
+            started_at_epoch_ms: 1_000,
+        }
+    }
+
+    #[test]
+    fn running_upserts_in_launch_order_and_finished_retires() {
+        let mut tasks = Vec::new();
+        let first = SessionId::new();
+        let second = SessionId::new();
+        apply_task_progress(
+            &mut tasks,
+            progress(first, TaskProgressState::Running, None),
+        );
+        apply_task_progress(
+            &mut tasks,
+            progress(second, TaskProgressState::Running, Some("fs.grep")),
+        );
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].task_session_id, first);
+        assert_eq!(tasks[1].task_session_id, second);
+
+        // An update to the first child keeps its launch position.
+        apply_task_progress(
+            &mut tasks,
+            progress(first, TaskProgressState::Running, Some("fs.read")),
+        );
+        assert_eq!(tasks[0].task_session_id, first);
+        assert_eq!(tasks[0].activity.as_deref(), Some("fs.read"));
+        assert_eq!(tasks[1].activity.as_deref(), Some("fs.grep"));
+
+        // Finishing retires exactly its own row.
+        apply_task_progress(
+            &mut tasks,
+            progress(first, TaskProgressState::Finished, None),
+        );
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].task_session_id, second);
+
+        // Finishing an unknown (already retired) child is a no-op.
+        apply_task_progress(
+            &mut tasks,
+            progress(first, TaskProgressState::Finished, None),
+        );
+        assert_eq!(tasks.len(), 1);
+    }
+
+    // Explicitly-typed builders keep the literals shallow and the
+    // assertions' intent readable.
+    fn user_message(text: &str) -> AgentFrameItem {
+        AgentFrameItem::Message(Message {
+            role: MessageRole::User,
+            text: text.to_string(),
+        })
+    }
+
+    fn task_notification(text: &str) -> AgentFrameItem {
+        AgentFrameItem::Message(Message {
+            role: MessageRole::TaskNotification,
+            text: text.to_string(),
+        })
+    }
+
+    #[test]
+    fn the_first_usable_user_message_supplies_the_title() {
+        let items = vec![
+            task_notification("task done"),
+            user_message("  fix the flaky test in\nsession.rs  "),
+        ];
+        assert_eq!(
+            derive_title_from_items(&items),
+            Some("fix the flaky test in session.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn a_blank_user_message_is_skipped_for_a_later_usable_one() {
+        let items = vec![user_message("   "), user_message("real ask")];
+        assert_eq!(
+            derive_title_from_items(&items),
+            Some("real ask".to_string())
+        );
+    }
+
+    #[test]
+    fn a_transcript_without_a_user_message_yields_no_title() {
+        assert_eq!(
+            derive_title_from_items(&[AgentFrameItem::MemoryCheckpointMissed]),
+            None
+        );
+        assert_eq!(derive_title_from_items(&[]), None);
     }
 }

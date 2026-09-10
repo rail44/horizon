@@ -142,6 +142,20 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
    (worktree/branch policy for child edits, approval forwarding,
    reconciling half-done work after a cap) are recorded for the next
    design round.
+8. **Live progress is an ephemeral mirror, not history** (owner request
+   2026-09-10: make a task's progress visible in the shell). Between
+   launch and completion, the child's watcher thread forwards what the
+   child is doing — the tool id of its latest call, reasoning vs
+   tool-running — as `AgentWireEvent::TaskProgress`
+   (`contract::TaskProgress`) onto the requester's attachment channel
+   (`ExplorationHost::forward_progress`). Deliberately not a
+   `contract::Event`: progress is UI feedback that must not bloat the
+   event log or the provider-visible history the notification path stays
+   out of. Dropped while no client is attached, never replayed on attach;
+   a re-attached client sees a child's row again at its next activity.
+   The durable record stays the completion notification — the progress
+   event's only job beyond mirroring is retiring the client's live row
+   when the child reaches any terminal state.
 
 ## Turn-semantics notes (implementation constraints)
 

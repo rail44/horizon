@@ -299,7 +299,7 @@ fn execute_tier1_bash(
         network,
         tool_state.loopback_connect(),
         crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
-        tool_state.filesystem_grants_snapshot(),
+        tool_state.effective_sandbox_grants(),
         None,
         runtime.async_results.clone(),
     );

@@ -73,6 +73,11 @@ fn derive_bindings(cx: &App, config: &horizon_config::RawConfig) -> (Vec<KeyBind
         KeyBinding::new("s", super::SplitPane, Some(MODE_CONTEXT)),
         KeyBinding::new("x", super::ClosePane, Some(MODE_CONTEXT)),
         KeyBinding::new("tab", super::NextTab, Some(MODE_CONTEXT)),
+        // Shift+Tab cycles the reverse direction. Like `tab` above it only
+        // fires while the mode owns key dispatch: an open modal keeps its
+        // deeper List-context `shift-tab` → `SelectUp` (below), and a
+        // focused terminal keeps its `NoAction` unbind (below).
+        KeyBinding::new("shift-tab", super::PrevTab, Some(MODE_CONTEXT)),
         KeyBinding::new(":", super::OpenPalette, Some(MODE_CONTEXT)),
         // Session manager row actions (`docs/session-relationship-design.md`
         // decision 4b), alongside the primary/secondary confirm the List

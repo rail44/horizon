@@ -98,6 +98,23 @@ pub(super) fn configured_domains(
     horizon_config::grants::domains_for_project(&state.project_grants, &project_root)
 }
 
+/// The `[grants]` `mach_services` entries this session's project entitles
+/// it to (`docs/macos-containment-denial-reporting-design.md`): macOS
+/// security services pre-recorded into the session's mach-service grant
+/// set at spawn, so a project that legitimately drives the keychain (e.g.
+/// one whose workflows authenticate with `gh`) doesn't re-ask per session.
+/// Same exact-root matching as [`configured_domains`]; validation happened
+/// at config resolution (`horizon_config::grants::resolve`).
+pub(super) fn configured_mach_services(
+    state: &Arc<AgentdState>,
+    workspace_root: Option<&Path>,
+) -> Vec<String> {
+    let Some(project_root) = workspace_root.and_then(worktree::project_root) else {
+        return Vec::new();
+    };
+    horizon_config::grants::mach_services_for_project(&state.project_grants, &project_root)
+}
+
 /// Whether this session's project root is in the user's `trusted_projects`
 /// config list -- the repository-trust gate (owner decision 2026-08-05).
 /// Resolved the same way [`configured_filesystem_grants`] resolves grants:
@@ -290,6 +307,7 @@ mod tests {
                 root: "/src/project".to_string(),
                 trees: vec![canonical_tree.display().to_string()],
                 network: Vec::new(),
+                mach_services: Vec::new(),
             }],
             Some(std::path::Path::new("/home/someone")),
         );
@@ -313,6 +331,7 @@ mod tests {
                 root: "/src/project".to_string(),
                 trees: vec!["/src/cache".to_string()],
                 network: Vec::new(),
+                mach_services: Vec::new(),
             }],
             None,
         );
@@ -329,6 +348,7 @@ mod tests {
                 root: "/src/project".to_string(),
                 trees: vec![path.display().to_string()],
                 network: Vec::new(),
+                mach_services: Vec::new(),
             }],
             None,
         );
@@ -361,6 +381,7 @@ mod tests {
                 root: "/src/project".to_string(),
                 trees: Vec::new(),
                 network: vec!["build-cache.internal".to_string()],
+                mach_services: Vec::new(),
             }],
             None,
         );

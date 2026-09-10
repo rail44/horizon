@@ -106,6 +106,13 @@ use crate::contract::{Command, SessionId};
 /// - **v19 — wire-only `Unknown` catch-alls removed; no decode compat**
 ///   (owner decision 2026-08-03 — this is a personal project, so backward
 ///   compatibility is not carried by default).
+///
+/// Additive since v19, no bump (the v12 precedent): **live background-task
+/// progress** — `AgentWireEvent::TaskProgress` (`contract::TaskProgress`),
+/// the daemon-side task watcher mirroring what a `task` child is doing
+/// (current tool, reasoning vs tool-running) onto the requester's
+/// attachment channel. Ephemeral UI feedback: never persisted, dropped
+/// while no client is attached, not replayed on attach.
 pub const AGENT_PROTOCOL_VERSION: u32 = 19;
 
 /// The oldest agent-wire version this build is still willing to negotiate

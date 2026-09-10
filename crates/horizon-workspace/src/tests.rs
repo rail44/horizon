@@ -1,4 +1,4 @@
-use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary};
+use super::types::{LayoutNode, PaneSummary, SessionSummary, TabSummary, TitleSource};
 use super::*;
 use crate::SessionId;
 
@@ -950,4 +950,52 @@ fn split_session_with_new_session_honors_the_vertical_axis() {
         }
         LayoutNode::Pane(_) => panic!("expected a vertical split of 2 panes"),
     }
+}
+
+#[test]
+fn a_derived_title_updates_an_auto_titled_session_and_dedupes() {
+    let mut workspace = Workspace::mvp();
+    let session_id = workspace.active_terminal_session_id().expect("session");
+
+    assert!(workspace.set_session_derived_title(session_id, Some("~/src/horizon")));
+    assert_eq!(workspace.session_summaries()[0].title, "~/src/horizon");
+    // A source re-reporting the title it already set changes nothing: the
+    // shell's pump keys its persist/repaint off this false.
+    assert!(!workspace.set_session_derived_title(session_id, Some("~/src/horizon")));
+}
+
+#[test]
+fn a_title_reset_restores_the_fallback_and_an_unknown_session_is_ignored() {
+    let mut workspace = Workspace::mvp();
+    let session_id = workspace.active_terminal_session_id().expect("session");
+    let fallback = workspace.session_summaries()[0].title.clone();
+
+    assert!(workspace.set_session_derived_title(session_id, Some("cargo build")));
+    // The `None` arm (`TerminalUpdate::Title(None)`, a shell's title reset)
+    // restores the kind-and-display-number default the session was created
+    // with.
+    assert!(workspace.set_session_derived_title(session_id, None));
+    assert_eq!(workspace.session_summaries()[0].title, fallback);
+    // A report for a session the model does not know is a no-op.
+    assert!(!workspace.set_session_derived_title(SessionId::new(), Some("nope")));
+}
+
+#[test]
+fn a_manually_titled_session_ignores_every_derived_update() {
+    let mut workspace = Workspace::mvp();
+    let session_id = workspace.active_terminal_session_id().expect("session");
+    {
+        let session = workspace
+            .sessions
+            .iter_mut()
+            .find(|session| session.id == session_id)
+            .expect("session");
+        session.title = "my terminal".to_string();
+        session.title_source = TitleSource::Manual;
+    }
+
+    // No rename path sets `Manual` yet, but the guard is the contract a
+    // future one relies on: derived updates never win over a pinned title.
+    assert!(!workspace.set_session_derived_title(session_id, Some("cargo build")));
+    assert_eq!(workspace.session_summaries()[0].title, "my terminal");
 }

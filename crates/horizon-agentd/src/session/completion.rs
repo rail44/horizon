@@ -61,7 +61,78 @@ pub(super) fn fold_tool_completion(
             denials,
             result,
         } => fold_filesystem_denied(state, live_state, session_id, call_id, denials, result),
+        ToolCompletion::MachServiceDenied {
+            call_id,
+            services,
+            result,
+        } => fold_mach_service_denied(state, live_state, session_id, call_id, services, result),
     }
+}
+
+/// A sandboxed `bash` call was refused mach-lookup to macOS security
+/// services (`docs/macos-containment-denial-reporting-design.md`) -- the
+/// macOS counterpart of [`fold_domain_denied`]: the call already ran to
+/// completion (evidence is the kernel's own unified-log denial record), so
+/// the reissued request carries the same retry shape --
+/// [`ApprovalKind::MachServiceGrant`] with `prior_result` -- so a later
+/// deny can forward it as-is (`tools::approval::resolve_mach_service_grant`).
+///
+/// The reason text states the enforcement granularity honestly: approving
+/// opens nono's whole security-service group (all-or-nothing -- the
+/// seatbelt profile has no per-service granularity), which includes the
+/// keychain. The service names themselves stay the primitive
+/// (`mach-lookup` targets); "keychain" appears only as this explanation.
+fn fold_mach_service_denied(
+    state: &Arc<AgentdState>,
+    live_state: &LiveState,
+    session_id: SessionId,
+    call_id: ToolCallId,
+    services: Vec<String>,
+    result: ToolCallResult,
+) {
+    let frame = live_state.frame();
+    if !should_fold_completion(&frame, &call_id) {
+        return;
+    }
+    let Some(original_request) = frame.tool_call_request(&call_id).cloned() else {
+        // Should be unreachable (this call_id was necessarily requested to
+        // have gotten this far) -- nothing sane to reissue against.
+        return;
+    };
+
+    let service_list = services.join(", ");
+    let reason = format!(
+        "`{}` tried to reach macOS security services ({service_list}) -- typically the \
+         keychain -- and the sandbox refused. Approving allows the macOS security/keychain \
+         service group for this session (all-or-nothing: the whole group, not just the named \
+         services) and retries the same call, still sandboxed. The grant lasts for this \
+         session only.",
+        original_request.tool_id
+    );
+    begin_reissued_approval(
+        state,
+        live_state,
+        session_id,
+        original_request.clone(),
+        ApprovalRequest {
+            call_id,
+            // See the matching site in `fold_domain_denied` above --
+            // `begin_reissued_approval` mints the fresh `OccurrenceId` for
+            // the reissued request; the `prior_result` is the *first*
+            // attempt's outcome, stamped with the original request's
+            // `occurrence_id` here so the transcript attributes it to the
+            // same occurrence.
+            occurrence_id: None,
+            reason,
+            kind: ApprovalKind::MachServiceGrant {
+                services,
+                prior_result: ToolCallResult {
+                    occurrence_id: original_request.occurrence_id.clone(),
+                    ..result
+                },
+            },
+        },
+    );
 }
 
 fn fold_approval_judgment(

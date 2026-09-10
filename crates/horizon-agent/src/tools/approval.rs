@@ -358,6 +358,17 @@ fn resolve_bash(
             prior_result,
             approval_source,
         ),
+        ApprovalKind::MachServiceGrant {
+            services,
+            prior_result,
+        } => resolve_mach_service_grant(
+            session_id,
+            runtime,
+            request,
+            decision,
+            services,
+            prior_result,
+        ),
         ApprovalKind::GitOperation { writable_roots } => {
             resolve_git_operation(session_id, runtime, request, decision, writable_roots)
         }
@@ -439,7 +450,7 @@ fn resolve_git_operation(
         runtime.tool_state.network_proxy(),
         runtime.tool_state.loopback_connect(),
         SandboxedApprovalOrigin::ManualGitOperation,
-        runtime.tool_state.filesystem_grants_snapshot(),
+        runtime.tool_state.effective_sandbox_grants(),
         Some(writable_roots),
         runtime.async_results.clone(),
     );
@@ -571,7 +582,7 @@ fn resolve_filesystem_denial_retry(
                 .map(|denial| denial.attempted_path.clone())
                 .collect(),
         },
-        runtime.tool_state.filesystem_grants_snapshot(),
+        runtime.tool_state.effective_sandbox_grants(),
         None,
         runtime.async_results.clone(),
     );
@@ -723,7 +734,91 @@ fn resolve_domain_denial_retry(
                 Some(network),
                 runtime.tool_state.loopback_connect(),
                 SandboxedApprovalOrigin::ManualDomainRetry { domains },
-                runtime.tool_state.filesystem_grants_snapshot(),
+                runtime.tool_state.effective_sandbox_grants(),
+                git_metadata_roots,
+                runtime.async_results.clone(),
+            );
+
+            ApprovalOutcome::Started { events, frame }
+        }
+    }
+}
+
+/// A sandboxed `bash` call was refused mach-lookup to macOS security
+/// services (`docs/macos-containment-denial-reporting-design.md`) -- the
+/// macOS counterpart of [`resolve_domain_denial_retry`]: the call already
+/// ran, a deny forwards `prior_result` unchanged, and an approve records
+/// the service set for this session (additive, session-persistent) and
+/// reruns the SAME call still sandboxed. The rerun's grant assembly picks
+/// up the enforcement mapping via
+/// [`ToolSessionState::effective_sandbox_grants`]
+/// (`horizon_sandbox::security_service_grants`).
+fn resolve_mach_service_grant(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    services: Vec<String>,
+    prior_result: ToolCallResult,
+) -> ApprovalOutcome {
+    let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
+    match decision {
+        ApprovalDecision::Deny { .. } => {
+            let events = vec![Event::ToolCallFinished(prior_result.clone())];
+            let frame = runtime
+                .live_state
+                .extend_provider_events(events.clone().into_iter().map(Into::into));
+            ApprovalOutcome::Executed {
+                events,
+                frame,
+                command: Command::ToolCallResult(prior_result),
+            }
+        }
+        ApprovalDecision::Approve => {
+            // Both should be impossible here -- a mach service grant is
+            // only ever produced by a tier-1 sandboxed call, which requires
+            // a workspace root -- but this stays defensive (forwarding the
+            // prior, already-computed result), mirroring
+            // [`resolve_domain_denial_retry`].
+            let Some(workspace_root) = runtime.tool_state.workspace_root() else {
+                let events = vec![Event::ToolCallFinished(prior_result.clone())];
+                let frame = runtime
+                    .live_state
+                    .extend_provider_events(events.clone().into_iter().map(Into::into));
+                return ApprovalOutcome::Executed {
+                    events,
+                    frame,
+                    command: Command::ToolCallResult(prior_result),
+                };
+            };
+            runtime.tool_state.approve_mach_services(&services);
+
+            let call_id = request.call_id.clone();
+            let events = vec![
+                // The abandoned attempt closes here, before the retry
+                // starts -- see `superseded_by_retry_result`.
+                Event::ToolCallFinished(superseded_by_retry_result(
+                    &prior_result,
+                    request.occurrence_id.as_ref(),
+                )),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(call_id.clone()),
+            ];
+            let frame = runtime
+                .live_state
+                .extend_provider_events(events.clone().into_iter().map(Into::into));
+
+            bash::spawn_sandboxed(
+                session_id,
+                call_id,
+                request.input.0.clone(),
+                runtime.tool_state.bash_cwd_handle(),
+                runtime.tool_state.bash_config(),
+                workspace_root.to_path_buf(),
+                runtime.tool_state.network_proxy(),
+                runtime.tool_state.loopback_connect(),
+                SandboxedApprovalOrigin::MachServiceGrant { services },
+                runtime.tool_state.effective_sandbox_grants(),
                 git_metadata_roots,
                 runtime.async_results.clone(),
             );

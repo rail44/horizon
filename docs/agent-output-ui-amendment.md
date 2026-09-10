@@ -988,7 +988,31 @@ deviation rather than asking for a mock update):
   tested ahead of that command existing, but nothing today can produce
   the divergence it handles.
 
-- **Transcript text made selectable and copyable (2026-08-06).** The
+- **Thinking hidden in full, superseding the tail-capped view (2026-09-10,
+  owner decision).** The 2026-07-13 "streaming thinking visibility
+  restored" bullet above is reversed: a reasoning delta is never a
+  transcript row again — streaming, mid-turn-replayed, or historical —
+  because the tail-capped six-line "thinking…" block was not actually
+  readable content, only fragmentary leakage. `build_transcript_rows`'s
+  visibility whitelist dropped its `ReasoningDelta`-while-turn-open clause
+  (a turn may now legitimately contribute zero rows beyond its receipt —
+  e.g. a thinking-only turn), and `render_item`'s reasoning arm became a
+  defensive no-op mirroring `ToolCallStarted`'s. Nothing outside the pane's
+  projection changed: the deltas keep flowing through the wire, the event
+  log, the DuckDB projection, and the rig provider's in-memory history
+  exactly as before — only the display is gone. Regression pin:
+  `thinking_is_never_a_transcript_row_streaming_or_replayed`
+  (`src/agent/view/transcript.rs`). The crate-side `cap_thinking_text`/
+  `THINKING_TAIL_LINES` helpers and their tests remain (the daemon-side
+  transcript view-model still uses them); the shell crate no longer
+  re-exports them. Known related artifact left untouched on purpose: when
+  a serving layer leaks orphan think-tags (`</mm:think>` etc.) into a
+  *committed* assistant message, that text renders via the ordinary
+  message row — hiding reasoning deltas does not and cannot remove it;
+  stripping it would be a display-time decision on the `Message` arm, not
+  this one.
+
+- **Transcript text made selectable and copyable (2026-09-10).** The
   transcript was paint-only — no mouse selection, no copy path for any
   message. Everything now rides gpui-component's window-level text
   selection (rev `0775df3`'s `TextView::selectable` + `Root`'s
@@ -998,9 +1022,9 @@ deviation rather than asking for a mock update):
   handler sits under the focused view; the TextView's own `Copy` action
   reads the window selection, and a click on transcript text moves focus
   to its TextView so cmd-c lands there). Assistant markdown/delta rows
-  just gain `.selectable(true)`. Plain-text rows (user messages, thinking
-  tails, error/exited/memory/throttle/context one-liners) — previously
-  bare `div().child(String)` divs the selection layer cannot see — now
+  just gain `.selectable(true)`. Plain-text rows (user messages,
+  error/exited/memory/throttle/context one-liners) — previously bare
+  `div().child(String)` divs the selection layer cannot see — now
   render through the same TextView pipeline with their text passed
   through `escape_markdown` first (backslash before every ASCII
   punctuation character, CommonMark's exact escapable set), so GFM can

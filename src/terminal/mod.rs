@@ -42,6 +42,7 @@ use self::input::{
     ScrollAccumulator,
 };
 use self::shape_cache::{CacheEpoch, RowItem, ShapedLineCache, NO_GENERATION};
+use crate::ime_forward;
 use crate::input_trace::input_trace;
 use crate::theme;
 
@@ -549,6 +550,25 @@ impl TerminalView {
                 keystroke.key
             );
             return;
+        }
+        // macOS gpui gap (see `ime_forward`'s module doc): control-modified
+        // keys never reach the input method, so IME-local ctrl+letter
+        // shortcuts (SKK's C-j mode toggle) cannot fire while a terminal
+        // pane has focus. The key is offered to the IME first: an IME that
+        // claims it keeps it from the PTY, and one that passes it through
+        // leaves the ordinary encoding below untouched.
+        if ime_forward::offerable_control_letter(keystroke).is_some() {
+            if ime_forward::forward_control_key_to_ime() {
+                input_trace!(
+                    "handle_key key={:?} sent: ime_forward consumed (pty skipped)",
+                    keystroke.key
+                );
+                return;
+            }
+            input_trace!(
+                "handle_key key={:?} ime_forward passed through, falls through to pty",
+                keystroke.key
+            );
         }
         // Cmd+C / Cmd+V are host shortcuts, not terminal input (the
         // command-model binding arrives with M3; these are the M1 stand-in).

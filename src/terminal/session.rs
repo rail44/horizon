@@ -21,6 +21,7 @@ use horizon_workspace::SessionId;
 
 use crate::input_trace::{input_trace, sink as input_trace_sink};
 use crate::runtime::{event_stream, RuntimeLink, TerminalSessionHandle};
+use crate::title::derive_session_title;
 
 /// Per-row content generations for the visible grid — the surviving form
 /// of the wire's row-level change information (goal 3 of
@@ -76,16 +77,25 @@ impl RowGenerations {
     }
 }
 
-/// How many viewports tall a requested scrollback window is
-/// (`docs/terminal-scrollback-design.md` §3.2, §9(2): the viewport plus about
-/// one screen of margin each side ≈ 3 viewports). The daemon clamps the
-/// request to its own byte-budgeted `max_window_rows` and the client already
-/// tolerates a shorter window, so an over-tall ask is harmless; a taller
-/// window just means more local scrolling before an edge re-fetch.
+/// How many viewports tall a **requested** scrollback window is
+/// (`docs/terminal-scrollback-design.md` §3.2, §9(2)). This is an upper
+/// bound, not a contract: the daemon clamps the served height to its own
+/// byte-budgeted `max_window_rows` (`screen_lines + OVERSCAN_ROWS`, so the
+/// overscan it actually grants is ~`OVERSCAN_ROWS / 2` per side however tall
+/// the pane), and the reply's `viewport_offset` reports the margin it really
+/// carried. The prefetch logic below must derive its lead from that served
+/// margin — a lead past it requests a replacement whose block cannot contain
+/// the current viewport, and rebasing the install would have to clamp,
+/// jumping the content (the repeated multi-line skip while scrolling up a
+/// pane taller than `OVERSCAN_ROWS / 2`).
 const WINDOW_VIEWPORTS: usize = 3;
 
-/// Start replenishing the held window while one viewport of overscan remains.
-/// This leaves the normal command/event round-trip off the gesture's edge.
+/// Base prefetch trigger distance and request lead, in viewports: start
+/// replenishing the held window while one served margin of overscan remains,
+/// and centre the replacement that far ahead in the gesture direction. Both
+/// are capped by the held window's served `viewport_offset` (see
+/// `WINDOW_VIEWPORTS`); for panes within the daemon's overscan the cap is
+/// inert and this is the whole distance.
 const PREFETCH_VIEWPORTS: usize = 1;
 
 fn requested_window_height(viewport_rows: usize) -> usize {
@@ -107,19 +117,27 @@ fn edge_anchor(len: usize, below: usize, viewport_rows: usize, off: i64) -> usiz
     anchor.max(0) as usize
 }
 
-/// Locate a live-tail-relative `anchor` inside a newly served window. This is
-/// the inverse of [`edge_anchor`] for an in-range viewport.
-fn offset_for_anchor(len: usize, below: usize, viewport_rows: usize, anchor: usize) -> usize {
+/// Locate a live-tail-relative `anchor` inside a newly served window — the
+/// inverse of [`edge_anchor`] for an in-range viewport. `None` when the
+/// window cannot represent the anchor: the row falls outside the sliceable
+/// range `[0, len - viewport_rows]`, and a clamped rebase would paint the
+/// wrong rows — callers re-request around the position instead.
+fn index_for_anchor(
+    len: usize,
+    below: usize,
+    viewport_rows: usize,
+    anchor: usize,
+) -> Option<usize> {
     let offset = len as i64 + below as i64 - viewport_rows as i64 - anchor as i64;
-    clamp_offset(offset.max(0) as usize, len, viewport_rows)
-}
-
-/// Clamp a viewport-top offset into `[0, len - viewport_rows]` so the visible
-/// slice stays inside the held window even when a served `viewport_offset`
-/// sits closer to the bottom than a full viewport (a short window near the
-/// true top).
-fn clamp_offset(offset: usize, len: usize, viewport_rows: usize) -> usize {
-    offset.min(len.saturating_sub(viewport_rows))
+    if offset < 0 {
+        return None;
+    }
+    let offset = offset as usize;
+    if offset > len.saturating_sub(viewport_rows) {
+        None
+    } else {
+        Some(offset)
+    }
 }
 
 fn prefetch_threshold(viewport_rows: usize) -> usize {
@@ -365,8 +383,17 @@ impl Scrollback {
                         *offset = 0;
                         *fractional_row = 0.0;
                         if fetch.is_some() {
-                            // The proactive replacement is already on its way.
-                            // Clamp briefly rather than fan out a second request.
+                            // The proactive replacement is already on its way,
+                            // but it was centred for a position inside the held
+                            // block and cannot represent this overshoot either.
+                            // Re-point it at the tracked continuous target so
+                            // the self-describing reply rebases to where the
+                            // gesture actually is instead of discarding the
+                            // rows scrolled past the block edge. Still no
+                            // second request: one replacement stays in flight.
+                            let target_anchor =
+                                edge_anchor(len, window.below, vr, 0) as f32 - new_position;
+                            *fetch = Some(WindowFetch::Edge { target_anchor });
                             ScrollDecision {
                                 ipc: ScrollIpc::None,
                                 repaint: true,
@@ -426,6 +453,26 @@ impl Scrollback {
                         *offset = max_top;
                         *fractional_row = 0.0;
                         if fetch.is_some() {
+                            // Mirror of the top-edge conversion: re-point the
+                            // in-flight replacement at the tracked continuous
+                            // target instead of discarding the rows scrolled
+                            // past the block's bottom edge.
+                            let target_anchor =
+                                edge_anchor(len, window.below, vr, 0) as f32 - new_position;
+                            if target_anchor <= FRACTION_EPSILON {
+                                // The gesture crossed every row below this
+                                // held block and reached the live tail; the
+                                // live frame is already available locally, so
+                                // drop to it (as the no-fetch path below does)
+                                // rather than rebasing onto a tail-anchored
+                                // window that hides cursor/selection.
+                                *self = Scrollback::Live;
+                                return ScrollDecision {
+                                    ipc: ScrollIpc::None,
+                                    repaint: true,
+                                };
+                            }
+                            *fetch = Some(WindowFetch::Edge { target_anchor });
                             ScrollDecision {
                                 ipc: ScrollIpc::None,
                                 repaint: true,
@@ -466,22 +513,30 @@ impl Scrollback {
                     (*offset, *fractional_row) = split_row_position(new_position, max_top);
                     let distance_to_top = *offset;
                     let distance_to_bottom = max_top - *offset;
+                    // The daemon serves at most `screen_lines + OVERSCAN_ROWS`
+                    // rows whatever height was requested, so the overscan it
+                    // actually grants is the held window's own
+                    // `viewport_offset` — cap both the trigger distance and
+                    // the request lead by it. A lead past that asks for a
+                    // replacement whose block cannot contain the current
+                    // viewport, and the install would have to clamp the
+                    // rebase: the repeated multi-line jump while scrolling up
+                    // a pane taller than `OVERSCAN_ROWS / 2`.
+                    let prefetch_margin = prefetch_threshold(vr).min(window.viewport_offset);
                     let near_top =
-                        rows > 0.0 && window.above > 0 && distance_to_top <= prefetch_threshold(vr);
-                    let near_bottom = rows < 0.0
-                        && window.below > 0
-                        && distance_to_bottom <= prefetch_threshold(vr);
+                        rows > 0.0 && window.above > 0 && distance_to_top <= prefetch_margin;
+                    let near_bottom =
+                        rows < 0.0 && window.below > 0 && distance_to_bottom <= prefetch_margin;
                     let ipc = if fetch.is_none() && (near_top || near_bottom) {
-                        // Centre the replacement one margin ahead in the
-                        // gesture direction. Once installed, the current
+                        // Centre the replacement one served margin ahead in
+                        // the gesture direction. Once installed, the current
                         // viewport sits at the opposite side of its overscan,
                         // avoiding a replacement on every individual tick.
                         let current_anchor = edge_anchor(len, window.below, vr, *offset as i64);
-                        let margin = prefetch_threshold(vr);
                         let anchor = if near_top {
-                            current_anchor.saturating_add(margin)
+                            current_anchor.saturating_add(prefetch_margin)
                         } else {
-                            current_anchor.saturating_sub(margin)
+                            current_anchor.saturating_sub(prefetch_margin)
                         };
                         *fetch = Some(WindowFetch::Prefetch);
                         ScrollIpc::Request {
@@ -569,22 +624,48 @@ impl Scrollback {
                         // Wheel ticks can move locally after the prefetch
                         // starts. Locate that current viewport in the new
                         // self-describing window instead of jumping back to
-                        // the request-time position.
+                        // the request-time position — but only if the
+                        // replacement can represent it. The daemon caps served
+                        // windows at `screen_lines + OVERSCAN_ROWS` whatever
+                        // height was asked, so a replacement centred further
+                        // ahead than the served margin arrives without the
+                        // rows the rebase needs. Installing it anyway would
+                        // clamp the rebase and jump the content; the held
+                        // window still covers the viewport (a prefetch only
+                        // fires mid-block), so keep it and re-request around
+                        // the live position as a tracked edge fetch instead.
                         let anchor = edge_anchor(
                             held.lines.len(),
                             held.below,
                             *viewport_rows,
                             *offset as i64,
                         );
-                        let off = offset_for_anchor(
+                        match index_for_anchor(
                             window.lines.len(),
                             window.below,
                             *viewport_rows,
                             anchor,
-                        );
-                        *held = Arc::new(window);
-                        *offset = off;
-                        WindowInstall::installed(None)
+                        ) {
+                            Some(off) => {
+                                *held = Arc::new(window);
+                                *offset = off;
+                                WindowInstall::installed(None)
+                            }
+                            None => {
+                                let target_anchor = continuous_anchor(
+                                    held.lines.len(),
+                                    held.below,
+                                    *viewport_rows,
+                                    *offset,
+                                    *fractional_row,
+                                );
+                                *fetch = Some(WindowFetch::Edge { target_anchor });
+                                WindowInstall::installed(Some((
+                                    request_anchor(target_anchor),
+                                    requested_window_height(*viewport_rows),
+                                )))
+                            }
+                        }
                     }
                     WindowFetch::Edge { target_anchor } => {
                         let vr = *viewport_rows;
@@ -772,6 +853,17 @@ pub(crate) struct TerminalSession {
     /// can terminate the workspace session and replace it if it was the last
     /// pane.
     exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+    /// The latest content-derived title this session reported
+    /// (`TerminalUpdate::Title`, already sanitized/clamped by
+    /// [`derive_session_title`]) -- `None` both before any title arrives
+    /// and after a title reset (`Title(None)`) retracts it. Kept so
+    /// [`Self::record_title_update`] can dedupe consecutive identical
+    /// reports instead of re-sending them.
+    derived_title: Option<String>,
+    /// Reports derived-title changes to the shell, which folds them into
+    /// the workspace model (`Workspace::set_session_derived_title` via
+    /// `wire_session_title_updates`) -- the title side of `exit_tx`.
+    title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
     /// Scrollback windowing state (`docs/terminal-scrollback-design.md` §3.3):
     /// `Live` while following the tail, or a held window scrolled within
     /// locally. Interior-mutable because both the sync scroll handler
@@ -794,6 +886,7 @@ impl TerminalSession {
         handle: TerminalSessionHandle,
         session_id: SessionId,
         exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+        title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut frames_rx = handle.frames();
@@ -882,6 +975,8 @@ impl TerminalSession {
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
             scrollback_generation: 0,
+            derived_title: None,
+            title_tx,
             _attachment: handle,
         }
     }
@@ -941,7 +1036,11 @@ impl TerminalSession {
                 }
                 true
             }
-            Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
+            Incoming::Event(TerminalUpdate::Title(title)) => {
+                self.record_title_update(title);
+                true
+            }
+            Incoming::Event(TerminalUpdate::Bell) => true,
             Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
                 let install = self.scrollback.borrow_mut().install_window(window);
                 if install.installed {
@@ -977,6 +1076,22 @@ impl TerminalSession {
 
     pub(crate) fn runtime_unreachable(&self) -> bool {
         self.link.is_unreachable()
+    }
+
+    /// Folds an OSC 0/2 title report (`TerminalUpdate::Title`: `Some` is a
+    /// shell/app-set title, `None` its reset) into this session's derived
+    /// title and reports it to the shell when it changed -- the tab label
+    /// updates to whatever the running program calls this terminal, and a
+    /// reset drops back to the model's default (`set_session_derived_title`'s
+    /// `None` arm). Deduped here so a shell that re-sends the same title on
+    /// every prompt costs no model writes.
+    fn record_title_update(&mut self, title: Option<String>) {
+        let derived = title.as_deref().and_then(derive_session_title);
+        if derived == self.derived_title {
+            return;
+        }
+        self.derived_title = derived.clone();
+        let _ = self.title_tx.unbounded_send((self.session_id, derived));
     }
 
     /// Every command send funnels through here. The link short-circuits once
@@ -1690,6 +1805,148 @@ mod tests {
             }
             other => panic!("expected installed prefetch, got {other:?}"),
         }
+    }
+
+    /// The daemon caps served windows at `screen_lines + OVERSCAN_ROWS`
+    /// whatever height was requested, so the overscan it grants per side is
+    /// the held window's `viewport_offset`, not a full viewport. The prefetch
+    /// lead (and trigger) must cap to it: leading by a full viewport asks for
+    /// a replacement whose block cannot represent the current viewport, and
+    /// the install would have to clamp the rebase — the repeated multi-line
+    /// jump while scrolling up a pane taller than `OVERSCAN_ROWS / 2`.
+    #[test]
+    fn prefetch_lead_is_capped_by_the_served_margin() {
+        // A 10-row viewport served a 14-row window (10 + 4 overscan, 2 per
+        // side): the granted margin (2) is a fifth of the viewport.
+        let mut state = Scrollback::Windowed {
+            window: window(14, 2, 9, 0).into(),
+            offset: 2,
+            fractional_row: 0.0,
+            viewport_rows: 10,
+            fetch: None,
+        };
+
+        // One tick up: a local move to offset 1 enters the capped near-edge
+        // check (distance 1 <= margin 2) and leads the replacement by 2, not
+        // by the 10-row threshold.
+        let decision = state.on_wheel(1.0, 10);
+        assert_eq!(
+            decision.ipc,
+            ScrollIpc::Request {
+                // Current anchor: 14 + 0 - 10 - 1 = 3; lead 2 → 5.
+                anchor: 5,
+                height: 10 * super::WINDOW_VIEWPORTS,
+            }
+        );
+
+        // The reply is centred on the requested anchor with the same 2-row
+        // margin: viewport top (index 2) at anchor 5 fixes below at 3
+        // (14 + below - 10 - 2 == 5), so the current row (anchor 3) lands at
+        // index 4 — the last representable offset, no clamp involved.
+        let install = state.install_window(window(14, 2, 7, 3));
+        assert!(install.installed);
+        assert_eq!(install.request, None);
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 4,
+                fetch: None,
+                ..
+            }
+        ));
+    }
+
+    /// A prefetch reply that cannot represent the viewport the gesture has
+    /// reached (the daemon served a shorter block than the lead assumed) must
+    /// not install with a clamped rebase: the held window still covers the
+    /// viewport, so keep it and re-request around the live position as a
+    /// tracked edge fetch.
+    #[test]
+    fn an_unrepresentable_prefetch_reply_keeps_the_held_window_and_rerequests() {
+        let mut state = Scrollback::Windowed {
+            window: window(14, 2, 9, 0).into(),
+            offset: 2,
+            fractional_row: 0.25,
+            viewport_rows: 10,
+            fetch: Some(WindowFetch::Prefetch),
+        };
+
+        // The reply's block sits five rows further from the tail than the
+        // held window describes: the current viewport top (anchor
+        // 14 + 0 - 10 - 2 = 2) maps to index 14 + 5 - 10 - 2 = 7, past the
+        // representable range (max_top 4).
+        let install = state.install_window(window(14, 2, 7, 5));
+        assert!(install.installed);
+        assert_eq!(
+            install.request,
+            Some((2, 10 * super::WINDOW_VIEWPORTS)),
+            "re-request centred on the held viewport's continuous anchor"
+        );
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 2,
+                fractional_row,
+                fetch: Some(WindowFetch::Edge { target_anchor }),
+                ..
+            } if (fractional_row - 0.25).abs() < 0.0001
+                && (target_anchor - 1.75).abs() < 0.0001
+        ));
+    }
+
+    /// Crossing the block's top while a prefetch is in flight re-points the
+    /// fetch at the tracked continuous target instead of discarding the
+    /// overshoot: the eventual reply rebases to where the gesture actually
+    /// is, so no scrolled-past rows are lost.
+    #[test]
+    fn crossing_the_top_with_a_prefetch_in_flight_tracks_the_target() {
+        let mut state = Scrollback::Windowed {
+            window: window(14, 2, 9, 0).into(),
+            offset: 1,
+            fractional_row: 0.25,
+            viewport_rows: 10,
+            fetch: Some(WindowFetch::Prefetch),
+        };
+
+        // 1.25 - 3 = -1.75: past the block top with history above.
+        let decision = state.on_wheel(3.0, 10);
+        assert_eq!(decision.ipc, ScrollIpc::None, "one fetch stays in flight");
+        assert!(decision.repaint);
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 0,
+                fractional_row: 0.0,
+                fetch: Some(WindowFetch::Edge { target_anchor }),
+                ..
+            } if (target_anchor - 5.75).abs() < 0.0001
+        ));
+    }
+
+    /// Mirror of the top-edge conversion at the block's bottom edge.
+    #[test]
+    fn crossing_the_bottom_with_a_prefetch_in_flight_tracks_the_target() {
+        let mut state = Scrollback::Windowed {
+            window: window(14, 2, 9, 5).into(),
+            offset: 4,
+            fractional_row: 0.0,
+            viewport_rows: 10,
+            fetch: Some(WindowFetch::Prefetch),
+        };
+
+        // 4.0 + 3 = 7: past the block bottom (max_top 4) with rows below.
+        let decision = state.on_wheel(-3.0, 10);
+        assert_eq!(decision.ipc, ScrollIpc::None);
+        assert!(decision.repaint);
+        assert!(matches!(
+            state,
+            Scrollback::Windowed {
+                offset: 4,
+                fractional_row: 0.0,
+                fetch: Some(WindowFetch::Edge { target_anchor }),
+                ..
+            } if (target_anchor - 2.0).abs() < 0.0001
+        ));
     }
 
     /// Scrolling down past the block bottom when it is the live tail

@@ -165,6 +165,14 @@ struct Inner {
     /// host-side web tools. It exists even when this session cannot start a
     /// sandbox proxy, so `web_fetch` never needs a separate policy model.
     domains: SessionDomainPolicy,
+    /// This session's approved (or config-declared) macOS mach service
+    /// grants (`docs/macos-containment-denial-reporting-design.md`):
+    /// security services whose seatbelt deny an approval has lifted for
+    /// every later sandboxed call in this session. Cross-platform field,
+    /// populated only on macOS -- interactively via
+    /// `ApprovalKind::MachServiceGrant`, or from the project's
+    /// `[[grants.project]]` `mach_services` entries at spawn.
+    mach_services: RefCell<Vec<String>>,
     /// This session's enforcing judge handle (`docs/agent-approval-
     /// design.md`'s "Judge design"), if one could be built for it. `None`
     /// means approval candidates go directly to the human (no
@@ -245,6 +253,7 @@ impl ToolSessionState {
                 network: None,
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
+                mach_services: RefCell::new(Vec::new()),
                 judge: None,
                 exploration: None,
                 board: None,
@@ -296,6 +305,61 @@ impl ToolSessionState {
     /// at all).
     pub(crate) fn is_isolated_worktree(&self) -> bool {
         self.inner.isolated_worktree
+    }
+
+    /// This session's approved (or config-declared) macOS mach service
+    /// grants (`docs/macos-containment-denial-reporting-design.md`):
+    /// security services whose seatbelt deny an approval has lifted for
+    /// every later sandboxed call in this session.
+    pub(crate) fn mach_services(&self) -> Vec<String> {
+        self.inner.mach_services.borrow().clone()
+    }
+
+    /// Records approved mach service grants for this session, additively
+    /// (same posture as [`Self::approve_filesystem_grants`]). Unlike
+    /// filesystem grants these are not revalidated per spawn -- they are
+    /// service names, not paths; the enforcement mapping itself is
+    /// best-effort per spawn (`horizon_sandbox::security_service_grants`
+    /// grants only the keychain database files that currently exist).
+    pub(crate) fn approve_mach_services(&self, services: &[String]) {
+        let mut approved = self.inner.mach_services.borrow_mut();
+        for service in services {
+            if !approved.contains(service) {
+                approved.push(service.clone());
+            }
+        }
+    }
+
+    /// Seeds config-declared mach services (`[[grants.project]]`
+    /// `mach_services`) the same way [`Self::with_filesystem_grants`] seeds
+    /// configured trees. Same construction-time-only safety contract as
+    /// [`Self::with_skills`].
+    pub fn with_mach_services(mut self, services: Vec<String>) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.mach_services = RefCell::new(services);
+        }
+        self
+    }
+
+    /// The grants merged into the next sandboxed spawn's policy: the
+    /// revalidated filesystem grants plus, on macOS, the enforcement grants
+    /// for this session's mach service set
+    /// (`horizon_sandbox::security_service_grants`). Every
+    /// `spawn_sandboxed` call site passes this instead of
+    /// [`Self::filesystem_grants_snapshot`] so an approved service grant
+    /// rides along on any sandboxed spawn, not just the retry that won it.
+    pub(crate) fn effective_sandbox_grants(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
+        let services = self.mach_services();
+        let mut grants = self.filesystem_grants_snapshot();
+        #[cfg(target_os = "macos")]
+        for grant in horizon_sandbox::security_service_grants(&services) {
+            if !grants.contains(&grant) {
+                grants.push(grant);
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        debug_assert!(services.is_empty());
+        grants
     }
 
     /// Installs this session's own network-proxy pair after construction --

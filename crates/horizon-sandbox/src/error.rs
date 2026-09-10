@@ -103,4 +103,12 @@ pub enum SandboxError {
     #[cfg(target_os = "linux")]
     #[error("sandbox supervisor report failed: {0}")]
     SupervisorReport(#[source] horizon_sandbox_runtime::ReportError),
+
+    /// macOS only: the unified-log denial collector could not run or read
+    /// the system log. The caller soft-degrades -- the report is evidence,
+    /// not the boundary (seatbelt enforced unconditionally either way); see
+    /// `docs/macos-containment-denial-reporting-design.md`.
+    #[cfg(target_os = "macos")]
+    #[error("macOS denial collector failed: {0}")]
+    DenialReport(String),
 }

@@ -172,6 +172,14 @@ pub struct ContainmentDenials {
     /// nothing narrow enough to offer for approval exists for them.
     #[serde(default)]
     pub ungrantable: Vec<UngrantableDenial>,
+    /// macOS only: security-related mach services a sandboxed process tried
+    /// to reach and was refused (`mach-lookup` records recovered from the
+    /// unified log -- see `macos::denials`). Unlike [`Self::network`], these
+    /// enter the approval flow (`ApprovalKind::MachServiceGrant`); approving
+    /// one opens nono's security-service group as a whole, which is the
+    /// only enforcement granularity the seatbelt profile offers.
+    #[serde(default)]
+    pub mach_services: Vec<String>,
 }
 
 /// Private helper wire envelope. Kept public only for this package's bin target.
