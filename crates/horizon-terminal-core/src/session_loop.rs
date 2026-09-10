@@ -200,6 +200,130 @@ fn flush_snapshot(
     }
 }
 
+/// Parse one PTY-output chunk and emit everything it produced: query/DA/DSR
+/// replies back into the PTY input (`TerminalCommand::Input`), bell/title/
+/// clipboard updates to the client, and -- when the grid actually changed --
+/// a rate-controlled snapshot. Shared by [`drain_pty_output`]'s priority
+/// drain and the `pty_rx` `select!` arm.
+#[allow(clippy::too_many_arguments)]
+fn process_pty_chunk(
+    core: &mut TerminalCore,
+    bytes: &[u8],
+    command_tx: &Sender<TerminalCommand>,
+    update_tx: &Sender<TerminalUpdate>,
+    frame_tx: &Sender<TerminalFrame>,
+    sync_flush_rx: &mut Receiver<Instant>,
+    last_sent: &mut Instant,
+    dirty: &mut bool,
+    flush_armed: &mut bool,
+    flush_rx: &mut Receiver<Instant>,
+) {
+    let events = core.write_vt(bytes);
+    tracing::debug!(
+        target: "horizon_terminal_core::session_loop",
+        visible_dirty = events.visible_dirty,
+        "pty_chunk_processed"
+    );
+    for bytes in events.pty_writes {
+        let _ = command_tx.send(TerminalCommand::Input(bytes));
+    }
+    if events.bell_count > 0 {
+        let _ = update_tx.send(TerminalUpdate::Bell);
+    }
+    if events.title.is_some() {
+        let _ = update_tx.send(TerminalUpdate::Title(events.title));
+    }
+    for text in events.clipboard_writes {
+        let _ = update_tx.send(TerminalUpdate::Clipboard {
+            text,
+            destination: ClipboardDestination::Clipboard,
+        });
+    }
+    rearm_sync_flush(core, sync_flush_rx);
+    // Only a chunk that actually reached the grid deserves
+    // `notify_snapshot`'s immediate slot -- a chunk that landed entirely
+    // inside an already-open BSU/ESU window (buffered, nothing flushed yet)
+    // must not steal it from the real content that flushes later. See
+    // `TerminalCore::write_vt`.
+    if events.visible_dirty {
+        notify_snapshot(core, frame_tx, last_sent, dirty, flush_armed, flush_rx);
+        tracing::debug!(
+            target: "horizon_terminal_core::session_loop",
+            "notify_snapshot"
+        );
+    } else {
+        tracing::debug!(
+            target: "horizon_terminal_core::session_loop",
+            "skipped_notify_buffered"
+        );
+    }
+}
+
+/// Upper bound on PTY-output chunks processed by one [`drain_pty_output`]
+/// call. Bounding keeps a sustained output flood from starving keystroke
+/// forwarding entirely: once the budget is spent the caller falls back to
+/// the randomized `select!`, which still services `pty_rx`.
+const PTY_DRAIN_BUDGET: usize = 8;
+
+/// Parse queued PTY-output chunks with priority over UI-originated input,
+/// so each chunk's terminal-query replies (`TerminalCommand::Input`, e.g.
+/// an OSC 11 background-color answer) are enqueued for the PTY writer
+/// *before* whatever keystroke/text/paste prompted this drain is forwarded.
+///
+/// Why that ordering is load-bearing: `select!` picks randomly among ready
+/// receivers, so a keystroke can otherwise be encoded and handed to the
+/// shell before an earlier-arrived PTY chunk is even parsed. That chunk may
+/// contain a terminal query -- fish 4.x probes the background color with
+/// `OSC 11;?` around every prompt -- and the reply must reach the process
+/// that asked while that process is still the one reading stdin. If the
+/// Enter keystroke that execs the next program (`gh auth login`, a TUI,
+/// ...) wins the race instead, the reply is written into the *new*
+/// process's stdin, where survey-style prompt loops abort with
+/// "unexpected escape sequence from terminal: ['\x1b' ']']". Native
+/// terminals answer queries inline in their read handler; this drain
+/// restores that ordering.
+///
+/// Returns `false` once `pty_rx` is disconnected (the session is tearing
+/// down) so the caller can return; otherwise drains at most
+/// [`PTY_DRAIN_BUDGET`] chunks and returns `true`.
+#[allow(clippy::too_many_arguments)]
+fn drain_pty_output(
+    core: &mut TerminalCore,
+    pty_rx: &Receiver<Vec<u8>>,
+    command_tx: &Sender<TerminalCommand>,
+    update_tx: &Sender<TerminalUpdate>,
+    frame_tx: &Sender<TerminalFrame>,
+    sync_flush_rx: &mut Receiver<Instant>,
+    last_sent: &mut Instant,
+    dirty: &mut bool,
+    flush_armed: &mut bool,
+    flush_rx: &mut Receiver<Instant>,
+    mut budget: usize,
+) -> bool {
+    while budget > 0 {
+        match pty_rx.try_recv() {
+            Ok(bytes) => {
+                process_pty_chunk(
+                    core,
+                    &bytes,
+                    command_tx,
+                    update_tx,
+                    frame_tx,
+                    sync_flush_rx,
+                    last_sent,
+                    dirty,
+                    flush_armed,
+                    flush_rx,
+                );
+                budget -= 1;
+            }
+            Err(crossbeam_channel::TryRecvError::Empty) => return true,
+            Err(crossbeam_channel::TryRecvError::Disconnected) => return false,
+        }
+    }
+    true
+}
+
 pub fn run_terminal_core(
     size: TerminalSize,
     options: TerminalCoreOptions,
@@ -240,6 +364,24 @@ pub fn run_terminal_core(
     let mut sync_flush_rx: Receiver<Instant> = crossbeam_channel::never();
 
     loop {
+        // PTY output drains with priority over UI-originated input -- see
+        // `drain_pty_output` for why that reply ordering is load-bearing.
+        if !drain_pty_output(
+            &mut core,
+            &pty_rx,
+            &command_tx,
+            &update_tx,
+            &frame_tx,
+            &mut sync_flush_rx,
+            &mut last_sent,
+            &mut dirty,
+            &mut flush_armed,
+            &mut flush_rx,
+            PTY_DRAIN_BUDGET,
+        ) {
+            return;
+        }
+
         crossbeam_channel::select! {
             recv(resize_rx) -> size => {
                 let Ok(size) = size else {
@@ -270,6 +412,24 @@ pub fn run_terminal_core(
                 let Ok(text) = text else {
                     return;
                 };
+                // A paste routinely carries the trailing newline that execs
+                // the pasted command, so it gets the same priority drain as
+                // a keystroke (see `drain_pty_output`).
+                if !drain_pty_output(
+                    &mut core,
+                    &pty_rx,
+                    &command_tx,
+                    &update_tx,
+                    &frame_tx,
+                    &mut sync_flush_rx,
+                    &mut last_sent,
+                    &mut dirty,
+                    &mut flush_armed,
+                    &mut flush_rx,
+                    PTY_DRAIN_BUDGET,
+                ) {
+                    return;
+                }
                 let _ = command_tx.send(TerminalCommand::Input(core.paste_input(&text)));
                 notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
@@ -277,6 +437,24 @@ pub fn run_terminal_core(
                 let Ok((key, modifiers, event, text)) = key else {
                     return;
                 };
+                // A keystroke may be the Enter that execs the next program;
+                // any query already queued on `pty_rx` must be answered
+                // before this key is forwarded (see `drain_pty_output`).
+                if !drain_pty_output(
+                    &mut core,
+                    &pty_rx,
+                    &command_tx,
+                    &update_tx,
+                    &frame_tx,
+                    &mut sync_flush_rx,
+                    &mut last_sent,
+                    &mut dirty,
+                    &mut flush_armed,
+                    &mut flush_rx,
+                    PTY_DRAIN_BUDGET,
+                ) {
+                    return;
+                }
                 // `key_input` only encodes bytes for the PTY -- it never
                 // touches `core`'s visible state, so there is nothing to
                 // notify here. The real echo arrives back through `pty_rx`
@@ -291,6 +469,24 @@ pub fn run_terminal_core(
                 let Ok(text) = text else {
                     return;
                 };
+                // An IME commit can carry the newline that submits a
+                // command, so it gets the same priority drain as a
+                // keystroke (see `drain_pty_output`).
+                if !drain_pty_output(
+                    &mut core,
+                    &pty_rx,
+                    &command_tx,
+                    &update_tx,
+                    &frame_tx,
+                    &mut sync_flush_rx,
+                    &mut last_sent,
+                    &mut dirty,
+                    &mut flush_armed,
+                    &mut flush_rx,
+                    PTY_DRAIN_BUDGET,
+                ) {
+                    return;
+                }
                 // `text_input` encodes committed text (e.g. IME commits) for
                 // the PTY according to the live Kitty keyboard mode. Like
                 // `key_input`, it does not touch visible state.
@@ -367,45 +563,18 @@ pub fn run_terminal_core(
                 let Ok(bytes) = bytes else {
                     return;
                 };
-                let events = core.write_vt(&bytes);
-                tracing::debug!(
-                    target: "horizon_terminal_core::session_loop",
-                    visible_dirty = events.visible_dirty,
-                    "pty_chunk_processed"
+                process_pty_chunk(
+                    &mut core,
+                    &bytes,
+                    &command_tx,
+                    &update_tx,
+                    &frame_tx,
+                    &mut sync_flush_rx,
+                    &mut last_sent,
+                    &mut dirty,
+                    &mut flush_armed,
+                    &mut flush_rx,
                 );
-                for bytes in events.pty_writes {
-                    let _ = command_tx.send(TerminalCommand::Input(bytes));
-                }
-                if events.bell_count > 0 {
-                    let _ = update_tx.send(TerminalUpdate::Bell);
-                }
-                if events.title.is_some() {
-                    let _ = update_tx.send(TerminalUpdate::Title(events.title));
-                }
-                for text in events.clipboard_writes {
-                    let _ = update_tx.send(TerminalUpdate::Clipboard {
-                        text,
-                        destination: ClipboardDestination::Clipboard,
-                    });
-                }
-                rearm_sync_flush(&core, &mut sync_flush_rx);
-                // Only a chunk that actually reached the grid deserves
-                // `notify_snapshot`'s immediate slot -- a chunk that landed
-                // entirely inside an already-open BSU/ESU window (buffered,
-                // nothing flushed yet) must not steal it from the real
-                // content that flushes later. See `TerminalCore::write_vt`.
-                if events.visible_dirty {
-                    notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
-                    tracing::debug!(
-                        target: "horizon_terminal_core::session_loop",
-                        "notify_snapshot"
-                    );
-                } else {
-                    tracing::debug!(
-                        target: "horizon_terminal_core::session_loop",
-                        "skipped_notify_buffered"
-                    );
-                }
             }
             recv(flush_rx) -> _ => {
                 flush_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -1311,5 +1480,99 @@ mod tests {
             }
         }
         false
+    }
+
+    /// Regression test for query-reply ordering: a PTY chunk containing a
+    /// terminal query (fish 4.x probes the background color with
+    /// `OSC 11;?` around every prompt) that reaches the loop before a
+    /// keystroke must be answered before that keystroke is forwarded to
+    /// the shell. With the old randomized-`select!`-only servicing, the
+    /// Enter keystroke that execs the next program could win the race, and
+    /// the reply was then written into the *new* process's stdin -- gh's
+    /// survey prompt loop aborts on it with "unexpected escape sequence
+    /// from terminal: ['\x1b' ']']". Both interleavings below (the query
+    /// drained at the loop top, or answered by the key arm's own priority
+    /// drain after `select!` picked the key) enqueue the reply first, so
+    /// the assertion is deterministic on the fixed loop. (An unfixed loop
+    /// can still pass by luck -- roughly one chance in three here -- which
+    /// is exactly the flakiness users saw as an intermittent gh failure.)
+    #[test]
+    fn pending_query_is_answered_before_a_queued_keystroke_is_forwarded() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+        let (key_tx, key_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx,
+            text_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            );
+        });
+
+        frame_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("startup snapshot");
+
+        // Queue the query first, then the keystrokes it must not lose to.
+        pty_tx.send(b"\x1b]11;?\x07".to_vec()).unwrap();
+        key_tx
+            .send((KeyCode::Enter, Modifiers::NONE, KeyEventKind::Press, None))
+            .unwrap();
+        key_tx
+            .send((
+                KeyCode::Char('a'),
+                Modifiers::NONE,
+                KeyEventKind::Press,
+                None,
+            ))
+            .unwrap();
+
+        let first = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("the query must be answered");
+        assert!(
+            matches!(&first, TerminalCommand::Input(bytes) if bytes.starts_with(b"\x1b]11;rgb:")),
+            "the OSC 11 reply must precede every queued keystroke, got {first:?}"
+        );
+
+        let second = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("the Enter keystroke must still be forwarded");
+        assert!(
+            matches!(&second, TerminalCommand::Input(bytes) if bytes == b"\r"),
+            "the Enter keystroke must be forwarded right after the reply, got {second:?}"
+        );
+
+        let third = command_rx
+            .recv_timeout(Duration::from_millis(500))
+            .expect("the 'a' keystroke must still be forwarded");
+        assert!(
+            matches!(&third, TerminalCommand::Input(bytes) if bytes == b"a"),
+            "the 'a' keystroke must keep its queue position, got {third:?}"
+        );
+
+        assert!(
+            command_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+            "the query must be answered exactly once"
+        );
     }
 }
