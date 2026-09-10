@@ -33,17 +33,29 @@
 //! with skk.el, where C-j belongs to emacs) — the same trade every
 //! terminal-with-SKK macOS setup makes, recorded in
 //! docs/ime-control-key-forwarding-design.md.
+//!
+//! Field test (2026-09-10) narrowed the offer set to an allowlist:
+//! offering *every* ctrl+letter to the input context loses most of them —
+//! AppKit's key-binding dispatch answers selector-bound chords (ctrl+d →
+//! `deleteForward:`, ctrl+k → `deleteToEndOfParagraph:`, ...) itself, and
+//! gpui_macos's `doCommandBySelector:` re-dispatch, which would route
+//! those back to the app, is primed from private window state an app
+//! cannot reach; IMK pass-through re-deliveries collide with gpui's
+//! key-equivalent dedup. Only chords an IME actually claims survive the
+//! round trip — outside composition, SKK claims C-j — so C-c/C-d and
+//! friends must stay on the PTY path (see
+//! `IME_CLAIMED_CONTROL_LETTERS`).
 
 use gpui::Keystroke;
 
 #[cfg(target_os = "macos")]
 use crate::input_trace::input_trace;
 
-/// The pure gate for which keystrokes the shim offers to the IME: control
-/// plus exactly one ASCII lowercase letter, and nothing else. Shifted,
-/// alt/cmd/function-modified, named, and non-letter keys stay on the
-/// ordinary path — the target shortcuts (SKK's C-j, plus the C-a/C-e/C-k
-/// chords SKK passes through untouched) are all plain ctrl+letter chords.
+/// The pure gate for which keystrokes the shim offers to the IME. The
+/// structural half is control plus exactly one ASCII lowercase letter and
+/// nothing else — shifted, alt/cmd/function-modified, named, and
+/// non-letter keys stay on the ordinary path. The allowlist half is
+/// empirical: see [`IME_CLAIMED_CONTROL_LETTERS`].
 pub(crate) fn offerable_control_letter(keystroke: &Keystroke) -> Option<char> {
     let modifiers = &keystroke.modifiers;
     if !modifiers.control
@@ -59,8 +71,22 @@ pub(crate) fn offerable_control_letter(keystroke: &Keystroke) -> Option<char> {
     if chars.next().is_some() || !ch.is_ascii_lowercase() {
         return None;
     }
-    Some(ch)
+    IME_CLAIMED_CONTROL_LETTERS.contains(&ch).then_some(ch)
 }
+
+/// The ctrl+letters offered to the input method. Empirically (field test
+/// of the spike, 2026-09-10), offering arbitrary ctrl+letters loses most
+/// of them: AppKit's key-binding dispatch answers selector-bound chords
+/// (ctrl+d → `deleteForward:`, ctrl+k → `deleteToEndOfParagraph:`, ...)
+/// with "handled", and the `doCommandBySelector:` re-dispatch that would
+/// route them back to the app is primed from gpui_macos-private window
+/// state (`keystroke_for_do_command`) no app code can reach; IMK
+/// pass-through re-deliveries collide with gpui's key-equivalent dedup.
+/// Only chords an IME actually claims survive the round trip — outside
+/// composition SKK claims C-j (C-q is the plausible second entry, not yet
+/// verified) — so everything else must stay on the PTY path. Extend one
+/// chord at a time, with the real IME in the loop.
+const IME_CLAIMED_CONTROL_LETTERS: &[char] = &['j'];
 
 /// Offers the original native key-down event to the input method.
 ///
@@ -125,9 +151,24 @@ mod tests {
     }
 
     #[test]
-    fn plain_ctrl_letter_is_offerable() {
+    fn only_the_skk_toggle_chord_is_offerable() {
         assert_eq!(offerable_control_letter(&keystroke("j", ctrl())), Some('j'));
-        assert_eq!(offerable_control_letter(&keystroke("a", ctrl())), Some('a'));
+    }
+
+    #[test]
+    fn every_other_ctrl_letter_stays_on_the_pty_path() {
+        // Field regression pin (2026-09-10): when every ctrl+letter was
+        // offered to the input context, C-c and C-d stopped reaching the
+        // PTY — selector-bound chords are answered by AppKit's key-binding
+        // dispatch and IMK pass-through never returns the rest. Only the
+        // allowlisted chord may be offered.
+        for key in ["a", "c", "d", "e", "k", "q", "s", "z"] {
+            assert_eq!(
+                offerable_control_letter(&keystroke(key, ctrl())),
+                None,
+                "ctrl+{key} must stay on the ordinary PTY path"
+            );
+        }
     }
 
     #[test]

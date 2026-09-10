@@ -554,9 +554,11 @@ impl TerminalView {
         // macOS gpui gap (see `ime_forward`'s module doc): control-modified
         // keys never reach the input method, so IME-local ctrl+letter
         // shortcuts (SKK's C-j mode toggle) cannot fire while a terminal
-        // pane has focus. The key is offered to the IME first: an IME that
-        // claims it keeps it from the PTY, and one that passes it through
-        // leaves the ordinary encoding below untouched.
+        // pane has focus. Only the allowlisted chords (`ime_forward`'s
+        // `IME_CLAIMED_CONTROL_LETTERS` — chords an IME actually claims;
+        // anything else gets lost in AppKit's key-binding dispatch) are
+        // offered: an IME that claims the key keeps it from the PTY, and
+        // every other key takes the ordinary encoding below untouched.
         if ime_forward::offerable_control_letter(keystroke).is_some() {
             if ime_forward::forward_control_key_to_ime() {
                 input_trace!(

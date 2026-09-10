@@ -2,7 +2,8 @@
 
 - Date: 2026-09-10
 - Status: shipped, on by default, deliberately no switch (owner decision
-  2026-09-10 — no file key, no environment override)
+  2026-09-10 — no file key, no environment override); offer set
+  allowlisted to C-j after the first field test (see "Field regression")
 - Scope: macOS only (no-op elsewhere)
 - Code: `src/ime_forward.rs` (bridge) + the hook in `TerminalView::handle_key`
   (`src/terminal/mod.rs`)
@@ -47,8 +48,9 @@ native events — verified by grep across `crates/gpui/src`):
 
 1. `TerminalView::handle_key`, after the composing/phantom-Enter guards,
    offers the key to the IME when the keystroke is control plus exactly one
-   ASCII lowercase letter with no other modifier
-   (`offerable_control_letter` — pure, unit-tested).
+   ASCII lowercase letter with no other modifier *and* the letter is on the
+   allowlist (`IME_CLAIMED_CONTROL_LETTERS`, currently just `j`;
+   `offerable_control_letter` — pure, unit-tested).
 2. The native event is recovered with `+[NSApplication currentEvent]`:
    `handle_key` runs inside AppKit's synchronous dispatch, so the very event
    gpui declined to forward is still current. Synthesizing an event was
@@ -88,6 +90,34 @@ to emacs's SKK — is accepted as part of that same trade. If it ever needs
 relief, adding an off-switch is a small, local change to
 `src/ime_forward.rs`; nothing else would move.
 
+## Field regression: why the offer set is an allowlist (2026-09-10)
+
+The spike's first cut offered every plain ctrl+letter to the input context.
+Field test: C-j worked (SKK toggled, PTY skipped) but C-c and C-d stopped
+reaching the terminal. The mechanism, reconstructed from AppKit behavior:
+
+- Most ctrl+letters are bound to standard text-system selectors in
+  AppKit's key-binding dispatch (ctrl+d → `deleteForward:`, ctrl+k →
+  `deleteToEndOfParagraph:`, ctrl+a/e/f/b/n/p → movement, ...). Sending
+  such an event through `handleEvent:` gets "handled = YES" from that
+  dispatch — not from the IME. Normally the selector is routed back to the
+  app via `doCommandBySelector:`, but gpui_macos primes that re-dispatch
+  from private window state (`keystroke_for_do_command`) immediately before
+  *its own* `handleEvent:` calls; an app-side call cannot prime it, so the
+  selector lands in gpui's no-op `doCommandBySelector:` and the key dies.
+- Chords without a selector go to the IMK server; a pass-through verdict is
+  re-delivered into the app, where it collides with gpui's
+  `last_key_equivalent` dedup (a ctrl+letter key-down always arrives as a
+  key equivalent first) and can be dropped there.
+
+Conclusion: only chords an IME actually claims survive the round trip.
+Outside composition, SKK claims C-j (C-q, the half-width toggle, is the
+plausible second entry — unverified). The gate is therefore an explicit
+allowlist; every other ctrl+letter stays on the ordinary PTY path
+byte-for-byte as before the spike. Extending the allowlist requires
+verifying the chord with the real IME; selector-bound chords are
+structurally unsafe and should never be listed.
+
 Other known limits: if gpui ever forwards control keys itself, this shim
 could double-offer the key; and gpui-component's `Input` (agent composer)
 is not wired to the shim — scope is the terminal pane, where the SKK C-j
@@ -102,7 +132,9 @@ GUI (manual — needs a real IME; per AGENTS.md's GUI Verification section):
 1. Run with `HORIZON_INPUT_TRACE=1`; focus a terminal pane; with a SKK IME
    active, press C-j → expect `ime_forward consumed (pty skipped)` in the
    trace, the SKK mode indicator toggling, and no LF reaching the shell.
-2. Press C-a / C-k → expect `ime_forward passed through, falls through to
-   pty` and normal readline behavior.
+2. Press C-a / C-k / C-d / C-c → expect `ime_forward passed through, falls
+   through to pty` (they are not on the allowlist) and normal
+   readline/flow-control behavior — this is the regression pin for the
+   first field test.
 3. With no IME active (ABC input source) → C-j sends LF exactly as before
    (trace shows `ime_forward passed through`).
