@@ -6,7 +6,7 @@ use rig_core::client::CompletionClient;
 use rig_core::{
     completion::{
         message::{Text, ToolCall},
-        AssistantContent, CompletionModel, Message, ToolDefinition,
+        AssistantContent, CompletionError, CompletionModel, Message, ToolDefinition,
     },
     providers::openai,
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
@@ -179,12 +179,14 @@ pub(super) enum Retried<T> {
 pub(super) fn retryable_rejection(
     attempt: u32,
     durable_output_emitted: bool,
-    message: &str,
+    error: &anyhow::Error,
 ) -> Option<TransientRejection> {
     if durable_output_emitted {
         return None;
     }
-    if let Some(status) = rejected_status(message) {
+    let message = format!("{error:#}");
+    let failure = classify_failure(error, &message);
+    if let Some(status) = failure.status {
         if !RETRYABLE_STATUSES.contains(&status) {
             return None;
         }
@@ -196,7 +198,7 @@ pub(super) fn retryable_rejection(
         }
         return Some(TransientRejection {
             status: Some(status),
-            retry_after: named_retry_after(message),
+            retry_after: failure.retry_after,
             mid_stream: false,
         });
     }
@@ -205,13 +207,69 @@ pub(super) fn retryable_rejection(
     if attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
         return None;
     }
-    message
-        .contains(TRANSPORT_FAILURE_MARKER)
-        .then_some(TransientRejection {
-            status: None,
-            retry_after: None,
-            mid_stream: message.contains("error decoding response body"),
-        })
+    failure.transport.then_some(TransientRejection {
+        status: None,
+        retry_after: None,
+        mid_stream: failure.mid_stream,
+    })
+}
+
+/// The signal a failure carries for the retry decision, read from rig's
+/// typed error where it exists and from Display markers as a fallback.
+struct ClassifiedFailure {
+    status: Option<u16>,
+    retry_after: Option<Duration>,
+    transport: bool,
+    mid_stream: bool,
+}
+
+/// rig 0.42 routes request-id-contract providers' failures (OpenAI among
+/// them) through `CompletionError::ProviderResponse`, which carries the
+/// status, the preserved headers (`Retry-After`), and the provider request
+/// id as structured data; a 2026-09 regression showed the Display-only
+/// classifier silently stopped retrying those. Text-only paths (providers
+/// without the contract, or `ProviderError(String)`) keep the marker
+/// fallback.
+fn classify_failure(error: &anyhow::Error, message: &str) -> ClassifiedFailure {
+    if let Some(response) = error.downcast_ref::<CompletionError>() {
+        let status = response
+            .provider_response_status()
+            .map(|status| status.as_u16());
+        let retry_after = response
+            .provider_response_headers()
+            .and_then(|headers| headers.get("retry-after"))
+            .and_then(|value| value.to_str().ok())
+            .and_then(retry_after_seconds)
+            // Some providers echo the hint into the JSON body instead of a
+            // header; the body scrape still covers that shape.
+            .or_else(|| named_retry_after(message));
+        if status.is_some() || retry_after.is_some() {
+            return ClassifiedFailure {
+                status,
+                retry_after,
+                transport: false,
+                mid_stream: false,
+            };
+        }
+    }
+    ClassifiedFailure {
+        status: rejected_status(message),
+        retry_after: named_retry_after(message),
+        transport: message.contains(TRANSPORT_FAILURE_MARKER),
+        mid_stream: message.contains("error decoding response body"),
+    }
+}
+
+/// Parses a whole-seconds `Retry-After` header value. The HTTP-date form is
+/// deliberately not handled (None): the exponential backoff is a fine
+/// stand-in, and date parsing does not earn its complexity here.
+fn retry_after_seconds(value: &str) -> Option<Duration> {
+    let trimmed = value.trim();
+    if !trimmed.starts_with(|character: char| character.is_ascii_digit()) {
+        return None;
+    }
+    let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok().map(Duration::from_secs)
 }
 
 /// rig renders a non-2xx response as `Invalid status code <status> <reason>
@@ -234,7 +292,8 @@ const TRANSPORT_FAILURE_MARKER: &str = "Http client error:";
 /// Reads a `Retry-After`-style hint out of the provider's error text, in
 /// whole seconds. Only the first number following the hint within a short
 /// window counts, so an unrelated number further down the body cannot be
-/// mistaken for one.
+/// mistaken for one. Fallback only: request-id-contract providers carry a
+/// real header on the typed error, which `classify_failure` prefers.
 fn named_retry_after(message: &str) -> Option<Duration> {
     let lowered = message.to_ascii_lowercase();
     let index = lowered
@@ -318,17 +377,24 @@ where
             Err(error) => error,
         };
         let message = format!("{error:#}");
-        let Some(rejection) = retryable_rejection(number, durable_output_emitted, &message) else {
+        let Some(rejection) = retryable_rejection(number, durable_output_emitted, &error) else {
             return Retried::Failed(error);
         };
         let backoff = retry_backoff(number, rejection.retry_after, jitter_permille());
         // The 2026-07-28 investigation had to infer this whole failure class
         // from its absence in the log; one line per retry is what makes it
-        // legible next time.
+        // legible next time. The provider request id (rig 0.42 preserves it
+        // for request-id-contract providers) is what provider support asks
+        // for, so it rides along when present.
+        let request_suffix = provider_request_id_of(&error)
+            .as_deref()
+            .map(|id| format!("; request id {id}"))
+            .unwrap_or_default();
         eprintln!(
             "horizon-agent: provider rejected attempt {number} before any durable output \
-             ({}); retrying in {backoff:?}: {}",
+             ({}{}); retrying in {backoff:?}: {}",
             rejection.describe(),
+            request_suffix,
             truncate_for_log(&message),
         );
         on_retry(number, rejection, backoff);
@@ -349,6 +415,16 @@ fn truncate_for_log(message: &str) -> String {
     } else {
         head
     }
+}
+
+/// The provider's transport request id for a failed call, when rig captured
+/// one (0.42 preserves it for request-id-contract providers such as OpenAI
+/// -- the id provider support asks for when investigating a failure).
+fn provider_request_id_of(error: &anyhow::Error) -> Option<String> {
+    error
+        .chain()
+        .filter_map(|cause| cause.downcast_ref::<CompletionError>())
+        .find_map(|error| error.provider_request_id().map(str::to_string))
 }
 
 /// Guarantees a matching `ProviderRequestFinished` marker for every path

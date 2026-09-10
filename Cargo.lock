@@ -3819,6 +3819,7 @@ dependencies = [
  "horizon-sandbox",
  "horizon-sandbox-proxy",
  "horizon-wire",
+ "http",
  "ignore",
  "libc",
  "regex",

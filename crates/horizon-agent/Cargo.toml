@@ -50,5 +50,10 @@ tracing = "0.1"
 toml = "1"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+[dev-dependencies]
+# The typed retry-classification tests build rig's `ProviderResponseError`,
+# whose status/header types come from the `http` crate rig already uses.
+http = "1"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
