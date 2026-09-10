@@ -95,6 +95,23 @@ toml_edit = "0.25"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+# macOS-only IME bridge (`src/ime_forward.rs`): the one public-AppKit lever
+# that lets ctrl+<letter> reach the input method despite gpui_macos never
+# forwarding control-modified keys (root cause and trade-offs in the module
+# doc and docs/ime-control-key-forwarding-design.md). Feature-gated to the
+# classes actually used; features unify additively with gpui_macos's
+# objc2-app-kit set, and the versions match the pins already in Cargo.lock
+# (objc2 0.6.4 / objc2-app-kit 0.3.2), so no new package versions enter the
+# graph.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "NSApplication",
+    "NSResponder",
+    "NSEvent",
+    "NSTextInputContext",
+] }
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 
