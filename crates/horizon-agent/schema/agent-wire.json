@@ -77,6 +77,19 @@
             "WorkspaceRootResolved"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Live progress of one of this session's background `task` children —\nthe daemon-side task watcher mirroring what the child was last\nobserved doing. Ephemeral like [`ToolCallProgress`]: a completion is\nrecorded durably as a `MessageRole::TaskNotification` message; this\nevent only drives the client's live progress rows. Not emitted while\nno client is attached, and not replayed on attach — a re-attached\nclient sees a child's row again at its next activity.",
+          "properties": {
+            "TaskProgress": {
+              "$ref": "#/$defs/TaskProgress"
+            }
+          },
+          "required": [
+            "TaskProgress"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1326,6 +1339,50 @@
         "provider_id"
       ],
       "type": "object"
+    },
+    "TaskProgress": {
+      "description": "Live progress of one background `task` child, observed by the daemon and\nforwarded to the requester's attached client. Purely a UI feedback signal:\nnever folded into conversation history and never persisted — see\n[`ProviderEvent::task_progress`]. A child's completion is *also* recorded\ndurably as a `MessageRole::TaskNotification` message; the [`Self::state`]\ntransition here only retires the client's live progress row.",
+      "properties": {
+        "activity": {
+          "description": "What the child was last observed doing: the tool id of its most\nrecent `ToolCallRequested` (e.g. `\"fs.grep\"`), or `None` while it is\nreasoning between tools.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "description": {
+          "description": "The child's launch description (the `task` input's `description`),\ncarried so the client can label the row without re-reading history.",
+          "type": "string"
+        },
+        "started_at_epoch_ms": {
+          "description": "When the child was launched, epoch milliseconds — lets a client show\nelapsed time that survives re-attach.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "state": {
+          "$ref": "#/$defs/TaskProgressState"
+        },
+        "task_session_id": {
+          "$ref": "#/$defs/SessionId",
+          "description": "The child session whose progress this describes — the same id the\n`task` tool call's started receipt carries, so a client can join the\nlive row against the transcript's own `task` tool-call record."
+        }
+      },
+      "required": [
+        "task_session_id",
+        "description",
+        "state",
+        "started_at_epoch_ms"
+      ],
+      "type": "object"
+    },
+    "TaskProgressState": {
+      "description": "[`TaskProgress::state`] — a child is either running or has reached *some*\nterminal state. The terminal flavor (completed / failed / capped) is the\nnotification's business, not the live row's.",
+      "enum": [
+        "Running",
+        "Finished"
+      ],
+      "type": "string"
     },
     "ToolCallId": {
       "type": "string"

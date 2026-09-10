@@ -209,6 +209,7 @@ pub(super) fn run_session(
     } else {
         Some(Arc::new(AgentdExplorationHost {
             state: state.clone(),
+            requester_id: session_id,
             provider_id: provider_id.clone(),
             workspace_root: workspace_root.clone(),
         }))
