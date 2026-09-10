@@ -96,10 +96,11 @@ fn run_gui() {
     }]);
 
     let application = build_application();
-    // `.with_assets` registers gpui-component's bundled SVGs, including the
-    // client-side titlebar's window-control glyphs.
+    // `.with_assets` registers the bundled SVGs (the `gpui-kit-assets` crate,
+    // formerly gpui-component-assets), including the client-side titlebar's
+    // window-control glyphs.
     application
-        .with_assets(gpui_component_assets::Assets)
+        .with_assets(gpui_kit_assets::Assets)
         .run(move |cx| {
             gpui_component::init(cx);
             theme::apply_gpui_component_theme(cx);
