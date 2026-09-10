@@ -7,6 +7,7 @@ mod composer;
 mod rows;
 mod scroll;
 mod status;
+mod tasks;
 mod transcript;
 
 use std::collections::HashSet;
@@ -22,6 +23,7 @@ use super::turns;
 use composer::{AgentComposer, ComposerEvent};
 use scroll::RunningTurnClock;
 use status::AgentStatus;
+use tasks::BackgroundTasks;
 use transcript::{build_transcript_rows, TranscriptRow};
 
 /// The stable, expensive portion of an agent pane. Session updates project
@@ -168,6 +170,7 @@ impl TranscriptSurface {
 /// subscription, so rendering the shell cannot clone/read a live agent frame.
 pub(crate) struct AgentView {
     transcript: TranscriptSurface,
+    tasks: Entity<BackgroundTasks>,
     status: Entity<AgentStatus>,
     composer: Entity<AgentComposer>,
     focus_handle: FocusHandle,
@@ -188,11 +191,13 @@ impl AgentView {
         transcript.update(cx, |transcript, cx| {
             transcript.bind_composer(&composer, cx);
         });
+        let tasks = cx.new(|cx| BackgroundTasks::new(session.clone(), cx));
         let status = cx.new(|cx| AgentStatus::new(session, cx));
         let focus_handle = composer.read(cx).focus_handle(cx);
 
         Self {
             transcript: TranscriptSurface::new(transcript),
+            tasks,
             status,
             composer,
             focus_handle,
@@ -235,6 +240,7 @@ impl Render for AgentView {
                     .min_h_0()
                     .child(self.transcript.element()),
             )
+            .child(self.tasks.clone())
             .child(self.status.clone())
             .child(self.composer.clone())
     }

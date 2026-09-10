@@ -4,9 +4,11 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use horizon_agent::contract::{Command, ProviderId, SessionId};
+use horizon_agent::contract::{Command, ProviderId, SessionId, TaskProgress};
 use horizon_agent::roles::RoleId;
+use horizon_agent::wire::AgentWireEvent;
 
+use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
 use super::state::AgentdState;
 
@@ -26,6 +28,9 @@ use super::state::AgentdState;
 /// an edge).
 pub(super) struct AgentdExplorationHost {
     pub(super) state: Arc<AgentdState>,
+    /// The session this host was installed on -- every task it launches is
+    /// reported back to *this* session's attached client.
+    pub(super) requester_id: SessionId,
     /// The requesting session's provider, so an exploration is answered by
     /// the same model family the requester is talking to.
     pub(super) provider_id: ProviderId,
@@ -69,6 +74,17 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
     fn terminate(&self, session_id: SessionId) {
         self.state.unsubscribe_from_session(session_id);
         self.state.send_command(session_id, Command::Shutdown);
+    }
+
+    fn forward_progress(&self, _child: SessionId, progress: TaskProgress) {
+        // Ephemeral by design: silently dropped when no client is attached
+        // right now, and never persisted (see `AgentWireEvent::TaskProgress`).
+        // The payload already carries the child's id.
+        send_session_event(
+            &self.state,
+            self.requester_id,
+            AgentWireEvent::TaskProgress(progress),
+        );
     }
 }
 
@@ -140,6 +156,7 @@ mod tests {
         let host: Arc<dyn horizon_agent::tools::ExplorationHost> =
             Arc::new(AgentdExplorationHost {
                 state: state.clone(),
+                requester_id,
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
                 workspace_root: None,
             });

@@ -30,6 +30,15 @@
 //! outstanding), so delivery waits for the approval to resolve without any
 //! special case here.
 //!
+//! **Live progress.** Between launch and completion the watcher thread also
+//! mirrors what the child is doing — which tool it last asked for, reasoning
+//! vs tool-running — as ephemeral [`TaskProgress`] events forwarded through
+//! [`ExplorationHost::forward_progress`] onto the requester's attachment
+//! channel. These never touch conversation history or the event log; they
+//! only feed the client's live task rows, and a row is retired when the
+//! child reaches any terminal state (the durable record is the completion
+//! notification, not the progress event).
+//!
 //! **Children are session-scoped, not turn-scoped** (decision 4): they
 //! survive `cancel-turn` -- interrupting the requester must not vaporize
 //! in-flight investigation -- and are terminated when the requesting
@@ -70,7 +79,8 @@ use crossbeam_channel::Receiver;
 use serde_json::{json, Value};
 
 use crate::contract::{
-    Event, MessageRole, SessionId, SessionState, ToolCallRequest, ToolCallResult, TurnEndReason,
+    Event, MessageRole, SessionId, SessionState, TaskProgress, TaskProgressState, ToolCallRequest,
+    ToolCallResult, TurnEndReason,
 };
 use crate::tools::state::ToolSessionState;
 use crate::tools::Execution;
@@ -137,6 +147,15 @@ pub trait ExplorationHost: Send + Sync {
     /// the child's own turn ends, or when the requesting session goes away.
     /// A no-op for a session that has already ended on its own.
     fn terminate(&self, session_id: SessionId);
+
+    /// Forwards one live progress observation about `child` to whoever is
+    /// watching the requesting session (its attached client). Called by the
+    /// child's watcher thread as the child acts; the daemon implementation
+    /// routes it onto the requester's attachment event channel and drops it
+    /// when no client is attached — progress is ephemeral by design (see
+    /// `contract::TaskProgress`). The default no-op covers hosts without a
+    /// client-attachment path (in-process test hosts).
+    fn forward_progress(&self, _child: SessionId, _progress: TaskProgress) {}
 }
 
 /// Launches a `task` child and returns immediately. Unlike every other
@@ -174,20 +193,53 @@ pub(crate) fn start(
 
     let child_id = started.session_id;
     let description = input.description;
+    let started_at_epoch_ms = unix_epoch_ms();
     let (cancel_tx, cancel_rx) = crossbeam_channel::bounded::<()>(1);
-    children::register(session_id, child_id, description.clone(), host, cancel_tx);
+    children::register(
+        session_id,
+        child_id,
+        description.clone(),
+        host.clone(),
+        cancel_tx,
+    );
 
     let events = started.events;
     let waiter_description = description.clone();
     std::thread::spawn(move || {
+        // Live-progress emit point: the watcher owns the only consumer of
+        // the child's event stream, so it is the one place that knows what
+        // the child is doing. `host` was cloned into the registry above (the
+        // take-once termination gate), leaving this move for the watcher.
+        let emit = {
+            let host = host.clone();
+            let description = waiter_description.clone();
+            move |state: TaskProgressState, activity: Option<String>| {
+                host.forward_progress(
+                    child_id,
+                    TaskProgress {
+                        task_session_id: child_id,
+                        description: description.clone(),
+                        state,
+                        activity,
+                        started_at_epoch_ms,
+                    },
+                );
+            }
+        };
         let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            fold_until_terminal(&events, &cancel_rx)
+            fold_until_terminal(&events, &cancel_rx, &mut |activity| {
+                emit(TaskProgressState::Running, activity)
+            })
         }))
         .unwrap_or_else(|payload| Outcome {
             terminal: Terminal::Panicked(panic_message(&*payload)),
             report: None,
             error: None,
         });
+        // The child reached *some* terminal state (or the watcher gave up):
+        // retire the requester's live progress row. The durable completion
+        // record is the notification queued below, not this ephemeral event.
+        emit(TaskProgressState::Finished, None);
         // `Cancelled` means the requesting session went away and
         // `cancel_session` already terminated this child directly; anything
         // else means the child reached a terminal state of its own and this
@@ -542,15 +594,28 @@ impl Outcome {
 }
 
 /// Folds the child's event stream until it reaches a terminal state or the
-/// requesting session goes away. Pure over its two receivers, so the whole
-/// decision table above is unit-testable by feeding a scripted event
-/// sequence.
-fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outcome {
+/// requesting session goes away. Pure over its receivers and the
+/// `on_activity` callback, so the whole decision table above is
+/// unit-testable by feeding a scripted event sequence: every time what a
+/// live progress row would say changes (current tool, reasoning vs
+/// tool-running), the observation is handed to `on_activity` as the child's
+/// current activity (`None` = reasoning). Terminal emission is the caller's
+/// — the fold only reports running observations.
+fn fold_until_terminal(
+    events: &Receiver<Event>,
+    cancel: &Receiver<()>,
+    on_activity: &mut dyn FnMut(Option<String>),
+) -> Outcome {
     let mut report = None;
     let mut error = None;
     // The child's own user message is the boundary: everything committed
     // before it belongs to session startup, not to the answer.
     let mut turn_started = false;
+    // Live-progress tracking: what the child was last observed doing, and
+    // the last observation actually emitted (dedup — history-shaped events
+    // like `MessageCommitted` must not re-emit an unchanged row).
+    let mut activity: Option<String> = None;
+    let mut emitted: Option<Option<String>> = None;
 
     let terminal = loop {
         crossbeam_channel::select! {
@@ -604,15 +669,26 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                         break Terminal::Terminated;
                     }
                     Event::Error(failure) => error = Some(failure.message),
+                    // Live progress: track what the child is doing. The tool
+                    // id of the latest requested call is the row's activity;
+                    // back in `Running` the child is reasoning between tools.
+                    Event::ToolCallRequested(request) => {
+                        activity = Some(request.tool_id);
+                    }
+                    Event::StateChanged(SessionState::Running) => {
+                        activity = None;
+                    }
+                    Event::StateChanged(SessionState::ToolRunning) => {}
                     // Guard-fail fallbacks: `TurnEnded` and
                     // `StateChanged(WaitingForUser)` above are guarded on
                     // `turn_started`; before the child's own user message that
                     // guard fails and they land here as no-ops (session
-                    // startup, not an answer). `StateChanged(_)` also absorbs
-                    // the non-terminal session states this watcher never acts
-                    // on. Grouped so the match stays exhaustive without a
-                    // wildcard -- adding a variant is a compile error here,
-                    // forcing a decision (see docs/agent-event-readers.md).
+                    // startup, not an answer). The remaining `StateChanged(_)`
+                    // states also absorb the non-terminal session states this
+                    // watcher never acts on. Grouped so the match stays
+                    // exhaustive without a wildcard -- adding a variant is a
+                    // compile error here, forcing a decision (see
+                    // docs/agent-event-readers.md).
                     Event::TurnEnded(_)
                     | Event::StateChanged(_)
                     // Streaming deltas don't change the outcome: the answer is
@@ -622,7 +698,6 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     // Tool lifecycle is not terminal here -- the watcher waits
                     // for the turn's final report/approval/exit, not individual
                     // tool calls.
-                    | Event::ToolCallRequested(_)
                     | Event::ToolCallStarted(_)
                     | Event::ToolCallFinished(_)
                     // Provider request lifecycle markers are timing-only and
@@ -647,6 +722,10 @@ fn fold_until_terminal(events: &Receiver<Event>, cancel: &Receiver<()>) -> Outco
                     | Event::MemoryCheckpointMissed
                     | Event::MemorySeeded => {}
                 }
+                if emitted.as_ref() != Some(&activity) {
+                    on_activity(activity.clone());
+                    emitted = Some(activity.clone());
+                }
             },
         }
     };
@@ -664,6 +743,16 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
         .map(|message| (*message).to_string())
         .or_else(|| payload.downcast_ref::<String>().cloned())
         .unwrap_or_else(|| "<non-string panic payload>".to_string())
+}
+
+/// Wall-clock now, epoch milliseconds — the launch timestamp every live
+/// progress event carries, so a client can show elapsed time that survives
+/// re-attach. `0` if the clock is before the epoch (never, in practice).
+fn unix_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

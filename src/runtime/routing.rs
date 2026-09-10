@@ -120,6 +120,9 @@ impl AgentRoutes {
             AgentWireEvent::ToolCallProgress(progress) => {
                 self.send_agent(session_id, ProviderEvent::tool_call_progress(progress));
             }
+            AgentWireEvent::TaskProgress(progress) => {
+                self.send_agent(session_id, ProviderEvent::task_progress(progress));
+            }
             AgentWireEvent::SessionModel(model) => {
                 self.send_agent(session_id, ProviderEvent::session_model(model));
             }

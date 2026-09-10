@@ -42,6 +42,8 @@ struct ScriptedHost {
     children: Mutex<Vec<(SessionId, Sender<Event>)>>,
     started: Mutex<Vec<String>>,
     terminated: Arc<Mutex<Vec<SessionId>>>,
+    /// Every `forward_progress` observation, in arrival order.
+    progress: Arc<Mutex<Vec<TaskProgress>>>,
     start_error: Option<String>,
 }
 
@@ -52,6 +54,7 @@ impl ScriptedHost {
             children: Mutex::new(Vec::new()),
             started: Mutex::new(Vec::new()),
             terminated: terminated.clone(),
+            progress: Arc::new(Mutex::new(Vec::new())),
             start_error: None,
         });
         (host, terminated)
@@ -62,6 +65,7 @@ impl ScriptedHost {
             children: Mutex::new(Vec::new()),
             started: Mutex::new(Vec::new()),
             terminated: Arc::new(Mutex::new(Vec::new())),
+            progress: Arc::new(Mutex::new(Vec::new())),
             start_error: Some(message.to_string()),
         })
     }
@@ -75,6 +79,11 @@ impl ScriptedHost {
             .get(index)
             .cloned()
             .unwrap_or_else(|| panic!("child {index} was never started"))
+    }
+
+    /// Every progress observation forwarded so far.
+    fn progressed(&self) -> Vec<TaskProgress> {
+        self.progress.lock().unwrap().clone()
     }
 }
 
@@ -92,6 +101,10 @@ impl ExplorationHost for ScriptedHost {
 
     fn terminate(&self, session_id: SessionId) {
         self.terminated.lock().unwrap().push(session_id);
+    }
+
+    fn forward_progress(&self, _child: SessionId, progress: TaskProgress) {
+        self.progress.lock().unwrap().push(progress);
     }
 }
 
@@ -716,5 +729,120 @@ fn task_output_rejects_a_malformed_session_id() {
             .expect("a message")
             .contains("not a task session id"),
         "{malformed}"
+    );
+}
+
+/// A scripted child event: a tool call request with the given tool id -- the
+/// live-progress activity signal.
+fn tool_request(tool_id: &str) -> Event {
+    Event::ToolCallRequested(ToolCallRequest {
+        call_id: ToolCallId(format!("child-{tool_id}")),
+        tool_id: tool_id.to_string(),
+        input: json!({}).into(),
+        occurrence_id: None,
+    })
+}
+
+/// Live progress: while the child runs, the watcher mirrors what it is
+/// doing -- activity changes only, deduplicated -- and retires the row with
+/// one `Finished` observation when the child reaches its terminal state.
+/// The durable completion path (the notification) is unchanged.
+#[test]
+fn a_running_child_mirrors_activity_and_retires_its_row_at_terminal() {
+    let (host, _terminated) = ScriptedHost::new();
+    let requester = Requester::new(Some(host.clone()));
+    requester.launch("t1", "map the emit sites", "where are they?");
+    let (child_id, events) = host.child(0);
+
+    events
+        .send(Event::StateChanged(SessionState::Running))
+        .unwrap();
+    wait_until(
+        || !host.progressed().is_empty(),
+        "the first running observation",
+    );
+    events.send(tool_request("fs.grep")).unwrap();
+    wait_until(
+        || {
+            host.progressed()
+                .iter()
+                .any(|p| p.activity.as_deref() == Some("fs.grep"))
+        },
+        "the fs.grep activity observation",
+    );
+
+    // History-shaped events (the report landing) change nothing a row
+    // would say -- no further observation may be emitted for them.
+    events.send(user("where are they?")).unwrap();
+    events.send(assistant("a partial thought")).unwrap();
+
+    complete_child(&events, "where are they?", "the report");
+    wait_until(
+        || {
+            matches!(
+                host.progressed().last(),
+                Some(p) if p.state == TaskProgressState::Finished
+            )
+        },
+        "the finished observation",
+    );
+
+    let progress = host.progressed();
+    let observations: Vec<_> = progress
+        .iter()
+        .map(|p| (p.state, p.activity.clone()))
+        .collect();
+    assert_eq!(
+        observations,
+        vec![
+            (TaskProgressState::Running, None),
+            (TaskProgressState::Running, Some("fs.grep".to_string())),
+            (TaskProgressState::Finished, None),
+        ],
+        "activity changes only, and the row is retired exactly once"
+    );
+    for observation in &progress {
+        assert_eq!(observation.task_session_id, child_id);
+        assert_eq!(observation.description, "map the emit sites");
+        assert!(observation.started_at_epoch_ms > 0, "{observation:?}");
+    }
+
+    // The durable path is untouched: the completion notification still lands.
+    requester.await_notification();
+}
+
+/// The fold's own decision table, driven directly: emit on the first
+/// observation and on every activity change; history-shaped events and
+/// repeated states deduplicate to nothing; the fold emits running
+/// observations only (the caller owns the terminal one).
+#[test]
+fn fold_emits_activity_changes_only() {
+    let (events_tx, events) = crossbeam_channel::unbounded();
+    let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
+
+    events_tx
+        .send(Event::StateChanged(SessionState::Created))
+        .unwrap();
+    events_tx
+        .send(Event::StateChanged(SessionState::Running))
+        .unwrap();
+    events_tx.send(user("prompt")).unwrap();
+    events_tx.send(assistant("a partial thought")).unwrap();
+    events_tx.send(tool_request("fs.grep")).unwrap();
+    events_tx.send(tool_request("fs.grep")).unwrap();
+    events_tx
+        .send(Event::TurnEnded(TurnEndReason::Completed))
+        .unwrap();
+
+    let observed = Arc::new(Mutex::new(Vec::new()));
+    let sink = observed.clone();
+    let outcome = fold_until_terminal(&events, &cancel, &mut |activity| {
+        sink.lock().unwrap().push(activity);
+    });
+    assert!(matches!(outcome.terminal, Terminal::Completed));
+    assert_eq!(
+        *observed.lock().unwrap(),
+        vec![None, Some("fs.grep".to_string())],
+        "the first observation and each activity change, deduplicated"
     );
 }
