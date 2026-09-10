@@ -85,6 +85,10 @@ pub(super) fn build_transcript_rows(
             }
 
             let item = &turn_items[index];
+            // Thinking (`ReasoningDelta`) is deliberately never a row —
+            // hidden in full, streaming and replayed alike (owner decision
+            // 2026-09-10, superseding 2026-07-13's tail-capped view). See
+            // `render_item`'s defensive arm.
             let visible = matches!(
                 item,
                 AgentFrameItem::Message(_)
@@ -96,13 +100,12 @@ pub(super) fn build_transcript_rows(
                     // precisely so it can never be swallowed by a receipt.
                     | AgentFrameItem::HistoryCleared(_)
                     | AgentFrameItem::ProviderRateLimited(_)
-            ) || matches!(item, AgentFrameItem::ReasoningDelta(_) if span.ended.is_none())
-                || matches!(
-                    item,
-                    AgentFrameItem::ApprovalRequested(request)
-                        if span.ended.is_some()
-                            && turns::is_approval_still_pending(turn_items, &request.call_id)
-                );
+            ) || matches!(
+                item,
+                AgentFrameItem::ApprovalRequested(request)
+                    if span.ended.is_some()
+                        && turns::is_approval_still_pending(turn_items, &request.call_id)
+            );
             if visible {
                 rows.push(TranscriptRow::Item {
                     turn: span.start..span.end,
@@ -323,26 +326,14 @@ impl AgentTranscript {
                 ("agent-delta", index),
                 delta.text.clone(),
             )),
-            AgentFrameItem::ReasoningDelta(delta) => {
-                // Height-bounded tail view (owner requirement 2026-07-13,
-                // closing an un-instructed deviation from base decision
-                // 5): `delta.text` is the item's own coalesced field, so
-                // this re-caps the whole accumulated block on every
-                // render rather than growing unboundedly while it
-                // streams (`turns::cap_thinking_text`'s own doc comment).
-                // The "…" label suffix mirrors `AssistantTextDelta`'s own
-                // "agent…" -- thinking only ever exists as this streaming
-                // delta shape, never a committed message, so it always
-                // reads as in-progress.
-                let (tail_text, omitted) =
-                    turns::cap_thinking_text(&delta.text, turns::THINKING_TAIL_LINES);
-                let text = if omitted > 0 {
-                    format!("… {omitted} earlier line(s) …\n{tail_text}")
-                } else {
-                    tail_text
-                };
-                Some(block("thinking…", theme::text_subtle(), text))
-            }
+            // Thinking is hidden in full (owner decision 2026-09-10,
+            // superseding 2026-07-13's tail-capped "thinking…" view):
+            // `build_transcript_rows`'s visibility whitelist no longer
+            // emits a row for a reasoning delta, streaming or replayed,
+            // so this arm is a defensive no-op like `ToolCallStarted`'s
+            // below. The deltas keep flowing and being persisted; only
+            // the display is gone.
+            AgentFrameItem::ReasoningDelta(_) => None,
             // Retired the raw-JSON `tool`/`tool result` dumps this arm and
             // the one below used to fall back to (owner feedback
             // 2026-07-13: leaking `{tool_id} {input}`/output JSON straight
@@ -1134,7 +1125,7 @@ mod tests {
     use horizon_agent::frame::AgentFrameItem;
 
     use super::super::super::turns::test_support::{
-        assistant_delta, tool_finished, tool_requested, tool_started, user_message,
+        assistant_delta, reasoning_delta, tool_finished, tool_requested, tool_started, user_message,
     };
     use super::{build_transcript_rows, BurstPresentation, TranscriptRow};
 
@@ -1185,5 +1176,38 @@ mod tests {
             build_transcript_rows(&before).0,
             build_transcript_rows(&after).0
         );
+    }
+
+    /// Owner decision 2026-09-10: thinking is hidden in full. A reasoning
+    /// delta produces no row while its turn runs and none after it ends —
+    /// streaming or replayed — without disturbing neighboring rows or the
+    /// latest-user anchor.
+    #[test]
+    fn thinking_is_never_a_transcript_row_streaming_or_replayed() {
+        let running = vec![
+            user_message("q"),
+            reasoning_delta("a hidden thought"),
+            assistant_delta("a"),
+        ];
+        let ended = vec![
+            user_message("q"),
+            reasoning_delta("a hidden thought"),
+            assistant_delta("a"),
+            turn_end(),
+        ];
+        for items in [&running, &ended] {
+            let (rows, latest_user) = build_transcript_rows(items);
+            assert_eq!(latest_user, Some(0));
+            let row_indices: Vec<usize> = rows
+                .iter()
+                .map(|row| match row {
+                    TranscriptRow::Item { index, .. } => *index,
+                    TranscriptRow::Burst { .. } => {
+                        panic!("thinking-only turns must not invent burst rows")
+                    }
+                })
+                .collect();
+            assert_eq!(row_indices, vec![0, 2], "the reasoning item is skipped");
+        }
     }
 }
