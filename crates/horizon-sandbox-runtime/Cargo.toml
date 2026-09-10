@@ -9,9 +9,9 @@ publish = false
 
 [dependencies]
 # Keep the extraction aligned with the source revision recorded in UPSTREAM.md.
-# horizon-sandbox deliberately accepts the compatible 0.68 line; this crate is
+# horizon-sandbox deliberately accepts the compatible 0.76 line; this crate is
 # stricter because its copied runtime assumptions track one exact release.
-nono = { version = "=0.68.0", default-features = false }
+nono = { version = "=0.76.0", default-features = false }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2.0"

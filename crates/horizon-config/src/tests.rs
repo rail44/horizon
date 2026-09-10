@@ -372,9 +372,8 @@ fn config_example_toml_documents_grants_without_activating_any() {
         "the example file must document the section"
     );
 
-    let parsed = contents
-        .parse::<toml::Value>()
-        .expect("config.example.toml must be valid TOML");
+    let parsed =
+        toml::from_str::<toml::Table>(&contents).expect("config.example.toml must be valid TOML");
     let grants = parsed.get("grants");
     assert!(
         grants.is_none(),

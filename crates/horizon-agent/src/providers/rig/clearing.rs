@@ -52,7 +52,6 @@ use rig_core::completion::{
     message::{AssistantContent, ToolResult, ToolResultContent, UserContent},
     Message,
 };
-use rig_core::OneOrMany;
 
 use crate::config::{
     CLEARING_CHARS_PER_TOKEN, CLEARING_RECOVERY_FLOOR_TOKENS, CLEARING_TAIL_BUDGET_TOKENS,
@@ -328,7 +327,7 @@ fn project_cleared(history: &[Message], cleared: &ClearedResults) -> Vec<Message
             let UserContent::ToolResult(result) = item else {
                 continue;
             };
-            let call_id = ToolCallId(result.id.clone());
+            let call_id = ToolCallId(result.call.as_str().to_string());
             let occurrence = seen.entry(call_id.clone()).or_insert(0);
             let index = *occurrence;
             *occurrence += 1;
@@ -340,7 +339,7 @@ fn project_cleared(history: &[Message], cleared: &ClearedResults) -> Vec<Message
                 continue;
             }
             let placeholder = clearing_placeholder(calls.get(&call_id), original_chars);
-            result.content = OneOrMany::one(ToolResultContent::text(placeholder));
+            result.content = vec![ToolResultContent::text(placeholder)];
         }
     }
     projected
@@ -426,7 +425,7 @@ fn tool_result_sites(history: &[Message]) -> Vec<ToolResultSite> {
         for item in content.iter() {
             if let UserContent::ToolResult(result) = item {
                 sites.push(ToolResultSite {
-                    call_id: ToolCallId(result.id.clone()),
+                    call_id: ToolCallId(result.call.as_str().to_string()),
                     chars: tool_result_chars(result),
                 });
             }
@@ -471,7 +470,10 @@ fn current_round_call_ids(history: &[Message]) -> HashSet<ToolCallId> {
             .iter()
             .filter_map(|item| match item {
                 AssistantContent::ToolCall(call) => Some(tool_call_id(
-                    call.call_id.as_deref().unwrap_or(call.id.as_str()),
+                    call.provider
+                        .as_ref()
+                        .map(|p| p.call_id.as_str())
+                        .unwrap_or_else(|| call.id.as_str()),
                 )),
                 _ => None,
             })
@@ -490,7 +492,7 @@ struct ToolCallSummary {
 }
 
 /// Indexes every tool call in `history` by the id its result carries -- the
-/// same `call_id.unwrap_or(id)` resolution `mapping::rig_tool_call_request`
+/// same provider-issued-id-preferred resolution `mapping::rig_tool_call_request`
 /// applies, so the two agree on what a call's id is.
 fn tool_call_summaries(history: &[Message]) -> HashMap<ToolCallId, ToolCallSummary> {
     let mut summaries = HashMap::new();
@@ -502,7 +504,12 @@ fn tool_call_summaries(history: &[Message]) -> HashMap<ToolCallId, ToolCallSumma
             let AssistantContent::ToolCall(call) = item else {
                 continue;
             };
-            let id = tool_call_id(call.call_id.as_deref().unwrap_or(call.id.as_str()));
+            let id = tool_call_id(
+                call.provider
+                    .as_ref()
+                    .map(|p| p.call_id.as_str())
+                    .unwrap_or_else(|| call.id.as_str()),
+            );
             summaries.insert(
                 id,
                 ToolCallSummary {
@@ -542,6 +549,8 @@ fn tool_result_chars(result: &ToolResult) -> u64 {
         .map(|item| match item {
             ToolResultContent::Text(text) => text.text.chars().count() as u64,
             ToolResultContent::Image(_) => 0,
+            // Structured JSON counts its serialized form, same metric as text.
+            ToolResultContent::Json { value } => value.to_string().chars().count() as u64,
         })
         .sum()
 }

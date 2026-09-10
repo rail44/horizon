@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use super::completion::{
     await_provider_phase, openai_turn_additional_params, output_cap_truncated,
-    partial_assistant_message, provider_request_usage_event_from_openai_final, retry_backoff,
+    partial_assistant_message, provider_request_usage_event_from_stream_final, retry_backoff,
     retryable_rejection, rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry,
     Attempt, ProviderRequestSpan, ProviderWait, Retried, TurnCompletion,
     MULTI_TOOL_TEST_BATCH_SIZE, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
@@ -37,12 +37,9 @@ use crate::contract::{
     ToolPermission, TurnEndReason,
 };
 use crate::registry::Provider as AgentProvider;
-use rig_core::{
-    completion::{
-        message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
-        AssistantContent, Message as RigMessage, ToolDefinition,
-    },
-    OneOrMany,
+use rig_core::completion::{
+    message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
+    AssistantContent, Message as RigMessage, ToolDefinition,
 };
 
 fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
@@ -505,21 +502,19 @@ fn openai_turn_completion_request_carries_the_explicit_max_tokens() {
 
 #[test]
 fn openai_stream_final_usage_emits_cached_input_event() {
-    let response =
-        rig_core::providers::openai::completion::streaming::StreamingCompletionResponse {
-            usage: rig_core::providers::openai::completion::Usage {
-                prompt_tokens: 100,
-                total_tokens: 125,
-                prompt_tokens_details: Some(
-                    rig_core::providers::openai::completion::PromptTokensDetails {
-                        cached_tokens: 80,
-                    },
-                ),
-            },
-        };
+    let final_record = rig_core::streaming::StreamFinal::new(
+        "openai",
+        rig_core::completion::Usage {
+            input_tokens: 100,
+            output_tokens: 25,
+            total_tokens: 125,
+            cached_input_tokens: 80,
+            ..rig_core::completion::Usage::new()
+        },
+    );
 
     assert_eq!(
-        provider_request_usage_event_from_openai_final(&response),
+        provider_request_usage_event_from_stream_final(&final_record),
         Event::ProviderRequestUsage(ProviderRequestUsage {
             input_tokens: 100,
             output_tokens: 25,
@@ -561,7 +556,7 @@ fn provider_usage_event_persists_through_the_generic_duckdb_record() {
 fn converts_rig_assistant_text_to_horizon_message() {
     let events = horizon_events_from_rig_message(RigMessage::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::Text(Text::new("hello"))),
+        content: vec![AssistantContent::Text(Text::new("hello"))],
     });
 
     assert!(matches!(
@@ -577,13 +572,12 @@ fn converts_rig_assistant_text_to_horizon_message() {
 fn emits_rig_reasoning_before_assistant_text() {
     let events = horizon_events_from_rig_message(RigMessage::Assistant {
         id: None,
-        content: OneOrMany::many(vec![
+        content: vec![
             AssistantContent::Text(Text::new("final answer")),
             AssistantContent::Reasoning(rig_core::completion::message::Reasoning::new(
                 "thinking first",
             )),
-        ])
-        .expect("assistant content"),
+        ],
     });
 
     assert!(matches!(
@@ -602,7 +596,7 @@ fn emits_rig_reasoning_before_assistant_text() {
 fn converts_rig_tool_call_to_horizon_tool_request() {
     let events = horizon_events_from_rig_message(RigMessage::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+        content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
     });
 
     assert!(matches!(
@@ -640,9 +634,9 @@ fn builds_versioned_rig_tool_call_provider_payload() {
 fn converts_rig_tool_call_to_provider_event_with_payload() {
     let events = horizon_provider_events_from_rig_message(RigMessage::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(
+        content: vec![AssistantContent::ToolCall(
             rig_workspace_snapshot_call_with_provider_metadata(),
-        )),
+        )],
     });
 
     assert!(matches!(
@@ -686,7 +680,7 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
     // progress event.
     let events = horizon_events_from_rig_message(RigMessage::Assistant {
         id: None,
-        content: OneOrMany::one(AssistantContent::ToolCall(rig_workspace_snapshot_call())),
+        content: vec![AssistantContent::ToolCall(rig_workspace_snapshot_call())],
     });
     assert!(matches!(
         events.as_slice(),
@@ -745,7 +739,7 @@ fn tool_call_progress_buffer_reports_no_truncation_when_all_started_calls_are_fi
 fn rig_tool_call_request_mints_a_distinct_occurrence_per_call() {
     let mint = || {
         rig_tool_call_request(ToolCall::new(
-            "functions.fs.edit:66".to_string(),
+            rig_core::message::ToolCallId::new_or_mint("functions.fs.edit:66"),
             ToolFunction::new(
                 "fs.edit".to_string(),
                 serde_json::json!({ "path": "a.txt" }),
@@ -843,13 +837,13 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
     assert!(matches!(
         &messages[1],
         RigMessage::Assistant { content, .. }
-            if matches!(content.first_ref(), AssistantContent::ToolCall(call)
-                if call.id == "call-1" && call.function.name == "workspace.snapshot")
+            if matches!(content.first(), Some(AssistantContent::ToolCall(call))
+                if call.id.as_str() == "call-1" && call.function.name == "workspace.snapshot")
     ));
     assert!(matches!(&messages[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == "call-1"
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == "call-1"
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("tab_count")))));
     assert!(matches!(&messages[3], RigMessage::Assistant { .. }));
 }
@@ -1035,12 +1029,12 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
     assert!(matches!(
         &messages[0],
         RigMessage::Assistant { content, .. }
-            if matches!(content.first_ref(), AssistantContent::ToolCall(call)
-                if call.id == request.call_id.0)
+            if matches!(content.first(), Some(AssistantContent::ToolCall(call))
+                if call.id.as_str() == request.call_id.0)
     ));
     assert!(matches!(&messages[1], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == request.call_id.0)));
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == request.call_id.0)));
 }
 
 /// A persisted background-`task` notification replays to the provider as a
@@ -1061,7 +1055,7 @@ fn a_task_notification_replays_to_the_provider_as_a_user_message() {
     assert_eq!(messages.len(), 1);
     assert!(
         matches!(&messages[0], RigMessage::User { content }
-            if matches!(content.first_ref(), UserContent::Text(text)
+            if matches!(content.first(), Some(UserContent::Text(text))
                 if text.text == "task \"map the emit sites\" completed")),
         "got {:?}",
         messages[0]
@@ -1092,7 +1086,7 @@ fn assert_pairing_valid(messages: &[RigMessage]) {
                 let calls: Vec<String> = content
                     .iter()
                     .filter_map(|item| match item {
-                        AssistantContent::ToolCall(call) => Some(call.id.clone()),
+                        AssistantContent::ToolCall(call) => Some(call.id.as_str().to_string()),
                         _ => None,
                     })
                     .collect();
@@ -1100,13 +1094,13 @@ fn assert_pairing_valid(messages: &[RigMessage]) {
                 announced.extend(calls);
             }
             RigMessage::User { content } => {
-                let UserContent::ToolResult(result) = content.first_ref() else {
+                let Some(UserContent::ToolResult(result)) = content.first() else {
                     continue;
                 };
                 assert!(
-                    announced.contains(&result.id),
+                    announced.contains(result.call.as_str()),
                     "message {index} answers unannounced call {}: {messages:?}",
-                    result.id
+                    result.call.as_str()
                 );
                 assert!(
                     nearest_assistant_announced,
@@ -1166,7 +1160,7 @@ fn a_streamed_assistant_text_never_separates_a_tool_call_from_its_result() {
     };
     let items = content.iter().collect::<Vec<_>>();
     assert_eq!(items.len(), 2);
-    assert!(matches!(items[0], AssistantContent::ToolCall(call) if call.id == "call-1"));
+    assert!(matches!(items[0], AssistantContent::ToolCall(call) if call.id.as_str() == "call-1"));
     assert!(matches!(items[1], AssistantContent::Text(text) if text.text == "Let me check."));
 }
 
@@ -1192,7 +1186,7 @@ fn an_orphaned_tool_result_is_dropped_when_history_is_rebuilt() {
     assert_pairing_valid(&messages);
     assert_eq!(messages.len(), 2);
     assert!(matches!(&messages[0], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::Text(text)
+        if matches!(content.first(), Some(UserContent::Text(text))
             if text.text == "how many tabs?")));
     assert!(matches!(&messages[1], RigMessage::Assistant { .. }));
 }
@@ -1221,12 +1215,12 @@ fn an_unanswered_tool_call_is_closed_with_a_cancelled_result_on_rebuild() {
     assert_pairing_valid(&messages);
     assert_eq!(messages.len(), 4);
     assert!(matches!(&messages[1], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == "call-1"
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == "call-1"
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("cancelled")))));
     assert!(matches!(&messages[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::Text(text)
+        if matches!(content.first(), Some(UserContent::Text(text))
             if text.text == "never mind")));
 }
 
@@ -1285,24 +1279,35 @@ fn rebuilt_history_pairing_repair_is_idempotent() {
 #[test]
 fn appends_cancelled_tool_results_after_assistant_tool_call_message() {
     let tool_call = rig_workspace_snapshot_call();
-    let call_id = ToolCallId(tool_call.id.clone());
+    let call_id = ToolCallId(tool_call.id.as_str().to_string());
     let mut history = vec![
         RigMessage::user("snapshot please"),
         RigMessage::Assistant {
             id: None,
-            content: OneOrMany::one(AssistantContent::ToolCall(tool_call)),
+            content: vec![AssistantContent::ToolCall(tool_call)],
         },
     ];
 
-    append_cancelled_tool_results_to_history(&mut history, std::slice::from_ref(&call_id));
+    let pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
+        call_id.clone(),
+        ToolCallDescriptor {
+            tool_id: "workspace.snapshot".to_string(),
+            args: serde_json::json!({}),
+        },
+    )]);
+    append_cancelled_tool_results_to_history(
+        &mut history,
+        std::slice::from_ref(&call_id),
+        &pending,
+    );
 
     // The assistant tool_calls message must be followed by one tool-result
     // message per cancelled call, or the next API request is rejected.
     assert_eq!(history.len(), 3);
     assert!(matches!(&history[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == call_id.0
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == call_id.0
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("cancelled")))));
 }
 
@@ -1313,11 +1318,11 @@ fn cancel_without_tool_calls_appends_no_history_tool_results() {
         RigMessage::assistant("partial answer"),
     ];
 
-    append_cancelled_tool_results_to_history(&mut history, &[]);
+    append_cancelled_tool_results_to_history(&mut history, &[], &HashMap::new());
 
     assert_eq!(history.len(), 2);
     assert!(matches!(&history[1], RigMessage::Assistant { content, .. }
-        if matches!(content.first_ref(), AssistantContent::Text(text)
+        if matches!(content.first(), Some(AssistantContent::Text(text))
             if text.text == "partial answer")));
 }
 
@@ -1333,7 +1338,7 @@ fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
     assert_eq!(items.len(), 2);
     assert!(matches!(&items[0], AssistantContent::Text(text) if text.text == "partial text"));
     assert!(matches!(&items[1], AssistantContent::ToolCall(call)
-        if call.id == "rig-workspace-snapshot-1"));
+        if call.id.as_str() == "rig-workspace-snapshot-1"));
 }
 
 // --- Double-encoded tool-call arguments -------------------------------
@@ -1361,7 +1366,7 @@ impl crate::tools::HostTools for NoHostTools {
 
 fn streamed_tool_call(arguments: serde_json::Value) -> ToolCall {
     ToolCall::new(
-        "call-1".to_string(),
+        rig_core::message::ToolCallId::new_or_mint("call-1"),
         ToolFunction::new("fs.read".to_string(), arguments),
     )
 }
@@ -1475,7 +1480,7 @@ fn unparseable_string_tool_arguments_error_the_tool_but_replay_as_an_empty_objec
 
     // Same for the streaming aggregation path, which assembles history from
     // rig's own `stream.choice` rather than the streamed calls.
-    let mut content = OneOrMany::one(AssistantContent::ToolCall(call));
+    let mut content = vec![AssistantContent::ToolCall(call)];
     super::completion::make_tool_call_arguments_replay_safe(&mut content);
     assert_eq!(
         history_tool_call_arguments(&RigMessage::Assistant { id: None, content }),
@@ -1793,20 +1798,19 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     // arrived and tripped the guard) and B (still outstanding).
     let call_a = rig_workspace_snapshot_call();
     let call_b = ToolCall::new(
-        "call-b".to_string(),
+        rig_core::message::ToolCallId::new_or_mint("call-b"),
         ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/x" })),
     );
-    let id_a = ToolCallId(call_a.id.clone());
-    let id_b = ToolCallId(call_b.id.clone());
+    let id_a = ToolCallId(call_a.id.as_str().to_string());
+    let id_b = ToolCallId(call_b.id.as_str().to_string());
     let history = vec![
         RigMessage::user("snapshot please"),
         RigMessage::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::ToolCall(call_a),
                 AssistantContent::ToolCall(call_b),
-            ])
-            .expect("assistant content"),
+            ],
         },
     ];
     // The session loop removes the arrived call from pending (to look up
@@ -1819,7 +1823,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         },
     )]);
     let cancelled: HashSet<ToolCallId> = HashSet::new();
-    let pending_halt_result: Option<ToolCallResult> = None;
+    let pending_halt_result: Option<(ToolCallResult, String)> = None;
     let arrived = ToolCallResult::new(id_a.clone(), None, serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
@@ -1848,7 +1852,11 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     };
 
     state
-        .halt_turn_loop(GuardHalt::IterationCapExceeded, &arrived)
+        .halt_turn_loop(
+            GuardHalt::IterationCapExceeded,
+            &arrived,
+            "workspace.snapshot",
+        )
         .await;
 
     // The arrived result is *not* folded into history here -- it's stashed
@@ -1858,14 +1866,14 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     // appended immediately, since it never gets a second chance to land.
     assert_eq!(
         state.pending_halt_result,
-        Some(arrived.clone()),
+        Some((arrived.clone(), "workspace.snapshot".to_string())),
         "the real, already-executed result must be stashed for Continue/a new user message"
     );
     assert_eq!(state.rig_history.len(), 3);
     assert!(matches!(&state.rig_history[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == id_b.0
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == id_b.0
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("cancelled")))));
 
     assert!(state.pending_tool_calls.is_empty());
@@ -2367,21 +2375,20 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         RigMessage::user("multi tool please"),
         RigMessage::Assistant {
             id: None,
-            content: OneOrMany::many(vec![
+            content: vec![
                 AssistantContent::ToolCall(ToolCall::new(
-                    call_a.0.clone(),
+                    rig_core::message::ToolCallId::new_or_mint(call_a.0.clone()),
                     ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/a" })),
                 )),
                 AssistantContent::ToolCall(ToolCall::new(
-                    call_b.0.clone(),
+                    rig_core::message::ToolCallId::new_or_mint(call_b.0.clone()),
                     ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/b" })),
                 )),
                 AssistantContent::ToolCall(ToolCall::new(
-                    call_c.0.clone(),
+                    rig_core::message::ToolCallId::new_or_mint(call_c.0.clone()),
                     ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/c" })),
                 )),
-            ])
-            .expect("assistant content"),
+            ],
         },
     ];
     let mut pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([
@@ -2414,7 +2421,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     let result_a =
         ToolCallResult::new(call_a.clone(), None, serde_json::json!({ "contents": "a" }));
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_a),
+        fold_batched_tool_result(&mut history, &pending, &result_a, "fs.read"),
         BatchStep::Continue
     );
     assert_eq!(history.len(), 3);
@@ -2424,7 +2431,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     let result_b =
         ToolCallResult::new(call_b.clone(), None, serde_json::json!({ "contents": "b" }));
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_b),
+        fold_batched_tool_result(&mut history, &pending, &result_b, "fs.read"),
         BatchStep::Continue
     );
     assert_eq!(history.len(), 4);
@@ -2438,7 +2445,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     let result_c =
         ToolCallResult::new(call_c.clone(), None, serde_json::json!({ "contents": "c" }));
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_c),
+        fold_batched_tool_result(&mut history, &pending, &result_c, "fs.read"),
         BatchStep::RunTurn
     );
     assert_eq!(
@@ -2450,14 +2457,14 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // The two folded-in-advance results land in arrival order, right after
     // the assistant's tool_calls message.
     assert!(matches!(&history[2], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == call_a.0
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == call_a.0
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("\"a\"")))));
     assert!(matches!(&history[3], RigMessage::User { content }
-        if matches!(content.first_ref(), UserContent::ToolResult(result)
-            if result.id == call_b.0
-                && matches!(result.content.first_ref(), ToolResultContent::Text(text)
+        if matches!(content.first(), Some(UserContent::ToolResult(result))
+            if result.call.as_str() == call_b.0
+                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("\"b\"")))));
 }
 

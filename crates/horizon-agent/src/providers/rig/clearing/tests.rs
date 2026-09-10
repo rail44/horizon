@@ -15,23 +15,20 @@ fn chars_for_tokens(tokens: u64) -> usize {
 fn tool_call_message(calls: &[(&str, &str, serde_json::Value)]) -> Message {
     Message::Assistant {
         id: None,
-        content: OneOrMany::many(
-            calls
-                .iter()
-                .map(|(call_id, tool_id, args)| {
-                    AssistantContent::ToolCall(ToolCall::new(
-                        (*call_id).to_string(),
-                        ToolFunction::new((*tool_id).to_string(), args.clone()),
-                    ))
-                })
-                .collect::<Vec<_>>(),
-        )
-        .expect("at least one call"),
+        content: calls
+            .iter()
+            .map(|(call_id, tool_id, args)| {
+                AssistantContent::ToolCall(ToolCall::new(
+                    rig_core::message::ToolCallId::new_or_mint(*call_id),
+                    ToolFunction::new((*tool_id).to_string(), args.clone()),
+                ))
+            })
+            .collect::<Vec<_>>(),
     }
 }
 
 fn tool_result_message(call_id: &str, chars: usize) -> Message {
-    Message::tool_result(call_id, "x".repeat(chars))
+    Message::tool_result(call_id, "tool", "x".repeat(chars))
 }
 
 fn call_id(id: &str) -> ToolCallId {
@@ -55,6 +52,7 @@ fn tool_result_text(message: &Message) -> Option<String> {
                 .filter_map(|item| match item {
                     ToolResultContent::Text(text) => Some(text.text.clone()),
                     ToolResultContent::Image(_) => None,
+                    ToolResultContent::Json { .. } => None,
                 })
                 .collect::<String>(),
         ),
@@ -264,11 +262,13 @@ fn clearing_preserves_every_tool_call_result_pair() {
             // source, so the projection never reshapes this side.
             (Message::Assistant { .. }, _) => assert_eq!(before, after, "message {index}"),
             (Message::User { content: before }, Message::User { content: after }) => {
-                let ids = |content: &OneOrMany<UserContent>| {
+                let ids = |content: &[UserContent]| {
                     content
                         .iter()
                         .filter_map(|item| match item {
-                            UserContent::ToolResult(result) => Some(result.id.clone()),
+                            UserContent::ToolResult(result) => {
+                                Some(result.call.as_str().to_string())
+                            }
                             _ => None,
                         })
                         .collect::<Vec<_>>()
@@ -504,6 +504,7 @@ fn a_result_reusing_a_cleared_call_id_after_the_freeze_is_never_replaced() {
     )]));
     history.push(Message::tool_result(
         "functions.fs.read:1",
+        "tool",
         "the fresh body the model just asked for",
     ));
 
@@ -541,7 +542,7 @@ fn a_pass_that_clears_two_occurrences_of_one_id_leaves_a_later_third_verbatim() 
         "fs.read",
         serde_json::json!({ "path": "src/fresh.rs" }),
     )]));
-    history.push(Message::tool_result("dup", "fresh"));
+    history.push(Message::tool_result("dup", "tool", "fresh"));
 
     let projected = history_for_provider_request(&history, &cleared, None);
     for index in [2, 4] {
@@ -573,7 +574,7 @@ fn resume_replay_preserves_the_reuse_guard() {
         "fs.read",
         serde_json::json!({ "path": "src/fresh.rs" }),
     )]));
-    history.push(Message::tool_result("dup", "fresh"));
+    history.push(Message::tool_result("dup", "tool", "fresh"));
 
     let events = vec![Event::HistoryCleared(HistoryCleared {
         cleared_call_ids: vec![call_id("dup"), call_id("dup")],

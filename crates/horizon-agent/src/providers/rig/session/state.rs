@@ -66,7 +66,10 @@ pub(crate) struct SessionLoopState {
     pub(crate) guard: TurnLoopGuard,
     /// The real, already-executed tool result a guard halt stashed instead
     /// of folding into `rig_history` right away — see `halt_turn_loop`.
-    pub(crate) pending_halt_result: Option<ToolCallResult>,
+    // Paired with the executed tool's id: rig 0.42 requires the tool name
+    // on every tool-result message, and the descriptor is gone from
+    // `pending_tool_calls` by the time this is flushed.
+    pub(crate) pending_halt_result: Option<(ToolCallResult, String)>,
 
     // --- Standing-agent memory (`docs/standing-agent-memory-design.md`) ----
     /// The current memory document, maintained incrementally as
@@ -209,8 +212,9 @@ impl SessionLoopState {
                     // a guard halt stashed still has to land in `rig_history`
                     // before the next request, or the API rejects an assistant
                     // `tool_calls` message with no matching result.
-                    if let Some(result) = self.pending_halt_result.take() {
-                        self.rig_history.push(rig_tool_result_message(&result));
+                    if let Some((result, tool_id)) = self.pending_halt_result.take() {
+                        self.rig_history
+                            .push(rig_tool_result_message(&result, &tool_id));
                     }
                     self.guard.reset();
                     self.memory_satisfied = false;
@@ -266,8 +270,9 @@ impl SessionLoopState {
                     // `rig_history` before the next request, or the API
                     // rejects it (an assistant `tool_calls` message with no
                     // matching result). A no-op when there's nothing pending.
-                    if let Some(result) = self.pending_halt_result.take() {
-                        self.rig_history.push(rig_tool_result_message(&result));
+                    if let Some((result, tool_id)) = self.pending_halt_result.take() {
+                        self.rig_history
+                            .push(rig_tool_result_message(&result, &tool_id));
                     }
                     // A fresh user message starts a new interaction: both loop
                     // guards below count/track only *tool-driven* turns since
@@ -351,7 +356,8 @@ impl SessionLoopState {
                         // result is real — its tool already executed — so it
                         // is recorded as-is; only *other* still-pending calls
                         // get the cancelled treatment.
-                        self.halt_turn_loop(halt, &result).await;
+                        self.halt_turn_loop(halt, &result, &descriptor.tool_id)
+                            .await;
                         continue;
                     }
 
@@ -359,6 +365,7 @@ impl SessionLoopState {
                         &mut self.rig_history,
                         &self.pending_tool_calls,
                         &result,
+                        &descriptor.tool_id,
                     ) == BatchStep::Continue
                     {
                         continue;
@@ -369,7 +376,8 @@ impl SessionLoopState {
                     // recorded exactly once here — never per result, or an
                     // N-call batch would burn the cap N times faster.
                     if let Some(halt) = self.guard.record_tool_turn() {
-                        self.halt_turn_loop(halt, &result).await;
+                        self.halt_turn_loop(halt, &result, &descriptor.tool_id)
+                            .await;
                         continue;
                     }
 
@@ -379,8 +387,9 @@ impl SessionLoopState {
                         )
                         .into(),
                     );
-                    let (prompt, injected) =
-                        self.inject_task_notification(rig_tool_result_message(&result));
+                    let (prompt, injected) = self.inject_task_notification(
+                        rig_tool_result_message(&result, &descriptor.tool_id),
+                    );
                     self.run_turn(prompt, move || match injected {
                         Some(text) => deterministic_rig_response(&text),
                         None => deterministic_tool_result_response(&result),
@@ -388,7 +397,7 @@ impl SessionLoopState {
                     .await;
                 }
                 crate::contract::Command::ContinueTurn => {
-                    let Some(result) = self.pending_halt_result.take() else {
+                    let Some((result, tool_id)) = self.pending_halt_result.take() else {
                         // Nothing halted to resume: a safe no-op. Covers a
                         // stale Continue arriving after a fresh user message
                         // already flushed the pending result, a Continue sent
@@ -407,7 +416,7 @@ impl SessionLoopState {
                     // re-trip after another full `iteration_cap` turns rather
                     // than being permanently defeated by one reset.
                     if let Some(halt) = self.guard.record_tool_turn() {
-                        self.halt_turn_loop(halt, &result).await;
+                        self.halt_turn_loop(halt, &result, &tool_id).await;
                         continue;
                     }
                     let _ = self.events_tx.send(
@@ -417,7 +426,7 @@ impl SessionLoopState {
                         .into(),
                     );
                     let (prompt, injected) =
-                        self.inject_task_notification(rig_tool_result_message(&result));
+                        self.inject_task_notification(rig_tool_result_message(&result, &tool_id));
                     self.run_turn(prompt, move || match injected {
                         Some(text) => deterministic_rig_response(&text),
                         None => deterministic_tool_result_response(&result),

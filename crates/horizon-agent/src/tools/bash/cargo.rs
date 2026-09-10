@@ -51,7 +51,7 @@ fn uses_shared_cache_build_dir(workspace_root: &Path) -> bool {
         let Ok(source) = std::fs::read_to_string(workspace_root.join(relative)) else {
             return false;
         };
-        let Ok(config) = source.parse::<toml::Value>() else {
+        let Ok(config) = toml::from_str::<toml::Table>(&source) else {
             return false;
         };
         config

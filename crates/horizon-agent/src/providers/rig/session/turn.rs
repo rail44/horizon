@@ -135,6 +135,7 @@ impl SessionLoopState {
             append_cancelled_tool_results_to_history(
                 &mut self.rig_history,
                 &outcome.requested_tool_call_ids,
+                &outcome.requested_tool_calls,
             );
             for call_id in outcome.requested_tool_call_ids {
                 let _ = self
@@ -206,6 +207,7 @@ impl SessionLoopState {
                 append_cancelled_tool_results_to_history(
                     &mut self.rig_history,
                     &outcome.requested_tool_call_ids,
+                    &outcome.requested_tool_calls,
                 );
                 for call_id in &outcome.requested_tool_call_ids {
                     let _ = self.events_tx.send(
@@ -332,13 +334,15 @@ impl SessionLoopState {
     /// retirement are recognized through `cancelled_call_ids` and dropped by the
     /// session loop instead of entering a later turn's batch.
     pub(crate) fn cancel_outstanding_tool_calls(&mut self) -> bool {
-        let call_ids: Vec<ToolCallId> = self.pending_tool_calls.drain().map(|(id, _)| id).collect();
-        if call_ids.is_empty() {
+        let drained: HashMap<ToolCallId, ToolCallDescriptor> =
+            std::mem::take(&mut self.pending_tool_calls);
+        if drained.is_empty() {
             return false;
         }
+        let call_ids: Vec<ToolCallId> = drained.keys().cloned().collect();
 
         self.cancelled_call_ids.extend(call_ids.iter().cloned());
-        append_cancelled_tool_results_to_history(&mut self.rig_history, &call_ids);
+        append_cancelled_tool_results_to_history(&mut self.rig_history, &call_ids, &drained);
         for call_id in call_ids {
             let _ = self
                 .events_tx
@@ -406,15 +410,16 @@ impl SessionLoopState {
         &mut self,
         halt: GuardHalt,
         arrived_result: &ToolCallResult,
+        tool_id: &str,
     ) {
         self.cancel_outstanding_tool_calls();
 
         let summarized = halt == GuardHalt::IterationCapExceeded
             && self.role.is_some_and(|role| role.summarize_on_cap)
-            && self.run_cap_summary_turn(arrived_result).await;
+            && self.run_cap_summary_turn(arrived_result, tool_id).await;
 
         if !summarized {
-            self.pending_halt_result = Some(arrived_result.clone());
+            self.pending_halt_result = Some((arrived_result.clone(), tool_id.to_string()));
         }
 
         self.guard.reset();
@@ -448,10 +453,14 @@ impl SessionLoopState {
     /// different number of messages depending on how far the wrap-up got
     /// (zero on a provider-request error, two -- the prompt and a partial
     /// assistant message -- on cancellation).
-    async fn run_cap_summary_turn(&mut self, arrived_result: &ToolCallResult) -> bool {
+    async fn run_cap_summary_turn(
+        &mut self,
+        arrived_result: &ToolCallResult,
+        tool_id: &str,
+    ) -> bool {
         let baseline_len = self.rig_history.len();
         self.rig_history
-            .push(rig_tool_result_message(arrived_result));
+            .push(rig_tool_result_message(arrived_result, tool_id));
 
         let mut wrap_up_config = self.config.clone();
         wrap_up_config.allowed_tool_ids = Some(Vec::new());
@@ -510,11 +519,12 @@ pub(crate) fn fold_batched_tool_result(
     rig_history: &mut Vec<Message>,
     pending_tool_calls: &HashMap<ToolCallId, ToolCallDescriptor>,
     result: &ToolCallResult,
+    tool_id: &str,
 ) -> BatchStep {
     if pending_tool_calls.is_empty() {
         BatchStep::RunTurn
     } else {
-        rig_history.push(rig_tool_result_message(result));
+        rig_history.push(rig_tool_result_message(result, tool_id));
         BatchStep::Continue
     }
 }
@@ -528,11 +538,16 @@ pub(crate) fn fold_batched_tool_result(
 pub(crate) fn append_cancelled_tool_results_to_history(
     rig_history: &mut Vec<Message>,
     cancelled_call_ids: &[ToolCallId],
+    pending: &HashMap<ToolCallId, ToolCallDescriptor>,
 ) {
     for call_id in cancelled_call_ids {
-        rig_history.push(rig_tool_result_message(&cancelled_tool_call_result(
-            call_id.clone(),
-        )));
+        rig_history.push(rig_tool_result_message(
+            &cancelled_tool_call_result(call_id.clone()),
+            pending
+                .get(call_id)
+                .map(|descriptor| descriptor.tool_id.as_str())
+                .unwrap_or(""),
+        ));
     }
 }
 
