@@ -42,36 +42,29 @@ edition = "2021"
 alacritty_terminal = "0.26.0"
 crossbeam-channel = "0.5"
 futures = "0.3"
-# gpui/gpui_platform are deliberately left unpinned here: gpui-component's
-# own Cargo.toml depends on them without a `rev` too, and adding one only to
-# *our* edge splits the graph into two incompatible `gpui` instances ("multiple
-# different versions of crate `gpui`" compile errors) since Cargo treats a
-# rev-pinned git source and a floating one as different SourceIds even
-# when they currently resolve to the same commit. A `[patch]` override was
-# also tried and rejected by Cargo itself ("patches must point to
-# different sources") — there is no manifest-level fix. The committed
-# Cargo.lock is therefore the only pin for this crate; if it ever drifts
-# (e.g. a `cargo update`/`cargo generate-lockfile` re-resolves it to a new
-# upstream HEAD), restore the intended commit (currently
-# 5f8a7413a31769e0882357f90dc424b3962ac72d) with
-# `cargo update -p gpui --precise <sha>` or bump deliberately the same
-# way. The quality gate now runs clippy and nextest with `--locked`, so
-# any such drift fails the gate loudly instead of silently re-resolving
-# (see AGENTS.md / hooks/pre-commit).
-gpui = { git = "https://github.com/zed-industries/zed" }
-gpui_platform = { git = "https://github.com/zed-industries/zed", features = [
+# gpui ships to crates.io as the `gpui-pre` family -- the packaging the
+# gpui-component v0.6 workspace itself is developed against (`gpui-pre`,
+# `gpui-pre-platform`, `gpui-pre-macros`, `gpui-pre-sum-tree`, ...). The
+# package renames keep our `use gpui::*` imports unchanged. This retires the
+# old floating-git-pin fragility (the committed lockfile used to be the only
+# pin, because a rev-pinned gpui edge next to gpui-component's floating one
+# split the graph into two incompatible `gpui` instances and a `[patch]`
+# was rejected by cargo): these are now ordinary crates.io requirements
+# resolved once into the committed lock like every other dependency.
+gpui = { package = "gpui-pre", version = "0.3.1" }
+gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
     "font-kit",
     "wayland",
     "x11",
 ] }
-# gpui-component/gpui-component-assets have no such conflict (nothing
-# else in the graph depends on them), so they carry an explicit pin.
-# Bump deliberately: update the rev below, then
-# `cargo update -p gpui-component -p gpui-component-assets`.
-gpui-component = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
-# Bundled SVGs gpui-component's own components (e.g. `TitleBar`'s window
-# control icons) resolve through the asset source registered below.
-gpui-component-assets = { git = "https://github.com/longbridge/gpui-component", rev = "0775df394083c1ed74f36f846b78868d1267398f" }
+# gpui-component (v0.6 workspace: crates/component) and the bundled icon
+# SVGs now ship as `gpui-kit-assets` (formerly gpui-component-assets); the
+# repository was renamed longbridge/gpui-component -> longbridge/gpui-kit.
+# Nothing else in the graph depends on them, so they carry an explicit rev
+# pin. Bump deliberately: update the rev below, then
+# `cargo update -p gpui-component -p gpui-kit-assets`.
+gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-board = { path = "crates/horizon-board" }
 horizon-cli = { path = "crates/horizon-cli" }

@@ -4,7 +4,7 @@
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Escape, Input, InputEvent, InputState};
+use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
 use horizon_agent::contract::ToolCallId;
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
@@ -23,7 +23,7 @@ pub(super) enum ComposerEvent {
 
 pub(super) struct AgentComposer {
     session: Entity<AgentSession>,
-    input: Entity<InputState>,
+    input: Entity<TextareaState>,
     transcript: WeakEntity<AgentTranscript>,
     model: Option<String>,
     turn_in_flight: bool,
@@ -45,7 +45,7 @@ impl AgentComposer {
         // Plain Enter submits, Shift+Enter remains a newline, and auto-grow
         // preserves the one-row empty composer while allowing up to the cap.
         let input = cx.new(|cx| {
-            InputState::new(window, cx)
+            TextareaState::new(window, cx)
                 .placeholder(turns::composer_placeholder(turn_in_flight))
                 .auto_grow(1, COMPOSER_MAX_ROWS)
                 .submit_on_enter(true)
@@ -229,7 +229,7 @@ impl Render for AgentComposer {
             .child(
                 div()
                     .flex_1()
-                    .child(Input::new(&self.input).appearance(false)),
+                    .child(Textarea::new(&self.input).appearance(false)),
             );
         if let Some(model) = self.model.clone() {
             row = row.child(div().pb(px(4.0)).child(render_model_chip(model)));
