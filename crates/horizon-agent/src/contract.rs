@@ -1081,6 +1081,24 @@ pub enum ApprovalKind {
     /// them only to this call (including any chained containment retry), and
     /// keeps the command inside the sandbox.
     GitOperation { writable_roots: Vec<PathBuf> },
+    /// A sandboxed `bash` call was refused mach-lookup to one or more macOS
+    /// security services (`docs/macos-containment-denial-reporting-design.md`)
+    /// -- the macOS counterpart of [`ApprovalKind::FilesystemDenialRetry`]:
+    /// the call already ran, and the evidence is the kernel's own unified-log
+    /// denial record. A deny forwards `prior_result` as-is; an approve
+    /// records the service set for this session and reruns the SAME call
+    /// still sandboxed. The enforcement behind the grant is nono's
+    /// security-service group as a whole (all-or-nothing -- the seatbelt
+    /// profile has no per-service granularity), which the request's reason
+    /// text states to the approver. The service names here are the
+    /// primitive (`mach-lookup` targets); no resource concept is defined
+    /// over them. Appended last (2026-09-10) so the wire schema's oneOf
+    /// indices for existing variants stay put -- same append-only discipline
+    /// the other persisted enums here follow.
+    MachServiceGrant {
+        services: Vec<String>,
+        prior_result: ToolCallResult,
+    },
 }
 
 /// Payload for [`Event::ProviderRequestSent`]: the model id the provider was

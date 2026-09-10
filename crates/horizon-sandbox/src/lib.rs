@@ -77,6 +77,31 @@ pub use linux::execute_supervised_helper;
 #[cfg(target_os = "macos")]
 pub use macos::apply_seatbelt_to_self;
 
+#[cfg(target_os = "macos")]
+pub use macos::denials::{security_service_grants, DenialCollector};
+
+/// The security services nono's macOS profile denies `mach-lookup` for
+/// (nono 0.68.0 `sandbox/macos.rs`'s `generate_profile`), and whose denies
+/// it skips when the capability set carries an explicit `Read` grant on a
+/// keychain database file (`has_explicit_keychain_db_access`). Mirrored
+/// here because nono exposes no query API. This is nono's knowledge about
+/// macOS, not a Horizon-defined resource concept; see
+/// [`security_service_grants`] for the enforcement mapping and
+/// `docs/macos-containment-denial-reporting-design.md` for the flow.
+pub const KNOWN_SECURITY_SERVICES: [&str; 5] = [
+    "com.apple.SecurityServer",
+    "com.apple.securityd",
+    "com.apple.security.keychaind",
+    "com.apple.secd",
+    "com.apple.security.agent",
+];
+
+/// Convenience accessor over [`KNOWN_SECURITY_SERVICES`] for callers that
+/// must exist on every platform (config validation runs on Linux too).
+pub fn known_security_services() -> &'static [&'static str] {
+    &KNOWN_SECURITY_SERVICES
+}
+
 use std::process::{Child, Command};
 
 /// Name of the TMPDIR-parity scratch directory both OS backends provision

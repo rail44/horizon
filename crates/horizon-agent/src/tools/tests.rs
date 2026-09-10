@@ -159,6 +159,12 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
+        BashCompletion::MachServiceDenied {
+            call_id, services, ..
+        } => panic!(
+            "expected a finished bash completion, got a mach-service-denied request for \
+             {call_id:?} ({services:?})"
+        ),
         BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
             "expected a finished bash completion, got a host-side domain grant for \
              {call_id:?} ({domains:?})"
@@ -2130,6 +2136,14 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
             panic!(
                 "a /tmp attempt must never raise a filesystem approval -- no grant for it \
                  can survive revalidation ({call_id:?}, {denials:?})"
+            );
+        }
+        BashCompletion::MachServiceDenied {
+            call_id, services, ..
+        } => {
+            panic!(
+                "expected a finished, ungrantable-annotated result, got a mach-service-denied \
+                 request instead for {call_id:?} ({services:?})"
             );
         }
         BashCompletion::DomainGrantRequired { call_id, domains } => {

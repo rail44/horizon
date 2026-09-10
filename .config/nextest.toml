@@ -125,6 +125,15 @@ max-threads = 1
 # before the assertion even runs. Reproduced with the workspace's changes
 # stashed (2026-09-07), so it is the containment boundary, not a regression.
 # The nice-value behavior itself is covered by the integrator's full gate.
+#
+# The macOS unified-log denial collector's sampler data source --
+# `test(/process_table_snapshot_is_available$/)` (2026-09-10,
+# `docs/macos-containment-denial-reporting-design.md`). The sampler shells
+# out to `/bin/ps` for the pid/pgid table; under containment that read is
+# refused (process-table visibility is exactly a host boundary the sandbox
+# enforces), so the collector's own soft-degrade path ("nothing new this
+# tick") is what runs, and the snapshot assertion cannot pass. The other
+# `macos::denials` tests are pure parsing/mapping logic and stay in.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -150,6 +159,7 @@ default-filter = '''
         + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
         + test(/attempts_with_nothing_in_common_fall_back_to_per_attempt_grants$/)
+        + test(/process_table_snapshot_is_available$/)
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
         + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
         + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)

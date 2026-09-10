@@ -98,6 +98,13 @@ pub struct RawProjectGrant {
     /// the session's network-proxy allowlist. Replaces the short-lived
     /// `loopback_connect` key with no compatibility alias.
     pub network: Vec<String>,
+    /// macOS security services a sandboxed session of this project may use
+    /// (`docs/macos-containment-denial-reporting-design.md`): names from
+    /// [`horizon_sandbox::KNOWN_SECURITY_SERVICES`] are recorded into the
+    /// session's mach-service grant set at spawn; unknown names are refused
+    /// with a warning. Enforcement is nono's all-or-nothing security-service
+    /// group (see `horizon_sandbox::security_service_grants`).
+    pub mach_services: Vec<String>,
 }
 
 /// A validated `[[grants.project]]` entry: absolute paths, `~` already
@@ -113,6 +120,10 @@ pub struct ProjectGrant {
     /// Validated domain names dispatched from `network`, pre-seeded into a
     /// spawned session's `SessionDomainPolicy`.
     pub domains: Vec<String>,
+    /// Validated macOS security services dispatched from `mach_services`
+    /// (`docs/macos-containment-denial-reporting-design.md`), pre-recorded
+    /// into a spawned session's mach-service grant set.
+    pub mach_services: Vec<String>,
 }
 
 /// Expands and validates every `[[grants.project]]` entry, returning the
@@ -200,11 +211,27 @@ pub fn resolve(
                 }
             }
         }
+        let mut mach_services = Vec::new();
+        for service in &entry.mach_services {
+            if !horizon_sandbox::KNOWN_SECURITY_SERVICES.contains(&service.as_str()) {
+                warnings.push(format!(
+                    "[[grants.project]] root {:?}: mach_services entry {service:?} is not one \
+                     of the macOS security services the sandbox knows about ({}), ignoring it",
+                    entry.root,
+                    horizon_sandbox::KNOWN_SECURITY_SERVICES.join(", ")
+                ));
+                continue;
+            }
+            if !mach_services.contains(service) {
+                mach_services.push(service.clone());
+            }
+        }
         resolved.push(ProjectGrant {
             root,
             trees,
             loopback_connect,
             domains,
+            mach_services,
         });
     }
 
@@ -251,6 +278,29 @@ pub fn loopback_connect_for_project(
         }
     }
     endpoints
+}
+
+/// The macOS security services granted to a session whose project root is
+/// `project_root` (`docs/macos-containment-denial-reporting-design.md`),
+/// dispatched from `mach_services` entries. Same exact-root matching as
+/// [`trees_for_project`]/[`loopback_connect_for_project`]/
+/// [`domains_for_project`]; several entries naming the same root
+/// contribute all of their services. `horizon-agentd`'s
+/// `session::setup::configured_mach_services` calls this at session spawn
+/// to pre-record the session's mach-service grant set.
+pub fn mach_services_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
+    let mut services = Vec::new();
+    for entry in entries {
+        if entry.root != project_root {
+            continue;
+        }
+        for service in &entry.mach_services {
+            if !services.contains(service) {
+                services.push(service.clone());
+            }
+        }
+    }
+    services
 }
 
 /// The domain names granted to a session whose project root is
@@ -367,6 +417,7 @@ mod tests {
             root: root.to_string(),
             trees: trees.iter().map(|tree| tree.to_string()).collect(),
             network: Vec::new(),
+            mach_services: Vec::new(),
         }
     }
 
@@ -383,6 +434,7 @@ mod tests {
                 trees: vec![PathBuf::from("/home/someone/.cargo")],
                 loopback_connect: Vec::new(),
                 domains: Vec::new(),
+                mach_services: Vec::new(),
             }]
         );
     }
@@ -515,6 +567,7 @@ mod tests {
             root: root.to_string(),
             trees: Vec::new(),
             network: network.iter().map(|s| s.to_string()).collect(),
+            mach_services: Vec::new(),
         }
     }
 

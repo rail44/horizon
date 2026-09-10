@@ -311,6 +311,17 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
                 git_metadata_operation: false,
             }
         }
+        ApprovalKind::MachServiceGrant { .. } => JudgeApprovalContext {
+            // The mach service grant's "what approval buys" (nono's
+            // all-or-nothing security-service group) has no field in this
+            // context; the request's reason text carries it, and the
+            // structural facts the judge needs are the all-false ones: the
+            // retry stays sandboxed, no filesystem grant, no domain grant.
+            requested_filesystem_grants: Vec::new(),
+            requested_domains: Vec::new(),
+            host_execution_requested: false,
+            git_metadata_operation: false,
+        },
         ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry => JudgeApprovalContext {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
