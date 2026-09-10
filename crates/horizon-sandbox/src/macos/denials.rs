@@ -22,20 +22,37 @@
 //! construction -- see `evidence.rs`'s authority criterion for what that
 //! permits. The kernel coalesces duplicate violations ("31 duplicate
 //! reports for ..."), so a denial can be summarized rather than individually
-//! logged; the collection window carries a grace tail, and anything still
-//! missed simply re-denies on the chained rerun.
+//! logged; anything still missed simply re-denies on the chained rerun.
+//!
+//! Collection is **live**, not a post-hoc store query: a process-shared
+//! `log stream` subscription (see [`shared_stream`]) receives each record
+//! the moment logd sees it, and `collect()` filters the run's window out of
+//! the accumulated buffer. This replaced a `log show --last <window>` query
+//! run at command exit (2026-09-10): the kernel's records reach the
+//! *datastore* that `log show` reads only after an unbounded, load-dependent
+//! delay (measured: a denial from 18:18:24 was still invisible to a query
+//! run around 18:19, visible by 18:40), so an immediate post-exit query
+//! raced the store and returned nothing -- exactly when commands failed.
+//! The store path also degraded to minutes-long scans under the denial
+//! flood every sandboxed command produces. `log stream`'s live delivery is
+//! documented ("Stream live log messages") and was verified same-second on
+//! the owner's machine; the datastore path carries no timing guarantee by
+//! spec (`man log` documents loss events and a separate "inflight" data
+//! state) and none in practice.
 
 use crate::error::SandboxError;
 use crate::policy::{
     ContainmentDenials, FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope,
     NetworkDenial, UngrantableDenial,
 };
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
+use std::io::BufRead;
 use std::path::PathBuf;
+use std::process::Child;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 /// How often the descendant-pid sampler walks the process table while the
 /// sandboxed command runs. Purely a discovery bound -- a grandchild that
@@ -43,13 +60,15 @@ use std::time::Duration;
 /// tolerates.
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
 
-/// Extra seconds the log query covers past the run's start-relative window,
-/// absorbing the kernel's duplicate-report coalescing and scheduling skew.
-const QUERY_GRACE_SECS: u64 = 2;
-
-/// Minimum `log show --last` window, so a sub-second command still sees its
-/// own records.
-const MIN_QUERY_WINDOW_SECS: u64 = 3;
+/// Upper bound on the shared stream's record buffer. The kernel's sandbox
+/// records are dominated by per-process noise (`/dev/dtracehelper` writes,
+/// one to three per spawned process, so a cargo/clippy run emits hundreds
+/// per minute); the cap bounds memory when a long build runs under a
+/// collector. Drop-oldest: attribution only needs records from the current
+/// run's window, and a real boundary crossing in the first seconds of a
+/// half-hour build is not recoverable evidence anyway by the time it
+/// finishes.
+const STREAM_BUFFER_CAP: usize = 8192;
 
 /// Report caps, mirroring the Linux report channel's bounded-output
 /// discipline (`horizon-sandbox-runtime`'s drop-oldest overflow behavior).
@@ -72,20 +91,28 @@ const WRITE_OPERATIONS: [&str; 3] = ["file-write-data", "file-write-metadata", "
 /// stops the sampler via `Drop`.
 pub struct DenialCollector {
     root_pid: u32,
-    started_at: std::time::SystemTime,
+    started_at: SystemTime,
     /// Every pid attributed to this run so far: the root plus all
     /// descendants seen by any sample. Accumulate-only, so a process that
     /// reparents to launchd after its parent exits stays attributed.
     sampled: Arc<Mutex<HashSet<u32>>>,
     stop: Arc<AtomicBool>,
     sampler: Option<JoinHandle<()>>,
+    /// The shared stream's generation when this run started, so `collect`
+    /// can tell whether the subscription was alive for the whole window.
+    stream_generation: u64,
+    /// Why the shared stream could not be (re)started for this run, if it
+    /// could not -- reported by `collect` as the soft-degrade annotation.
+    stream_error: Option<String>,
 }
 
 impl DenialCollector {
-    /// Starts the descendant sampler. Never fails: if the sampler thread
-    /// cannot spawn, attribution degrades to the root pid alone (and
-    /// [`Self::collect`] still runs).
-    pub fn start(root_pid: u32, started_at: std::time::SystemTime) -> Self {
+    /// Starts the descendant sampler and makes sure the shared `log stream`
+    /// subscription is alive. Never fails: if the sampler thread cannot
+    /// spawn, attribution degrades to the root pid alone; if the stream
+    /// cannot start, the error is carried to [`Self::collect`] (which turns
+    /// it into the caller's soft-degrade annotation).
+    pub fn start(root_pid: u32, started_at: SystemTime) -> Self {
         let sampled = Arc::new(Mutex::new(HashSet::from([root_pid])));
         let stop = Arc::new(AtomicBool::new(false));
         let sampler = std::thread::Builder::new()
@@ -105,38 +132,47 @@ impl DenialCollector {
                 }
             })
             .ok();
+        let (stream_generation, stream_error) = match ensure_stream_started() {
+            Ok(generation) => (generation, None),
+            Err(error) => (0, Some(error.to_string())),
+        };
         Self {
             root_pid,
             started_at,
             sampled,
             stop,
             sampler,
+            stream_generation,
+            stream_error,
         }
     }
 
-    /// Stops the sampler, queries the unified log over the run's window,
-    /// and shapes the records this call's process tree produced into the
-    /// same structure the Linux supervisor reports.
+    /// Stops the sampler and shapes the live stream's records for this
+    /// run's window and process tree into the same structure the Linux
+    /// supervisor reports. Fails (soft-degrade at the caller) when the
+    /// stream was not alive for the whole window: evidence that may be
+    /// missing must say so rather than present absence as absence.
     pub fn collect(mut self) -> Result<ContainmentDenials, SandboxError> {
         self.stop_sampler();
+        if let Some(error) = &self.stream_error {
+            return Err(SandboxError::DenialReport(error.clone()));
+        }
+        let (records, generation, healthy) = stream_snapshot();
+        if !healthy || generation != self.stream_generation {
+            return Err(SandboxError::DenialReport(
+                "the macOS denial stream was not alive for the whole of this command".to_string(),
+            ));
+        }
         let attributed_pids = self
             .sampled
             .lock()
             .map(|set| set.clone())
             .unwrap_or_else(|_| HashSet::from([self.root_pid]));
-
-        let log = query_security_log(self.started_at)?;
-        let mut denials = ContainmentDenials::default();
-        for line in log.lines() {
-            let Some(record) = parse_record(line) else {
-                continue;
-            };
-            if !attributed_pids.contains(&record.pid) {
-                continue;
-            }
-            apply_record(record, &mut denials);
-        }
-        Ok(denials)
+        Ok(denials_from_buffered(
+            &records,
+            &attributed_pids,
+            self.started_at,
+        ))
     }
 
     fn stop_sampler(&mut self) {
@@ -191,6 +227,17 @@ pub fn security_service_grants(services: &[String]) -> Vec<FilesystemGrant> {
     grants
 }
 
+/// One parsed kernel record, held with the instant our reader received it.
+/// Receipt time (not the record's own log timestamp) scopes the run window:
+/// it is monotonic against `started_at` on the same clock and needs no
+/// format parsing beyond what [`parse_record`] already did.
+#[derive(Clone)]
+struct BufferedRecord {
+    received_at: SystemTime,
+    record: LogRecord,
+}
+
+#[derive(Clone)]
 struct LogRecord {
     pid: u32,
     operation: String,
@@ -332,33 +379,176 @@ fn mark_by_group(groups: &[(u32, u32)], root_pid: u32, attributed: &mut HashSet<
     }
 }
 
-/// Runs `log show` over the run's window (`--last`, relative to now, so no
-/// wall-clock formatting is needed) and returns its stdout.
-fn query_security_log(started_at: std::time::SystemTime) -> Result<String, SandboxError> {
-    let elapsed = started_at.elapsed().unwrap_or_default().as_secs();
-    let window = (elapsed + QUERY_GRACE_SECS).max(MIN_QUERY_WINDOW_SECS);
-    let output = std::process::Command::new("/usr/bin/log")
+/// The process-shared `log stream` subscription backing every collector in
+/// this process.
+///
+/// One subscription per process (per agentd), not per command: attaching a
+/// fresh `log stream` costs tens of milliseconds, which is the same order
+/// as a fast-failing command's whole life -- the exact case this recovery
+/// exists for. Attached once, it is already subscribed before any command
+/// spawns, so a denial is received by the reader in the same instant logd
+/// sees it. This also takes the *datastore* -- the delayed, lossy path
+/// `log show` reads -- entirely off the collection critical path.
+struct SharedStream {
+    inner: Mutex<StreamState>,
+}
+
+#[derive(Default)]
+struct StreamState {
+    records: VecDeque<BufferedRecord>,
+    /// Bumped on every successful (re)spawn. A collector captures it at
+    /// start and requires it unchanged at collect, so a stream that died
+    /// mid-run fails the run's collection rather than reporting a silent
+    /// gap as absence.
+    generation: u64,
+    healthy: bool,
+    /// The subscription's child. Reaped on respawn (the reader is the only
+    /// side that knows it exited); when this process exits, the pipe the
+    /// child writes to closes and its EPIPE death reaps the subscription
+    /// without us.
+    child: Option<Child>,
+}
+
+/// The live subscription's predicate: seatbelt denials from the kernel,
+/// identical to the retired `log show` query's (and to the shape
+/// [`parse_record`] anchors on, verified against live output 2026-09-10).
+const STREAM_PREDICATE: &str = "sender == \"kernel\" AND eventMessage CONTAINS \"Sandbox:\"";
+
+fn shared_stream() -> &'static SharedStream {
+    static STREAM: LazyLock<SharedStream> = LazyLock::new(|| SharedStream {
+        inner: Mutex::new(StreamState::default()),
+    });
+    &STREAM
+}
+
+/// Makes sure the shared subscription is running, returning its current
+/// generation. Idempotent while healthy; respawns after the reader reports
+/// the child gone (logd restart, crash). The spawn must not be sandboxed
+/// -- `log` refuses under seatbelt ("Cannot run while sandboxed"), which
+/// holds for the collector's host (agentd) and is exactly why this lives
+/// host-side rather than in the sandboxed child.
+fn ensure_stream_started() -> Result<u64, SandboxError> {
+    let shared = shared_stream();
+    let mut state = shared
+        .inner
+        .lock()
+        .map_err(|_| SandboxError::DenialReport("denial stream state poisoned".to_string()))?;
+    if state.healthy {
+        return Ok(state.generation);
+    }
+    // The previous child is dead (the reader only clears `healthy` on its
+    // exit); reap it before replacing the handle.
+    if let Some(mut dead) = state.child.take() {
+        let _ = dead.wait();
+    }
+    let mut child = std::process::Command::new("/usr/bin/log")
         .args([
-            "show",
-            "--last",
-            &format!("{window}s"),
+            "stream",
             "--style",
             "compact",
             "--predicate",
-            "sender == \"kernel\" AND eventMessage CONTAINS \"Sandbox:\"",
+            STREAM_PREDICATE,
         ])
-        .output()
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
         .map_err(|error| {
-            SandboxError::DenialReport(format!("failed to run `log show`: {error}"))
+            SandboxError::DenialReport(format!("failed to run `log stream`: {error}"))
         })?;
-    if !output.status.success() {
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| SandboxError::DenialReport("`log stream` stdout was not captured".into()))?;
+    state.generation += 1;
+    state.healthy = true;
+    state.child = Some(child);
+    let generation = state.generation;
+    // The reader takes the same lock per record; holding ours across the
+    // spawn only ever blocks it briefly, never cycles.
+    let reader_spawned = std::thread::Builder::new()
+        .name("macos-denial-stream".to_string())
+        .spawn(move || {
+            let reader = std::io::BufReader::new(stdout);
+            for line in reader.lines() {
+                let Ok(line) = line else {
+                    break; // child exited -- the writer's side is gone
+                };
+                let Some(record) = parse_record(&line) else {
+                    // Banner, column header, `System Policy:` lines from
+                    // other applications -- parse_record's documented no's.
+                    continue;
+                };
+                if let Ok(mut state) = shared_stream().inner.lock() {
+                    // The shared buffer also carries other runs' and system
+                    // daemons' records; drop-oldest keeps it bounded and the
+                    // per-run attribution at collect time is what keeps
+                    // foreign records out of any report.
+                    if state.records.len() >= STREAM_BUFFER_CAP {
+                        state.records.pop_front();
+                    }
+                    state.records.push_back(BufferedRecord {
+                        received_at: SystemTime::now(),
+                        record,
+                    });
+                }
+            }
+            if let Ok(mut state) = shared_stream().inner.lock() {
+                state.healthy = false;
+                // Reap before the handle is replaced (the reader is the only
+                // side that knows the child exited).
+                if let Some(mut dead) = state.child.take() {
+                    let _ = dead.wait();
+                }
+            }
+        });
+    if let Err(error) = reader_spawned {
+        // The child is subscribed but nothing would ever drain it; take the
+        // subscription down with us rather than report a half-attached
+        // stream as healthy. Same lock, same thread -- no re-entry.
+        state.healthy = false;
+        if let Some(mut child) = state.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         return Err(SandboxError::DenialReport(format!(
-            "`log show` exited with {}: {}",
-            output.status,
-            String::from_utf8_lossy(&output.stderr).trim()
+            "failed to spawn the denial stream reader: {error}"
         )));
     }
-    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    Ok(generation)
+}
+
+/// A consistent snapshot of the shared buffer plus the subscription's
+/// liveness, taken under one lock.
+fn stream_snapshot() -> (Vec<BufferedRecord>, u64, bool) {
+    match shared_stream().inner.lock() {
+        Ok(state) => (
+            state.records.iter().cloned().collect(),
+            state.generation,
+            state.healthy,
+        ),
+        Err(_) => (Vec::new(), 0, false),
+    }
+}
+
+/// Folds the run's window of buffered records, restricted to the run's
+/// attributed pids, into the Linux-shaped denial report. Free-standing so
+/// the window/attribution rules are testable without a subscription.
+fn denials_from_buffered(
+    records: &[BufferedRecord],
+    attributed_pids: &HashSet<u32>,
+    started_at: SystemTime,
+) -> ContainmentDenials {
+    let mut denials = ContainmentDenials::default();
+    for buffered in records {
+        if buffered.received_at < started_at {
+            continue;
+        }
+        if !attributed_pids.contains(&buffered.record.pid) {
+            continue;
+        }
+        apply_record(buffered.record.clone(), &mut denials);
+    }
+    denials
 }
 
 #[cfg(test)]
@@ -503,5 +693,42 @@ mod tests {
         let groups = process_groups().expect("process table readable");
         assert!(!groups.is_empty());
         assert!(groups.iter().any(|(pid, _)| *pid == std::process::id()));
+    }
+
+    #[test]
+    fn stream_banner_and_column_headers_do_not_parse() {
+        // `log stream`'s own preamble lines, as emitted on the live pipe
+        // (captured 2026-09-10). parse_record's rfind anchor makes the
+        // banner's quoted predicate fall out on its own; the column header
+        // has no record shape at all.
+        assert!(parse_record(
+            "Filtering the log data using \"composedMessage CONTAINS \"Sandbox:\"\""
+        )
+        .is_none());
+        assert!(parse_record("Timestamp               Ty Process[PID:TID]").is_none());
+    }
+
+    #[test]
+    fn buffered_records_filter_by_window_and_attribution() {
+        let started = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+        let attributed = HashSet::from([7u32]);
+        let buffered = |at: u64, pid: u32| BufferedRecord {
+            received_at: SystemTime::UNIX_EPOCH + Duration::from_secs(at),
+            record: LogRecord {
+                pid,
+                operation: "mach-lookup".to_string(),
+                target: "com.apple.SecurityServer".to_string(),
+            },
+        };
+        let records = vec![
+            buffered(999, 7),   // received before the run's window -> out
+            buffered(1_001, 7), // in-window, attributed -> in
+            buffered(1_001, 9), // in-window, foreign pid -> out
+            buffered(2_000, 7), // trailing record, same attributed pid -> in
+        ];
+        let denials = denials_from_buffered(&records, &attributed, started);
+        assert_eq!(denials.mach_services, vec!["com.apple.SecurityServer"]);
+        assert_eq!(denials.network.len(), 1);
+        assert!(denials.filesystem.is_empty());
     }
 }
