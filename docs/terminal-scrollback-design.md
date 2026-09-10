@@ -284,6 +284,20 @@ supersedes an older by self-location (§3.2). The very first scroll-back tick
 still costs one fetch (IPC was measured ~1.5 ms median, `docs/roadmap.md`
 terminal wave), optionally hidden by pre-warming a window on attach/focus.
 
+Both the threshold and how far the re-centred request leads the current
+position are capped by the margin the daemon actually serves: windows are
+hard-capped at `screen_lines + OVERSCAN_ROWS` regardless of the requested
+height, so the per-side overscan is fixed (~`OVERSCAN_ROWS / 2`) and the
+held window's `viewport_offset` reports it. A lead past that granted margin
+asks for a replacement whose block cannot contain the current viewport; the
+install would have to clamp the rebase and the content would jump — the
+repeated multi-line skip while scrolling up a pane taller than
+`OVERSCAN_ROWS / 2`. If a reply still cannot represent the position (a lead
+calibrated before any reply, or a shorter-than-expected block), the client
+keeps the held window — a prefetch only fires mid-block, so it still covers
+the viewport — and re-requests around the live position as a tracked edge
+fetch instead of clamping.
+
 ### 3.5 Tradeoffs (stated)
 
 - **Jump beyond the held window** — a scrollbar drag or "scroll to top" that
