@@ -6,6 +6,7 @@
 //! (`render_changes_bar`, `render_changes_list`).
 
 use std::ops::Range;
+use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -85,10 +86,14 @@ pub(super) fn build_transcript_rows(
             }
 
             let item = &turn_items[index];
-            // Thinking (`ReasoningDelta`) is deliberately never a row —
-            // hidden in full, streaming and replayed alike (owner decision
-            // 2026-09-10, superseding 2026-07-13's tail-capped view). See
-            // `render_item`'s defensive arm.
+            // Thinking (`ReasoningDelta`) content is deliberately never a
+            // row — hidden in full, streaming and replayed alike (owner
+            // decision 2026-09-10, superseding 2026-07-13's tail-capped
+            // view). Same-day owner feedback carves out exactly one
+            // display affordance: while thinking is the open turn's
+            // *current* activity, the delta projects an indicator-only
+            // row (see `render_item`'s thinking arm) so a long reasoning
+            // phase doesn't read as an idle pane.
             let visible = matches!(
                 item,
                 AgentFrameItem::Message(_)
@@ -105,6 +110,15 @@ pub(super) fn build_transcript_rows(
                 AgentFrameItem::ApprovalRequested(request)
                     if span.ended.is_some()
                         && turns::is_approval_still_pending(turn_items, &request.call_id)
+            ) || matches!(
+                // The thinking-indicator carve-out: only while this
+                // reasoning delta is the open turn's latest item. Anything
+                // streaming after it (assistant text, a tool call) or the
+                // turn ending retires the indicator, so it can never
+                // linger as a stale pulse.
+                item,
+                AgentFrameItem::ReasoningDelta(_)
+                    if span.ended.is_none() && index + 1 == turn_items.len()
             );
             if visible {
                 rows.push(TranscriptRow::Item {
@@ -336,14 +350,64 @@ impl AgentTranscript {
                 ("agent-delta", index),
                 delta.text.clone(),
             )),
-            // Thinking is hidden in full (owner decision 2026-09-10,
-            // superseding 2026-07-13's tail-capped "thinking…" view):
-            // `build_transcript_rows`'s visibility whitelist no longer
-            // emits a row for a reasoning delta, streaming or replayed,
-            // so this arm is a defensive no-op like `ToolCallStarted`'s
-            // below. The deltas keep flowing and being persisted; only
-            // the display is gone.
-            AgentFrameItem::ReasoningDelta(_) => None,
+            // Thinking content is hidden in full (owner decision
+            // 2026-09-10, superseding 2026-07-13's tail-capped "thinking…"
+            // view) — but same-day owner feedback kept one affordance,
+            // owner-reviewed in form: while a reasoning delta is the open
+            // turn's current tail, its row renders in the running card's
+            // own visual language — a breathing `theme::accent()` dot
+            // beside a semibold accent "thinking…" label (the owner
+            // passed on a loader-icon spinner as too terminal-flavored
+            // for a GUI app). No delta text reaches the screen here, and
+            // `build_transcript_rows` routes only the tail-of-open-turn
+            // item to this arm, so the indicator is always retired by the
+            // next streamed item or the turn end.
+            AgentFrameItem::ReasoningDelta(_) => {
+                // One full breath per cycle: the eased delta runs 0→1 and
+                // repeats, so fold it into a triangle wave (0→1→0) and
+                // ride the dot's opacity between a dim floor and full
+                // accent. The label itself stays static; only the dot
+                // breathes.
+                let breathe = |dot: Div, delta: f32| {
+                    let phase = if delta < 0.5 {
+                        delta * 2.0
+                    } else {
+                        (1.0 - delta) * 2.0
+                    };
+                    dot.opacity(0.35 + 0.65 * phase)
+                };
+                Some(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .py_0p5()
+                        .child(
+                            div()
+                                .flex_none()
+                                .size(px(6.0))
+                                .rounded_full()
+                                .bg(theme::accent())
+                                .with_animation(
+                                    "thinking-pulse",
+                                    Animation::new(Duration::from_secs_f64(1.6))
+                                        .repeat()
+                                        .with_easing(ease_in_out),
+                                    breathe,
+                                ),
+                        )
+                        .child(
+                            div()
+                                .flex_none()
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(theme::accent())
+                                .child("thinking…"),
+                        )
+                        .into_any_element(),
+                )
+            }
             // Retired the raw-JSON `tool`/`tool result` dumps this arm and
             // the one below used to fall back to (owner feedback
             // 2026-07-13: leaking `{tool_id} {input}`/output JSON straight
@@ -1254,7 +1318,11 @@ mod tests {
     /// Owner decision 2026-09-10: thinking is hidden in full. A reasoning
     /// delta produces no row while its turn runs and none after it ends —
     /// streaming or replayed — without disturbing neighboring rows or the
-    /// latest-user anchor.
+    /// latest-user anchor. (The same-day thinking-indicator carve-out is
+    /// pinned by
+    /// `thinking_shows_an_indicator_row_only_while_it_is_the_open_tail`
+    /// below; these cases all have later activity or an ended turn, so
+    /// they stay rowless.)
     #[test]
     fn thinking_is_never_a_transcript_row_streaming_or_replayed() {
         let running = vec![
@@ -1282,5 +1350,54 @@ mod tests {
                 .collect();
             assert_eq!(row_indices, vec![0, 2], "the reasoning item is skipped");
         }
+    }
+
+    /// Same-day companion pin (owner feedback 2026-09-10): thinking
+    /// content stays hidden, but while a reasoning delta is the open
+    /// turn's latest item it projects exactly one indicator row (the
+    /// breathing-dot treatment), retired the moment anything else
+    /// streams or the turn ends — so the pane never looks idle
+    /// mid-reasoning, and the indicator never outlives the thinking it
+    /// describes.
+    #[test]
+    fn thinking_shows_an_indicator_row_only_while_it_is_the_open_tail() {
+        let row_indices = |rows: &[TranscriptRow]| -> Vec<usize> {
+            rows.iter()
+                .map(|row| match row {
+                    TranscriptRow::Item { index, .. } => *index,
+                    TranscriptRow::Burst { .. } => {
+                        panic!("a thinking indicator row is never part of a burst")
+                    }
+                })
+                .collect()
+        };
+
+        // Tail of a running turn: the reasoning item IS a row (the
+        // indicator).
+        let (rows, latest_user) =
+            build_transcript_rows(&[user_message("q"), reasoning_delta("hmm")]);
+        assert_eq!(latest_user, Some(0));
+        assert_eq!(
+            row_indices(&rows),
+            vec![0, 1],
+            "open-tail thinking shows its indicator row"
+        );
+
+        // Anything streaming after the delta retires the indicator...
+        let (rows, _) = build_transcript_rows(&[
+            user_message("q"),
+            reasoning_delta("hmm"),
+            assistant_delta("a"),
+        ]);
+        assert_eq!(
+            row_indices(&rows),
+            vec![0, 2],
+            "indicator is gone once text streams"
+        );
+
+        // ...and an ended turn never keeps one either.
+        let (rows, _) =
+            build_transcript_rows(&[user_message("q"), reasoning_delta("hmm"), turn_end()]);
+        assert_eq!(row_indices(&rows), vec![0], "ended thinking leaves no row");
     }
 }
