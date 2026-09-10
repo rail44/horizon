@@ -5,11 +5,6 @@
 //! binary, any subcommand routes to the control-plane client
 //! (`horizon_cli::run`) instead of launching the GUI.
 
-// `theme.rs`'s `gpui_component_theme_config` builds one large
-// `serde_json::json!` object literal (slice B2 grew it past the crate's
-// default recursion-limit-driven macro-expansion depth); raising the
-// limit is the standard fix for a `json!` macro this size, per
-// `serde_json`'s own docs.
 #![recursion_limit = "256"]
 
 mod agent;
@@ -24,6 +19,7 @@ mod terminal;
 mod terminal_focus;
 mod theme;
 mod theme_settings;
+mod title;
 mod view_chooser;
 mod workspace;
 mod workspace_state;

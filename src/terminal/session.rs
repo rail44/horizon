@@ -21,6 +21,7 @@ use horizon_workspace::SessionId;
 
 use crate::input_trace::{input_trace, sink as input_trace_sink};
 use crate::runtime::{event_stream, RuntimeLink, TerminalSessionHandle};
+use crate::title::derive_session_title;
 
 /// Per-row content generations for the visible grid — the surviving form
 /// of the wire's row-level change information (goal 3 of
@@ -772,6 +773,17 @@ pub(crate) struct TerminalSession {
     /// can terminate the workspace session and replace it if it was the last
     /// pane.
     exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+    /// The latest content-derived title this session reported
+    /// (`TerminalUpdate::Title`, already sanitized/clamped by
+    /// [`derive_session_title`]) -- `None` both before any title arrives
+    /// and after a title reset (`Title(None)`) retracts it. Kept so
+    /// [`Self::record_title_update`] can dedupe consecutive identical
+    /// reports instead of re-sending them.
+    derived_title: Option<String>,
+    /// Reports derived-title changes to the shell, which folds them into
+    /// the workspace model (`Workspace::set_session_derived_title` via
+    /// `wire_session_title_updates`) -- the title side of `exit_tx`.
+    title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
     /// Scrollback windowing state (`docs/terminal-scrollback-design.md` §3.3):
     /// `Live` while following the tail, or a held window scrolled within
     /// locally. Interior-mutable because both the sync scroll handler
@@ -794,6 +806,7 @@ impl TerminalSession {
         handle: TerminalSessionHandle,
         session_id: SessionId,
         exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+        title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut frames_rx = handle.frames();
@@ -882,6 +895,8 @@ impl TerminalSession {
             exit_tx,
             scrollback: RefCell::new(Scrollback::Live),
             scrollback_generation: 0,
+            derived_title: None,
+            title_tx,
             _attachment: handle,
         }
     }
@@ -941,7 +956,11 @@ impl TerminalSession {
                 }
                 true
             }
-            Incoming::Event(TerminalUpdate::Title(_) | TerminalUpdate::Bell) => true,
+            Incoming::Event(TerminalUpdate::Title(title)) => {
+                self.record_title_update(title);
+                true
+            }
+            Incoming::Event(TerminalUpdate::Bell) => true,
             Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
                 let install = self.scrollback.borrow_mut().install_window(window);
                 if install.installed {
@@ -977,6 +996,22 @@ impl TerminalSession {
 
     pub(crate) fn runtime_unreachable(&self) -> bool {
         self.link.is_unreachable()
+    }
+
+    /// Folds an OSC 0/2 title report (`TerminalUpdate::Title`: `Some` is a
+    /// shell/app-set title, `None` its reset) into this session's derived
+    /// title and reports it to the shell when it changed -- the tab label
+    /// updates to whatever the running program calls this terminal, and a
+    /// reset drops back to the model's default (`set_session_derived_title`'s
+    /// `None` arm). Deduped here so a shell that re-sends the same title on
+    /// every prompt costs no model writes.
+    fn record_title_update(&mut self, title: Option<String>) {
+        let derived = title.as_deref().and_then(derive_session_title);
+        if derived == self.derived_title {
+            return;
+        }
+        self.derived_title = derived.clone();
+        let _ = self.title_tx.unbounded_send((self.session_id, derived));
     }
 
     /// Every command send funnels through here. The link short-circuits once

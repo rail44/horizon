@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use super::types::{PaneKind, SessionKind, Workspace, WorkspaceSession};
+use super::types::{PaneKind, SessionKind, TitleSource, Workspace, WorkspaceSession};
 use crate::SessionId;
 
 impl Workspace {
@@ -21,6 +21,36 @@ impl Workspace {
         if let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) {
             session.parent_session_id = Some(parent_session_id);
         }
+    }
+
+    /// Overwrites a session's title with a content-derived one -- the seam
+    /// every per-session model pushes through (a terminal's OSC 0/2 title
+    /// and its reset, an agent's first user message; the shell's
+    /// `wire_session_title_updates` pump is the single caller). `None`
+    /// means the source retracted its title, restoring
+    /// [`WorkspaceSession::fallback_title`]. Only an auto-titled session
+    /// ([`TitleSource::Auto`]) is touched, so a future manual rename wins
+    /// over every derived update. Returns whether the model changed, so a
+    /// source re-reporting a known title costs no persistence/repaint.
+    pub fn set_session_derived_title(
+        &mut self,
+        session_id: SessionId,
+        title: Option<&str>,
+    ) -> bool {
+        let Some(session) = self.sessions.iter_mut().find(|s| s.id == session_id) else {
+            return false;
+        };
+        if session.title_source != TitleSource::Auto {
+            return false;
+        }
+        let derived = title
+            .map(str::to_string)
+            .unwrap_or_else(|| session.fallback_title());
+        if session.title == derived {
+            return false;
+        }
+        session.title = derived;
+        true
     }
 
     pub fn terminate_session(&mut self, session_id: SessionId) -> bool {

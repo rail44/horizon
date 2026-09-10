@@ -164,9 +164,10 @@ impl WorkspaceShell {
                         let wire = terminald
                             .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
                         let exit_tx = self.terminal_exit_tx.clone();
+                        let title_tx = self.session_title_tx.clone();
                         self.sessions.insert(
                             id,
-                            cx.new(|cx| TerminalSession::spawn(wire, id, exit_tx, cx)),
+                            cx.new(|cx| TerminalSession::spawn(wire, id, exit_tx, title_tx, cx)),
                         );
                     }
                 }
@@ -213,9 +214,10 @@ impl WorkspaceShell {
                         spawn.source_session_id.map(agent_session_id),
                         spawn.isolate,
                     );
+                    let title_tx = self.session_title_tx.clone();
                     self.agent_sessions.insert(
                         summary.id,
-                        cx.new(|cx| AgentSession::new(session_handle, cx)),
+                        cx.new(|cx| AgentSession::new(session_handle, summary.id, title_tx, cx)),
                     );
                 }
             }
@@ -390,6 +392,36 @@ impl WorkspaceShell {
         .detach();
     }
 
+    /// Wires the receiving end of every session's `title_tx`: a
+    /// `TerminalSession` (OSC 0/2 title or its reset) or an `AgentSession`
+    /// (first user message) reporting a content-derived title. The model
+    /// decides whether the report changes anything
+    /// (`set_session_derived_title` dedupes and honors manual titles), so
+    /// the pump persists/repaints only on real changes. Already async
+    /// (`futures` unbounded senders, like `wire_terminal_exit`), so no
+    /// blocking-to-async bridge is needed.
+    pub(super) fn wire_session_title_updates(
+        &self,
+        mut title_rx: futures::channel::mpsc::UnboundedReceiver<(SessionId, Option<String>)>,
+        cx: &mut Context<Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some((session_id, title)) = title_rx.next().await {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell
+                        .workspace
+                        .set_session_derived_title(session_id, title.as_deref())
+                    {
+                        shell.persist_workspace();
+                        cx.notify();
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+
     /// Terminates the workspace session whose shell just exited -- whether
     /// it was attached to a pane or sitting detached (session-manager
     /// entry), `terminate_session` handles both uniformly. If this emptied
@@ -498,9 +530,12 @@ impl WorkspaceShell {
                             shell.workspace.set_session_parent(session_id, parent_id);
                         }
                         let session_handle = adopted.attach_session(summary.session_id);
+                        let title_tx = shell.session_title_tx.clone();
                         shell.agent_sessions.insert(
                             session_id,
-                            cx.new(|cx| AgentSession::new(session_handle, cx)),
+                            cx.new(|cx| {
+                                AgentSession::new(session_handle, session_id, title_tx, cx)
+                            }),
                         );
                     }
                     shell.reconcile(window, cx);
@@ -723,9 +758,12 @@ impl WorkspaceShell {
                             == Some(PaneKind::Terminal)
                         {
                             let exit_tx = shell.terminal_exit_tx.clone();
+                            let title_tx = shell.session_title_tx.clone();
                             shell.sessions.insert(
                                 session_id,
-                                cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, cx)),
+                                cx.new(|cx| {
+                                    TerminalSession::spawn(wire, session_id, exit_tx, title_tx, cx)
+                                }),
                             );
                         }
                     }
@@ -750,9 +788,10 @@ impl WorkspaceShell {
                                     .workspace
                                     .set_session_parent(session_id, SessionId::from_uuid(*parent));
                             }
+                            let title_tx = shell.session_title_tx.clone();
                             shell.agent_sessions.insert(
                                 session_id,
-                                cx.new(|cx| AgentSession::new(wire, cx)),
+                                cx.new(|cx| AgentSession::new(wire, session_id, title_tx, cx)),
                             );
                         }
                     }
@@ -849,9 +888,12 @@ impl WorkspaceShell {
                             .workspace
                             .register_detached_session(PaneKind::Terminal, session_id);
                         let exit_tx = shell.terminal_exit_tx.clone();
+                        let title_tx = shell.session_title_tx.clone();
                         shell.sessions.insert(
                             session_id,
-                            cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, cx)),
+                            cx.new(|cx| {
+                                TerminalSession::spawn(wire, session_id, exit_tx, title_tx, cx)
+                            }),
                         );
                     }
                     // See `spawn_workspace_restore`'s matching comment: an
