@@ -182,6 +182,9 @@ fn expect_domain_denied(
         BashCompletion::FilesystemDenied { denials, .. } => {
             panic!("unexpected filesystem denial: {denials:?}")
         }
+        BashCompletion::MachServiceDenied { services, .. } => {
+            panic!("unexpected mach-service denial: {services:?}")
+        }
         BashCompletion::DomainGrantRequired { domains, .. } => {
             panic!("bash must not produce a host-side domain grant: {domains:?}")
         }
@@ -342,6 +345,9 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         }
         BashCompletion::FilesystemDenied { denials, .. } => {
             panic!("unexpected filesystem denial: {denials:?}")
+        }
+        BashCompletion::MachServiceDenied { services, .. } => {
+            panic!("unexpected mach-service denial: {services:?}")
         }
         BashCompletion::DomainGrantRequired { domains, .. } => {
             panic!("kernel-side bypass must not become a host-side domain grant: {domains:?}")

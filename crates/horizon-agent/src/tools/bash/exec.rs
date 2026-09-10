@@ -609,6 +609,8 @@ pub(super) fn run_sandboxed(
         }
     }
 
+    #[cfg(target_os = "macos")]
+    let started_at = std::time::SystemTime::now();
     let sandboxed = match horizon_sandbox::spawn_with_filesystem_grants(
         cmd,
         &policy,
@@ -638,6 +640,8 @@ pub(super) fn run_sandboxed(
         .take()
         .map(|report| std::thread::spawn(move || report.containment_denials()));
     let mut child = sandboxed.child;
+    #[cfg(target_os = "macos")]
+    let denial_collector = horizon_sandbox::DenialCollector::start(child.id(), started_at);
 
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         kill_pid(child.id());
@@ -711,14 +715,41 @@ pub(super) fn run_sandboxed(
             }
         }
     };
-    #[cfg(not(target_os = "linux"))]
+    // macOS: recover the run's containment denials from the kernel's
+    // unified-log records -- seatbelt denies silently, so this is how the
+    // deny -> approve -> sandboxed-rerun loop gets its evidence
+    // (`horizon_sandbox::DenialCollector`,
+    // `docs/macos-containment-denial-reporting-design.md`). Collected only
+    // when the call did not succeed: a successful outcome needs no approval
+    // candidate, and the query would put a fixed log-lookup cost on every
+    // call. Killed/timeout runs keep Linux's empty-denials semantics, and a
+    // collector failure soft-degrades into an audit annotation rather than
+    // failing the call -- the report is evidence, not the boundary.
+    #[cfg(target_os = "macos")]
+    let (containment_denials, denial_collection_error) =
+        if killed || status.as_ref().is_some_and(|status| status.success()) {
+            (horizon_sandbox::ContainmentDenials::default(), None)
+        } else {
+            match denial_collector.collect() {
+                Ok(denials) => (denials, None),
+                Err(error) => (
+                    horizon_sandbox::ContainmentDenials::default(),
+                    Some(error.to_string()),
+                ),
+            }
+        };
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let containment_denials = horizon_sandbox::ContainmentDenials::default();
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let denial_collection_error = None;
     let filesystem_denials = containment_denials.filesystem;
     let network_denials = containment_denials.network;
     // Deliberately not an approval candidate: no grant exists that could
     // satisfy these, so the model is told what to do instead (see
     // `horizon_sandbox::UngrantableDenial`).
     let ungrantable_denials = containment_denials.ungrantable;
+    #[cfg(target_os = "macos")]
+    let mach_service_denials = containment_denials.mach_services;
 
     // Drained once the child has fully exited, so no further request can
     // still be in flight against the proxy -- see this function's own doc
@@ -765,6 +796,10 @@ pub(super) fn run_sandboxed(
         crate::policy::annotate_filesystem_denials(&mut value, &filesystem_denials);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
         crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
+        #[cfg(target_os = "macos")]
+        if let Some(error) = &denial_collection_error {
+            crate::policy::annotate_denial_collection_unavailable(&mut value, error);
+        }
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
         }
@@ -789,6 +824,35 @@ pub(super) fn run_sandboxed(
         };
     }
 
+    // macOS: the call was refused mach-lookup to one or more macOS security
+    // services -- the seatbelt counterpart of the `FilesystemDenied` arm
+    // above, recovered from the kernel's unified-log records
+    // (`horizon_sandbox::DenialCollector`,
+    // `docs/macos-containment-denial-reporting-design.md`). Same
+    // `occurrence_id: None` fixup-at-fold-time story as that arm.
+    #[cfg(target_os = "macos")]
+    if !mach_service_denials.is_empty() {
+        let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
+        annotate_sandboxed(&mut value, true);
+        crate::policy::annotate_denied_mach_services(&mut value, &mach_service_denials);
+        crate::policy::annotate_network_denials(&mut value, &network_denials);
+        crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
+        if !denied_domains.is_empty() {
+            annotate_denied_domains(&mut value, &denied_domains);
+        }
+        if let Some(error) = &denial_collection_error {
+            crate::policy::annotate_denial_collection_unavailable(&mut value, error);
+        }
+        if !drained {
+            note_undrained(&mut value, config);
+        }
+        return BashCompletion::MachServiceDenied {
+            call_id: call_id.clone(),
+            services: mach_service_denials,
+            result: ToolCallResult::new(call_id.clone(), None, value),
+        };
+    }
+
     // Authoritative regardless of the wrapped shell pipeline's own exit
     // code -- see this function's own doc comment (backlog 59). Output text
     // never names or authorizes a domain grant.
@@ -797,6 +861,10 @@ pub(super) fn run_sandboxed(
         annotate_sandboxed(&mut value, true);
         crate::policy::annotate_network_denials(&mut value, &network_denials);
         crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
+        #[cfg(target_os = "macos")]
+        if let Some(error) = &denial_collection_error {
+            crate::policy::annotate_denial_collection_unavailable(&mut value, error);
+        }
         annotate_denied_domains(&mut value, &denied_domains);
         if !drained {
             note_undrained(&mut value, config);
@@ -808,6 +876,10 @@ pub(super) fn run_sandboxed(
     annotate_sandboxed(&mut value, true);
     crate::policy::annotate_network_denials(&mut value, &network_denials);
     crate::policy::annotate_ungrantable_denials(&mut value, &ungrantable_denials);
+    #[cfg(target_os = "macos")]
+    if let Some(error) = &denial_collection_error {
+        crate::policy::annotate_denial_collection_unavailable(&mut value, error);
+    }
     if !drained {
         note_undrained(&mut value, config);
     }

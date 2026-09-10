@@ -40,6 +40,12 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
+        BashCompletion::MachServiceDenied {
+            call_id, services, ..
+        } => panic!(
+            "expected a finished bash completion, got a mach-service-denied request for \
+             {call_id:?} ({services:?})"
+        ),
         BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
             "expected a finished bash completion, got a host-side domain grant for \
              {call_id:?} ({domains:?})"

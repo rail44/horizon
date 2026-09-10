@@ -164,6 +164,7 @@ impl SupervisorReport {
             filesystem: denials,
             network,
             ungrantable,
+            mach_services: Vec::new(),
         })
     }
 }

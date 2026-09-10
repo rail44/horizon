@@ -100,6 +100,17 @@ pub enum ToolCompletion {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         result: ToolCallResult,
     },
+    /// A sandboxed attempt was refused mach-lookup to macOS security
+    /// services (`docs/macos-containment-denial-reporting-design.md`) -- the
+    /// macOS counterpart of `FilesystemDenied`: the call actually ran to
+    /// completion, the evidence is the kernel's own denial record, and
+    /// approval records the service set for this session and reruns the
+    /// same call, still sandboxed; denying forwards `result` as-is.
+    MachServiceDenied {
+        call_id: ToolCallId,
+        services: Vec<String>,
+        result: ToolCallResult,
+    },
 }
 
 /// Compatibility name for the bash module's existing callers. New async
@@ -135,6 +146,11 @@ pub(crate) enum SandboxedApprovalOrigin {
         grants: Vec<horizon_sandbox::FilesystemGrant>,
         trigger_paths: Vec<PathBuf>,
     },
+    /// A judge/human-approved mach service grant: the approval recorded the
+    /// service set on this session's state, and this call is the sandboxed
+    /// retry that runs with the enforcement grants assembled from it
+    /// (`docs/macos-containment-denial-reporting-design.md`).
+    MachServiceGrant { services: Vec<String> },
 }
 
 /// Who decided an approval -- the enforcing judge or a human. Both produce
@@ -415,6 +431,12 @@ pub(crate) fn spawn_sandboxed(
                                 );
                             }
                         }
+                        SandboxedApprovalOrigin::MachServiceGrant { services } => {
+                            crate::policy::annotate_mach_service_grant_approval(
+                                &mut result.output,
+                                services,
+                            );
+                        }
                     }
                 }
                 completion
@@ -429,7 +451,8 @@ fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCal
         BashCompletion::ApprovalJudged(_) => None,
         BashCompletion::Finished(result)
         | BashCompletion::DomainDenied { result, .. }
-        | BashCompletion::FilesystemDenied { result, .. } => Some(result),
+        | BashCompletion::FilesystemDenied { result, .. }
+        | BashCompletion::MachServiceDenied { result, .. } => Some(result),
         BashCompletion::DomainGrantRequired { .. } => None,
     }
 }

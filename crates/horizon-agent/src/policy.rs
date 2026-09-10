@@ -253,6 +253,53 @@ pub(crate) fn annotate_network_denials(
     }
 }
 
+/// Records that a sandboxed `bash` call was refused mach-lookup to one or
+/// more macOS security services (`docs/macos-containment-denial-reporting-
+/// design.md`) -- additive, same convention as [`annotate_denied_domains`].
+/// Also forces `is_error: true`: a call denied security-service access is
+/// not a clean success from the agent's point of view.
+pub(crate) fn annotate_denied_mach_services(output: &mut Value, services: &[String]) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "denied_mach_services".to_string(),
+            Value::Array(services.iter().cloned().map(Value::String).collect()),
+        );
+        map.insert("is_error".to_string(), Value::Bool(true));
+    }
+}
+
+/// Records that an approval granted this session's mach service set before
+/// this retry ran -- additive, same convention as
+/// [`annotate_domain_approval`]. `services` names what was approved; the
+/// enforcement granularity (nono's all-or-nothing security-service group)
+/// is stated in the approval request's reason text, not here.
+pub(crate) fn annotate_mach_service_grant_approval(output: &mut Value, services: &[String]) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert("mach_service_grant_approved".to_string(), Value::Bool(true));
+        map.insert(
+            "approved_mach_services".to_string(),
+            Value::Array(services.iter().cloned().map(Value::String).collect()),
+        );
+    }
+}
+
+/// Records that the macOS unified-log denial collector itself failed and
+/// the run proceeded without denial evidence (soft-degrade;
+/// `docs/macos-containment-denial-reporting-design.md`) -- additive, audit
+/// only, never a failure of the call itself.
+pub(crate) fn annotate_denial_collection_unavailable(output: &mut Value, error: &str) {
+    if let Some(map) = output.as_object_mut() {
+        map.insert(
+            "denial_collection_unavailable".to_string(),
+            Value::Bool(true),
+        );
+        map.insert(
+            "denial_collection_error".to_string(),
+            Value::String(error.to_string()),
+        );
+    }
+}
+
 /// Records that an approved `bash` call ran once with the host process's
 /// ordinary authority -- an [`ApprovalKind::Standard`] approve, the only
 /// path that still does this.

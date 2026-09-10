@@ -33,9 +33,12 @@
 //! macos-14, more runtime verification than this crate's old hand-rolled
 //! SBPL ever had.
 
+pub mod denials;
+
 use crate::error::SandboxError;
 use crate::policy::{SandboxPolicy, SandboxStdio};
 use crate::SandboxedChild;
+use std::os::unix::process::CommandExt;
 use std::process::Command;
 
 /// Applies `policy` to the calling process via nono's Seatbelt backend.
@@ -118,6 +121,17 @@ pub(crate) fn spawn_with_grants(
     // environment the helper inherits across its own `exec()` into the
     // real command -- see `crate::tmpdir`'s module doc.
     crate::tmpdir::provision(policy, &command, &mut wrapped)?;
+
+    // Make the sandboxed child a process-group leader. Two consequences,
+    // both deliberate (2026-09-10, `docs/macos-containment-denial-
+    // reporting-design.md`):
+    // 1. The registry's timeout kill (`kill(-pid)`, a group kill) actually
+    //    reaches the tree -- without this the sandboxed child stays in the
+    //    daemon's own group and the group kill misses it.
+    // 2. Every descendant inherits the group at spawn and keeps it after
+    //    reparenting, which is how the unified-log denial collector
+    //    (`macos::denials`) attributes kernel records to this run.
+    wrapped.process_group(0);
 
     wrapped
         .stdin(stdio.stdin)

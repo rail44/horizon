@@ -33,8 +33,8 @@ use super::panic::{
 };
 use super::setup::{
     configured_domains, configured_filesystem_grants, configured_loopback_connect,
-    project_is_trusted, resolve_and_create_isolated_worktree, skill_discovery_root,
-    tool_session_state_for,
+    configured_mach_services, project_is_trusted, resolve_and_create_isolated_worktree,
+    skill_discovery_root, tool_session_state_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree::WorktreeInfo;
@@ -224,6 +224,7 @@ pub(super) fn run_session(
     // `[provider]`.
     let filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
     let loopback_connect = configured_loopback_connect(state, workspace_root.as_deref());
+    let mach_services = configured_mach_services(state, workspace_root.as_deref());
     // Constructed before `workspace_root` is moved into
     // `tool_session_state_for` below.
     let board = board_host_for(workspace_root.as_deref());
@@ -241,6 +242,7 @@ pub(super) fn run_session(
         SkillRegistry::embedded()
     })
     .with_config_path(state.config_path.clone())
+    .with_mach_services(mach_services)
     .with_domain_policy(domains)
     .with_network_proxy(network)
     .with_judge(judge)

@@ -234,6 +234,34 @@
             "GitOperation"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A sandboxed `bash` call was refused mach-lookup to one or more macOS\nsecurity services (`docs/macos-containment-denial-reporting-design.md`)\n-- the macOS counterpart of [`ApprovalKind::FilesystemDenialRetry`]:\nthe call already ran, and the evidence is the kernel's own unified-log\ndenial record. A deny forwards `prior_result` as-is; an approve\nrecords the service set for this session and reruns the SAME call\nstill sandboxed. The enforcement behind the grant is nono's\nsecurity-service group as a whole (all-or-nothing -- the seatbelt\nprofile has no per-service granularity), which the request's reason\ntext states to the approver. The service names here are the\nprimitive (`mach-lookup` targets); no resource concept is defined\nover them. Appended last (2026-09-10) so the wire schema's oneOf\nindices for existing variants stay put -- same append-only discipline\nthe other persisted enums here follow.",
+          "properties": {
+            "MachServiceGrant": {
+              "properties": {
+                "prior_result": {
+                  "$ref": "#/$defs/ToolCallResult"
+                },
+                "services": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "services",
+                "prior_result"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "MachServiceGrant"
+          ],
+          "type": "object"
         }
       ]
     },
