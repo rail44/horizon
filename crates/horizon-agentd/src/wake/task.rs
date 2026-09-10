@@ -410,15 +410,22 @@ mod tests {
         std::fs::write(path, text).unwrap();
     }
 
+    /// Per-test scratch dir. The nanosecond timestamp alone collided when
+    /// two tests (nextest: one process each) started within the same clock
+    /// tick and shared one `events.jsonl` -- `read_events_since_returns_empty_when_cursor_at_end`
+    /// read the sibling's three-event file and failed. Mixing the unique
+    /// test name into the path removes the collision regardless of timing.
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!("horizon-wake-test-{name}-{nanos}"))
+    }
+
     #[test]
     fn read_events_since_returns_only_new_events() {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-wake-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = scratch_dir("returns_only_new_events");
         let path = dir.join("events.jsonl");
         write_events(
             &path,
@@ -433,13 +440,7 @@ mod tests {
 
     #[test]
     fn read_events_since_returns_empty_when_cursor_at_end() {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-wake-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = scratch_dir("returns_empty_when_cursor_at_end");
         let path = dir.join("events.jsonl");
         write_events(&path, &[item_created(1), comment(1, "owner")]);
 
@@ -455,13 +456,7 @@ mod tests {
 
     #[test]
     fn read_events_since_skips_undecodable_lines_but_advances_seq() {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-wake-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
+        let dir = scratch_dir("skips_undecodable_lines_but_advances_seq");
         let path = dir.join("events.jsonl");
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
