@@ -126,8 +126,8 @@ pub(super) fn build_transcript_rows(
 }
 
 impl AgentTranscript {
-    /// Reconcile the intrusive variable-height list with the latest folded
-    /// frame. Stable prefix rows retain their measured heights; only the
+    /// Reconcile the scroller's virtual list with the latest folded frame.
+    /// Stable prefix rows retain their measured heights; only the
     /// changed append tail is spliced. A descriptor-stable streaming update
     /// remeasures the last row because its Markdown/tool content may have
     /// grown in place.
@@ -145,15 +145,18 @@ impl AgentTranscript {
             .zip(&next_rows)
             .take_while(|(old, new)| old == new)
             .count();
+        let old_len = self.transcript_rows.len();
+        let next_len = next_rows.len();
 
-        if stable_prefix < self.transcript_rows.len() || stable_prefix < next_rows.len() {
-            self.transcript_list.splice(
-                stable_prefix..self.transcript_rows.len(),
-                next_rows.len() - stable_prefix,
-            );
-        } else if !next_rows.is_empty() {
-            let last = next_rows.len() - 1;
-            self.transcript_list.remeasure_items(last..last + 1);
+        if stable_prefix < old_len || stable_prefix < next_len {
+            self.scroller.update(cx, |scroller, cx| {
+                scroller.splice(stable_prefix..old_len, next_len - stable_prefix, cx);
+            });
+        } else if next_len > 0 {
+            let last = next_len - 1;
+            self.scroller.update(cx, |scroller, cx| {
+                scroller.remeasure_items(last..last + 1, cx);
+            });
         }
 
         self.transcript_rows = next_rows;
@@ -226,7 +229,8 @@ impl AgentTranscript {
         if !self.expanded_receipts.remove(&receipt_key) {
             self.expanded_receipts.insert(receipt_key);
         }
-        self.transcript_list.remeasure();
+        self.scroller
+            .update(cx, |scroller, cx| scroller.remeasure(cx));
         cx.notify();
     }
 
