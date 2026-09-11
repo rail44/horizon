@@ -150,7 +150,8 @@ fn parse_edits(input: &Value) -> Result<Vec<Edit<'_>>, Value> {
     for (index, entry) in entries.iter().enumerate() {
         let Some(path) = entry.get("path").and_then(Value::as_str) else {
             return Err(error_output(format!(
-                "edit at index {index} requires a `path` string argument"
+                "edit at index {index} requires a `path` string argument — every entry in \
+                 `edits` carries its own `path`; there is no call-level path"
             )));
         };
         let Some(old_string) = entry.get("old_string").and_then(Value::as_str) else {

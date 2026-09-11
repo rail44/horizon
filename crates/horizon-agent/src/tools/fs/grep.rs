@@ -69,7 +69,10 @@ pub(super) fn execute(
     allow_out_of_root: bool,
 ) -> Value {
     let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
-        return error_output("fs.grep requires a `base_path` string argument");
+        return error_output(
+            "fs.grep requires a `base_path` string argument — the directory to search under \
+             (there is no `path` field)",
+        );
     };
     let Some(pattern) = input.get("pattern").and_then(Value::as_str) else {
         return error_output("fs.grep requires a `pattern` regex string argument");

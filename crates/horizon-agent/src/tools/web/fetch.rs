@@ -103,12 +103,18 @@ async fn fetch(
     max_characters: usize,
     domains: Arc<Allowlist>,
 ) -> Result<FetchOutcome, String> {
+    // GitHub's API rejects requests without a User-Agent outright (HTTP 403
+    // "make sure your request has a User-Agent"), so always send one. Recorded
+    // 2026-09-10: seven 403s against api.github.com across four sessions, all
+    // this exact rejection.
+    let user_agent = format!("horizon/{} (web_fetch)", env!("CARGO_PKG_VERSION"));
     let client = Client::builder()
         .dns_resolver(SafeResolver)
         .no_proxy()
         .redirect(redirect::Policy::none())
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(REQUEST_TIMEOUT)
+        .user_agent(user_agent)
         .build()
         .map_err(|error| format!("failed to build the web_fetch client: {error}"))?;
 
