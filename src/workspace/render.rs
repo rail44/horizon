@@ -313,16 +313,15 @@ const EQUAL_WIDTH_GAP_PX: f32 = 2.0;
 /// Never size a tab below this, however many are open or however narrow
 /// the window gets -- `tabs-inner`'s `overflow_x_scroll()` (already
 /// gpui-component's own default) takes over once tabs stop fitting, the
-/// same fallback content-sized tabs already rely on today.
+/// same fallback content-sized tabs already rely on today. There is
+/// deliberately no matching upper bound: a wide window's few tabs are
+/// meant to divide the whole strip between them (the point of the
+/// equal-width mode), and a long title truncates inside its own tab via
+/// the `min_w_0()` + `text_ellipsis()` label wrapper -- which is what the
+/// short-lived 2026-09-10 240px cap guarded in a coarser way (removed the
+/// same day: it froze every sparse strip at 240px-wide tabs, which the
+/// owner read as a regression).
 const EQUAL_WIDTH_MIN_TAB_PX: f32 = 40.0;
-
-/// Never size a tab above this, however few are open or however wide the
-/// window is -- an even split across a wide strip with one or two tabs
-/// stretched a long title into a wall of text filling the viewport. The
-/// cap leaves the track's remainder empty (tabs lay out from the left)
-/// and the label truncates inside the capped width instead; short titles
-/// keep centering within it, so nothing changes for tabs that already fit.
-const EQUAL_WIDTH_MAX_TAB_PX: f32 = 240.0;
 
 /// One equal-width tab's share of `strip_width` (the tab strip's measured
 /// viewport width -- it spans the window edge to edge, see
@@ -336,12 +335,10 @@ fn equal_tab_width(strip_width: Pixels, tab_count: usize) -> Pixels {
     }
     let gaps = EQUAL_WIDTH_GAP_PX * tab_count.saturating_sub(1) as f32;
     let usable = (f32::from(strip_width) - EQUAL_WIDTH_CHROME_ALLOWANCE_PX - gaps).max(0.0);
-    // The even share, clamped into [floor, cap]: the floor keeps a narrow
-    // window's tabs clickable (the strip scrolls instead), the cap keeps a
-    // wide window's few tabs from swallowing the whole strip. Both bounds
-    // are positive constants, so the input can never be NaN.
-    let share = usable / tab_count as f32;
-    px(share.clamp(EQUAL_WIDTH_MIN_TAB_PX, EQUAL_WIDTH_MAX_TAB_PX))
+    // The even share, floored at `EQUAL_WIDTH_MIN_TAB_PX` so a narrow
+    // window's tabs stay clickable (the strip scrolls instead). No upper
+    // bound, on purpose -- see the note on the constant above.
+    px((usable / tab_count as f32).max(EQUAL_WIDTH_MIN_TAB_PX))
 }
 
 fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
@@ -1318,11 +1315,13 @@ mod tests {
     }
 
     #[test]
-    fn equal_tab_width_never_rises_above_the_cap() {
-        // A wide window with two tabs: the even split (475px each) would
-        // let one long title fill the viewport, so the cap wins and the
-        // track's remainder simply stays empty.
-        assert_eq!(equal_tab_width(px(1000.0), 2), px(240.0));
+    fn equal_tab_width_splits_the_whole_strip_even_with_few_tabs() {
+        // A wide window with two tabs: the even split is handed through
+        // un-capped -- (1000 - 24 - 1 gap * 2) / 2 = 487px each. A long
+        // title truncates inside its tab instead of the tab width being
+        // capped; the 2026-09-10 240px cap did the latter and was removed
+        // because it froze sparse strips at fixed-width tabs.
+        assert_eq!(equal_tab_width(px(1000.0), 2), px(487.0));
     }
 
     #[test]

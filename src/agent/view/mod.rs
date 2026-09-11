@@ -16,7 +16,6 @@ use std::time::Duration;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::StyledExt as _;
-use gpui_component::WindowExt as _;
 use horizon_agent::contract::ToolCallId;
 
 use super::session::AgentSession;
@@ -239,7 +238,10 @@ impl Render for AgentView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _: &MouseUpEvent, window, cx| {
-                    if window.selected_text(cx).trim().is_empty() {
+                    if gpui_base::TextSelection::selected_text(window, cx)
+                        .trim()
+                        .is_empty()
+                    {
                         window.focus(&this.focus_handle, cx);
                     }
                 }),

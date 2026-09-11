@@ -3782,6 +3782,7 @@ dependencies = [
  "alacritty_terminal",
  "crossbeam-channel",
  "futures",
+ "gpui-base",
  "gpui-component",
  "gpui-kit-assets",
  "gpui-pre",
