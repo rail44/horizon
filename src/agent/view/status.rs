@@ -1,6 +1,7 @@
 //! Session-status projection and its small, ordinary entity view.
 
 use gpui::*;
+use gpui_component::status_bar::StatusBar;
 use horizon_agent::contract::SessionState;
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
@@ -87,23 +88,18 @@ impl Render for AgentStatus {
             StatusTone::Muted => theme::text_muted(),
             StatusTone::Danger => theme::danger(),
         };
-        let mut row = div()
-            .px_2()
-            .py_0p5()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(px(11.0))
-                    .text_color(color)
-                    .child(self.projection.text),
-            );
+        // The component's three-slot status bar chrome (left/center/right)
+        // replaces the hand-rolled flex row; the projection above stays ours.
+        let mut bar = StatusBar::new().left(
+            div()
+                .text_size(px(11.0))
+                .text_color(color)
+                .child(self.projection.text),
+        );
         if self.projection.turn_in_flight {
-            row = row.child(render_stop_button("status-line-stop"));
+            bar = bar.right(render_stop_button("status-line-stop"));
         }
-        row.into_any_element()
+        bar.into_any_element()
     }
 }
 
