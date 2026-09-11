@@ -95,7 +95,9 @@ pub(super) fn resolve_path(
 
     if !allow_out_of_root && !resolved.starts_with(workspace_root) {
         return Err(error_output(format!(
-            "path `{requested}` escapes the workspace root `{}`",
+            "path `{requested}` escapes the workspace root `{}` — the fs tools can only touch \
+             paths inside the session's workspace; write scratch files (commit messages, PR \
+             bodies) inside the workspace rather than in a host temp dir",
             workspace_root.display()
         )));
     }
