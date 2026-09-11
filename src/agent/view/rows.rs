@@ -23,7 +23,8 @@ impl AgentTranscript {
         if !self.expanded_rows.remove(&call_id) {
             self.expanded_rows.insert(call_id);
         }
-        self.transcript_list.remeasure();
+        self.scroller
+            .update(cx, |scroller, cx| scroller.remeasure(cx));
         cx.notify();
     }
 

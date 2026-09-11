@@ -1,7 +1,8 @@
 //! The agent pane is a lightweight composite over three independently owned
-//! child entities. The transcript owns the virtual list and is the only cached
-//! child; status and the auto-growing composer retain ordinary GPUI layout so
-//! their intrinsic heights can change.
+//! child entities. The transcript owns the message scroller (gpui-component's
+//! tail-following virtual list) and is the only cached child; status and the
+//! auto-growing composer retain ordinary GPUI layout so their intrinsic
+//! heights can change.
 
 mod composer;
 mod rows;
@@ -15,6 +16,7 @@ use std::time::Duration;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_component::StyledExt as _;
 use horizon_agent::contract::ToolCallId;
 
@@ -30,7 +32,7 @@ use transcript::{build_transcript_rows, TranscriptRow};
 /// into compact row descriptors here; `Render` constructs only visible rows.
 pub(super) struct AgentTranscript {
     session: Entity<AgentSession>,
-    transcript_list: ListState,
+    scroller: Entity<MessageScrollerState>,
     transcript_rows: Vec<TranscriptRow>,
     latest_user_row: Option<usize>,
     session_changes: Vec<turns::FileChange>,
@@ -56,8 +58,7 @@ impl AgentTranscript {
             let calls = turns::build_tool_call_views(&session.frame.items);
             (rows, latest_user, turns::aggregate_changes(&calls))
         };
-        let transcript_list = ListState::new(transcript_rows.len(), ListAlignment::Top, px(1024.0));
-        transcript_list.set_follow_mode(FollowMode::Tail);
+        let scroller = cx.new(|cx| MessageScrollerState::new(transcript_rows.len(), cx));
 
         let subscriptions =
             vec![
@@ -83,7 +84,7 @@ impl AgentTranscript {
 
         Self {
             session,
-            transcript_list,
+            scroller,
             transcript_rows,
             latest_user_row,
             session_changes,
@@ -103,7 +104,9 @@ impl AgentTranscript {
                 let ComposerEvent::ModeChanged(mode) = event;
                 if transcript.composer_mode != *mode {
                     transcript.composer_mode = mode.clone();
-                    transcript.transcript_list.remeasure();
+                    transcript
+                        .scroller
+                        .update(cx, |scroller, cx| scroller.remeasure(cx));
                     cx.notify();
                 }
             },
@@ -111,15 +114,17 @@ impl AgentTranscript {
     }
 
     fn repin_to_tail(&mut self, cx: &mut Context<Self>) {
-        self.transcript_list.set_follow_mode(FollowMode::Tail);
-        self.transcript_list.scroll_to_end();
+        // `scroll_to_end` re-engages tail following (message_scroller's own
+        // contract), so this is the same explicit re-pin the composer's send
+        // path has always performed.
+        self.scroller
+            .update(cx, |scroller, cx| scroller.scroll_to_end(cx));
         cx.notify();
     }
 }
 
 impl Render for AgentTranscript {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let detached = !self.transcript_list.is_following_tail();
         let changes_bar = self.render_changes_bar(&self.session_changes, cx);
 
         div()
@@ -131,16 +136,22 @@ impl Render for AgentTranscript {
                     .relative()
                     .flex_1()
                     .min_h_0()
-                    .child(
-                        list(
-                            self.transcript_list.clone(),
-                            cx.processor(Self::render_transcript_row),
+                    // The scroller owns tail-following, the scrollbar, the
+                    // jump-to-latest button, and the bottom fade; the
+                    // hand-rolled follow pill is gone with them.
+                    .child({
+                        let transcript_view = cx.entity();
+                        MessageScroller::new(
+                            "transcript-rows",
+                            self.scroller.clone(),
+                            move |row_index, window, cx| {
+                                transcript_view.update(cx, |transcript, cx| {
+                                    transcript.render_transcript_row(row_index, window, cx)
+                                })
+                            },
                         )
+                        .with_content_style(StyleRefinement::default().pt_2())
                         .size_full()
-                        .pt_2(),
-                    )
-                    .when(detached, |this| {
-                        this.child(self.render_follow_pill(self.latest_user_row, cx))
                     }),
             )
             .when_some(changes_bar, |this, bar| this.child(bar))

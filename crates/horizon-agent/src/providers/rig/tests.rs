@@ -39,8 +39,9 @@ use crate::contract::{
 use crate::registry::Provider as AgentProvider;
 use rig_core::completion::{
     message::{Text, ToolCall, ToolFunction, ToolResultContent, UserContent},
-    AssistantContent, Message as RigMessage, ToolDefinition,
+    AssistantContent, CompletionError, Message as RigMessage, ToolDefinition,
 };
+use rig_core::ProviderResponseError;
 
 fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     rx.recv_timeout(std::time::Duration::from_secs(1))
@@ -91,8 +92,11 @@ fn provider_request_span_finishes_when_an_error_path_drops_it() {
 /// The exact shape rig renders a non-2xx streaming response as: the status
 /// arrives as the response stream's first item (rig sends the HTTP request
 /// lazily), wrapped in a `ProviderError`.
-fn rejected_with(status: &str, body: &str) -> String {
-    format!("ProviderError: Invalid status code {status} with message: {body}")
+/// The string shape a metadata-less provider rejection takes in the retry
+/// harness's Display fallback (the `ProviderError` marker plus rig's
+/// `Invalid status code` rendering).
+fn rejected_with(status: &str, body: &str) -> anyhow::Error {
+    anyhow::anyhow!("ProviderError: Invalid status code {status} with message: {body}")
 }
 
 /// The retry classifier, tested directly: `horizon-agent` has no way to
@@ -139,8 +143,10 @@ fn rejections_before_generation_are_classified_as_retryable() {
     let transport = retryable_rejection(
         1,
         false,
-        "ProviderError: Http client error: error sending request for url \
-         (https://example.invalid/v1/chat/completions)",
+        &anyhow::anyhow!(
+            "ProviderError: Http client error: error sending request for url \
+             (https://example.invalid/v1/chat/completions)"
+        ),
     )
     .expect("a connection failure is retryable");
     assert_eq!(transport.status, None);
@@ -156,8 +162,10 @@ fn a_mid_stream_transport_failure_with_no_durable_output_is_retryable() {
     let rejection = retryable_rejection(
         1,
         false, // no ToolCallRequested or MessageCommitted
-        "ProviderError: Http client error: error decoding response body: \
-         trailing comma at line 1 column 42",
+        &anyhow::anyhow!(
+            "ProviderError: Http client error: error decoding response body: \
+             trailing comma at line 1 column 42"
+        ),
     )
     .expect("a mid-stream failure with no durable output is retryable");
     assert_eq!(rejection.status, None);
@@ -176,8 +184,10 @@ fn a_mid_stream_transport_failure_after_durable_output_is_not_retried() {
         retryable_rejection(
             1,
             true, // a ToolCallRequested was emitted
-            "ProviderError: Http client error: error decoding response body: \
-             trailing comma at line 1 column 42",
+            &anyhow::anyhow!(
+                "ProviderError: Http client error: error decoding response body: \
+                 trailing comma at line 1 column 42"
+            ),
         )
         .is_none(),
         "a mid-stream failure after durable output must not be retried"
@@ -249,14 +259,53 @@ fn rejections_that_could_duplicate_or_repeat_are_not_retried() {
     );
 
     assert!(
-        retryable_rejection(1, false, "provider response stream timed out after 120s").is_none(),
+        retryable_rejection(
+            1,
+            false,
+            &anyhow::anyhow!("provider response stream timed out after 120s")
+        )
+        .is_none(),
         "a stream timeout may already have generated tokens"
     );
 }
 
-/// `Retry-After` is honoured when the provider names one. rig surfaces no
-/// response headers, so the only place it can be read from is the error
-/// body the provider echoed it into.
+/// rig 0.42's request-id-contract providers (OpenAI among them) surface a
+/// handshake 429/5xx as a typed `CompletionError::ProviderResponse` whose
+/// Display no longer contains the `Invalid status code` marker. The
+/// classifier must read the structured status — a 2026-09 regression showed
+/// the string-only classifier silently stopped retrying these.
+#[test]
+fn a_typed_provider_response_429_is_still_retryable() {
+    let error = anyhow::Error::new(CompletionError::from_http_response_with_request_id(
+        http::StatusCode::TOO_MANY_REQUESTS,
+        "rate limited",
+        Some("req_123".to_string()),
+    ));
+    let rejection =
+        retryable_rejection(1, false, &error).expect("a typed pre-generation 429 is retryable");
+    assert_eq!(rejection.status, Some(429));
+}
+
+/// The preserved `Retry-After` header is honoured from the typed error
+/// without falling back to body scraping.
+#[test]
+fn a_retry_after_header_is_read_from_the_typed_error() {
+    let headers = http::HeaderMap::from_iter([(
+        http::header::RETRY_AFTER,
+        http::HeaderValue::from_static("37"),
+    )]);
+    let error = anyhow::Error::new(CompletionError::ProviderResponse(
+        ProviderResponseError::new(http::StatusCode::TOO_MANY_REQUESTS, "slow down")
+            .with_headers(Some(Box::new(headers))),
+    ));
+    let rejection = retryable_rejection(1, false, &error)
+        .expect("a 429 with a Retry-After header is retryable");
+    assert_eq!(rejection.retry_after, Some(Duration::from_secs(37)));
+}
+
+/// `Retry-After` is honoured when the provider names one. For providers
+/// without the request-id contract (no preserved headers), the error body
+/// the provider echoed the hint into is the only source.
 #[test]
 fn a_named_retry_after_is_read_out_of_the_rejection() {
     let rejection = retryable_rejection(
@@ -306,10 +355,10 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
             attempts.set(attempts.get() + 1);
             if attempts.get() == 1 {
                 Attempt {
-                    result: Err(anyhow::anyhow!(rejected_with(
+                    result: Err(rejected_with(
                         "503 Service Unavailable",
-                        "upstream is unwell"
-                    ))),
+                        "upstream is unwell",
+                    )),
                     durable_output_emitted: false,
                 }
             } else {
