@@ -945,6 +945,11 @@ fn configure_ssh_tunneling(
 /// The `GIT_SSH_COMMAND` value: SSH over the session proxy, with host keys
 /// accumulated in the sandbox scratch dir (TOFU via `accept-new` -- no
 /// interactive prompt a contained session could never answer).
+// Production callers are macOS-only (`configure_ssh_tunneling`, whose own
+// doc comment records Linux's separate enforcement/netcat dialect); on
+// Linux the only caller is `sandbox_provisioning_tests`, which clippy's
+// non-test lib target cannot see.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 fn git_ssh_command_for_proxy(proxy_port: u16, known_hosts: &Path) -> String {
     format!(
         "ssh -o ProxyCommand='/usr/bin/nc -X connect -x 127.0.0.1:{proxy_port} %h %p' \
