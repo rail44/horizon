@@ -448,6 +448,47 @@ fn one_report_contains_filesystem_and_network_denials() {
     std::fs::remove_dir_all(outside).expect("remove outside directory");
 }
 
+#[test]
+fn proxy_connects_from_a_non_main_thread_reach_only_the_trusted_endpoint() {
+    let root = test_dir("proxy-thread");
+    let proxy = TcpListener::bind("127.0.0.1:0").expect("bind proxy endpoint");
+    let proxy_addr = proxy.local_addr().unwrap();
+    let decoy = TcpListener::bind(("127.0.0.2", proxy_addr.port())).expect("bind decoy");
+    let decoy_addr = decoy.local_addr().unwrap();
+
+    // Regression: the seccomp-notify pid is the connecting thread's TID,
+    // and pidfd_open rejects non-leader TIDs (ENOENT), so every proxy
+    // connect from a non-main thread of a multithreaded child was denied
+    // with "could not inspect the child socket". It must reach the exact
+    // proxy endpoint -- and the exact-match policy must stay intact
+    // otherwise.
+    let allowed = run_network_probe(&root, proxy_addr, "thread", &proxy_addr.to_string());
+    assert_eq!(
+        allowed.0,
+        Some(0),
+        "a connect from a non-main thread must reach the exact proxy endpoint: {allowed:?}"
+    );
+    assert!(
+        allowed.2.ipc_denials.is_empty(),
+        "no denials expected for the proxy connect: {:?}",
+        allowed.2.ipc_denials
+    );
+
+    let denied = run_network_probe(&root, proxy_addr, "thread", &decoy_addr.to_string());
+    assert_eq!(
+        denied.0,
+        Some(23),
+        "a same-port decoy must stay denied from a non-main thread: {denied:?}"
+    );
+    assert!(denied
+        .2
+        .ipc_denials
+        .iter()
+        .any(|record| record.target == decoy_addr.to_string() && record.operation == "connect"));
+
+    std::fs::remove_dir_all(root).expect("remove test directory");
+}
+
 fn run_network_probe(
     root: &std::path::Path,
     proxy_addr: std::net::SocketAddr,

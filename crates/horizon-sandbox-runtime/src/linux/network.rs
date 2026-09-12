@@ -270,14 +270,27 @@ fn continue_if_live(notify_fd: RawFd, notification_id: u64) -> nono::Result<()> 
     }
 }
 
-fn duplicate_child_fd(pid: u32, raw_fd: u64) -> nono::Result<OwnedFd> {
+/// Duplicates `raw_fd` out of the sandboxed child so the supervisor can
+/// perform the connect on it. `tid` is the seccomp-notify pid: the TID of
+/// the thread that called connect(2), which only equals the process's
+/// thread-group leader for a single-threaded child. pidfd_open rejects
+/// non-leader TIDs on this kernel (measured: ENOENT for every non-leader
+/// TID while the leader always opens), so every trusted-endpoint connect
+/// from a multithreaded child (Go dialers like `gh`, python threads) died
+/// here with "could not inspect the child socket" unless it happened to
+/// run on the main thread. Threads share one file-descriptor table, so
+/// duplicating from the leader's pidfd hands back the same socket. Fails
+/// closed: a TID that cannot be resolved (child already gone, unreadable
+/// status) surfaces as the same denial as before.
+fn duplicate_child_fd(tid: u32, raw_fd: u64) -> nono::Result<OwnedFd> {
     let child_fd = i32::try_from(raw_fd).map_err(|_| {
         nono::NonoError::SandboxInit(format!("child socket fd is out of range: {raw_fd}"))
     })?;
-    let pidfd_raw = unsafe { libc::syscall(libc::SYS_pidfd_open, pid as libc::pid_t, 0_u32) };
+    let leader = thread_group_leader(tid)?;
+    let pidfd_raw = unsafe { libc::syscall(libc::SYS_pidfd_open, leader as libc::pid_t, 0_u32) };
     if pidfd_raw < 0 {
         return Err(nono::NonoError::SandboxInit(format!(
-            "pidfd_open failed for child {pid}: {}",
+            "pidfd_open failed for child leader {leader} (tid {tid}): {}",
             std::io::Error::last_os_error()
         )));
     }
@@ -286,11 +299,28 @@ fn duplicate_child_fd(pid: u32, raw_fd: u64) -> nono::Result<OwnedFd> {
         unsafe { libc::syscall(libc::SYS_pidfd_getfd, pidfd.as_raw_fd(), child_fd, 0_u32) };
     if duplicated < 0 {
         return Err(nono::NonoError::SandboxInit(format!(
-            "pidfd_getfd failed for child {pid} fd {child_fd}: {}",
+            "pidfd_getfd failed for child leader {leader} fd {child_fd}: {}",
             std::io::Error::last_os_error()
         )));
     }
     Ok(unsafe { OwnedFd::from_raw_fd(duplicated as RawFd) })
+}
+
+/// Resolves a seccomp-notify TID to its thread-group leader via
+/// `/proc/<tid>/status`'s `Tgid:` line -- the same /proc permission model
+/// `read_address` already relies on for `/proc/<pid>/mem`.
+fn thread_group_leader(tid: u32) -> nono::Result<u32> {
+    let path = format!("/proc/{tid}/status");
+    let status = std::fs::read_to_string(&path)
+        .map_err(|error| nono::NonoError::SandboxInit(format!("failed to read {path}: {error}")))?;
+    parse_status_tgid(&status)
+        .ok_or_else(|| nono::NonoError::SandboxInit(format!("no Tgid line in {path}")))
+}
+
+fn parse_status_tgid(status: &str) -> Option<u32> {
+    status
+        .lines()
+        .find_map(|line| line.strip_prefix("Tgid:")?.trim().parse::<u32>().ok())
 }
 
 fn socket_property(fd: RawFd, property: libc::c_int) -> nono::Result<libc::c_int> {
@@ -445,5 +475,22 @@ mod tests {
         assert!(attempted_proxy == proxy || loopback_connect.contains(&attempted_proxy));
         assert!(attempted_granted == proxy || loopback_connect.contains(&attempted_granted));
         assert!(attempted_decoy != proxy && !loopback_connect.contains(&attempted_decoy));
+    }
+
+    #[test]
+    fn parses_the_thread_group_leader_from_a_proc_status_body() {
+        let status = "Name:\tprobe\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t24765\nNgid:\t0\nPid:\t24766\nPPid:\t24760\n";
+        assert_eq!(parse_status_tgid(status), Some(24765));
+    }
+
+    #[test]
+    fn a_status_body_without_a_tgid_line_parses_to_none() {
+        assert_eq!(parse_status_tgid("Name:\tprobe\nPid:\t7\n"), None);
+        assert_eq!(parse_status_tgid(""), None);
+    }
+
+    #[test]
+    fn a_malformed_tgid_value_parses_to_none() {
+        assert_eq!(parse_status_tgid("Tgid:\tnot-a-number\n"), None);
     }
 }
