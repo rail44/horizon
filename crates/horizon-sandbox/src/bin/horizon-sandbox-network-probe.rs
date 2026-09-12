@@ -15,6 +15,14 @@ fn main() {
 
     let result = match mode.as_str() {
         "tcp" => TcpStream::connect(&target).map(|_| ()),
+        "thread" => {
+            // Connect from a deliberately non-main thread: seccomp notify
+            // reports the calling thread's TID, so supervisor bugs in the
+            // pidfd path only show up off the thread-group leader.
+            std::thread::spawn(move || TcpStream::connect(&target).map(|_| ()))
+                .join()
+                .unwrap_or_else(|_| Err(std::io::Error::other("probe thread panicked")))
+        }
         "bind" => TcpListener::bind(&target).map(|_| ()),
         "udp" => UdpSocket::bind("127.0.0.1:0")
             .and_then(|socket| socket.send_to(b"HORIZON-UDP-PROBE", &target).map(|_| ())),
