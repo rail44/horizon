@@ -350,16 +350,22 @@ impl ToolSessionState {
     /// rides along on any sandboxed spawn, not just the retry that won it.
     pub(crate) fn effective_sandbox_grants(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
         let services = self.mach_services();
-        let mut grants = self.filesystem_grants_snapshot();
+        let grants = self.filesystem_grants_snapshot();
         #[cfg(target_os = "macos")]
-        for grant in horizon_sandbox::security_service_grants(&services) {
-            if !grants.contains(&grant) {
-                grants.push(grant);
+        {
+            let mut grants = grants;
+            for grant in horizon_sandbox::security_service_grants(&services) {
+                if !grants.contains(&grant) {
+                    grants.push(grant);
+                }
             }
+            grants
         }
         #[cfg(not(target_os = "macos"))]
-        debug_assert!(services.is_empty());
-        grants
+        {
+            debug_assert!(services.is_empty());
+            grants
+        }
     }
 
     /// Installs this session's own network-proxy pair after construction --

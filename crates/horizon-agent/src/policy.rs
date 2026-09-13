@@ -258,6 +258,7 @@ pub(crate) fn annotate_network_denials(
 /// design.md`) -- additive, same convention as [`annotate_denied_domains`].
 /// Also forces `is_error: true`: a call denied security-service access is
 /// not a clean success from the agent's point of view.
+#[cfg(target_os = "macos")]
 pub(crate) fn annotate_denied_mach_services(output: &mut Value, services: &[String]) {
     if let Some(map) = output.as_object_mut() {
         map.insert(
@@ -287,6 +288,7 @@ pub(crate) fn annotate_mach_service_grant_approval(output: &mut Value, services:
 /// the run proceeded without denial evidence (soft-degrade;
 /// `docs/macos-containment-denial-reporting-design.md`) -- additive, audit
 /// only, never a failure of the call itself.
+#[cfg(target_os = "macos")]
 pub(crate) fn annotate_denial_collection_unavailable(output: &mut Value, error: &str) {
     if let Some(map) = output.as_object_mut() {
         map.insert(

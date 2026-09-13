@@ -62,17 +62,27 @@ max-threads = 1
 # mechanism with the observed failure mode, so the next reader can tell
 # signal from noise.
 #
-# Control-plane Unix-socket IPC -- `binary_id(horizon-cli::integration)` and
-# `test(/^host::listener::tests::/)`. `horizon-cli::integration` binds a stub
-# `UnixListener` speaking `horizon_control::wire`, and `host::listener::tests`
-# bind the real listener -- both at `std::env::temp_dir()`. Under containment
+# Control-plane Unix-socket IPC -- `binary_id(horizon-cli::integration)`,
+# `test(/^host::listener::tests::/)`, and
+# `test(/^host::connection::tests::/)`. The CLI integration tests bind a stub
+# `UnixListener` speaking `horizon_control::wire`, and the listener tests bind
+# the real listener -- both at `std::env::temp_dir()`. Under containment
 # $TMPDIR is provisioned under this session's (deep) worktree, so the socket
 # path exceeds SUN_LEN and `bind()` fails with `InvalidInput` ("path must be
-# shorter than SUN_LEN") before the sandbox even sees the call. Outside
-# containment $TMPDIR is /tmp and both pass. (Two `horizon-cli::integration`
-# cases -- `a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic`
-# and `usage_error_exits_with_code_two` -- don't bind and would pass, but ride
-# along with the whole integration binary; the full gate covers them.)
+# shorter than SUN_LEN") before the sandbox even sees the call. The connection
+# tests use `UnixStream::pair`; the outer sandbox permits creating the pair but
+# refuses writes with EPERM. Outside containment all pass. (Two
+# `horizon-cli::integration` cases --
+# `a_socket_with_no_listener_is_a_clear_connection_error_not_a_panic` and
+# `usage_error_exits_with_code_two` -- don't bind and would pass, but ride along
+# with the whole integration binary; the full gate covers them.)
+#
+# Linux helper authenticated-report transport --
+# `(binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))`. Both tests
+# create the production `SOCK_SEQPACKET` Unix socketpair used between Horizon
+# and the sandbox helper. The outer sandbox refuses that `socketpair` with
+# EPERM; the integrator's full gate exercises the credential-authenticated
+# round trip outside containment.
 #
 # The sandbox's own boundary enforcer -- `binary_id(horizon-sandbox::linux_supervised_helper)`
 # and `(binary_id(horizon-sandbox-proxy) & test(/^tests::/))`.
@@ -155,6 +165,8 @@ default-filter = '''
         + test(/outside_any_repository_is_none$/)
         + binary_id(horizon-cli::integration)
         + test(/^host::listener::tests::/)
+        + test(/^host::connection::tests::/)
+        + (binary_id(horizon-sandbox-runtime) & test(/^report::tests::/))
         + binary_id(horizon-sandbox::linux_supervised_helper)
         + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
