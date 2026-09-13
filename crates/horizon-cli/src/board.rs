@@ -576,26 +576,58 @@ fn print_workflow(stdout: &mut impl Write, item: &Item) {
             let _ = writeln!(stdout, "  • {criterion}");
         }
         for task in &plan.tasks {
-            let status = if flow.finished(&task.key) {
-                "implemented"
-            } else {
-                "pending"
-            };
-            let _ = writeln!(
-                stdout,
-                "  [{}] {} ({status}; depends on: {})",
-                task.key,
-                task.title,
-                task.depends_on.join(", ")
-            );
+            let _ = writeln!(stdout, "  Task #{task}");
         }
     }
-    for result in &flow.results {
-        let _ = writeln!(stdout, "Result [{}]: {}", result.key, result.summary);
+    if let Some(result) = &flow.result {
+        let _ = writeln!(
+            stdout,
+            "Implementation: {} ({})",
+            result.summary, result.commit
+        );
         for check in &result.checks {
             let _ = writeln!(stdout, "  Reported check: {check}");
         }
     }
+    if let Some(verification) = &flow.verification {
+        let _ = writeln!(
+            stdout,
+            "Verification: {} ({})",
+            verification.summary, verification.commit
+        );
+        for evidence in &verification.evidence {
+            let _ = writeln!(
+                stdout,
+                "  {}: {} — {}",
+                evidence.criterion,
+                if evidence.satisfied {
+                    "verified"
+                } else {
+                    "unverified"
+                },
+                evidence.detail
+            );
+        }
+    }
+    if let Some(commit) = &flow.integrated {
+        let _ = writeln!(stdout, "Integrated into main: {commit}");
+    }
+    if let Some(plan) = &flow.plan {
+        for d in &plan.decisions {
+            if let Some(resolution) = &d.resolution {
+                let _ = writeln!(stdout, "Decision [{}]: {resolution}", d.key);
+            }
+            if let Some(message) = d.messages.last() {
+                let _ = writeln!(
+                    stdout,
+                    "  {}: {}",
+                    if message.owner { "Owner" } else { "AI" },
+                    message.text
+                );
+            }
+        }
+    }
+
     if let Some(worker) = &flow.worker {
         let _ = writeln!(
             stdout,

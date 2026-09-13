@@ -35,6 +35,9 @@ pub struct Envelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BoardEvent {
+    /// One durable transaction, including all newly allocated board ids.
+    #[serde(rename = "workflow-batch")]
+    WorkflowBatch { id: u64, items: Vec<crate::Item> },
     #[serde(rename = "workflow-changed")]
     WorkflowChanged {
         id: u64,
@@ -209,7 +212,7 @@ fn event_id(event: &BoardEvent) -> Option<u64> {
         BoardEvent::ItemCreated { id, .. } => Some(*id),
         BoardEvent::ItemUpdated { id, .. } => Some(*id),
         BoardEvent::CommentAdded { id, .. } => Some(*id),
-        BoardEvent::WorkflowChanged { id, .. } => Some(*id),
+        BoardEvent::WorkflowChanged { id, .. } | BoardEvent::WorkflowBatch { id, .. } => Some(*id),
     }
 }
 

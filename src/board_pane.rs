@@ -377,8 +377,14 @@ impl BoardListDelegate {
     /// display list — called after every load, search, and toggle.
     fn rederive(&mut self) {
         let mut matched = filter_items(&self.all, &self.last_query);
-        if self.milestones_only && self.all.iter().any(|item| item.workflow.is_some()) {
-            matched.retain(|item| item.workflow.is_some());
+        matched.retain(|item| !horizon_board::is_closed_status(&item.status));
+        if self.milestones_only
+            && self.all.iter().any(|item| {
+                !horizon_board::is_closed_status(&item.status)
+                    && item.workflow.as_ref().is_some_and(|w| w.is_milestone())
+            })
+        {
+            matched.retain(|item| item.workflow.as_ref().is_some_and(|w| w.is_milestone()));
         }
         let (filtered, depths) = flatten_with_depth(&matched, self.top_level_only);
         self.filtered = filtered;
@@ -783,6 +789,9 @@ pub(crate) struct BoardPaneView {
     workflow_error: Option<String>,
     workflow_busy: bool,
     show_history: bool,
+    navigation_item: Option<u64>,
+    navigation_decision: Option<String>,
+    selected_decision: Option<String>,
     focus_handle: FocusHandle,
     root: Option<PathBuf>,
     list: Entity<ListState<BoardListDelegate>>,
@@ -870,6 +879,9 @@ impl BoardPaneView {
             workflow_error: None,
             workflow_busy: false,
             show_history: false,
+            navigation_item: None,
+            navigation_decision: None,
+            selected_decision: None,
             focus_handle: cx.focus_handle(),
             root,
             list,
@@ -895,7 +907,7 @@ impl BoardPaneView {
                         .background_executor()
                         .spawn(async move {
                             Store::from_dir(&root)
-                                .and_then(|store| store.list(None, false))
+                                .and_then(|store| store.list(None, true))
                                 .map(|result| result.items)
                         })
                         .await;
@@ -931,7 +943,10 @@ impl BoardPaneView {
         };
         match poke_reload_target(open) {
             PokeReloadTarget::List => self.spawn_load(cx),
-            PokeReloadTarget::Item(id) => self.spawn_show(id, cx),
+            PokeReloadTarget::Item(id) => {
+                self.spawn_show(id, cx);
+                self.spawn_load(cx);
+            }
         }
     }
 
@@ -969,6 +984,7 @@ impl BoardPaneView {
 
     fn open_detail(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
         self.show_history = false;
+        self.selected_decision = None;
         self.workflow_error = None;
         self.decision_input
             .update(cx, |input, cx| input.set_value("", window, cx));
@@ -1438,13 +1454,13 @@ impl Render for BoardPaneView {
                                 .gap_2()
                                 .child(
                                     if self.list.read(cx).delegate().milestones_only
-                                        && self
-                                            .list
-                                            .read(cx)
-                                            .delegate()
-                                            .all
-                                            .iter()
-                                            .any(|item| item.workflow.is_some())
+                                        && self.list.read(cx).delegate().all.iter().any(|item| {
+                                            !horizon_board::is_closed_status(&item.status)
+                                                && item
+                                                    .workflow
+                                                    .as_ref()
+                                                    .is_some_and(|w| w.is_milestone())
+                                        })
                                     {
                                         "Milestones"
                                     } else {

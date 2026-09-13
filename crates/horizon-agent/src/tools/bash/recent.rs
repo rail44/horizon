@@ -101,6 +101,12 @@ pub(crate) fn find_reusable_output(
     let mut has_intervening_modification = false;
 
     for item in frame.items.iter().rev().take(SCAN_LIMIT) {
+        // A new assignment may follow external changes (for example a merge
+        // prepared by the coordinator). Only reuse output within one turn.
+        if matches!(item, AgentFrameItem::Message(message) if message.role == crate::contract::MessageRole::User)
+        {
+            break;
+        }
         if let AgentFrameItem::ToolCallFinished(result) = item {
             let Some(req) = frame.tool_call_request(&result.call_id) else {
                 continue;
@@ -314,6 +320,23 @@ mod tests {
         let path = std::env::temp_dir().join(format!("horizon-test-{name}.log"));
         std::fs::write(&path, "full output").unwrap();
         path
+    }
+
+    #[test]
+    fn a_new_assignment_does_not_reuse_checks_from_before_external_changes() {
+        let path = temp_spill("new-assignment-verification");
+        let mut f = frame(vec![
+            bash_request("check", "cargo nextest run"),
+            bash_result("check", path.to_str(), Some(0)),
+        ]);
+        assert!(find_reusable_output(&f, "cargo nextest run").is_some());
+        f.items
+            .push(AgentFrameItem::Message(crate::contract::Message {
+                role: crate::contract::MessageRole::User,
+                text: "Verify the newly combined commit".into(),
+            }));
+        assert!(find_reusable_output(&f, "cargo nextest run").is_none());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

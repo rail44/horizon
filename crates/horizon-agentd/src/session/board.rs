@@ -24,11 +24,20 @@ use serde_json::Value;
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum SubmittedReport {
     Plan {
-        plan: horizon_board::workflow::Plan,
+        plan: horizon_board::workflow::PlanDraft,
     },
     Task {
         summary: String,
         checks: Vec<String>,
+        commit: String,
+    },
+    Discussion {
+        reply: String,
+        resolution: Option<String>,
+        acceptance: Option<Vec<String>>,
+    },
+    Verification {
+        verification: horizon_board::workflow::Verification,
     },
     Blocked {
         reason: String,
@@ -39,7 +48,25 @@ impl From<SubmittedReport> for horizon_board::workflow::Report {
     fn from(report: SubmittedReport) -> Self {
         match report {
             SubmittedReport::Plan { plan } => Self::Plan { plan },
-            SubmittedReport::Task { summary, checks } => Self::Task { summary, checks },
+            SubmittedReport::Task {
+                summary,
+                checks,
+                commit,
+            } => Self::Task {
+                summary,
+                checks,
+                commit,
+            },
+            SubmittedReport::Discussion {
+                reply,
+                resolution,
+                acceptance,
+            } => Self::Discussion {
+                reply,
+                resolution,
+                acceptance,
+            },
+            SubmittedReport::Verification { verification } => Self::Verification { verification },
             SubmittedReport::Blocked { reason } => Self::Blocked { reason },
         }
     }

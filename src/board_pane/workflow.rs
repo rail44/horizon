@@ -1,7 +1,19 @@
 use super::*;
-use horizon_board::workflow::{Mutation, Work};
+use horizon_board::workflow::{Decision, Mutation, Workflow};
 
 impl BoardPaneView {
+    fn displayed_decision<'a>(&self, flow: &'a Workflow) -> Option<&'a Decision> {
+        self.selected_decision
+            .as_ref()
+            .and_then(|key| {
+                flow.plan
+                    .as_ref()?
+                    .decisions
+                    .iter()
+                    .find(|d| &d.key == key && !d.retired)
+            })
+            .or_else(|| flow.unanswered().first().copied())
+    }
     pub(crate) fn set_workflow_error(&mut self, error: String, cx: &mut Context<Self>) {
         self.workflow_error = Some(error);
         cx.notify();
@@ -21,7 +33,12 @@ impl BoardPaneView {
                     .and(flow.last_attempt.as_ref())
                     .map(|last| last.attempt.session.as_str())
             })
-            .or_else(|| flow.worker.as_ref().map(|w| w.session.as_str()))?;
+            .or_else(|| {
+                flow.verifier
+                    .as_ref()
+                    .or(flow.worker.as_ref())
+                    .map(|w| w.session.as_str())
+            })?;
         uuid::Uuid::parse_str(value)
             .ok()
             .map(horizon_workspace::SessionId::from_uuid)
@@ -33,6 +50,30 @@ impl BoardPaneView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if command == CommandId::OpenBoardRelatedItem {
+            if let Some(id) = self.navigation_item.take() {
+                let item = self
+                    .list
+                    .read(cx)
+                    .delegate()
+                    .all
+                    .iter()
+                    .find(|i| i.id == id)
+                    .cloned();
+                if let Some(item) = item {
+                    self.open_detail(item, window, cx);
+                }
+            }
+            return;
+        }
+        if command == CommandId::SelectBoardDecision {
+            self.selected_decision = self.navigation_decision.take();
+            self.decision_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            window.focus(&self.decision_input.read(cx).focus_handle(cx), cx);
+            cx.notify();
+            return;
+        }
         if command == CommandId::ToggleBoardMilestoneFilter {
             self.list.update(cx, |list, cx| {
                 let delegate = list.delegate_mut();
@@ -63,7 +104,7 @@ impl BoardPaneView {
                 let Some(decision) = item
                     .workflow
                     .as_ref()
-                    .and_then(|f| f.unanswered().first().copied())
+                    .and_then(|f| self.displayed_decision(f))
                 else {
                     return;
                 };
@@ -155,6 +196,20 @@ impl BoardPaneView {
             .into_any_element()
     }
 
+    fn related_item(&self, id: u64, label: String, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .id(SharedString::from(format!("board-item-{id}-{label}")))
+            .p_2()
+            .border_1()
+            .border_color(theme::border())
+            .child(label)
+            .on_click(cx.listener(move |view, _, _, cx| {
+                view.navigation_item = Some(id);
+                cx.emit(BoardCommand(CommandId::OpenBoardRelatedItem));
+            }))
+            .into_any_element()
+    }
+
     pub(super) fn render_workflow(&self, item: &Item, cx: &mut Context<Self>) -> AnyElement {
         let mut content = v_flex().gap_3().w_full().text_size(px(12.0));
         if let Some(error) = &self.workflow_error {
@@ -167,17 +222,21 @@ impl BoardPaneView {
             return content
                 .child(self.workflow_button(
                     "milestone-enable",
-                    "Plan and run as milestone",
+                    "Plan, run and integrate into main",
                     CommandId::EnableBoardMilestone,
                     cx,
                 ))
                 .into_any_element();
         };
-        content = content.child(
-            div()
-                .text_size(px(14.0))
-                .child(format!("Milestone · {}", flow.label())),
-        );
+        content = content.child(div().text_size(px(14.0)).child(format!(
+            "{} · {}",
+            if flow.is_milestone() {
+                "Milestone"
+            } else {
+                "Task"
+            },
+            flow.label()
+        )));
         let mut actions = h_flex().flex_wrap().gap_2();
         if !flow.paused {
             actions = actions.child(self.workflow_button(
@@ -220,29 +279,80 @@ impl BoardPaneView {
                 content = content.child(div().child(attention.clone()));
             }
         }
-        if let Some(decision) = flow.unanswered().first() {
-            content = content.child(
-                v_flex()
-                    .gap_2()
-                    .p_3()
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(format!(
-                        "Your decision · {} remaining",
-                        flow.unanswered().len()
-                    ))
-                    .child(div().text_size(px(14.0)).child(decision.question.clone()))
-                    .child(decision.context.clone())
-                    .child(format!("Recommendation: {}", decision.recommendation))
-                    .child(format!("Effect: {}", decision.consequence))
+        if let Some(parent) = item.parent {
+            content =
+                content.child(self.related_item(parent, format!("Open milestone #{parent}"), cx));
+        }
+        if let Some(plan) = &flow.plan {
+            let mut choices = h_flex().gap_2().flex_wrap();
+            for decision in plan
+                .decisions
+                .iter()
+                .filter(|d| !d.retired && (d.resolution.is_none() || self.show_history))
+            {
+                let key = decision.key.clone();
+                choices = choices.child(
+                    div()
+                        .id(SharedString::from(format!("decision-{key}")))
+                        .p_2()
+                        .border_1()
+                        .border_color(theme::border())
+                        .child(format!(
+                            "{}: {}",
+                            if decision.resolution.is_some() {
+                                "Decided"
+                            } else {
+                                "Decision"
+                            },
+                            decision.question
+                        ))
+                        .on_click(cx.listener(move |view, _, _, cx| {
+                            view.navigation_decision = Some(key.clone());
+                            cx.emit(BoardCommand(CommandId::SelectBoardDecision));
+                        })),
+                );
+            }
+            content = content.child(choices);
+        }
+        if let Some(decision) = self.displayed_decision(flow) {
+            let mut discussion = v_flex()
+                .gap_2()
+                .p_3()
+                .border_1()
+                .border_color(theme::border())
+                .child(div().text_size(px(14.0)).child(decision.question.clone()))
+                .child(decision.context.clone())
+                .child(format!("Recommendation: {}", decision.recommendation))
+                .child(format!("Effect: {}", decision.consequence));
+            for id in &decision.affected_tasks {
+                discussion =
+                    discussion.child(self.related_item(*id, format!("Affected task #{id}"), cx));
+            }
+            if let Some(resolution) = &decision.resolution {
+                discussion = discussion.child(format!("Decision: {resolution}"));
+            }
+            let messages = if self.show_history {
+                decision.messages.as_slice()
+            } else {
+                &decision.messages[decision.messages.len().saturating_sub(2)..]
+            };
+            for message in messages {
+                discussion = discussion.child(format!(
+                    "{}: {}",
+                    if message.owner { "You" } else { "AI" },
+                    message.text
+                ));
+            }
+            discussion =
+                discussion
                     .child(Input::new(&self.decision_input))
                     .child(self.workflow_button(
                         "milestone-answer",
-                        "Send answer",
+                        "Send message",
                         CommandId::SubmitBoardDecision,
                         cx,
-                    )),
-            );
+                    ));
+            content = content.child(discussion);
         }
         if let Some(plan) = &flow.plan {
             content = content
@@ -252,56 +362,106 @@ impl BoardPaneView {
                     v_flex().gap_1().children(
                         plan.acceptance
                             .iter()
-                            .map(|criterion| div().child(format!("• {criterion}"))),
+                            .map(|c| div().child(format!("• {c}"))),
                     ),
-                )
-                .child("Tasks · priority order; dependencies run first");
-            for task in &plan.tasks {
-                let result = flow.results.iter().find(|r| r.key == task.key);
-                let running = flow.active.as_ref().is_some_and(|a| {
-                    a.work
-                        == Work::Task {
-                            key: task.key.clone(),
-                        }
-                });
-                let status = if result.is_some() {
-                    "implemented"
-                } else if running {
-                    "running"
-                } else {
-                    "pending"
-                };
-                let mut card = v_flex()
-                    .gap_1()
-                    .p_2()
-                    .border_1()
-                    .border_color(theme::border())
-                    .child(format!("{} · {} · {status}", task.key, task.title))
-                    .child(task.instructions.clone())
-                    .children(
-                        task.acceptance
-                            .iter()
-                            .map(|criterion| div().child(format!("• {criterion}"))),
-                    );
-                if !task.depends_on.is_empty() {
-                    card = card.child(format!("Depends on: {}", task.depends_on.join(", ")));
-                }
-                if let Some(result) = result {
-                    card = card
-                        .child(result.summary.clone())
-                        .child("Reported verification")
-                        .children(result.checks.iter().map(|check| div().child(check.clone())));
-                }
-                content = content.child(card);
+                );
+            let items = self.list.read(cx).delegate().all.clone();
+            let running = plan
+                .tasks
+                .iter()
+                .filter(|id| {
+                    items
+                        .iter()
+                        .find(|i| i.id == **id)
+                        .and_then(|i| i.workflow.as_ref())
+                        .is_some_and(|w| w.active.is_some())
+                })
+                .count();
+            let integrated = plan
+                .tasks
+                .iter()
+                .filter(|id| {
+                    items
+                        .iter()
+                        .find(|i| i.id == **id)
+                        .and_then(|i| i.workflow.as_ref())
+                        .is_some_and(|w| w.integrated.is_some())
+                })
+                .count();
+            content = content.child(format!(
+                "{running} running · {integrated}/{} integrated · {} decisions pending",
+                plan.tasks.len(),
+                flow.unanswered().len()
+            ));
+            for id in &plan.tasks {
+                let label = items
+                    .iter()
+                    .find(|i| i.id == *id)
+                    .map(|i| {
+                        format!(
+                            "#{} · {} · {}",
+                            i.id,
+                            i.title,
+                            i.workflow.as_ref().map_or(i.status.as_str(), |w| w.label())
+                        )
+                    })
+                    .unwrap_or_else(|| format!("Task #{id}"));
+                content = content.child(self.related_item(*id, label, cx));
+            }
+        }
+        if let Some(task) = &flow.task {
+            content = content.child(
+                v_flex().gap_1().children(
+                    task.acceptance
+                        .iter()
+                        .map(|c| div().child(format!("• {c}"))),
+                ),
+            );
+            for id in &item.depends_on {
+                content = content.child(self.related_item(*id, format!("Dependency #{id}"), cx));
+            }
+            if self.show_history {
+                content = content
+                    .child(format!("Source scope: {}", task.scope.paths.join(", ")))
+                    .child(format!(
+                        "Functional scope: {}",
+                        task.scope.functions.join(", ")
+                    ));
+            }
+        }
+        if let Some(result) = &flow.result {
+            content = content.child(result.summary.clone());
+        }
+        if let Some(v) = &flow.verification {
+            content = content.child(v.summary.clone());
+            for e in &v.evidence {
+                content = content.child(format!(
+                    "{} · {}: {}",
+                    if e.satisfied {
+                        "Verified"
+                    } else {
+                        "Unverified"
+                    },
+                    e.criterion,
+                    e.detail
+                ));
+            }
+        }
+        if let Some(commit) = &flow.integrated {
+            content = content.child(format!("Integrated into main: {commit}"));
+        }
+        if self.show_history {
+            for entry in &flow.history {
+                content = content.child(entry.clone());
+            }
+            if let Some(result) = &flow.result {
+                content = content.children(result.checks.iter().map(|c| div().child(c.clone())));
             }
         }
         if let Some(worker) = &flow.worker {
             content = content
                 .child(format!("Worktree: {}", worker.worktree))
                 .child(format!("Branch: {}", worker.branch));
-        }
-        if flow.label() == "review results" {
-            content = content.child("Implementation results are ready to review. Checks above are reported by the implementation session. Integration and milestone acceptance remain separate.");
         }
         content
             .child(self.workflow_button(

@@ -23,17 +23,17 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-The board's product direction was clarified with the owner on 2026-09-13:
-milestones drive task decomposition, prioritization, implementation, and
-replanning. Human-readable decisions are a prerequisite for deciding what to
-delegate. The first implementation adds explicit milestone activation,
-structured plans and free-text decisions, dependency-ordered serial execution
-in an isolated worktree, and reported results in the native board. The real
-daemon path is checked with a deterministic local provider; model quality
-and native GUI interaction still need dogfooding. See
-[`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
-implemented scope, commands, validation and remaining work.
-This is product scope, not a repository development-flow policy.
+The board's milestone flow is implemented on `board-milestone-flow` following
+owner decisions on 2026-09-13: ordinary board tasks, automatic prioritization
+and replanning, parallel implementation in separate worktrees, focused decision
+conversations, and integration of verified finished branches into main.
+Decisions block only affected work; task and milestone acceptance have separate
+verification records. A real-daemon fixture covers concurrent work, stale-main
+reverification, conversation and restart through milestone achievement.
+Real-model judgment quality and native GUI usability still need dogfooding.
+See [`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
+agreed behavior, implementation, validation and separate improvement
+opportunities. This is product scope, not a repository development-flow policy.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

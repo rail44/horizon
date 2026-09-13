@@ -1,25 +1,6 @@
 {
   "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
-    "Answer": {
-      "properties": {
-        "key": {
-          "type": "string"
-        },
-        "question": {
-          "type": "string"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "key",
-        "question",
-        "text"
-      ],
-      "type": "object"
-    },
     "Attempt": {
       "properties": {
         "attention": {
@@ -27,6 +8,11 @@
             "string",
             "null"
           ]
+        },
+        "generation": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "report": {
           "anyOf": [
@@ -37,7 +23,7 @@
               "type": "null"
             }
           ],
-          "description": "A report is provisional until the session actually returns to idle."
+          "description": "Provisional until a real assignment turn boundary is observed."
         },
         "session": {
           "type": "string"
@@ -52,7 +38,8 @@
       "required": [
         "token",
         "session",
-        "work"
+        "work",
+        "generation"
       ],
       "type": "object"
     },
@@ -71,6 +58,27 @@
       "required": [
         "attempt"
       ],
+      "type": "object"
+    },
+    "ChangeScope": {
+      "properties": {
+        "functions": {
+          "default": [],
+          "description": "Shared behavior/interface identifiers assessed by the planner.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "paths": {
+          "default": [],
+          "description": "Repository-relative file or directory paths. '*' denotes the project.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
       "type": "object"
     },
     "ClientHello": {
@@ -113,6 +121,14 @@
     },
     "Decision": {
       "properties": {
+        "affected_tasks": {
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
         "consequence": {
           "type": "string"
         },
@@ -122,11 +138,26 @@
         "key": {
           "type": "string"
         },
+        "messages": {
+          "items": {
+            "$ref": "#/$defs/DiscussionMessage"
+          },
+          "type": "array"
+        },
         "question": {
           "type": "string"
         },
         "recommendation": {
           "type": "string"
+        },
+        "resolution": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retired": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -134,7 +165,58 @@
         "question",
         "context",
         "recommendation",
-        "consequence"
+        "consequence",
+        "affected_tasks",
+        "messages",
+        "retired"
+      ],
+      "type": "object"
+    },
+    "DiscussionMessage": {
+      "properties": {
+        "owner": {
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "owner",
+        "text"
+      ],
+      "type": "object"
+    },
+    "Evidence": {
+      "properties": {
+        "check": {
+          "description": "Exact successful verification command supporting automated evidence.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "criterion": {
+          "type": "string"
+        },
+        "decision": {
+          "description": "Human-evaluated evidence references a settled decision on the milestone.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": "string"
+        },
+        "satisfied": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "criterion",
+        "detail",
+        "satisfied"
       ],
       "type": "object"
     },
@@ -502,6 +584,21 @@
         }
       ]
     },
+    "Integration": {
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "head": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "base",
+        "head"
+      ],
+      "type": "object"
+    },
     "Item": {
       "description": "The full state of one work item after folding all events.",
       "properties": {
@@ -673,7 +770,8 @@
             "Enable",
             "Pause",
             "Resume",
-            "Replan"
+            "Replan",
+            "BeginIntegration"
           ],
           "type": "string"
         },
@@ -752,6 +850,50 @@
         {
           "additionalProperties": false,
           "properties": {
+            "SetVerifier": {
+              "properties": {
+                "worker": {
+                  "$ref": "#/$defs/Worker"
+                }
+              },
+              "required": [
+                "worker"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SetVerifier"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "PrepareVerification": {
+              "properties": {
+                "base": {
+                  "type": "string"
+                },
+                "head": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "base",
+                "head"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "PrepareVerification"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "Report": {
               "properties": {
                 "report": {
@@ -824,6 +966,26 @@
         {
           "additionalProperties": false,
           "properties": {
+            "Restart": {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Restart"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "Attention": {
               "properties": {
                 "message": {
@@ -844,6 +1006,86 @@
           },
           "required": [
             "Attention"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Integrated": {
+              "properties": {
+                "commit": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "commit"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Integrated"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "IntegrationFailed": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "IntegrationFailed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Reverify": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Reverify"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Repair": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Repair"
           ],
           "type": "object"
         }
@@ -867,9 +1109,11 @@
           "type": "string"
         },
         "tasks": {
-          "description": "Priority order. Dependencies take precedence over this order.",
+          "description": "Canonical board ids, not a second collection of task definitions.",
           "items": {
-            "$ref": "#/$defs/PlannedTask"
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "type": "array"
         }
@@ -882,37 +1126,139 @@
       ],
       "type": "object"
     },
+    "PlanDraft": {
+      "properties": {
+        "acceptance": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "decisions": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PlannedDecision"
+          },
+          "type": "array"
+        },
+        "implementation_decisions": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "priorities": {
+          "default": [],
+          "items": {
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "default": "",
+          "type": "string"
+        },
+        "summary": {
+          "default": "",
+          "type": "string"
+        },
+        "tasks": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "type": "array"
+        }
+      },
+      "type": "object"
+    },
+    "PlannedDecision": {
+      "properties": {
+        "affected_tasks": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "consequence": {
+          "default": "",
+          "type": "string"
+        },
+        "context": {
+          "default": "",
+          "type": "string"
+        },
+        "key": {
+          "default": "",
+          "type": "string"
+        },
+        "question": {
+          "default": "",
+          "type": "string"
+        },
+        "recommendation": {
+          "default": "",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
     "PlannedTask": {
       "properties": {
         "acceptance": {
+          "default": [],
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "depends_on": {
+          "default": [],
+          "description": "Draft keys, or #123 for an existing board item outside this draft.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
         "instructions": {
+          "default": "",
           "type": "string"
+        },
+        "item_id": {
+          "default": null,
+          "description": "Supply an existing board id to adopt or revise an existing task.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "key": {
+          "default": "",
           "type": "string"
         },
+        "retry": {
+          "default": false,
+          "type": "boolean"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChangeScope",
+          "default": {
+            "functions": [],
+            "paths": []
+          }
+        },
         "title": {
+          "default": "",
           "type": "string"
         }
       },
-      "required": [
-        "key",
-        "title",
-        "instructions",
-        "acceptance",
-        "depends_on"
-      ],
       "type": "object"
     },
     "Position": {
@@ -963,7 +1309,7 @@
             "Plan": {
               "properties": {
                 "plan": {
-                  "$ref": "#/$defs/Plan"
+                  "$ref": "#/$defs/PlanDraft"
                 }
               },
               "required": [
@@ -980,6 +1326,42 @@
         {
           "additionalProperties": false,
           "properties": {
+            "Discussion": {
+              "properties": {
+                "acceptance": {
+                  "description": "Only a resolved, explicitly authorized criteria change can set this.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": [
+                    "array",
+                    "null"
+                  ]
+                },
+                "reply": {
+                  "type": "string"
+                },
+                "resolution": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "reply"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Discussion"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
             "Task": {
               "properties": {
                 "checks": {
@@ -988,19 +1370,43 @@
                   },
                   "type": "array"
                 },
+                "commit": {
+                  "type": "string"
+                },
                 "summary": {
                   "type": "string"
                 }
               },
               "required": [
                 "summary",
-                "checks"
+                "checks",
+                "commit"
               ],
               "type": "object"
             }
           },
           "required": [
             "Task"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Verification": {
+              "properties": {
+                "verification": {
+                  "$ref": "#/$defs/Verification"
+                }
+              },
+              "required": [
+                "verification"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Verification"
           ],
           "type": "object"
         },
@@ -1073,13 +1479,12 @@
     "TaskResult": {
       "properties": {
         "checks": {
-          "description": "Agent-reported checks, not an independent verification certificate.",
           "items": {
             "type": "string"
           },
           "type": "array"
         },
-        "key": {
+        "commit": {
           "type": "string"
         },
         "session": {
@@ -1090,10 +1495,74 @@
         }
       },
       "required": [
-        "key",
         "session",
         "summary",
-        "checks"
+        "checks",
+        "commit"
+      ],
+      "type": "object"
+    },
+    "TaskSpec": {
+      "properties": {
+        "acceptance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "goal_revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "key": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/ChangeScope"
+        }
+      },
+      "required": [
+        "key",
+        "acceptance",
+        "scope",
+        "goal_revision"
+      ],
+      "type": "object"
+    },
+    "Verification": {
+      "properties": {
+        "checks": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/PlannedDecision"
+          },
+          "type": "array"
+        },
+        "evidence": {
+          "items": {
+            "$ref": "#/$defs/Evidence"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary",
+        "commit",
+        "evidence",
+        "checks",
+        "decisions"
       ],
       "type": "object"
     },
@@ -1121,9 +1590,36 @@
       "oneOf": [
         {
           "enum": [
-            "Plan"
+            "Plan",
+            "Verify"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Discuss": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "turn": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "key",
+                "turn"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Discuss"
+          ],
+          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -1168,6 +1664,10 @@
     },
     "Workflow": {
       "properties": {
+        "achieved": {
+          "default": false,
+          "type": "boolean"
+        },
         "active": {
           "anyOf": [
             {
@@ -1176,13 +1676,49 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         },
-        "answers": {
+        "before": {
+          "default": [],
+          "description": "Explicit owner ordering constraints; AI ranking cannot override them.",
           "items": {
-            "$ref": "#/$defs/Answer"
+            "format": "uint64",
+            "minimum": 0,
+            "type": "integer"
           },
           "type": "array"
+        },
+        "goal_revision": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "history": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "integrated": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "integration": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Integration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "last_attempt": {
           "anyOf": [
@@ -1192,9 +1728,22 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
+        },
+        "merging": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Integration"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "paused": {
+          "default": false,
           "type": "boolean"
         },
         "plan": {
@@ -1205,27 +1754,75 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
+        },
+        "plan_generation": {
+          "default": 0,
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
         },
         "plan_requested": {
+          "default": false,
           "type": "boolean"
         },
         "problem": {
+          "default": null,
           "type": [
             "string",
             "null"
           ]
         },
-        "results": {
-          "items": {
-            "$ref": "#/$defs/TaskResult"
-          },
-          "type": "array"
+        "result": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskResult"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "revision": {
+          "default": 0,
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "task": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TaskSpec"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verification": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Verification"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "verifier": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Worker"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "worker": {
           "anyOf": [
@@ -1235,16 +1832,10 @@
             {
               "type": "null"
             }
-          ]
+          ],
+          "default": null
         }
       },
-      "required": [
-        "revision",
-        "plan_requested",
-        "paused",
-        "answers",
-        "results"
-      ],
       "type": "object"
     }
   },
@@ -1295,5 +1886,5 @@
     }
   },
   "title": "horizon-log-wire",
-  "x-session-protocol-version": 3
+  "x-session-protocol-version": 4
 }

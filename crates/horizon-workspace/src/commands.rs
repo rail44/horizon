@@ -64,6 +64,8 @@ pub enum CommandId {
     OpenBoardMilestoneSession,
     ToggleBoardHistory,
     ToggleBoardMilestoneFilter,
+    OpenBoardRelatedItem,
+    SelectBoardDecision,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -289,8 +291,8 @@ pub fn core_commands() -> Vec<CommandSpec> {
             ),
             (
                 CommandId::SubmitBoardDecision,
-                "Send Milestone Answer",
-                "Save the answer to the displayed decision and update the plan.",
+                "Send Decision Message",
+                "Continue the displayed decision conversation.",
             ),
             (
                 CommandId::PauseBoardMilestone,
@@ -316,6 +318,16 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 CommandId::ToggleBoardHistory,
                 "Toggle Milestone Discussion",
                 "Show or hide the milestone's comment history.",
+            ),
+            (
+                CommandId::OpenBoardRelatedItem,
+                "Open Related Board Item",
+                "Open the selected task or milestone.",
+            ),
+            (
+                CommandId::SelectBoardDecision,
+                "Select Board Decision",
+                "Discuss the selected decision.",
             ),
             (
                 CommandId::ToggleBoardMilestoneFilter,
@@ -361,6 +373,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReplanBoardMilestone
         | CommandId::OpenBoardMilestoneSession
         | CommandId::ToggleBoardHistory
+        | CommandId::OpenBoardRelatedItem
+        | CommandId::SelectBoardDecision
         | CommandId::ToggleBoardMilestoneFilter => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
@@ -419,7 +433,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 30);
+        assert_eq!(commands.len(), 32);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

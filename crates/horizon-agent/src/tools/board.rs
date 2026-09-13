@@ -25,46 +25,35 @@ use crate::tools::state::ToolSessionState;
 use crate::tools::Execution;
 
 pub(crate) fn report_schema() -> Value {
-    let strings = json!({"type": "array", "items": {"type": "string"}});
-    let task = json!({
-        "type": "object", "additionalProperties": false,
-        "required": ["key", "title", "instructions", "acceptance", "depends_on"],
-        "properties": {
-            "key": {"type": "string"}, "title": {"type": "string"},
-            "instructions": {"type": "string"}, "acceptance": strings, "depends_on": strings
-        }
-    });
-    let decision = json!({
-        "type": "object", "additionalProperties": false,
-        "required": ["key", "question", "context", "recommendation", "consequence"],
-        "properties": {
-            "key": {"type": "string"}, "question": {"type": "string"},
-            "context": {"type": "string"}, "recommendation": {"type": "string"},
-            "consequence": {"type": "string"}
-        }
-    });
-    json!({
-        "type": "object", "additionalProperties": false, "required": ["id", "attempt", "report"],
-        "properties": {
-            "id": {"type": "integer"}, "attempt": {"type": "string"},
-            "report": {
-                "type": "object", "additionalProperties": false, "required": ["kind"],
-                "properties": {
-                    "kind": {"type": "string", "enum": ["plan", "task", "blocked"]},
-                    "summary": {"type": "string"}, "checks": strings, "reason": {"type": "string"},
-                    "plan": {
-                        "type": "object", "additionalProperties": false,
-                        "required": ["summary", "acceptance", "tasks", "decisions"],
-                        "properties": {
-                            "summary": {"type": "string"}, "acceptance": strings,
-                            "tasks": {"type": "array", "items": task},
-                            "decisions": {"type": "array", "items": decision}
-                        }
-                    }
-                }
-            }
-        }
-    })
+    let strings = json!({"type":"array","items":{"type":"string"}});
+    let decision = json!({"type":"object","additionalProperties":false,
+        "required":["key","question","context","recommendation","consequence","affected_tasks"],
+        "properties":{"key":{"type":"string"},"question":{"type":"string"},"context":{"type":"string"},
+            "recommendation":{"type":"string"},"consequence":{"type":"string"},"affected_tasks":strings}});
+    let task = json!({"type":"object","additionalProperties":false,
+        "required":["key","title","instructions","acceptance","depends_on","scope"],
+        "properties":{"key":{"type":"string"},"item_id":{"type":["integer","null"]},"title":{"type":"string"},
+            "instructions":{"type":"string"},"acceptance":strings,"depends_on":strings,"retry":{"type":"boolean"},
+            "scope":{"type":"object","additionalProperties":false,"required":["paths","functions"],
+                "properties":{"paths":strings,"functions":strings}}}});
+    let evidence = json!({"type":"object","additionalProperties":false,
+        "required":["criterion","detail","satisfied","decision","check"],
+        "properties":{"criterion":{"type":"string"},"detail":{"type":"string"},"satisfied":{"type":"boolean"},
+            "decision":{"type":["string","null"]},"check":{"type":["string","null"]}}});
+    json!({"type":"object","additionalProperties":false,"required":["id","attempt","report"],
+        "properties":{"id":{"type":"integer"},"attempt":{"type":"string"},
+            "report":{"type":"object","additionalProperties":false,"required":["kind"],
+                "properties":{"kind":{"type":"string","enum":["plan","discussion","task","verification","blocked"]},
+                    "summary":{"type":"string"},"checks":strings,"commit":{"type":"string"},"reason":{"type":"string"},
+                    "reply":{"type":"string"},"resolution":{"type":["string","null"]},
+                    "acceptance":{"type":["array","null"],"items":{"type":"string"}},
+                    "plan":{"type":"object","additionalProperties":false,"required":["summary","reason","acceptance","tasks","decisions"],
+                        "properties":{"summary":{"type":"string"},"reason":{"type":"string"},"acceptance":strings,
+                            "tasks":{"type":"array","items":task},"decisions":{"type":"array","items":decision},
+                            "priorities":{"type":"array","items":{"type":"integer"}},"implementation_decisions":strings}},
+                    "verification":{"type":"object","additionalProperties":false,"required":["summary","commit","evidence","checks","decisions"],
+                        "properties":{"summary":{"type":"string"},"commit":{"type":"string"},
+                            "evidence":{"type":"array","items":evidence},"checks":strings,"decisions":{"type":"array","items":decision}}}}}}})
 }
 
 /// The daemon capability `board.read` and `board.comment` are built on: read

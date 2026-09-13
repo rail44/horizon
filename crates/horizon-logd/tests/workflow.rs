@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use horizon_board::wire::{IngestReply, IngestRequest, LogError};
-use horizon_board::workflow::{Mutation, Plan, PlannedTask, Report, Work};
+use horizon_board::workflow::{ChangeScope, Mutation, PlanDraft, PlannedTask, Report, Work};
 use horizon_board::{Item, Position, Store};
 use horizon_logd::writer::perform;
 
@@ -28,11 +28,16 @@ impl Board {
     }
 
     fn mutate(&self, mutation: Mutation) -> Item {
-        let revision = self.item().workflow.as_ref().map_or(0, |f| f.revision);
+        self.mutate_id(1, mutation)
+    }
+
+    fn mutate_id(&self, id: u64, mutation: Mutation) -> Item {
+        let loaded = Store::at(self.0.clone()).show(id).unwrap().unwrap();
+        let revision = loaded.workflow.as_ref().map_or(0, |f| f.revision);
         let (IngestReply::Item(item), _) = perform(
             &self.0,
             IngestRequest::Workflow {
-                id: 1,
+                id,
                 expected_revision: revision,
                 mutation,
             },
@@ -42,7 +47,7 @@ impl Board {
         };
         assert_eq!(
             item,
-            self.item(),
+            Store::at(self.0.clone()).show(id).unwrap().unwrap(),
             "writer reply must match the durable projection"
         );
         item
@@ -117,7 +122,8 @@ fn saved_plan_and_task_result_survive_reload_and_do_not_close_the_milestone() {
         session: "planner".into(),
         work: Work::Plan,
     });
-    let plan = Plan {
+    let plan = PlanDraft {
+        reason: "Initial decomposition".into(),
         summary: "Implement goal".into(),
         acceptance: vec!["Observable behavior".into()],
         tasks: vec![PlannedTask {
@@ -126,44 +132,77 @@ fn saved_plan_and_task_result_survive_reload_and_do_not_close_the_milestone() {
             instructions: "Implement and test".into(),
             acceptance: vec!["Tests pass".into()],
             depends_on: vec![],
+            scope: ChangeScope {
+                paths: vec!["result.txt".into()],
+                functions: vec!["fixture".into()],
+            },
+            ..PlannedTask::default()
         }],
         decisions: vec![],
+        ..PlanDraft::default()
     };
     board.mutate(Mutation::Report {
         token: "plan".into(),
         session: "planner".into(),
         report: Report::Plan { plan },
     });
-    assert!(board.item().workflow.unwrap().next_work().is_none());
+    assert_eq!(
+        Store::at(board.0.clone())
+            .list(None, true)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
     board.mutate(Mutation::Finish {
         token: "plan".into(),
     });
-    board.mutate(Mutation::Start {
-        token: "task".into(),
-        session: "worker".into(),
-        work: Work::Task {
-            key: "implement".into(),
+    let task = board.item().workflow.unwrap().plan.unwrap().tasks[0];
+    let events_before = horizon_board::read_events(&board.0).unwrap().line_count;
+    assert_eq!(
+        Store::at(board.0.clone())
+            .show(task)
+            .unwrap()
+            .unwrap()
+            .parent,
+        Some(1)
+    );
+    board.mutate_id(
+        task,
+        Mutation::Start {
+            token: "task".into(),
+            session: "worker".into(),
+            work: Work::Task {
+                key: "implement".into(),
+            },
         },
-    });
-    board.mutate(Mutation::Report {
-        token: "task".into(),
-        session: "worker".into(),
-        report: Report::Task {
-            summary: "Implemented".into(),
-            checks: vec!["cargo test: 4 passed".into()],
+    );
+    board.mutate_id(
+        task,
+        Mutation::Report {
+            token: "task".into(),
+            session: "worker".into(),
+            report: Report::Task {
+                summary: "Implemented".into(),
+                checks: vec!["cargo test: 4 passed".into()],
+                commit: "1111111111111111111111111111111111111111".into(),
+            },
         },
-    });
-    board.mutate(Mutation::Finish {
-        token: "task".into(),
-    });
-    let item = board.item();
-    assert_eq!(item.status, "review");
-    let flow = item.workflow.unwrap();
-    assert_eq!(flow.results.len(), 1);
-    assert!(flow.next_work().is_none());
-    assert!(
-        item.comments.is_empty(),
-        "progress must not create comment noise"
+    );
+    board.mutate_id(
+        task,
+        Mutation::Finish {
+            token: "task".into(),
+        },
+    );
+    let task = Store::at(board.0.clone()).show(task).unwrap().unwrap();
+    assert!(task.workflow.unwrap().result.is_some());
+    assert!(board.item().workflow.unwrap().plan_requested);
+    assert_ne!(board.item().status, "done");
+    assert!(board.item().comments.is_empty());
+    assert_eq!(
+        horizon_board::read_events(&board.0).unwrap().line_count,
+        events_before + 3
     );
 }
 

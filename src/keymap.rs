@@ -144,6 +144,8 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
         "enable-board-milestone" => Some(CommandId::EnableBoardMilestone),
+        "open-board-related-item" => Some(CommandId::OpenBoardRelatedItem),
+        "select-board-decision" => Some(CommandId::SelectBoardDecision),
         "submit-board-decision" => Some(CommandId::SubmitBoardDecision),
         "pause-board-milestone" => Some(CommandId::PauseBoardMilestone),
         "resume-board-milestone" => Some(CommandId::ResumeBoardMilestone),

@@ -51,6 +51,11 @@ pub fn fold(envelopes: &[Envelope]) -> HashMap<u64, Item> {
     let mut items: HashMap<u64, Item> = HashMap::new();
     for env in envelopes {
         match &env.event {
+            BoardEvent::WorkflowBatch { items: changed, .. } => {
+                for item in changed {
+                    items.insert(item.id, item.clone());
+                }
+            }
             BoardEvent::WorkflowChanged {
                 id,
                 workflow,

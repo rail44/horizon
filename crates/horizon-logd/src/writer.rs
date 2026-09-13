@@ -134,38 +134,24 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
             mutation,
         } => {
             let (mut file, report) = open_locked(path)?;
-            let mut items = fold(&report.envelopes);
-            let item = items.get_mut(&id).ok_or(LogError::ItemNotFound(id))?;
-            if matches!(
-                mutation,
-                horizon_board::workflow::Mutation::Enable
-                    | horizon_board::workflow::Mutation::Start { .. }
-            ) && horizon_board::is_closed_status(&item.status)
-            {
-                return Err(LogError::InvalidWorkflow(
-                    "Reopen the item before enabling milestone execution".into(),
-                ));
-            }
+            let items = fold(&report.envelopes);
+            let item = items.get(&id).ok_or(LogError::ItemNotFound(id))?;
             let revision = item.workflow.as_ref().map_or(0, |flow| flow.revision);
             if revision != expected_revision {
                 return Err(LogError::InvalidWorkflow(
-                    "The milestone changed; reload and try again".into(),
+                    "The item changed; reload and try again".into(),
                 ));
             }
-            let workflow = horizon_board::workflow::apply(item.workflow.as_deref(), mutation)
-                .map_err(LogError::InvalidWorkflow)?;
-            let env = make_envelope(BoardEvent::WorkflowChanged {
-                id,
-                workflow: Box::new(workflow.clone()),
-                title: None,
-                body: None,
+            let changed =
+                horizon_board::workflow::apply(&items, id, mutation, report.max_id.unwrap_or(0))
+                    .map_err(LogError::InvalidWorkflow)?;
+            let updated = changed.iter().find(|i| i.id == id).unwrap().clone();
+            let env = make_envelope(BoardEvent::WorkflowBatch {
+                id: changed.iter().map(|i| i.id).max().unwrap_or(id),
+                items: changed,
             });
             append(&mut file, &env)?;
-            if !horizon_board::is_closed_status(&item.status) {
-                item.status = workflow.item_status().into();
-            }
-            item.workflow = Some(Box::new(workflow));
-            Ok((IngestReply::Item(item.clone()), vec![report.line_count + 1]))
+            Ok((IngestReply::Item(updated), vec![report.line_count + 1]))
         }
         IngestRequest::Add {
             title,
@@ -273,25 +259,33 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
         }
         IngestRequest::MoveItem { id, position } => {
             let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            if !items.contains_key(&id) {
-                return Err(LogError::ItemNotFound(id));
-            }
+            let mut items = fold(&report.envelopes);
             let rank = compute_rank(&items, &position)?;
-            let env = make_envelope(BoardEvent::ItemUpdated {
-                id,
-                status: None,
-                rank: Some(rank.clone()),
-                assignee: None,
-                parent: None,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
+            let item = items.get_mut(&id).ok_or(LogError::ItemNotFound(id))?;
+            item.rank = rank.clone();
+            let order: Vec<_> = sorted_by_rank(&items).iter().map(|i| i.id).collect();
+            let index = order.iter().position(|i| *i == id).unwrap();
+            let mut changed = Vec::new();
+            for (item_id, mut item) in items {
+                if let Some(flow) = &mut item.workflow {
+                    flow.before.retain(|other| *other != id);
+                    if item_id == id {
+                        flow.before = order[index + 1..].to_vec();
+                    } else if order[..index].contains(&item_id) {
+                        flow.before.push(id);
+                    }
+                    flow.revision += 1;
+                    changed.push(item);
+                } else if item_id == id {
+                    changed.push(item);
+                }
+            }
+            let env = make_envelope(BoardEvent::WorkflowBatch {
+                id: changed.iter().map(|i| i.id).max().unwrap_or(id),
+                items: changed,
             });
-            let seq = report.line_count + 1;
             append(&mut file, &env)?;
-            Ok((IngestReply::Rank(rank), vec![seq]))
+            Ok((IngestReply::Rank(rank), vec![report.line_count + 1]))
         }
         IngestRequest::Edit { id, title, body } => {
             let (mut file, report) = open_locked(path)?;
@@ -300,17 +294,61 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
                 return Err(LogError::ItemNotFound(id));
             }
             if let Some(mut workflow) = items[&id].workflow.clone() {
-                if workflow.active.is_some() {
-                    return Err(LogError::InvalidWorkflow("Pause the milestone and wait for its session to stop before changing the goal".into()));
+                if workflow.active.is_some()
+                    || items.values().any(|i| {
+                        i.parent == Some(id)
+                            && i.workflow
+                                .as_ref()
+                                .is_some_and(|w| w.active.is_some() || w.merging.is_some())
+                    })
+                {
+                    return Err(LogError::InvalidWorkflow(
+                        "Pause affected work and wait for its sessions before changing its scope"
+                            .into(),
+                    ));
+                }
+                if workflow.task.is_some()
+                    && (workflow.result.is_some() || workflow.integrated.is_some())
+                {
+                    return Err(LogError::InvalidWorkflow(
+                        "Preserve implemented work and add a corrective task".into(),
+                    ));
+                }
+                let mut item = items[&id].clone();
+                if let Some(title) = title {
+                    item.title = title;
+                }
+                if let Some(body) = body {
+                    item.body = body;
                 }
                 workflow.revision += 1;
-                workflow.plan_requested = true;
                 workflow.problem = None;
-                let env = make_envelope(BoardEvent::WorkflowChanged {
-                    id,
-                    workflow,
-                    title,
-                    body,
+                workflow.verification = None;
+                workflow.achieved = false;
+                if workflow.is_milestone() {
+                    workflow.plan_requested = true;
+                    workflow.plan_generation += 1;
+                    workflow.goal_revision += 1;
+                    if let Some(plan) = &mut workflow.plan {
+                        plan.acceptance.clear();
+                    }
+                }
+                item.status = workflow.item_status().into();
+                item.workflow = Some(workflow);
+                let mut changed = vec![item];
+                if let Some(parent_id) = items[&id].parent {
+                    if let Some(mut parent) = items.get(&parent_id).cloned() {
+                        if let Some(flow) = &mut parent.workflow {
+                            flow.revision += 1;
+                            flow.plan_generation += 1;
+                            flow.plan_requested = true;
+                            changed.push(parent);
+                        }
+                    }
+                }
+                let env = make_envelope(BoardEvent::WorkflowBatch {
+                    id: changed.iter().map(|i| i.id).max().unwrap_or(id),
+                    items: changed,
                 });
                 append(&mut file, &env)?;
                 return Ok((IngestReply::Done, vec![report.line_count + 1]));

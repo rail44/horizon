@@ -196,6 +196,8 @@ impl WorkspaceShell {
             | CommandId::ResumeBoardMilestone
             | CommandId::ReplanBoardMilestone
             | CommandId::ToggleBoardHistory
+            | CommandId::OpenBoardRelatedItem
+            | CommandId::SelectBoardDecision
             | CommandId::ToggleBoardMilestoneFilter => {
                 if let Some(view) = self.active_board_pane() {
                     view.update(cx, |view, cx| view.workflow_command(id, window, cx));

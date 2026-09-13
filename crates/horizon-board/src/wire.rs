@@ -33,12 +33,12 @@ use crate::store::Position;
 /// policy (`MIN_SUPPORTED_LOG_PROTOCOL_VERSION == LOG_PROTOCOL_VERSION`),
 /// same-machine self-spawned daemons need no cross-version interop, only
 /// honest restart.
-pub const LOG_PROTOCOL_VERSION: u32 = 3;
+pub const LOG_PROTOCOL_VERSION: u32 = 4;
 
 /// The oldest log-wire version this build is still willing to negotiate down
 /// to in [`LogHub::hello`]. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
-pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 3;
+pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 4;
 
 /// The version range this build advertises in every `hello` to `horizon-logd`.
 pub fn log_version_range() -> VersionRange {
@@ -218,7 +218,7 @@ mod tests {
 
     #[test]
     fn the_lockstep_pair_is_equal() {
-        assert_eq!(LOG_PROTOCOL_VERSION, 3);
-        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 3);
+        assert_eq!(LOG_PROTOCOL_VERSION, 4);
+        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 4);
     }
 }
