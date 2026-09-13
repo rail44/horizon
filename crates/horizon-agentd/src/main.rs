@@ -59,6 +59,7 @@
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
 mod hub;
+mod milestone;
 mod session;
 mod wake;
 mod worktree;
@@ -155,7 +156,7 @@ async fn main() -> anyhow::Result<()> {
     // the `RoleDefinition` from board's data and registers it here, at
     // startup, before any session is spawned. See
     // `docs/board-keeper-design.md` §1.
-    horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
+    let mut board_roles = vec![horizon_agent::roles::RoleDefinition {
         id: horizon_board::keeper::ROLE_ID,
         title: horizon_board::keeper::ROLE_TITLE,
         prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
@@ -167,7 +168,9 @@ async fn main() -> anyhow::Result<()> {
         skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
         summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
         standing: horizon_board::keeper::ROLE_STANDING,
-    }]);
+    }];
+    board_roles.extend(milestone::roles::definitions());
+    horizon_agent::roles::register_external(board_roles);
     horizon_agent::skills::register_external_skill_sources(vec![
         horizon_board::keeper::SKILL_SOURCE,
     ]);
@@ -178,6 +181,7 @@ async fn main() -> anyhow::Result<()> {
     let event_log_path = agent_config.persistence.event_log_path.clone();
 
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
+    milestone::spawn(state.clone(), std::env::current_dir().ok());
 
     // Spawn the board wake subscriber. The wake action is a swappable seam
     // (`WakeAction` trait); the default is v2 (`ResumeKeeper`, board #39) —

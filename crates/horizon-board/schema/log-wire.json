@@ -1,6 +1,78 @@
 {
   "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
+    "Answer": {
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "question",
+        "text"
+      ],
+      "type": "object"
+    },
+    "Attempt": {
+      "properties": {
+        "attention": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "report": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Report"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "A report is provisional until the session actually returns to idle."
+        },
+        "session": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "work": {
+          "$ref": "#/$defs/Work"
+        }
+      },
+      "required": [
+        "token",
+        "session",
+        "work"
+      ],
+      "type": "object"
+    },
+    "AttemptOutcome": {
+      "properties": {
+        "attempt": {
+          "$ref": "#/$defs/Attempt"
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "attempt"
+      ],
+      "type": "object"
+    },
     "ClientHello": {
       "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
       "properties": {
@@ -36,6 +108,33 @@
         "author",
         "text",
         "at"
+      ],
+      "type": "object"
+    },
+    "Decision": {
+      "properties": {
+        "consequence": {
+          "type": "string"
+        },
+        "context": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "question": {
+          "type": "string"
+        },
+        "recommendation": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "question",
+        "context",
+        "recommendation",
+        "consequence"
       ],
       "type": "object"
     },
@@ -164,6 +263,38 @@
     "IngestRequest": {
       "description": "One board write operation, sent over the socket to logd. Each variant\nmirrors a `Store` write method; logd performs the full read-fold-compute-\nappend atomically under its exclusive flock (the same sequence the library\nused to do in-process) and returns the result.\n\n`BoardEvent` is reused internally (logd constructs it from these\nparameters when appending to the JSONL) — the wire type is the operation,\nnot the event, because operations like `add` need context the event does\nnot carry (e.g. `Position` for rank computation) and because `claim` must\nfind-and-append atomically.",
       "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Workflow": {
+              "properties": {
+                "expected_revision": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "mutation": {
+                  "$ref": "#/$defs/Mutation"
+                }
+              },
+              "required": [
+                "id",
+                "expected_revision",
+                "mutation"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Workflow"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "description": "`Store::add`: create a new item, optionally with a parent.",
@@ -428,6 +559,17 @@
         },
         "title": {
           "type": "string"
+        },
+        "workflow": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Workflow"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         }
       },
       "required": [
@@ -451,6 +593,18 @@
             "RankExhausted"
           ],
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "InvalidWorkflow": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "InvalidWorkflow"
+          ],
+          "type": "object"
         },
         {
           "additionalProperties": false,
@@ -512,6 +666,255 @@
       ],
       "type": "object"
     },
+    "Mutation": {
+      "oneOf": [
+        {
+          "enum": [
+            "Enable",
+            "Pause",
+            "Resume",
+            "Replan"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Answer": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Answer"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Start": {
+              "properties": {
+                "session": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string"
+                },
+                "work": {
+                  "$ref": "#/$defs/Work"
+                }
+              },
+              "required": [
+                "token",
+                "session",
+                "work"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Start"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SetWorker": {
+              "properties": {
+                "worker": {
+                  "$ref": "#/$defs/Worker"
+                }
+              },
+              "required": [
+                "worker"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SetWorker"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Report": {
+              "properties": {
+                "report": {
+                  "$ref": "#/$defs/Report"
+                },
+                "session": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token",
+                "session",
+                "report"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Report"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Finish": {
+              "properties": {
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Finish"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Interrupt": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                },
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token",
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Interrupt"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Attention": {
+              "properties": {
+                "message": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "token": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Attention"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Plan": {
+      "properties": {
+        "acceptance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "decisions": {
+          "items": {
+            "$ref": "#/$defs/Decision"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "tasks": {
+          "description": "Priority order. Dependencies take precedence over this order.",
+          "items": {
+            "$ref": "#/$defs/PlannedTask"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "summary",
+        "acceptance",
+        "tasks",
+        "decisions"
+      ],
+      "type": "object"
+    },
+    "PlannedTask": {
+      "properties": {
+        "acceptance": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "depends_on": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "instructions": {
+          "type": "string"
+        },
+        "key": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title",
+        "instructions",
+        "acceptance",
+        "depends_on"
+      ],
+      "type": "object"
+    },
     "Position": {
       "description": "Where to place a new or moved item in the rank queue.",
       "oneOf": [
@@ -547,6 +950,77 @@
           },
           "required": [
             "Before"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Report": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Plan": {
+              "properties": {
+                "plan": {
+                  "$ref": "#/$defs/Plan"
+                }
+              },
+              "required": [
+                "plan"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Plan"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Task": {
+              "properties": {
+                "checks": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "summary": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "summary",
+                "checks"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Task"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Blocked": {
+              "properties": {
+                "reason": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "reason"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Blocked"
           ],
           "type": "object"
         }
@@ -596,6 +1070,33 @@
       },
       "type": "object"
     },
+    "TaskResult": {
+      "properties": {
+        "checks": {
+          "description": "Agent-reported checks, not an independent verification certificate.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "key": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "summary": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "session",
+        "summary",
+        "checks"
+      ],
+      "type": "object"
+    },
     "VersionRange": {
       "description": "An inclusive protocol-version range one peer supports, as exchanged in\n[`SessionHub::hello`].",
       "properties": {
@@ -613,6 +1114,136 @@
       "required": [
         "min_supported",
         "current"
+      ],
+      "type": "object"
+    },
+    "Work": {
+      "oneOf": [
+        {
+          "enum": [
+            "Plan"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Task": {
+              "properties": {
+                "key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Task"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Worker": {
+      "properties": {
+        "branch": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "session",
+        "worktree",
+        "branch"
+      ],
+      "type": "object"
+    },
+    "Workflow": {
+      "properties": {
+        "active": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Attempt"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "answers": {
+          "items": {
+            "$ref": "#/$defs/Answer"
+          },
+          "type": "array"
+        },
+        "last_attempt": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AttemptOutcome"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "paused": {
+          "type": "boolean"
+        },
+        "plan": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Plan"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "plan_requested": {
+          "type": "boolean"
+        },
+        "problem": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "results": {
+          "items": {
+            "$ref": "#/$defs/TaskResult"
+          },
+          "type": "array"
+        },
+        "revision": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "worker": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Worker"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "revision",
+        "plan_requested",
+        "paused",
+        "answers",
+        "results"
       ],
       "type": "object"
     }
@@ -664,5 +1295,5 @@
     }
   },
   "title": "horizon-log-wire",
-  "x-session-protocol-version": 2
+  "x-session-protocol-version": 3
 }

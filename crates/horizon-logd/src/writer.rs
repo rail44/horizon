@@ -128,6 +128,45 @@ fn compute_rank(items: &HashMap<u64, Item>, position: &Position) -> Result<Strin
 /// in the JSONL file — the durable cursor a consumer catches up from.
 pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<u64>), LogError> {
     match request {
+        IngestRequest::Workflow {
+            id,
+            expected_revision,
+            mutation,
+        } => {
+            let (mut file, report) = open_locked(path)?;
+            let mut items = fold(&report.envelopes);
+            let item = items.get_mut(&id).ok_or(LogError::ItemNotFound(id))?;
+            if matches!(
+                mutation,
+                horizon_board::workflow::Mutation::Enable
+                    | horizon_board::workflow::Mutation::Start { .. }
+            ) && horizon_board::is_closed_status(&item.status)
+            {
+                return Err(LogError::InvalidWorkflow(
+                    "Reopen the item before enabling milestone execution".into(),
+                ));
+            }
+            let revision = item.workflow.as_ref().map_or(0, |flow| flow.revision);
+            if revision != expected_revision {
+                return Err(LogError::InvalidWorkflow(
+                    "The milestone changed; reload and try again".into(),
+                ));
+            }
+            let workflow = horizon_board::workflow::apply(item.workflow.as_deref(), mutation)
+                .map_err(LogError::InvalidWorkflow)?;
+            let env = make_envelope(BoardEvent::WorkflowChanged {
+                id,
+                workflow: Box::new(workflow.clone()),
+                title: None,
+                body: None,
+            });
+            append(&mut file, &env)?;
+            if !horizon_board::is_closed_status(&item.status) {
+                item.status = workflow.item_status().into();
+            }
+            item.workflow = Some(Box::new(workflow));
+            Ok((IngestReply::Item(item.clone()), vec![report.line_count + 1]))
+        }
         IngestRequest::Add {
             title,
             body,
@@ -260,6 +299,22 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
             if !items.contains_key(&id) {
                 return Err(LogError::ItemNotFound(id));
             }
+            if let Some(mut workflow) = items[&id].workflow.clone() {
+                if workflow.active.is_some() {
+                    return Err(LogError::InvalidWorkflow("Pause the milestone and wait for its session to stop before changing the goal".into()));
+                }
+                workflow.revision += 1;
+                workflow.plan_requested = true;
+                workflow.problem = None;
+                let env = make_envelope(BoardEvent::WorkflowChanged {
+                    id,
+                    workflow,
+                    title,
+                    body,
+                });
+                append(&mut file, &env)?;
+                return Ok((IngestReply::Done, vec![report.line_count + 1]));
+            }
             let env = make_envelope(BoardEvent::ItemUpdated {
                 id,
                 status: None,
@@ -282,7 +337,7 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
 
             let found = sorted
                 .into_iter()
-                .find(|i| i.status == "ready" && i.assignee.is_empty());
+                .find(|i| i.status == "ready" && i.assignee.is_empty() && i.workflow.is_none());
 
             let Some(mut item) = found.cloned() else {
                 return Ok((IngestReply::MaybeItem(None), vec![]));

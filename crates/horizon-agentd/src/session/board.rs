@@ -18,6 +18,33 @@ use std::sync::Arc;
 use horizon_agent::tools::BoardHost;
 use serde_json::Value;
 
+/// Model JSON uses readable tags; board wire enums use external tags to
+/// round-trip the binary Postbag codec as well as the JSON event log.
+#[derive(serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+enum SubmittedReport {
+    Plan {
+        plan: horizon_board::workflow::Plan,
+    },
+    Task {
+        summary: String,
+        checks: Vec<String>,
+    },
+    Blocked {
+        reason: String,
+    },
+}
+
+impl From<SubmittedReport> for horizon_board::workflow::Report {
+    fn from(report: SubmittedReport) -> Self {
+        match report {
+            SubmittedReport::Plan { plan } => Self::Plan { plan },
+            SubmittedReport::Task { summary, checks } => Self::Task { summary, checks },
+            SubmittedReport::Blocked { reason } => Self::Blocked { reason },
+        }
+    }
+}
+
 /// The daemon's `BoardHost` implementation: wraps a `horizon_board::Store`
 /// resolved from the session's workspace root, so board reads and writes
 /// target the same board the board CLI and the board pane see.
@@ -39,6 +66,34 @@ impl AgentdBoardHost {
 }
 
 impl BoardHost for AgentdBoardHost {
+    fn report(&self, id: u64, token: &str, session: &str, report: Value) -> Result<Value, String> {
+        let item = self
+            .store
+            .show(id)
+            .map_err(|e| e.to_string())?
+            .ok_or("Milestone not found")?;
+        let flow = item.workflow.as_ref().ok_or("Item is not a milestone")?;
+        let report = serde_json::from_value::<SubmittedReport>(report)
+            .map_err(|e| format!("Invalid report: {e}"))?
+            .into();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        let updated = runtime
+            .block_on(self.store.workflow(
+                id,
+                flow.revision,
+                horizon_board::workflow::Mutation::Report {
+                    token: token.into(),
+                    session: session.into(),
+                    report,
+                },
+            ))
+            .map_err(|e| e.to_string())?;
+        serde_json::to_value(updated.workflow).map_err(|e| e.to_string())
+    }
+
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String> {
         let result = self
             .store

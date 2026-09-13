@@ -24,6 +24,49 @@ use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
 use crate::tools::Execution;
 
+pub(crate) fn report_schema() -> Value {
+    let strings = json!({"type": "array", "items": {"type": "string"}});
+    let task = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["key", "title", "instructions", "acceptance", "depends_on"],
+        "properties": {
+            "key": {"type": "string"}, "title": {"type": "string"},
+            "instructions": {"type": "string"}, "acceptance": strings, "depends_on": strings
+        }
+    });
+    let decision = json!({
+        "type": "object", "additionalProperties": false,
+        "required": ["key", "question", "context", "recommendation", "consequence"],
+        "properties": {
+            "key": {"type": "string"}, "question": {"type": "string"},
+            "context": {"type": "string"}, "recommendation": {"type": "string"},
+            "consequence": {"type": "string"}
+        }
+    });
+    json!({
+        "type": "object", "additionalProperties": false, "required": ["id", "attempt", "report"],
+        "properties": {
+            "id": {"type": "integer"}, "attempt": {"type": "string"},
+            "report": {
+                "type": "object", "additionalProperties": false, "required": ["kind"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["plan", "task", "blocked"]},
+                    "summary": {"type": "string"}, "checks": strings, "reason": {"type": "string"},
+                    "plan": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["summary", "acceptance", "tasks", "decisions"],
+                        "properties": {
+                            "summary": {"type": "string"}, "acceptance": strings,
+                            "tasks": {"type": "array", "items": task},
+                            "decisions": {"type": "array", "items": decision}
+                        }
+                    }
+                }
+            }
+        }
+    })
+}
+
 /// The daemon capability `board.read` and `board.comment` are built on: read
 /// the board (list items or show one) and append a comment. Implemented by
 /// `horizon-agentd` (`session::AgentdBoardHost`) using `horizon_board::Store`
@@ -52,6 +95,17 @@ pub trait BoardHost: Send + Sync {
     /// daemon, from the session id) — the model never controls the author
     /// field. `Err` carries a message suitable for the model to read.
     fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), String>;
+
+    /// Saves a structured report for an attempt owned by this session.
+    fn report(
+        &self,
+        _id: u64,
+        _token: &str,
+        _session: &str,
+        _report: Value,
+    ) -> Result<Value, String> {
+        Err("This session has no milestone reporting capability".into())
+    }
 }
 
 /// Executes an auto-allowed board read tool (`board.read`). Returns `None` for
@@ -131,6 +185,31 @@ pub(crate) fn execute_comment(
 }
 
 /// Builds the `Execution::Auto` event list for a synchronous board tool result.
+pub(crate) fn execute_report(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> Execution {
+    let result = (|| {
+        let host = tool_state
+            .board_host()
+            .ok_or("No board host is installed")?;
+        let id = request
+            .input
+            .get("id")
+            .and_then(Value::as_u64)
+            .ok_or("Missing milestone id")?;
+        let token = request
+            .input
+            .get("attempt")
+            .and_then(Value::as_str)
+            .ok_or("Missing attempt token")?;
+        let report = request.input.get("report").ok_or("Missing report")?.clone();
+        host.report(id, token, &session_id.as_uuid().to_string(), report)
+    })();
+    synchronous(request, result.unwrap_or_else(error_output))
+}
+
 fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
     Execution::Auto(vec![
         Event::StateChanged(SessionState::ToolRunning),

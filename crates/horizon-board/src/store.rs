@@ -104,6 +104,28 @@ pub struct Store {
 }
 
 impl Store {
+    /// Compare-and-swap a milestone operation against the displayed revision.
+    pub async fn workflow(
+        &self,
+        id: u64,
+        expected_revision: u64,
+        mutation: crate::workflow::Mutation,
+    ) -> Result<Item, StoreError> {
+        match self
+            .ingest(IngestRequest::Workflow {
+                id,
+                expected_revision,
+                mutation,
+            })
+            .await?
+        {
+            IngestReply::Item(item) => Ok(item),
+            _ => Err(StoreError::Io(std::io::Error::other(
+                "Unexpected workflow reply",
+            ))),
+        }
+    }
+
     /// Resolves the store from the current directory's main git root.
     pub fn from_cwd() -> Result<Self, StoreError> {
         let cwd = std::env::current_dir()?;
@@ -454,6 +476,7 @@ fn hub_error_to_store(err: horizon_wire::HubError) -> StoreError {
 /// typed domain errors (`ItemNotFound`, `RankExhausted`).
 fn log_error_to_store(err: LogError) -> StoreError {
     match err {
+        LogError::InvalidWorkflow(msg) => StoreError::Io(std::io::Error::other(msg)),
         LogError::ItemNotFound(id) => StoreError::ItemNotFound(id),
         LogError::RankExhausted => StoreError::RankExhausted,
         LogError::Io(msg) => StoreError::Io(std::io::Error::other(msg)),

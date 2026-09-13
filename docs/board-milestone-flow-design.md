@@ -1,233 +1,141 @@
-# Milestones, decisions, and execution
+# Milestone planning and execution
 
-Status: product direction agreed with the owner on 2026-09-13; implementation
-proposal. The browser prototype is a simulation, not a functioning Horizon
-workflow. No live board data is changed by opening it.
+The owner supplies a feature or outcome. Horizon investigates the repository,
+decomposes and prioritizes work, presents unresolved decisions concisely, and
+runs implementation tasks. Decisions must be understandable before the owner
+can decide whether to retain or delegate them. Reading a long comment thread
+is not a prerequisite for answering.
 
-## 1. Outcome and evidence
+The first implementation supports serial execution in the agent daemon's
+current project. It uses native board views, durable board operations, two agent
+roles and a deterministic coordinator. This is product behavior, not a
+repository development-flow policy.
 
-The owner supplies features or outcomes as milestones. Horizon investigates,
-decomposes work, prioritizes executable tasks, runs implementations, and revises
-the plan from their results. The owner can understand and redirect this work.
+## Using the flow
 
-The first proof is one real milestone with at least one real implementation
-attempt, through planning, any necessary consultation, execution, verification,
-and incorporation of the result. Multiple milestones, shared work, and parallel
-execution remain part of the destination; this first proof does not satisfy them.
+Run Horizon from the project whose board is being operated. Add a board item
+describing the desired outcome, open it, and select **Plan and run as milestone**.
+This authorizes planning and eligible implementation in an isolated worktree.
+Legacy items are not automatically converted or executed.
 
-The owner's immediate obstacle is the inability to see what decisions exist:
-too much noise, with judgments not expressed concisely. Asking the owner to
-allocate decision authority before presenting those decisions puts the work on
-the wrong side of the interface. Discovering and explaining decisions is part
-of Horizon's responsibility.
+The planner reads the goal, comments, repository and prior decisions. It saves
+acceptance criteria, ordered tasks with dependencies, and unresolved decisions.
+The board defaults to milestones when any exist; **Show all items** retains
+access to the ordinary backlog. Details show the current plan, the next
+unresolved decision, task progress and reported verification. The discussion
+stays collapsed until **Show discussion** is selected. Workflow progress does
+not post comments or wake the keeper.
 
-The 2026-09-13 read-only inspection of main `79d2c1b` found 47 board items,
-all without parent, dependency, or structured link values. There is tree-rendering
-code, but no tree in the actual board. Existing items cannot be reparented through
-the public operations. Dependencies and links have model fields but no public
-write operations. The implementation must be assessed through real operations
-and visible behavior, not the existence of a field or renderer.
+Each decision has a question, factual context, recommendation and consequence.
+The owner answers in free text. After the outstanding decisions are answered,
+the planner incorporates the answers into a revised plan. A plan without
+outstanding decisions proceeds automatically. Routine implementation choices
+belong to the planner; there is no blanket plan-approval question.
 
-This is a product design, not a repository development-flow specification. It
-does not reinstate the development-flow document retired by the owner.
+Tasks run one at a time, in priority order among those whose dependencies have
+finished. Their implementation session and isolated worktree persist across
+tasks, including uncommitted changes. The implementation reports a summary and
+the verification it ran. The coordinator incorporates this result after the
+turn ends. When every task has reported success, the item enters `review`,
+not `done`.
 
-## 2. The human-facing projection
+**Open session** attaches the active daemon-created session even if the shell
+did not previously know its id. Tool approval stays in the agent approval UI;
+the board displays that the session needs attention. **Pause** cancels the
+current turn and prevents another launch. **Retry / resume** continues from
+the preserved worktree. **Revise plan** re-investigates the goal, comments,
+owner answers, completed work and last failure. Completed task definitions
+must be retained; corrective work gets new keys.
 
-The main view answers four questions without requiring a transcript read:
+The CLI exposes the same state and owner operations:
 
-1. What outcome are we trying to achieve, and how will we recognize it?
-2. What is happening now, and what will happen next?
-3. What remains undecided, why does it matter, and what work does it affect?
-4. What evidence supports the reported progress?
+```sh
+horizon board add "Desired outcome" --body "Context and constraints"
+horizon board milestone 48
+horizon board flow 48
+horizon board answer 48 scope "The first version only needs local use."
+horizon board pause 48
+horizon board replan 48
+horizon board resume 48
+```
 
-Milestone overview: intent, acceptance criteria, current phase, a short current
-finding, unresolved decisions, and executable/waiting work with reasons. Task
-counts alone are not a measure of milestone completion. Source material, full
-attempt logs, and superseded discussions remain available through detail views.
+Use the id returned by `add`; 48 is illustrative. `--json` returns structured
+state. CLI writes can queue work while the agent daemon is down; execution
+needs Horizon/agentd running from that project. Changing a milestone's title
+or body atomically invalidates its plan revision and requests replanning.
+An active attempt must stop before its goal can change.
 
-The current finding is maintained from the current plan and observed execution
-state. It does not acquire a new permanent comment every time the worker reports
-progress. An append-only audit history can coexist with this current projection.
+## Persistence and ownership
 
-A decision contains a concise question, why it matters now, materially different
-options, the recommendation and its reasoning when there is enough evidence,
-affected criteria/tasks, and source references. Its disposition distinguishes
-missing evidence, open consultation, answered, and superseded/reopened. Neither
-every unknown nor every option is automatically a question for the owner.
+`horizon-board::workflow` owns the plan, decisions, answers, task results,
+attempt reservation, last outcome and workspace reference. Task keys are local
+to a milestone. These are structured plan tasks, not reparented legacy items;
+no existing board hierarchy is assumed.
 
-Known repository decisions and explicit instructions remain inputs. Researchable
-facts produce investigation tasks, not owner questionnaires. Equivalent questions
-across tasks share a decision record. A resolved decision leaves the current
-attention list. New evidence can reopen it with the changed premise identified.
-No decision is invented just to satisfy a template or demonstration.
+`Store::workflow` sends a typed mutation and expected revision to logd. Under
+the writer's existing lock, logd validates both and appends one
+`workflow-changed` snapshot event. Concurrent reservations and stale answers
+cannot both succeed. The fold derives progress status; owner-applied closed
+statuses remain closed. Legacy `claim` excludes milestones.
 
-The view accepts natural-language correction as well as selection of a proposed
-course. Receiving a message is not the same as understanding and resolving a
-decision; the actual plan change must remain inspectable. Previously granted
-authorization persists; normal progress does not require repeated approval.
+The planner can read and call `board.report`, but cannot run shell commands or
+edit files. The implementer uses existing contained filesystem/shell tools
+and `board.report`. The keeper's comment-only authority is unchanged. The tool
+executor binds the reporting session identity; the writer checks it against
+the active attempt token and report type. A report remains provisional until
+the coordinator observes the assignment's user message followed by the session
+returning to idle. Initial idle and a tool result alone cannot complete work.
 
-## 3. Product objects and operations
+The daemon is the composition root. `horizon-agent` does not depend on
+`horizon-board`; their boundary remains the `BoardHost` JSON seam. Typed wire
+enums use external serde tags for Postbag; model reports use readable `kind`
+tags decoded at the daemon boundary. The log protocol is **3**, in lockstep.
+Rebuild the workspace and restart Horizon, `horizon-agentd` and `horizon-logd`
+when installing. The terminal daemon's protocol is unchanged.
 
-These are conceptual responsibilities, not a finalized Rust schema.
+## Execution and interruption
 
-| Object | Required information and behavior |
-|---|---|
-| Milestone | Owner intent; proposed/accepted criteria and their origin; priority relative to other goals; scope revisions; related tasks and decisions; evidence for achieved criteria |
-| Task | Concrete outcome; completion checks; dependencies; related milestone(s); unresolved blockers; references; plan revision; current execution attempt |
-| Decision | Question, rationale, alternatives, affected work, evidence, disposition, resolution, author/origin, and the premise revision to which it applies |
-| Attempt | Task and plan revision; durable attempt identity; session/worktree/branch references; current state; verification results; integration state; artifact references |
-| Plan revision | Task/dependency/priority changes with reasons, relevant decisions, and a base revision for rejecting stale concurrent writes |
+The coordinator holds a per-board file lease and a single active monitor. It
+reserves an attempt durably before starting a provider or creating a worktree.
+Board rank orders milestones; the plan orders their tasks. Polling durable
+state every 500 ms avoids depending on every subscription notification. The
+native view continues to reload through logd's subscription stream.
 
-Milestones must not be inferred solely from `parent == None`: the existing
-top-level items mix goals, implementation tasks, investigations, and findings.
-Grouping and executable dependency are different relationships. Whether tasks
-can belong to several milestones is still open; do not silently encode single
-ownership while claiming shared work is supported.
+Worktree creation completes before implementation starts. Failure never falls
+back to modifying the source checkout. Existing sandbox, repository trust and
+approval machinery apply. Ownership is checked before reusing the worker.
 
-Required operations include creating/editing milestones and criteria, proposing
-and revising a plan, organizing existing tasks, setting dependencies, recording
-or reopening decisions, binding an attempt, reporting verification, recording
-integration, and pausing/resuming dispatch. References retain stable identities
-when tasks move. Splitting or merging tasks must preserve the old references and
-explain where remaining work moved.
+A session that stops without a report, exits or reports a blocker leaves a
+visible problem and last-attempt context. Failed work is not retried in a loop.
+On daemon restart the coordinator waits for session recovery, then marks
+unfinished attempts interrupted. Explicit retry can inspect partial work;
+restart never silently replays an assignment. A saved decision without an
+active attempt survives restart and can be answered normally.
 
-The host validates referential integrity, cycles, invalid transitions, stale plan
-revisions, and duplicate launches. These constraints do not depend on an agent
-remembering prose instructions. Migration keeps the current board log readable
-and preserves existing comments/IDs. Classifying legacy items is an explicit,
-reviewable organization operation, not an automatic claim that they are all goals.
+## Validation and remaining scope
 
-## 4. One complete run
+State-machine and writer tests cover decisions and replanning, dependency
+ordering/cycles, immutable completed tasks, stale/foreign reports, pause and
+interruption, concurrent reservations, goal edits, legacy reads/claims, and
+actual Postbag request/reply round-trips. The monitor test distinguishes initial
+idle, approval wait and actual assignment completion.
 
-| Trigger | Horizon action | Visible result |
-|---|---|---|
-| Owner describes an outcome | Persist intent; investigate code, board, decisions, and related work; propose criteria and tasks | A concise plan, known facts, assumptions, and any genuine unresolved decisions |
-| Investigation establishes a fact | Update evidence and plan; retire questions it resolves | Research disappears from the attention list; affected tasks become eligible where appropriate |
-| A decision is answered | Preserve the answer and resulting interpretation; revise affected work and dependencies | The new plan and reasons; the same question is no longer active |
-| A task becomes eligible | Select work by goal priority, dependencies, unresolved blockers, conflicts, and capacity; reserve and launch an attempt | Task, rationale for starting it, and a reachable execution session |
-| Worker produces output | Capture structured artifact/result references and evaluate task checks | Separate implementation, verification, and integration states |
-| A check fails | Preserve the attempt and failure evidence; repair or investigate within scope; surface a new judgment only if necessary | Specific cause, next action, and effect on dependent work |
-| Verified work is integrated | Record integration evidence; evaluate criteria; make downstream work eligible | Updated milestone progress and remaining work, without manual status repair |
-| Intent or priority changes | Revise queued work; show consequences for active attempts and completed artifacts | Inspectable changes and reasons instead of a hidden queue reshuffle |
+`python3 scripts/check-board-milestone.py` runs the built agent and log daemons
+against a temporary Git repository and a deterministic localhost provider.
+It exercises goal registration, a decision, daemon restart, a free-text answer,
+a revised plan, two real shell tasks in dependency order, a shared isolated
+worktree and the review projection. The source checkout must stay untouched.
+It requires local sockets and process spawning, so it runs outside session
+containment. It never calls an external API.
 
-Existing permissions continue to govern implementation and integration. In this
-repository, integration into main needs explicit owner clearance; the product
-must distinguish a verified branch from an integrated change. This is not a new
-blanket approval step for planning, task execution, or ordinary reversible work.
+Real-model planning quality and visual interaction with the native GUI still
+require dogfooding. Reported checks are session evidence, not independent
+verification or owner acceptance. The coordinator does not merge, push,
+publish, deploy or mark the milestone accepted.
 
-An unresolved decision blocks only work affected by it. Eligibility is a
-computed predicate, not just a manually assigned `ready` string. A first rollout
-can use one dispatch slot while exercising dependency selection; this is not
-evidence that parallel scheduling or cross-milestone fairness works.
-
-The execution packet contains milestone intent, task outcome and checks, current
-decisions, dependency artifacts, relevant source pointers, and the plan revision.
-It should not be the unbounded board comment history. No owner copy/paste into a
-new session is required.
-
-## 5. Reliable execution and recovery
-
-Record the launch intent and attempt ID before dispatching. A daemon restart
-must reconcile that attempt against existing sessions rather than spawn a second
-worker for the same task. Retries have distinct attempt IDs, and stale results
-must not complete a newer plan revision accidentally. Interrupted or unreachable
-execution is distinct from success, failure, or task completion.
-
-Dispatch pause stops new launches. It does not silently terminate workers or
-their worktrees. Existing sessions remain reachable; termination remains an
-explicit operation. A scope change records which active attempts have become
-stale and what should happen to their results.
-
-The coordinator uses persisted board state as the source of truth for scheduling.
-Agent memory is useful for reasoning but is not the authoritative queue or
-recovery journal. Comment arrival and worker turn completion are not sufficient
-signals for task completion.
-
-## 6. Composition with existing code
-
-| Existing surface | Proposed responsibility |
-|---|---|
-| `horizon-board` | Domain records, operations, folds/projections, plan validation, and persisted coordination state; retain the boundary without a dependency on `horizon-agent` |
-| `horizon-logd` | Serialized durable operation application and subscription notification; no model prompting or dispatch policy |
-| `horizon-agentd` | Compose the board capability and agent runtime; planning/execution coordination, session binding, reconciliation, and result collection |
-| `horizon-agent` | Tool contracts and model-facing schemas through a host capability; existing role/skill registration seams; no direct board crate dependency |
-| Shell and `horizon-workspace` | Milestone/decision/task views and command bindings; every new user operation follows the shared command model |
-| `horizon-cli` | Equivalent inspect/edit/decision/control operations for automation and diagnosis |
-
-There is no decision here to add a daemon or one persistent agent per feature.
-The number and lifetime of reasoning sessions need separate validation. Existing
-Keeper is a context-restoration role with comments as its only write capability;
-it must not be described as an already functioning planner or dispatcher.
-
-New wire operations need the existing schema artifact/version discipline for
-the affected hub. A protocol bump requires a full shell restart during the
-real application trial, not just a runtime reload. UI updates must subscribe to
-plan/execution changes, including title/body and status changes; the current
-Keeper policy ignoring `ItemUpdated` cannot be reused as a workflow policy.
-
-Board #46 is a concrete execution-visibility dependency: a daemon-created agent
-must be inspectable and attachable from the shell. A work-item-to-session binding
-is not useful if the user cannot open the referenced session.
-
-## 7. Implementation increments
-
-Each increment needs a visible operation and an acceptance check. None alone is
-the completed milestone workflow.
-
-| Increment | Deliverable | Acceptance check |
-|---|---|---|
-| A. Executable design example | Interactive simulation, object responsibilities, operation contracts, and this verification plan | The reader can distinguish a decision, an implementation attempt, verification failure, and remaining milestone work without reading logs |
-| B. Durable milestone/decision/task operations | Records and transitions; organization of existing items; dependencies; current projection; shell/CLI parity | Organize actual existing tasks, answer/reopen a decision, restart, and recover the same plan with stable references |
-| C. Planning into that projection | Grounded investigation and structured plan changes; decision deduplication; evidence and revision handling | A real goal produces actionable tasks; facts are researched; a decision changes the affected plan and does not recur unchanged |
-| D. One real implementation attempt | Eligibility, durable reservation, session spawn/visibility, context handoff, result capture, pause and recovery | An eligible task runs without manual prompt transfer; a restart does not duplicate it; failure remains visible and recoverable |
-| E. Verified result to next work | Checks, integration state, evidence-based criteria evaluation, and downstream eligibility | A failed check never advances completion; successful integrated work advances affected criteria and starts the next eligible task |
-| F. Multiple goals and concurrency | Shared work, milestone ordering, resource/conflict-aware dispatch, priority changes during work | Reordering goals changes upcoming work predictably; concurrent attempts do not duplicate a task or overwrite conflicting plans |
-
-B through E form the first real trial. A is the artifact introduced by this
-document and does not count as that trial. #47's existing gate repair is already
-on another branch; it is a prerequisite for a clean implementation baseline, not
-a new board workflow feature or a duplicate work item to create here.
-
-## 8. Acceptance of the first real trial
-
-Use an actual owner-selected goal and an implementation task with observable
-completion checks. Preserve the record across a shell and daemon restart.
-
-- The owner can state the goal, current work, remaining decisions, and next
-  action from the overview alone. Feedback on this is required from actual use;
-  unit tests and the HTML demonstration cannot establish usability.
-- The plan identifies assumptions as assumptions. Resolved and duplicate
-  questions do not remain in the active decision list.
-- Decisions update the plan and task eligibility without manual re-entry.
-- At least one real worktree-backed session receives the correct task context,
-  produces a code change, and returns traceable verification/artifact references.
-- A forced failure remains a failure until corrected and verified. Merely ending
-  a model turn cannot mark the task done.
-- Restart during a launch or execution recovers the original attempt and never
-  creates a duplicate worker. Pause does not terminate active sessions.
-- Task verification, integration, and milestone acceptance remain distinct.
-  Remaining criteria stay open after partial implementation.
-- All required repository gates pass on the integrated candidate, with the
-  sandboxed nextest profile used inside containment. Boundary recovery tests
-  must also be covered by the integrator's default profile.
-
-## 9. Open design choices
-
-Only product direction and the single-milestone-first validation approach are
-agreed. These remain proposals to resolve from concrete scenarios:
-
-- Whether task membership in milestones is single or multiple, and how shared
-  work contributes evidence to each goal.
-- The durable representation and migration path for richer records alongside
-  existing items, including plan revisions and concurrent edits.
-- How autonomous decisions are classified and made inspectable. The owner has
-  not supplied a blanket approval policy, and should first be able to see the
-  actual decisions.
-- Execution/session topology and how much planning memory to preserve.
-- The conflict and capacity model used for parallel work.
-
-References: [Keeper](board-keeper-design.md),
-[runtime boundaries](view-runtime-principle.md),
-[wire evolution](remoc-adoption-design.md),
-[Japanese walkthrough](research/board-milestone-flow-2026-09-13.md),
-[interactive prototype](assets/board-milestone-flow/index.html).
+Remaining work includes routing boards from arbitrary projects to a global
+daemon, concurrent execution, shared tasks between milestones, and replacing
+an explicitly terminated implementation session/worktree. Normal daemon
+restart preserves and resumes existing sessions. Plan revision currently
+follows owner answers or an explicit replan request; task completion updates
+results and eligibility without starting another planning turn.

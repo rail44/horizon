@@ -26,11 +26,13 @@ projection, and a receipt-based transcript UI.
 The board's product direction was clarified with the owner on 2026-09-13:
 milestones drive task decomposition, prioritization, implementation, and
 replanning. Human-readable decisions are a prerequisite for deciding what to
-delegate. The first validation target is one real milestone through an
-implementation attempt and result incorporation. The current design and
-interactive simulation are **not** an implemented workflow; see
+delegate. The first implementation adds explicit milestone activation,
+structured plans and free-text decisions, dependency-ordered serial execution
+in an isolated worktree, and reported results in the native board. The real
+daemon path is checked with a deterministic local provider; model quality
+and native GUI interaction still need dogfooding. See
 [`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
-required operations, implementation increments, and acceptance conditions.
+implemented scope, commands, validation and remaining work.
 This is product scope, not a repository development-flow policy.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring

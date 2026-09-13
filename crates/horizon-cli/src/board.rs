@@ -26,6 +26,14 @@ const BOARD_USAGE: &str = "\
 Usage: horizon board <command> [options]
 
 Commands:
+  milestone <id>
+      Enable automatic planning and serial implementation for this item's goal.
+  flow <id>
+      Show the current plan, outstanding decisions and implementation results.
+  answer <id> <decision-key> <text>
+      Save a free-form answer; the planner incorporates it before implementation.
+  pause <id> | resume <id> | replan <id>
+      Pause automatic work, retry/resume, or request a revised plan.
   add <title> [--body <text>] [--parent <id>] [--after <id> | --before <id> | --top]
       Create a new item. Default position is the bottom of the queue.
   list [--status <s>] [--all] [--top]
@@ -261,6 +269,55 @@ async fn dispatch(
             }
             Ok(())
         }
+        "milestone" | "flow" | "answer" | "pause" | "resume" | "replan" => {
+            use horizon_board::workflow::Mutation;
+            let id = positionals
+                .first()
+                .ok_or("milestone id required")?
+                .parse::<u64>()
+                .map_err(|_| "invalid milestone id")?;
+            let item = store
+                .show(id)
+                .map_err(|e| e.to_string())?
+                .ok_or("milestone not found")?;
+            let mutation = match command {
+                "milestone" => Some(Mutation::Enable),
+                "pause" => Some(Mutation::Pause),
+                "resume" => Some(Mutation::Resume),
+                "replan" => Some(Mutation::Replan),
+                "answer" => Some(Mutation::Answer {
+                    key: positionals.get(1).ok_or("decision key required")?.clone(),
+                    text: positionals
+                        .get(2..)
+                        .filter(|parts| !parts.is_empty())
+                        .ok_or("answer text required")?
+                        .join(" "),
+                }),
+                _ => None,
+            };
+            let item = if let Some(mutation) = mutation {
+                store
+                    .workflow(
+                        id,
+                        item.workflow.as_ref().map_or(0, |f| f.revision),
+                        mutation,
+                    )
+                    .await
+                    .map_err(|e| e.to_string())?
+            } else {
+                item
+            };
+            if json {
+                let _ = writeln!(
+                    stdout,
+                    "{}",
+                    serde_json::to_string_pretty(&item.workflow).map_err(|e| e.to_string())?
+                );
+            } else {
+                print_workflow(stdout, &item);
+            }
+            Ok(())
+        }
         "show" => {
             let id = parse_id(
                 positionals
@@ -480,7 +537,78 @@ fn print_item_at_depth(stdout: &mut impl Write, item: &Item, depth: usize) {
     }
 }
 
+fn print_workflow(stdout: &mut impl Write, item: &Item) {
+    let Some(flow) = &item.workflow else {
+        let _ = writeln!(stdout, "#{} is not a milestone", item.id);
+        return;
+    };
+    let _ = writeln!(
+        stdout,
+        "#{} {} — {} (revision {})",
+        item.id,
+        item.title,
+        flow.label(),
+        flow.revision
+    );
+    if let Some(problem) = &flow.problem {
+        let _ = writeln!(stdout, "Stopped: {problem}");
+    }
+    if let Some(active) = &flow.active {
+        let _ = writeln!(stdout, "Session: {}", active.session);
+        if let Some(attention) = &active.attention {
+            let _ = writeln!(stdout, "{attention}");
+        }
+    }
+    for decision in flow.unanswered() {
+        let _ = writeln!(
+            stdout,
+            "Decision [{}]: {}\n  {}\n  Recommendation: {}\n  Effect: {}",
+            decision.key,
+            decision.question,
+            decision.context,
+            decision.recommendation,
+            decision.consequence
+        );
+    }
+    if let Some(plan) = &flow.plan {
+        let _ = writeln!(stdout, "Plan: {}", plan.summary);
+        for criterion in &plan.acceptance {
+            let _ = writeln!(stdout, "  • {criterion}");
+        }
+        for task in &plan.tasks {
+            let status = if flow.finished(&task.key) {
+                "implemented"
+            } else {
+                "pending"
+            };
+            let _ = writeln!(
+                stdout,
+                "  [{}] {} ({status}; depends on: {})",
+                task.key,
+                task.title,
+                task.depends_on.join(", ")
+            );
+        }
+    }
+    for result in &flow.results {
+        let _ = writeln!(stdout, "Result [{}]: {}", result.key, result.summary);
+        for check in &result.checks {
+            let _ = writeln!(stdout, "  Reported check: {check}");
+        }
+    }
+    if let Some(worker) = &flow.worker {
+        let _ = writeln!(
+            stdout,
+            "Worktree: {}\nBranch: {}",
+            worker.worktree, worker.branch
+        );
+    }
+}
+
 fn print_item_full(stdout: &mut impl Write, item: &Item) {
+    if item.workflow.is_some() {
+        print_workflow(stdout, item);
+    }
     let _ = writeln!(stdout, "Item #{}", item.id);
     let _ = writeln!(stdout, "  title:    {}", item.title);
     let _ = writeln!(
@@ -563,5 +691,6 @@ fn item_json(item: &Item) -> serde_json::Value {
         "depends_on": item.depends_on,
         "links": item.links,
         "comments": item.comments,
+        "workflow": item.workflow,
     })
 }

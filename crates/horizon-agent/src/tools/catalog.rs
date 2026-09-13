@@ -680,6 +680,13 @@ pub(crate) fn definitions() -> Vec<Definition> {
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
+            id: "board.report".to_string(),
+            title: "Save Milestone Report".to_string(),
+            description: "Save the assigned milestone attempt's plan, task result, or blocker. Only the assigned session can report. Use the id and attempt token from the assignment. Task checks must name commands actually run and their outcomes. The report is applied when your turn ends.".to_string(),
+            input_schema: super::board::report_schema(),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
             id: "board.comment".to_string(),
             title: "Add Board Comment".to_string(),
             description: "Add a comment to a board item. The comment author is set \

@@ -36,6 +36,7 @@ mod path;
 mod rank;
 mod store;
 pub mod wire;
+pub mod workflow;
 
 pub use model::{Comment, Item};
 pub use store::{ListResult, Position, Store, StoreError, SubscribeStream};

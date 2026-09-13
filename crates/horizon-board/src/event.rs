@@ -35,6 +35,15 @@ pub struct Envelope {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BoardEvent {
+    #[serde(rename = "workflow-changed")]
+    WorkflowChanged {
+        id: u64,
+        workflow: Box<crate::workflow::Workflow>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        body: Option<String>,
+    },
     #[serde(rename = "item-created")]
     ItemCreated {
         id: u64,
@@ -200,6 +209,7 @@ fn event_id(event: &BoardEvent) -> Option<u64> {
         BoardEvent::ItemCreated { id, .. } => Some(*id),
         BoardEvent::ItemUpdated { id, .. } => Some(*id),
         BoardEvent::CommentAdded { id, .. } => Some(*id),
+        BoardEvent::WorkflowChanged { id, .. } => Some(*id),
     }
 }
 

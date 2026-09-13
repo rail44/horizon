@@ -60,7 +60,7 @@ fn event_is_wake_relevant(event: &BoardEvent, keeper_author: Option<&str>) -> bo
                 None => true,
             }
         }
-        BoardEvent::ItemUpdated { .. } => false,
+        BoardEvent::ItemUpdated { .. } | BoardEvent::WorkflowChanged { .. } => false,
     }
 }
 
@@ -254,7 +254,7 @@ impl WakeState {
     fn accumulate(&mut self, seq: u64, event: &BoardEvent) {
         let id = match event {
             BoardEvent::ItemCreated { id, .. } | BoardEvent::CommentAdded { id, .. } => *id,
-            BoardEvent::ItemUpdated { id, .. } => *id,
+            BoardEvent::ItemUpdated { id, .. } | BoardEvent::WorkflowChanged { id, .. } => *id,
         };
         if !self.pending_items.contains(&id) {
             self.pending_items.push(id);

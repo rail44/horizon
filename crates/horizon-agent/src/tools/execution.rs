@@ -79,6 +79,9 @@ pub fn execute_agent_tool(
         // (set to `session:<id>`, never model-controlled), so it's
         // special-cased here rather than routed through
         // `execute_auto_tool` (whose signature doesn't carry session_id).
+        Some(ToolPermission::AutoAllowRead) if request.tool_id == "board.report" => {
+            crate::tools::board::execute_report(tool_state, session_id, request)
+        }
         Some(ToolPermission::AutoAllowRead) if request.tool_id == "board.comment" => {
             crate::tools::board::execute_comment(tool_state, session_id, request)
         }

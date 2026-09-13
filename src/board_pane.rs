@@ -36,6 +36,12 @@ use gpui_component::{h_flex, v_flex, IndexPath};
 use horizon_board::{tree_order, Item, Position, Store, StoreError, SubscribeStream};
 
 use crate::theme;
+use horizon_workspace::commands::CommandId;
+
+mod workflow;
+
+pub(crate) struct BoardCommand(pub(crate) CommandId);
+impl EventEmitter<BoardCommand> for BoardPaneView {}
 
 // ---------------------------------------------------------------------------
 // Pure model helpers (unit-tested below)
@@ -320,6 +326,7 @@ fn select_first_row_on_open<D: ListDelegate>(
 /// title substring. Starts empty in a loading state; the pane fills it via
 /// [`BoardListDelegate::set_loaded`] once the off-thread `Store::list` returns.
 struct BoardListDelegate {
+    milestones_only: bool,
     all: Vec<Item>,
     filtered: Vec<Item>,
     /// Display depth per row in `filtered`, parallel to it. 0 for top-level
@@ -352,6 +359,7 @@ struct BoardListDelegate {
 impl BoardListDelegate {
     fn new() -> Self {
         Self {
+            milestones_only: true,
             all: Vec::new(),
             filtered: Vec::new(),
             depths: Vec::new(),
@@ -368,7 +376,10 @@ impl BoardListDelegate {
     /// `last_query` and `top_level_only`. The single place that rebuilds the
     /// display list — called after every load, search, and toggle.
     fn rederive(&mut self) {
-        let matched = filter_items(&self.all, &self.last_query);
+        let mut matched = filter_items(&self.all, &self.last_query);
+        if self.milestones_only && self.all.iter().any(|item| item.workflow.is_some()) {
+            matched.retain(|item| item.workflow.is_some());
+        }
         let (filtered, depths) = flatten_with_depth(&matched, self.top_level_only);
         self.filtered = filtered;
         self.depths = depths;
@@ -544,12 +555,12 @@ impl ListDelegate for BoardListDelegate {
                             .min_w_0()
                             .child(item.title.clone()),
                     )
-                    .child(
-                        div()
-                            .text_size(px(11.0))
-                            .text_color(status_color)
-                            .child(status_label(&item.status)),
-                    )
+                    .child(div().text_size(px(11.0)).text_color(status_color).child(
+                        item.workflow.as_ref().map_or_else(
+                            || status_label(&item.status),
+                            |flow| flow.label().to_string(),
+                        ),
+                    ))
                     .child(
                         div()
                             .text_size(px(11.0))
@@ -766,6 +777,12 @@ enum BoardPaneMode {
 /// state). The list reads the store on open and after a comment is posted; a
 /// logd subscribe pump (`_live_updates`) re-reads on any external write too.
 pub(crate) struct BoardPaneView {
+    pub(crate) command_subscription: Option<Subscription>,
+    decision_input: Entity<InputState>,
+    _decision_subscription: Subscription,
+    workflow_error: Option<String>,
+    workflow_busy: bool,
+    show_history: bool,
     focus_handle: FocusHandle,
     root: Option<PathBuf>,
     list: Entity<ListState<BoardListDelegate>>,
@@ -832,7 +849,27 @@ impl BoardPaneView {
             list.delegate_mut().view = Some(view_entity);
             cx.notify();
         });
+        let decision_input = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("Your answer — in your own words…")
+                .submit_on_enter(true)
+        });
+        let decision_subscription = cx.subscribe_in(
+            &decision_input,
+            window,
+            |_, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::PressEnter { shift: false, .. }) {
+                    cx.emit(BoardCommand(CommandId::SubmitBoardDecision));
+                }
+            },
+        );
         let view = Self {
+            command_subscription: None,
+            decision_input,
+            _decision_subscription: decision_subscription,
+            workflow_error: None,
+            workflow_busy: false,
+            show_history: false,
             focus_handle: cx.focus_handle(),
             root,
             list,
@@ -931,6 +968,10 @@ impl BoardPaneView {
     }
 
     fn open_detail(&mut self, item: Item, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_history = false;
+        self.workflow_error = None;
+        self.decision_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
         let root = self.root.clone();
         let input = cx.new(|cx| {
             InputState::new(window, cx)
@@ -946,7 +987,15 @@ impl BoardPaneView {
                 }
             },
         );
-        window.focus(&input.read(cx).focus_handle(cx), cx);
+        if let Some(flow) = &item.workflow {
+            if flow.unanswered().is_empty() {
+                window.focus(&self.focus_handle, cx);
+            } else {
+                window.focus(&self.decision_input.read(cx).focus_handle(cx), cx);
+            }
+        } else {
+            window.focus(&input.read(cx).focus_handle(cx), cx);
+        }
         let _ = root; // root is read from self in post_comment, not needed here
         self.mode = BoardPaneMode::Detail {
             item: Box::new(item),
@@ -1054,6 +1103,8 @@ impl BoardPaneView {
                 .await;
             let _ = this.update(cx, |view, cx| {
                 if result.is_ok() {
+                    view.list
+                        .update(cx, |list, _| list.delegate_mut().milestones_only = false);
                     view.spawn_load(cx);
                     cx.notify();
                 }
@@ -1324,16 +1375,21 @@ impl BoardPaneView {
                                         .text_color(theme::text_primary()),
                                 ),
                             )
-                            .child(Self::render_comments(item)),
+                            .child(self.render_workflow(item, cx))
+                            .when(item.workflow.is_none() || self.show_history, |this| {
+                                this.child(Self::render_comments(item))
+                            }),
                     ),
             )
-            .child(
-                div()
-                    .px(px(12.0))
-                    .pb(px(8.0))
-                    .pt(px(4.0))
-                    .child(Input::new(comment_input).appearance(false)),
-            )
+            .when(item.workflow.is_none() || self.show_history, |this| {
+                this.child(
+                    div()
+                        .px(px(12.0))
+                        .pb(px(8.0))
+                        .pt(px(4.0))
+                        .child(Input::new(comment_input).appearance(false)),
+                )
+            })
     }
 }
 
@@ -1376,6 +1432,41 @@ impl Render for BoardPaneView {
                     let view_entity = cx.entity().downgrade();
                     v_flex()
                         .size_full()
+                        .child(
+                            h_flex()
+                                .p_2()
+                                .gap_2()
+                                .child(
+                                    if self.list.read(cx).delegate().milestones_only
+                                        && self
+                                            .list
+                                            .read(cx)
+                                            .delegate()
+                                            .all
+                                            .iter()
+                                            .any(|item| item.workflow.is_some())
+                                    {
+                                        "Milestones"
+                                    } else {
+                                        "All items"
+                                    },
+                                )
+                                .child(
+                                    div()
+                                        .id("board-milestone-filter")
+                                        .text_color(theme::text_muted())
+                                        .child(if self.list.read(cx).delegate().milestones_only {
+                                            "Show all items"
+                                        } else {
+                                            "Show milestones"
+                                        })
+                                        .on_click(cx.listener(|_, _, _, cx| {
+                                            cx.emit(BoardCommand(
+                                                CommandId::ToggleBoardMilestoneFilter,
+                                            ))
+                                        })),
+                                ),
+                        )
                         .child(
                             div()
                                 .id("board-list-wrap")

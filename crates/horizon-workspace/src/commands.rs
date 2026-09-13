@@ -56,6 +56,14 @@ pub enum CommandId {
     /// or the built-in default), ending a zoom session. Default chord /
     /// override id: `"reset-font-size"`.
     ResetFontSize,
+    EnableBoardMilestone,
+    SubmitBoardDecision,
+    PauseBoardMilestone,
+    ResumeBoardMilestone,
+    ReplanBoardMilestone,
+    OpenBoardMilestoneSession,
+    ToggleBoardHistory,
+    ToggleBoardMilestoneFilter,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -112,7 +120,7 @@ pub struct CommandEntry {
 }
 
 pub fn core_commands() -> Vec<CommandSpec> {
-    vec![
+    let mut commands = vec![
         CommandSpec {
             id: CommandId::SplitRight,
             title: "Split Right…",
@@ -271,7 +279,59 @@ pub fn core_commands() -> Vec<CommandSpec> {
             description: "Restore the startup-configured default font size.",
             destructive: false,
         },
-    ]
+    ];
+    commands.extend(
+        [
+            (
+                CommandId::EnableBoardMilestone,
+                "Plan and Run as Milestone",
+                "Plan and execute the open board item's goal.",
+            ),
+            (
+                CommandId::SubmitBoardDecision,
+                "Send Milestone Answer",
+                "Save the answer to the displayed decision and update the plan.",
+            ),
+            (
+                CommandId::PauseBoardMilestone,
+                "Pause Milestone",
+                "Stop the current attempt and pause automatic work.",
+            ),
+            (
+                CommandId::ResumeBoardMilestone,
+                "Resume Milestone",
+                "Retry interrupted work or resume a paused milestone.",
+            ),
+            (
+                CommandId::ReplanBoardMilestone,
+                "Revise Milestone Plan",
+                "Investigate the goal again, preserving completed work.",
+            ),
+            (
+                CommandId::OpenBoardMilestoneSession,
+                "Open Milestone Session",
+                "Open the milestone's current planning or implementation session.",
+            ),
+            (
+                CommandId::ToggleBoardHistory,
+                "Toggle Milestone Discussion",
+                "Show or hide the milestone's comment history.",
+            ),
+            (
+                CommandId::ToggleBoardMilestoneFilter,
+                "Toggle Milestones Only",
+                "Switch the board between milestones and all items.",
+            ),
+        ]
+        .map(|(id, title, description)| CommandSpec {
+            id,
+            title,
+            description,
+            category: CommandCategory::Workspace,
+            destructive: false,
+        }),
+    );
+    commands
 }
 
 pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> bool {
@@ -293,7 +353,15 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ToggleBoardExpansion
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
-        | CommandId::ResetFontSize => true,
+        | CommandId::ResetFontSize
+        | CommandId::EnableBoardMilestone
+        | CommandId::SubmitBoardDecision
+        | CommandId::PauseBoardMilestone
+        | CommandId::ResumeBoardMilestone
+        | CommandId::ReplanBoardMilestone
+        | CommandId::OpenBoardMilestoneSession
+        | CommandId::ToggleBoardHistory
+        | CommandId::ToggleBoardMilestoneFilter => true,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
@@ -351,7 +419,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 22);
+        assert_eq!(commands.len(), 30);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

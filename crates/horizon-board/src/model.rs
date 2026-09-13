@@ -39,6 +39,8 @@ pub struct Item {
     pub links: Vec<String>,
     /// Comments in chronological order.
     pub comments: Vec<Comment>,
+    #[serde(default)]
+    pub workflow: Option<Box<crate::workflow::Workflow>>,
 }
 
 /// Folds a chronologically-ordered slice of envelopes into a map of
@@ -49,6 +51,25 @@ pub fn fold(envelopes: &[Envelope]) -> HashMap<u64, Item> {
     let mut items: HashMap<u64, Item> = HashMap::new();
     for env in envelopes {
         match &env.event {
+            BoardEvent::WorkflowChanged {
+                id,
+                workflow,
+                title,
+                body,
+            } => {
+                if let Some(item) = items.get_mut(id) {
+                    if let Some(title) = title {
+                        item.title = title.clone();
+                    }
+                    if let Some(body) = body {
+                        item.body = body.clone();
+                    }
+                    if !is_closed_status(&item.status) {
+                        item.status = workflow.item_status().into();
+                    }
+                    item.workflow = Some(workflow.clone());
+                }
+            }
             BoardEvent::ItemCreated {
                 id,
                 title,

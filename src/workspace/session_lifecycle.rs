@@ -268,10 +268,17 @@ impl WorkspaceShell {
                         .map(|p| p.to_path_buf())
                 });
                 let cwd = std::env::current_dir().ok();
-                self.panes.insert(
-                    pane_id,
-                    PaneView::board(cx.new(|cx| BoardPaneView::new(session_root, cwd, window, cx))),
+                let view = cx.new(|cx| BoardPaneView::new(session_root, cwd, window, cx));
+                let subscription = cx.subscribe_in(
+                    &view,
+                    window,
+                    move |shell, _, event: &crate::board_pane::BoardCommand, window, cx| {
+                        shell.workspace.activate_pane(pane_id);
+                        shell.execute(event.0, window, cx);
+                    },
                 );
+                view.update(cx, |view, _| view.command_subscription = Some(subscription));
+                self.panes.insert(pane_id, PaneView::board(view));
             }
         }
         self.persist_workspace();

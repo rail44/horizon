@@ -33,12 +33,12 @@ use crate::store::Position;
 /// policy (`MIN_SUPPORTED_LOG_PROTOCOL_VERSION == LOG_PROTOCOL_VERSION`),
 /// same-machine self-spawned daemons need no cross-version interop, only
 /// honest restart.
-pub const LOG_PROTOCOL_VERSION: u32 = 2;
+pub const LOG_PROTOCOL_VERSION: u32 = 3;
 
 /// The oldest log-wire version this build is still willing to negotiate down
 /// to in [`LogHub::hello`]. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
-pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 2;
+pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 3;
 
 /// The version range this build advertises in every `hello` to `horizon-logd`.
 pub fn log_version_range() -> VersionRange {
@@ -71,6 +71,11 @@ pub struct LogHubHello {
 /// find-and-append atomically.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum IngestRequest {
+    Workflow {
+        id: u64,
+        expected_revision: u64,
+        mutation: crate::workflow::Mutation,
+    },
     /// `Store::add`: create a new item, optionally with a parent.
     Add {
         title: String,
@@ -123,6 +128,8 @@ pub enum IngestReply {
 /// `HubError::Call`.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
 pub enum LogError {
+    #[error("{0}")]
+    InvalidWorkflow(String),
     #[error("item {0} not found")]
     ItemNotFound(u64),
     #[error("rank space exhausted (rebalance needed)")]
@@ -211,7 +218,7 @@ mod tests {
 
     #[test]
     fn the_lockstep_pair_is_equal() {
-        assert_eq!(LOG_PROTOCOL_VERSION, 2);
-        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 2);
+        assert_eq!(LOG_PROTOCOL_VERSION, 3);
+        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 3);
     }
 }

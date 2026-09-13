@@ -47,6 +47,73 @@ fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> b
 }
 
 impl WorkspaceShell {
+    fn open_board_milestone_session(&self, cx: &mut Context<Self>) {
+        let Some(view) = self.active_board_pane() else {
+            return;
+        };
+        let Some(session_id) = view.read(cx).milestone_session() else {
+            return;
+        };
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            let list_handle = handle.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { list_handle.session_list() })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.restoring_workspace
+                        || shell
+                            .agentd
+                            .as_ref()
+                            .is_none_or(|h| !h.same_runtime(&handle))
+                    {
+                        return;
+                    }
+                    let summary = result.ok().and_then(|items| {
+                        items
+                            .into_iter()
+                            .find(|s| s.session_id.as_uuid() == session_id.as_uuid())
+                    });
+                    let Some(summary) = summary else {
+                        view.update(cx, |view, cx| {
+                            view.set_workflow_error(
+                                "The session is not available in the current agent runtime".into(),
+                                cx,
+                            )
+                        });
+                        return;
+                    };
+                    if !shell.agent_sessions.contains_key(&session_id) {
+                        shell.workspace.register_detached_session(
+                            horizon_workspace::PaneKind::Agent,
+                            session_id,
+                        );
+                        if let Some(root) = summary.workspace_root {
+                            shell.workspace.set_session_workspace_root(session_id, root);
+                        }
+                        let session_handle = handle.attach_session(summary.session_id);
+                        let title_tx = shell.session_title_tx.clone();
+                        shell.agent_sessions.insert(
+                            session_id,
+                            cx.new(|cx| {
+                                AgentSession::new(session_handle, session_id, title_tx, cx)
+                            }),
+                        );
+                    }
+                    if let Err(error) = shell.external_attach(session_id, true, window, cx) {
+                        view.update(cx, |view, cx| view.set_workflow_error(error, cx));
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     /// The active pane's agent session, when it is an agent pane.
     fn active_agent_session(&self) -> Option<Entity<AgentSession>> {
         let pane_id = self.workspace.cursor_pane_id()?;
@@ -123,6 +190,18 @@ impl WorkspaceShell {
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
             CommandId::OpenBoard => self.open_board_pane(window, cx),
+            CommandId::EnableBoardMilestone
+            | CommandId::SubmitBoardDecision
+            | CommandId::PauseBoardMilestone
+            | CommandId::ResumeBoardMilestone
+            | CommandId::ReplanBoardMilestone
+            | CommandId::ToggleBoardHistory
+            | CommandId::ToggleBoardMilestoneFilter => {
+                if let Some(view) = self.active_board_pane() {
+                    view.update(cx, |view, cx| view.workflow_command(id, window, cx));
+                }
+            }
+            CommandId::OpenBoardMilestoneSession => self.open_board_milestone_session(cx),
             CommandId::ToggleBoardExpansion => {
                 if let Some(view) = self.active_board_pane() {
                     view.update(cx, |view, cx| view.toggle_expansion(cx));

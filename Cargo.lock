@@ -3849,6 +3849,7 @@ dependencies = [
  "horizon-wire",
  "libc",
  "remoc",
+ "serde",
  "serde_json",
  "tempfile",
  "tokio",
