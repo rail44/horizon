@@ -1,7 +1,7 @@
 ---
 id: 015
 title: bash_calls_for_different_sessions_are_not_serialized_against_each_other flakes under gate load
-status: open
+status: triaged
 severity: low
 area: agent, tests
 ---
@@ -81,3 +81,22 @@ session gates and integrator gates alike — where a concurrent build or
 a second gate on the host is common: exactly the contention
 `.config/nextest.toml`'s daemon-e2e comment says per-binary
 serialization cannot protect against.
+
+## Triage (2026-09-13)
+
+The title finding is resolved. Commit `e9eb1bd` replaced the fixed elapsed-time
+threshold with a direct overlap assertion over the two calls' recorded start
+and finish intervals, retaining a separate generous timeout only as hang
+protection.
+
+The terminal follow-up was subsequently resolved under board #9: `6757a27`
+replaced the `mid_sync_buffering` negative wall-clock assertion with ordered
+`tracing` observations, including the review fix for deterministic setup-event
+draining.
+
+The one-off recall failure remains a diagnostic watch item, not an actionable
+board task. Its assertion now includes the complete error output, but no later
+occurrence or underlying DuckDB error is recorded in the repository. Keep this
+issue `triaged`; if it recurs, the captured error is the trigger for opening a
+focused work item. Until then, creating a speculative board item would add no
+claimable work.

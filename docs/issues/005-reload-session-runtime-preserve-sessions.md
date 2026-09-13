@@ -1,7 +1,7 @@
 ---
 id: 005
 title: Reload Session Runtime discards every existing agent session
-status: open
+status: resolved
 severity: high
 area: agent, agentd
 ---
@@ -42,3 +42,18 @@ misattributed which kind was lost. The issue remains real — reload still
 destroys live sessions a user cares about — but the fix target is the
 terminal side, and the title's claim about agent sessions no longer
 reproduces.
+
+## Resolution (2026-07-30, verified 2026-09-13)
+
+The runtime split merged in `5a98b2c` resolved both versions of the finding.
+`Reload Agent Runtime` now drains and respawns only `horizon-agentd`, replays
+and re-adopts its persisted agent sessions, and leaves every terminal session
+untouched. Terminal ownership moved to `horizon-terminald`; replacing that
+binary is now a separate `Reload Terminal Runtime` command whose destructive
+effect on PTYs is explicit in the command model and UI.
+
+The original agent-loss claim was already contradicted by the correction
+above, and the later-observed terminal collateral damage no longer occurs on
+an agent-runtime reload. A deliberately requested terminal-runtime reload is
+a different, explicitly destructive operation rather than hidden collateral
+damage from the command described by this issue.

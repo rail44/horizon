@@ -1,7 +1,7 @@
 ---
 id: 006
 title: An isolated agent worktree branches from origin/main instead of the session that launched it
-status: open
+status: resolved
 severity: high
 area: agent, worktree
 ---
@@ -31,7 +31,7 @@ local commits that have not been pushed to `origin/main`.
 
 Filed 2026-07-25 from owner dogfooding of a read-only delegated task.
 
-## Resolution
+## Resolution (2026-07-28)
 
 Fixed by switching the base-ref dispatch in
 `crates/horizon-agentd/src/worktree.rs::create_isolated_worktree` to

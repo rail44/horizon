@@ -1,7 +1,7 @@
 ---
 id: 016
 title: A turn truncated at the output-token cap ends as "Completed" with nothing to show for it
-status: partially-resolved
+status: resolved
 severity: high
 area: agent, ui
 ---
@@ -88,7 +88,13 @@ The two blind spots are in the code's doc comment, not just here: usage
 never arrives on ~2% of `syn:large:text` streams, and a provider that
 reports zero usage is indistinguishable from a genuinely tiny turn.
 
-## The cause half is NOT resolved
+## Separate causal investigation
+
+The visibility and recovery defect named by this issue is resolved. The
+remaining question — why some model/workload combinations spend an excessive
+share of the output budget on reasoning — is a separate investigation tracked
+as board #10 and does not keep this incident open.
+
 Probed against the configured provider 2026-08-04 (`syn:large:text` on
 synthetic.new, trivial and reasoning-heavy prompts, n=1 per condition):
 
