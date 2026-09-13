@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Horizon — マイルストーンの動作見本</title>
+  <style>
+    :root{color-scheme:light;--paper:#f6f5f1;--surface:#fff;--ink:#24302d;--muted:#65716b;--line:#dedfd8;--green:#286650;--wash:#eef5ee;--amber:#835c21;--rose:#974732}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:14px/1.7 system-ui,-apple-system,"Noto Sans JP",sans-serif}button,input,textarea{font:inherit}button{cursor:pointer;border:1px solid var(--line);border-radius:6px;background:white;color:var(--ink);padding:7px 13px}button:hover:not(:disabled){background:#eef1eb}button:disabled{opacity:.48;cursor:default}button.primary{background:var(--green);border-color:var(--green);color:white}button.primary:hover:not(:disabled){background:#20533f}a{color:var(--green)}button:focus-visible,a:focus-visible,textarea:focus-visible,summary:focus-visible,input:focus-visible{outline:3px solid #76a38d;outline-offset:3px}h1,h2,h3,p{margin:0}h1{font-size:25px;line-height:1.5;letter-spacing:-.04em;font-weight:650}h2{font-size:16px;font-weight:650}h3{font-size:14px;font-weight:650}.muted{color:var(--muted)}.small{font-size:12px}.eyebrow{font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase}.stack{display:grid;gap:12px}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.spread{justify-content:space-between}.pill{font-size:11px;line-height:1.4;display:inline-flex;align-items:center;padding:4px 8px;border-radius:4px;background:#edf0e9;color:#415547;white-space:nowrap}.pill.wait{background:#f6f0e2;color:var(--amber)}.pill.fail{background:#faece6;color:var(--rose)}
+    .lab{background:#25352e;color:#f1f4ef;padding:12px 22px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}.lab p{font-size:12px;color:#cad4cb}.lab button{background:#34493e;border-color:#688070;color:#fff;font-size:12px}.lab button:hover:not(:disabled){background:#425d4d}.lab label{font-size:12px;display:flex;align-items:center;gap:6px}.lab a{color:#d3e4d4}.brandbar{height:62px;padding:0 28px;background:var(--surface);border-bottom:1px solid var(--line)}.brand{font-size:18px;letter-spacing:-.04em;font-weight:650}.brand .mark{color:var(--green);margin-right:8px}.shell{max-width:1440px;margin:auto;display:grid;grid-template-columns:222px minmax(0,1fr);min-height:calc(100vh - 145px)}nav{padding:29px 18px;border-right:1px solid var(--line)}.navitem{margin-top:18px;border-left:3px solid var(--green);border-radius:0 6px 6px 0;background:#e9eee6;padding:14px 12px}.navitem p{font-size:13px;font-weight:600;margin:7px 0}.navnote{padding:24px 13px;font-size:12px;color:var(--muted)}main{padding:32px 36px 48px;min-width:0}.intro{margin:10px 0 23px;max-width:750px;color:var(--muted)}.summary{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:18px 0;margin-bottom:24px}.summary strong{font-size:16px;display:block;margin:4px 0}.columns{display:grid;grid-template-columns:minmax(0,1fr) 285px;gap:24px;align-items:start}.card{background:var(--surface);border:1px solid var(--line);border-radius:8px;overflow:hidden}.cardhead{padding:18px 20px;border-bottom:1px solid var(--line)}.cardbody{padding:20px}.decision{border-top:3px solid var(--green)}.question{font-size:18px;line-height:1.6;margin:7px 0 10px}.decision .why{color:var(--muted);margin-bottom:18px}.recommendation{padding:16px;background:var(--wash);border-radius:6px;margin-bottom:16px}.recommendation p{margin-top:7px}.options{margin:15px 0}summary{cursor:pointer;color:var(--muted);font-size:12px;list-style-position:outside;margin-left:14px}details[open]>summary{margin-bottom:12px}.option{border-left:2px solid var(--line);padding-left:14px;margin:12px 0}.effects{font-size:12px;color:var(--muted);margin:16px 0}.actions{display:flex;gap:9px;flex-wrap:wrap}.replybox{margin-top:16px}textarea{width:100%;min-height:94px;resize:vertical;border:1px solid var(--line);border-radius:6px;padding:11px;background:#fff;color:var(--ink);margin:8px 0}.received{background:#f9f5e9;padding:14px;border-radius:6px;margin-bottom:16px}.quote{white-space:pre-wrap;overflow-wrap:anywhere;padding:12px;border-left:2px solid var(--line);margin-top:10px}.tasklist{list-style:none;margin:0;padding:0}.task{display:grid;grid-template-columns:26px minmax(0,1fr) auto;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line);align-items:start}.task:last-child{border-bottom:none}.tasknum{font-size:12px;color:var(--muted);margin-top:3px}.taskname{display:block;border:none;padding:0;border-radius:0;text-align:left;background:none;font-weight:550}.taskname:hover:not(:disabled){background:none;text-decoration:underline}.task p{font-size:12px;color:var(--muted);margin-top:4px}.criteria{list-style:none;margin:0;padding:0;display:grid;gap:15px}.criteria li{display:grid;grid-template-columns:18px 1fr;gap:7px;font-size:13px}.tick{color:var(--green);font-weight:700}.notes{padding:17px 20px;border-top:1px solid var(--line);background:#fafbf8;font-size:12px;color:var(--muted)}.sectionlabel{margin:23px 0 10px}.empty{padding:19px 20px;font-size:13px;color:var(--muted)}.archive{margin-top:20px}.archive .cardbody{font-size:13px}.archive p+p{margin-top:10px}.detail{margin-top:18px;border:1px solid var(--line);background:white;border-radius:8px;padding:20px}.detail p{margin-top:9px}.statusline{padding:12px 0;font-size:12px;color:var(--muted)}.failure{border-left:3px solid var(--rose);padding:12px 15px;background:#fcf0e9;margin-bottom:18px}.failure p{margin-top:5px}.progress-rule{border-top:1px solid var(--line);padding-top:12px;margin-top:18px}.hidden{display:none!important}.linkbutton{border:none;background:none;padding:0;color:var(--green);font-size:12px}.footer{border-top:1px solid var(--line);margin-top:28px;padding-top:15px;font-size:12px;color:var(--muted)}
+    @media(min-width:1500px){main{padding-left:48px;padding-right:48px}}@media(max-width:1050px){.columns{grid-template-columns:minmax(0,1fr)}aside{display:grid;grid-template-columns:1fr 1fr;gap:16px}aside>.card{margin-top:0!important}.shell{grid-template-columns:190px minmax(0,1fr)}main{padding:25px}}@media(max-width:720px){.shell{grid-template-columns:1fr}nav{display:none}.lab{padding:12px 16px;gap:10px}.lab .row{gap:7px}.brandbar{height:52px;padding:0 18px}main{padding:24px 16px}h1{font-size:22px}.columns{gap:18px}aside{grid-template-columns:1fr}.cardbody,.cardhead{padding:16px}.task{padding:15px 16px;grid-template-columns:20px minmax(0,1fr)}.task>.pill{grid-column:2;justify-self:start}.question{font-size:17px}.summary{align-items:start}.summary>.row{width:100%}}
+    @media(prefers-reduced-motion:no-preference){button{transition:background .12s ease}}
+  </style>
+</head>
+<body>
+  <header class="lab" aria-label="画面見本の操作">
+    <div><strong>動作を確かめる画面見本</strong><p>模擬データです。実ボードの更新やエージェントの起動は行いません。</p></div>
+    <div class="row">
+      <label><input type="checkbox" id="inject-failure" checked>検証失敗を挟む</label>
+      <button id="advance" data-action="advance">次の出来事を見る</button>
+      <button data-action="reset">最初から</button>
+      <a href="../../research/board-milestone-flow-2026-09-13.md" class="small">設計メモ</a>
+    </div>
+  </header>
+  <div class="brandbar row spread"><div class="brand"><span class="mark">◒</span>horizon</div><span class="small muted">マイルストーン / Horizon</span></div>
+  <div class="shell">
+    <nav aria-label="マイルストーン"><p class="eyebrow">Milestones</p><div class="navitem"><span class="small muted">検証用の目標</span><p>作業しているエージェントに辿り着ける</p><span id="nav-phase" class="pill">計画中</span></div><p class="navnote">目標ごとに、現在地と次の仕事を見渡せるようにする。</p></nav>
+    <main id="main"></main>
+  </div>
+  <script>
+    'use strict';
+    // Deterministic design simulation. No backend, network, or persistent writes.
+    const initialState = () => ({phase:'decision', choice:null, answer:'', customReply:'', draft:'', replying:false, paused:false, attempt:0, failures:0, detail:null, revision:1});
+    let state = initialState();
+    const labels = {decision:'計画中', replied:'返答を整理中', planned:'着手可能', running:'実装中', verifying:'検証中', failed:'修正が必要', verified:'統合待ち', integrated:'次の作業へ'};
+    const escape = value => String(value).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+    const combined = () => state.choice === 'together';
+    const finished = () => state.phase === 'integrated';
+    function currentSummary() {
+      const map = {
+        decision:['実現方法が分かりました。進め方を1点整理しています。','ID指定で開く修正と、一覧への反映を分けて進める案があります。'],
+        replied:['返答を受け取りました。計画への影響を整理しています。','内容の解釈と変更箇所がまとまるまでは、判断を解決済みにしません。'],
+        planned:['判断を計画へ反映しました。実装に進めます。',combined()?'ID指定で開く操作と、一覧への反映をまとめて実装します。':'まずID指定で開けるようにします。一覧への反映は次の作業です。'],
+        running:[`担当エージェントが実装しています。試行 ${state.attempt}。`,'作業の目的・完了条件・決定内容を渡したセッションから、進行を追跡しています。'],
+        verifying:['実装ができ、動作を検証しています。','まだ作業完了ではありません。完了条件を検証結果と照合しています。'],
+        failed:['再接続後のケースで検証に失敗しました。','原因を調べて修正します。この結果で作業や目標を完了にはしません。'],
+        verified:['実装と検証が完了しました。統合を待っています。','ブランチ上の成果として確認済みです。利用中のHorizonへの反映はまだです。'],
+        integrated:['実装が統合され、残る作業が更新されました。',combined()?'一覧への反映まで確認済みです。次はボード項目からセッションを開く導線です。':'ID指定で開けることを確認済みです。次は新しいセッションの一覧への反映です。']
+      };
+      const [current, next] = map[state.phase];
+      return state.paused ? ['新しい着手は停止中。'+current, next+' 実行中の作業の結果は引き続き受け取ります。'] : [current, next];
+    }
+    function decisionCard() {
+      if (state.choice) return '<section class="card" aria-label="現在の判断"><div class="empty">現在、返答を待っている判断はありません。</div></section>';
+      const received = state.customReply ? `<div class="received"><strong>返答を受領しました</strong><div class="quote">${escape(state.customReply)}</div><p class="small muted">この見本には言語モデルがありません。自由な返答の意味を推測して、案を採用したことにはしません。</p></div>` : '';
+      return `<section class="card decision" aria-labelledby="decision-title"><div class="cardbody">
+        <div class="row spread"><span class="eyebrow">判断事項 · D1</span><span class="pill wait">${state.customReply?'返答を整理中':'未決'}</span></div>
+        <h2 id="decision-title" class="question">ID指定で開く修正を先に届けるか、一覧への反映までまとめるか</h2>
+        <p class="why">今は、daemonが作成したセッションへshellから到達できません。最初に使えるようになる操作と、実装範囲が変わります。</p>
+        ${received}
+        <div class="recommendation"><p class="eyebrow">推奨案</p><h3>まずID指定で開けるようにする</h3><p class="small">既存の照会経路を使う修正を先に届けます。一覧への即時反映と、ボードからの導線は後続作業として残します。</p></div>
+        <details class="options"><summary>もう一つの案と影響を見る</summary><div class="option"><h3>一覧への即時反映までまとめて実装する</h3><p class="small muted">最初から一覧で見つけられます。セッション生成通知も対象になるため、daemon側と通信の変更が加わります。</p><button class="small" data-action="choose-together">この案を計画に反映</button></div></details>
+        <p class="effects">影響する作業：① ID指定の修正、② 一覧への反映。目標全体の達成条件は変わりません。</p>
+        <div class="actions"><button class="primary" data-action="choose-staged">推奨案を計画に反映</button><button data-action="open-reply">自分の言葉で返答する</button></div>
+        ${state.replying?'<form id="reply-form" class="replybox"><label for="reply">進め方への意見・修正</label><textarea id="reply" name="reply" required placeholder="判断を変えたい理由や、追加したい条件を書けます。">'+escape(state.draft)+'</textarea><button type="submit">返答を伝える</button></form>':''}
+      </div></section>`;
+    }
+    function taskRows() {
+      let primary = '判断待ち';
+      if (state.choice) primary = ({planned:'着手可能',running:'実装中',verifying:'検証中',failed:'検証失敗',verified:'統合待ち',integrated:'統合済み'})[state.phase];
+      const reason = !state.choice?'D1：最初に届ける範囲の判断に関係します。':state.phase==='failed'?'再接続後にセッションを見つけられないケースを修正します。':finished()?'実装・検証・統合の結果を確認済み。':combined()?'①と②を同じ実装範囲として進めます。':'既存の一覧照会を使い、shellが知らないIDでも開けるようにします。';
+      const rows = [
+        ['1','ID指定でセッションを開けるようにする',primary,reason],
+        ['2','新しいセッションを一覧へ反映する',combined()?primary:finished()?'着手可能':'待機中',combined()?'D1により①と一緒に実装します。':finished()?'①の統合が確認できたため、次に進めます。':'①の成果を前提に進めます。'],
+        ['3','ボードの項目から担当セッションを開く',finished()&&combined()?'着手可能':'待機中',finished()&&combined()?'到達と一覧の仕組みが揃いました。':'項目と実行の対応、および①②の成果が必要です。']
+      ];
+      return rows.map(([id,title,status,why])=>`<li class="task"><span class="tasknum">0${id}</span><div><button class="taskname" data-action="task" data-id="${id}">${title}</button><p>${why}</p></div><span class="pill ${status==='検証失敗'?'fail':['判断待ち','統合待ち','待機中'].includes(status)?'wait':''}">${status}</span></li>`).join('');
+    }
+    function criteriaCard() {
+      const done = finished() ? (combined()?2:1) : 0;
+      const text = ['IDが分かるセッションを開ける','新しいセッションが一覧に現れる','ボード項目から担当セッションを開ける'];
+      return `<section class="card"><div class="cardhead row spread"><h2>達成条件</h2><span class="small muted">確認済み ${done} / 3</span></div><div class="cardbody"><ul class="criteria">${text.map((t,i)=>`<li><span class="${i<done?'tick':'muted'}">${i<done?'✓':'○'}</span><span>${t}</span></li>`).join('')}</ul><p class="small muted progress-rule">${finished()?'一部の作業が終わっても、目標全体は進行中です。':'検証済みのブランチと、利用できる状態への反映を区別します。'}</p></div></section>`;
+    }
+    function archiveCard() {
+      if (!state.choice) return '';
+      return `<details class="archive"><summary>決定済みの判断 · 1件</summary><section class="card"><div class="cardbody"><h3>D1：最初に届ける範囲</h3><p>${escape(state.answer)}</p><p class="muted">計画 v${state.revision} に反映。${combined()?'①②をまとめる作業範囲へ更新。':'①を先行、②を後続として更新。'} 同じ問いは現在の判断一覧から外しています。</p>${state.customReply?'<p class="small muted">先に受け取った返答</p><div class="quote">'+escape(state.customReply)+'</div>':''}</div></section></details>`;
+    }
+    function detailCard() {
+      if (!state.detail) return '';
+      const title = {'1':'ID指定でセッションを開く','2':'新しいセッションを一覧へ反映','3':'項目から担当セッションへ移動'}[state.detail];
+      const hasAttempt = state.attempt > 0 && (state.detail === '1' || (combined() && state.detail === '2'));
+      return `<section class="detail" id="task-detail" tabindex="-1"><div class="row spread"><h2>作業 ${state.detail} · ${title}</h2><button class="linkbutton" data-action="close-detail">閉じる</button></div><p>目的：作業しているエージェントへ、人間が到達できるようにする。</p><p class="small muted">関連：判断 D1、マイルストーンの達成条件。根拠は詳細に残し、本文や長いコメントの転記を求めません。</p><details class="archive"><summary>実行と成果の詳細</summary><p>セッション：${hasAttempt?'模擬セッション / 試行 '+state.attempt:'未起動'}</p><p>検証：${hasAttempt&&['verified','integrated'].includes(state.phase)?'成功した検証結果の例':hasAttempt&&state.phase==='failed'?'再接続の検証に失敗した例':'未完了'}</p><p>統合：${hasAttempt&&finished()?'統合済みの状態の例':'未統合'}</p>${hasAttempt&&state.failures?'<p>試行1の検証失敗を保存。再試行の結果で、失敗の記録自体を消しません。</p>':''}</details></section>`;
+    }
+    function render() {
+      const [summary,next] = currentSummary();
+      document.querySelector('#nav-phase').textContent = state.paused?'着手を停止中':labels[state.phase];
+      document.querySelector('#advance').disabled = ['decision','replied','integrated'].includes(state.phase) || (state.paused && ['planned','failed'].includes(state.phase));
+      document.querySelector('#advance').textContent = state.phase==='failed'?'修正・再試行の例を見る':state.phase==='verified'?'統合後の例を見る':'次の出来事を見る';
+      document.querySelector('#main').innerHTML = `
+        <p class="eyebrow">Milestone · 検証用の目標</p><h1>作業しているエージェントに辿り着ける</h1>
+        <p class="intro">ボードで状況を把握したあと、担当エージェントを開いて作業を確認できる。実ボード #46 を題材にしたシナリオです。</p>
+        <div class="summary row spread"><div><span class="eyebrow">現在地</span><strong role="status">${summary}</strong><p class="small muted">${next}</p></div><button data-action="pause">${state.paused?'進行を再開':'新しい着手を一時停止'}</button></div>
+        <div class="columns"><div>
+          ${state.phase==='failed'?'<div class="failure"><strong>検証失敗：再接続後のセッション到達</strong><p class="small">成果は残っています。原因を修正して再検証し、成功後に残作業へ反映します。</p></div>':''}
+          ${decisionCard()}
+          <div class="row spread sectionlabel"><h2>これから進める作業</h2><span class="small muted">計画 v${state.revision}</span></div>
+          <section class="card" aria-label="作業計画"><ol class="tasklist">${taskRows()}</ol><div class="notes">${state.choice?'決定と依存関係に基づいて次の作業が変わります。':'この例ではD1が①②の範囲に影響します。無関係な作業まで一律に停止する仕様ではありません。'}</div></section>
+          ${detailCard()}${archiveCard()}
+        </div><aside class="stack">${criteriaCard()}<section class="card"><div class="cardhead"><h2>根拠と履歴</h2></div><div class="cardbody stack"><p class="small muted">調査や試行の過程は、必要なときにここから辿ります。</p><details><summary>調査で分かったこと</summary><p class="small">mainのattach処理はshellが知るセッションを探し、見つからなければunknown sessionを返します。既存の一覧照会を使う案と、新規生成を通知する案があります。</p><a class="small" href="../../../src/workspace/commands.rs">確認したattachのソース</a></details><details><summary>見本の検証範囲</summary><p class="small muted">計画への反映、判断の履歴化、失敗と再試行、統合後の残作業を模擬表示します。実装やテストを実行した結果ではありません。</p></details></div></section></aside></div>
+        <footer class="footer">設計の検討用です。現在のHorizonにこの画面や自動処理が実装されていることを示すものではありません。</footer>`;
+    }
+    function choose(choice) {
+      if (state.choice) return;
+      state.choice=choice;
+      state.answer=choice==='staged'?'ID指定で開ける修正を先行し、一覧への反映を後続として進める。':'ID指定で開く操作と、一覧への即時反映をまとめて進める。';
+      state.phase='planned'; state.revision++; state.replying=false;
+      render();
+    }
+    function advance() {
+      if (state.paused && ['planned','failed'].includes(state.phase)) return;
+      if (state.phase==='planned') { state.phase='running'; state.attempt=1; }
+      else if (state.phase==='running') state.phase='verifying';
+      else if (state.phase==='verifying') {
+        if (document.querySelector('#inject-failure').checked && state.failures===0) { state.phase='failed'; state.failures++; }
+        else state.phase='verified';
+      } else if (state.phase==='failed') { state.phase='running'; state.attempt++; }
+      else if (state.phase==='verified') state.phase='integrated';
+      render();
+    }
+    document.addEventListener('click', event => {
+      const button=event.target.closest('[data-action]'); if(!button||button.disabled)return;
+      const action=button.dataset.action;
+      if(action==='choose-staged')choose('staged');
+      else if(action==='choose-together')choose('together');
+      else if(action==='advance')advance();
+      else if(action==='reset'){state=initialState();document.querySelector('#inject-failure').checked=true;render();}
+      else if(action==='pause'){state.paused=!state.paused;render();document.querySelector('[data-action="pause"]').focus();}
+      else if(action==='open-reply'){state.replying=true;render();document.querySelector('#reply').focus();}
+      else if(action==='task'){state.detail=button.dataset.id;render();document.querySelector('#task-detail').focus();}
+      else if(action==='close-detail'){const id=state.detail;state.detail=null;render();document.querySelector(`[data-action="task"][data-id="${id}"]`).focus();}
+      if(action.startsWith('choose-'))document.querySelector('#advance').focus();
+    });
+    document.addEventListener('input', event => {
+      if (event.target.id === 'reply') state.draft = event.target.value;
+    });
+    document.addEventListener('submit', event => {
+      if(event.target.id!=='reply-form')return;
+      event.preventDefault();const text=document.querySelector('#reply').value.trim();if(!text)return;
+      state.customReply=text;state.draft='';state.replying=false;state.phase='replied';render();document.querySelector('[data-action="open-reply"]').focus();
+    });
+    render();
+  </script>
+</body>
+</html>

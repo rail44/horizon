@@ -23,6 +23,16 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+The board's product direction was clarified with the owner on 2026-09-13:
+milestones drive task decomposition, prioritization, implementation, and
+replanning. Human-readable decisions are a prerequisite for deciding what to
+delegate. The first validation target is one real milestone through an
+implementation attempt and result incorporation. The current design and
+interactive simulation are **not** an implemented workflow; see
+[`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
+required operations, implementation increments, and acceptance conditions.
+This is product scope, not a repository development-flow policy.
+
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
