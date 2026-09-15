@@ -317,25 +317,33 @@ impl Store {
             .max()
             .unwrap_or(0))
     }
-    /// Message IDs actually displayed by this reader, independently for each task.
-    /// A later displayed message does not imply earlier messages were read.
-    pub fn read_messages(
+    /// Furthest read message per task, ordered by the task's comment sequence.
+    /// Existing individual read events collapse into one inclusive read prefix.
+    pub fn read_positions(
         &self,
         reader: &str,
-    ) -> Result<std::collections::HashMap<u64, std::collections::HashSet<String>>, StoreError> {
-        let mut positions = std::collections::HashMap::new();
-        for e in self.events()?.envelopes {
+    ) -> Result<std::collections::HashMap<u64, String>, StoreError> {
+        let report = self.events()?;
+        let items = fold(&report.envelopes);
+        let mut positions: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::new();
+        for envelope in &report.envelopes {
             if let crate::BoardEvent::ReadAdvanced {
                 id,
-                reader: r,
+                reader: owner,
                 message_id,
-            } = e.event
+            } = &envelope.event
             {
-                if r == reader {
-                    positions
-                        .entry(id)
-                        .or_insert_with(std::collections::HashSet::new)
-                        .insert(message_id);
+                if owner == reader
+                    && items.get(id).is_some_and(|item| {
+                        crate::read_position_advances(
+                            item,
+                            positions.get(id).map(String::as_str),
+                            message_id,
+                        )
+                    })
+                {
+                    positions.insert(*id, message_id.clone());
                 }
             }
         }

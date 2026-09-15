@@ -60,7 +60,7 @@ pub(crate) struct BoardPaneView {
     state_input: Entity<InputState>,
     dependency_input: Entity<InputState>,
     _dependency_subscription: Subscription,
-    read_messages: std::collections::HashMap<u64, std::collections::HashSet<String>>,
+    read_positions: std::collections::HashMap<u64, String>,
     navigation_epoch: u64,
     focus_handle: FocusHandle,
     root: Option<PathBuf>,
@@ -145,7 +145,7 @@ impl BoardPaneView {
             state_input,
             dependency_input,
             _dependency_subscription: dependency_subscription,
-            read_messages: Default::default(),
+            read_positions: Default::default(),
             navigation_epoch: 0,
             focus_handle: cx.focus_handle(),
             root,
@@ -173,7 +173,10 @@ impl BoardPaneView {
                         .background_executor()
                         .spawn(async move {
                             Store::from_dir(&root).and_then(|store| {
-                                Ok((store.list(None, true)?.items, store.read_messages("owner")?))
+                                Ok((
+                                    store.list(None, true)?.items,
+                                    store.read_positions("owner")?,
+                                ))
                             })
                         })
                         .await;
@@ -186,8 +189,8 @@ impl BoardPaneView {
                             if !sessions.is_empty() {
                                 cx.emit(BoardSessionsRefreshed(sessions));
                             }
-                            view.read_messages = positions;
-                            let unread = unread_tasks(&items, &view.read_messages);
+                            view.read_positions = positions;
+                            let unread = unread_tasks(&items, &view.read_positions);
                             view.list.update(cx, |list, cx| {
                                 list.delegate_mut().unread = unread;
                                 list.delegate_mut().set_loaded(items);

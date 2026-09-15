@@ -250,26 +250,17 @@ pub(super) fn task_state(item: &Item) -> String {
     }
 }
 
-pub(super) fn newly_displayed(
-    item: &Item,
-    read: Option<&std::collections::HashSet<String>>,
-    message: &str,
-) -> bool {
-    item.comments.iter().any(|comment| comment.id == message)
-        && read.is_none_or(|messages| !messages.contains(message))
-}
-
 pub(super) fn unread_tasks(
     items: &[Item],
-    positions: &std::collections::HashMap<u64, std::collections::HashSet<String>>,
+    positions: &std::collections::HashMap<u64, String>,
 ) -> std::collections::HashSet<u64> {
     let mut unread = std::collections::HashSet::new();
     for item in items {
-        if !item.comments.iter().any(|comment| {
-            positions
-                .get(&item.id)
-                .is_none_or(|messages| !messages.contains(&comment.id))
-        }) {
+        if item
+            .comments
+            .last()
+            .is_none_or(|comment| positions.get(&item.id) == Some(&comment.id))
+        {
             continue;
         }
         let mut current = Some(item.id);
@@ -320,7 +311,7 @@ pub(super) fn navigation_matches(
 mod tests {
     use super::{
         drop_position_from_half, flatten_with_depth, message_visible, navigation_matches,
-        newly_displayed, sibling_move, unread_tasks, DropHalf,
+        sibling_move, unread_tasks, DropHalf,
     };
     use horizon_board::{Item, Position};
     fn task(id: u64, parent: Option<u64>, rank: &str) -> Item {
@@ -374,30 +365,25 @@ mod tests {
         parent.comments.push(message("parent"));
         let mut child = task(2, Some(1), "a");
         child.comments.push(message("child"));
-        let mut positions = std::collections::HashMap::from([(
-            1,
-            std::collections::HashSet::from(["parent".into()]),
-        )]);
+        let mut positions = std::collections::HashMap::from([(1, "parent".into())]);
         assert_eq!(
             unread_tasks(&[parent.clone(), child.clone()], &positions),
             std::collections::HashSet::from([1, 2])
         );
-        positions.insert(2, std::collections::HashSet::from(["child".into()]));
+        positions.insert(2, "child".into());
         assert!(unread_tasks(&[parent, child], &positions).is_empty());
     }
     #[test]
-    fn jumping_to_last_message_does_not_read_skipped_messages() {
+    fn jumping_to_last_message_reads_the_whole_thread_until_a_new_post() {
         let mut item = task(1, None, "a");
-        item.comments = vec![message("a"), message("b"), message("c")];
-        let read = std::collections::HashSet::from(["c".into()]);
-        assert!(newly_displayed(&item, Some(&read), "a"));
-        assert!(!newly_displayed(&item, Some(&read), "c"));
-        assert!(!newly_displayed(&item, Some(&read), "missing"));
-        let mut positions = std::collections::HashMap::from([(1, read)]);
+        item.comments = vec![message("z"), message("a"), message("m")];
+        let mut positions = std::collections::HashMap::from([(1, "a".into())]);
         assert!(unread_tasks(&[item.clone()], &positions).contains(&1));
-        positions.get_mut(&1).unwrap().insert("a".into());
+        positions.insert(1, "m".into());
+        assert!(unread_tasks(&[item.clone()], &positions).is_empty());
+        item.comments.push(message("new"));
         assert!(unread_tasks(&[item.clone()], &positions).contains(&1));
-        positions.get_mut(&1).unwrap().insert("b".into());
+        positions.insert(1, "new".into());
         assert!(unread_tasks(&[item], &positions).is_empty());
     }
     #[test]

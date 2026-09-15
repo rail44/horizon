@@ -19,8 +19,11 @@ attachments, and workspace layout were preserved.
 | E. Roles and routing | `horizon-board/src/agents.rs`, embedded organizer/task/reviewer skills, and `horizon-agentd/src/board_flow/`. |
 | F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, full host gate, importer tests, isolated flow, native GUI, selected-record rehearsal, and live cutover passed. The original data and matching old binaries are retained locally for recovery. |
 
-Read state stores a **set of actually seen message IDs** per reader and task,
-not a greatest-message cursor: jumping past a message leaves it unread.
+Read state stores the **furthest displayed message** per reader and task;
+all earlier posts in that conversation count as read. The owner requested this
+correction after the initial cutover because invisible unread gaps could not be
+located in the simple task-level UI. Existing read records collapse to their
+furthest message without a log rewrite or a wire-format change.
 `session_id` remains the task's consultation/implementation session. Each review
 request creates a fresh ordinary reviewer session with its own worktree pinned
 to the requested tip; `review_session_id` is only the latest reviewer reference.
@@ -179,10 +182,11 @@ every worker the full codebase or design history.
   records, retain its attribution and represent unavailable timestamps honestly.
   Do not import the old decision schema or its machine-generated resolutions
   as new owner agreement. The original log remains the migration source.
-- Store interface-managed seen message IDs separately from task/session edits.
-  Record each actually displayed message independently; a later seen message
-  does not clear an earlier skipped one. Derive ancestor unread indication
-  from descendant message/seen state.
+- Store an interface-managed read position separately from task/session edits.
+  Displaying a later post marks its whole conversation prefix read. Compare
+  message order within the task and never regress for delayed earlier requests.
+  Derive ancestor unread indication from descendant conversation/read positions;
+  reading a parent's posts does not read a child's posts.
 - Import does not emit fresh completion notifications, create runnable requests,
   or transfer old workflow results and verification flags into the active model.
 
@@ -310,7 +314,8 @@ daemon/provider fixture. Boundary tests that require sockets or real daemons
 belong in the existing sandboxed-profile exclusions with documented reasons;
 they must still run in the host integration environment. Verify the native GUI
 with representative parent/child tasks and a long consultation, including
-scroll jumps that must leave skipped messages unread.
+scroll jumps that must read through the displayed post while preserving later
+posts and unread child conversations.
 
 Implementation validation follows the repository gate: `cargo fmt`, workspace
 Clippy with warnings denied, the appropriate workspace nextest profile, and
@@ -338,8 +343,9 @@ checks. The original source-only audit ran no new behavior tests.
 - The fixture reproduced a tool-result/environment-activation ordering race;
   the fix drains already-enqueued host commands before releasing the provider's
   next decision. A deterministic regression test checks activation-before-result
-  ordering. Stop priority, retained grants, delivery replay/retry, and sparse
-  read state are also covered by automated tests.
+  ordering. Stop priority, retained grants, and delivery replay/retry are also
+  covered by automated tests. The initial sparse read-state checks were later
+  replaced by the owner-requested read-through behavior described above.
 
 - Full default host gate at commit `8e057dd`: formatting, workspace Clippy,
   **1,952 nextest tests passed (11 skipped)**, and wire checker passed. This also
@@ -350,8 +356,9 @@ checks. The original source-only audit ran no new behavior tests.
   keyboard/mouse events: hierarchy/top-level filter, common child detail,
   scroll/selection restoration, prerequisite search/add/remove, free state plus
   independent completion, sibling move/drag, owner consultation, and ordinary
-  working history passed. Only displayed messages were marked read; skipped
-  parent messages and unopened child consultation stayed unread.
+  working history passed. This initial run checked the then-current sparse
+  read behavior; the subsequent owner correction replaces that behavior with
+  an inclusive read position. Unopened child consultation remains independent.
 - Explicit CLI termination followed by a native owner post resumed the same
   task session ID, emitted `SessionResumed`, and displayed both old and new
   inputs/replies in its ordinary history. All isolated fixture processes were

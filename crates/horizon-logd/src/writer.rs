@@ -255,12 +255,23 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
                     if !item.comments.iter().any(|message| message.id == message_id) {
                         return Err(invalid("Read message must identify an existing message"));
                     }
-                    let already_read = report.envelopes.iter().any(|envelope| {
-                        matches!(&envelope.event,
-                        BoardEvent::ReadAdvanced { id: task, reader: owner, message_id: seen }
-                        if *task == id && owner == &reader && seen == &message_id)
-                    });
-                    if already_read {
+                    let mut current: Option<&str> = None;
+                    for envelope in &report.envelopes {
+                        if let BoardEvent::ReadAdvanced {
+                            id: task,
+                            reader: owner,
+                            message_id: seen,
+                        } = &envelope.event
+                        {
+                            if *task == id
+                                && owner == &reader
+                                && horizon_board::read_position_advances(&item, current, seen)
+                            {
+                                current = Some(seen);
+                            }
+                        }
+                    }
+                    if !horizon_board::read_position_advances(&item, current, &message_id) {
                         return Ok((IngestReply::Done, vec![]));
                     }
                     Some(BoardEvent::ReadAdvanced {

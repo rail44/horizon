@@ -19,8 +19,8 @@ view. See the [implementation map](board-redesign-implementation-plan.md) for
 package status and verification obligations.
 
 Current choices: completion is a separate `completed` fact alongside free-form
-`status`; read state is a set of actually seen message IDs, so scrolling past a
-message does not mark it read. The task keeps its `session_id`; every review
+`status`; read state is the furthest displayed message in each task, including
+all earlier posts. The task keeps its `session_id`; every review
 request creates a fresh ordinary session/worktree pinned to its exact tip, and
 `review_session_id` points only to the latest reviewer. Explicit source sends
 are persisted in the automatic event batch before the successful tool result,
@@ -414,10 +414,18 @@ skill policy.
 Read position is interface-managed reader state, separate from the task's
 agent-edited fields. Unread indication follows message and read state; it does
 not represent whether a task is ready or whether a decision has been settled.
-The view records each actually displayed message ID independently. It does not
-use a monotonic prefix: jumping to a later message leaves skipped messages
-unread. Opening a detail without viewing the consultation marks nothing read.
-Representative native GUI checks confirmed this visibility behavior.
+The view advances one inclusive read position per task and reader. Displaying a
+later message marks all earlier posts in that task read, even when scrolling
+skips them; older visibility callbacks cannot move the position backward.
+Opening a detail without viewing the consultation marks nothing read, and
+reading a parent does not mark its children's conversations read. Message order,
+not timestamp or message-ID sorting, determines the position.
+
+This follows the owner's 2026-09-16 correction after the initial cutover: the
+implementation had preserved unread gaps without showing per-message unread
+markers or a way to find those gaps. The owner accepted a simple read-through
+position. Existing read records are interpreted at their furthest valid message,
+so their gaps close without rewriting the task or conversation log.
 Viewing the ordinary session transcript is a different operation from
 reading the board consultation; this design does not assume shared read state
 between those two histories.

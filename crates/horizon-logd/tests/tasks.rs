@@ -191,7 +191,7 @@ fn a_new_review_replaces_only_the_review_session_binding() {
 }
 
 #[test]
-fn stable_message_delivery_preserves_duplicates_and_sparse_read_state() {
+fn stable_message_delivery_preserves_duplicates_and_read_prefix() {
     let b = Board::new();
     let id = b.add(None);
     let message = Comment {
@@ -244,11 +244,11 @@ fn stable_message_delivery_preserves_duplicates_and_sparse_read_state() {
     })
     .unwrap();
     assert_eq!(
-        Store::at(b.0.clone()).read_messages("owner").unwrap()[&id],
-        std::collections::HashSet::from([last.clone()])
+        Store::at(b.0.clone()).read_positions("owner").unwrap()[&id],
+        last.clone()
     );
     assert!(Store::at(b.0.clone())
-        .read_messages("another reader")
+        .read_positions("another reader")
         .unwrap()
         .is_empty());
     assert!(b
@@ -268,8 +268,8 @@ fn stable_message_delivery_preserves_duplicates_and_sparse_read_state() {
     .unwrap();
     assert_eq!(b.item(id), before);
     assert_eq!(
-        Store::at(b.0.clone()).read_messages("owner").unwrap()[&id],
-        std::collections::HashSet::from([last.clone(), before.comments[0].id.clone()])
+        Store::at(b.0.clone()).read_positions("owner").unwrap()[&id],
+        last.clone()
     );
 }
 #[test]
@@ -301,4 +301,108 @@ fn import_high_water_survives_without_creating_runnable_events() {
     })
     .unwrap();
     assert_eq!(Store::at(b.0.clone()).cursor("organizer").unwrap(), 2);
+}
+
+#[test]
+fn read_prefix_replays_sparse_events_and_never_regresses() {
+    use horizon_board::{read_position_advances, BoardEvent, Envelope, SCHEMA, VERSION};
+    use std::io::Write;
+    let board = Board::new();
+    let task = board.add(None);
+    let other = board.add(None);
+    for (index, id) in ["z-last-lexically", "a", "middle"].iter().enumerate() {
+        board
+            .write(Request::PostMessage {
+                id: task,
+                message: Comment {
+                    id: (*id).into(),
+                    author: "owner".into(),
+                    text: "duplicate text".into(),
+                    at: Some(100 - index as u64),
+                    source: None,
+                },
+            })
+            .unwrap();
+    }
+    // Old sparse records may arrive in any order and contain unread holes.
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&board.0)
+        .unwrap();
+    for (id, reader, message_id) in [
+        (task, "owner", "middle"),
+        (task, "owner", "z-last-lexically"),
+        (task, "another", "a"),
+        (other, "owner", "middle"),
+        (task, "owner", "unknown"),
+    ] {
+        let envelope = Envelope {
+            schema: SCHEMA.into(),
+            version: VERSION,
+            at: 0,
+            event: BoardEvent::ReadAdvanced {
+                id,
+                reader: reader.into(),
+                message_id: message_id.into(),
+            },
+        };
+        writeln!(file, "{}", serde_json::to_string(&envelope).unwrap()).unwrap();
+    }
+    drop(file);
+    let store = Store::at(board.0.clone());
+    assert_eq!(
+        store.read_positions("owner").unwrap(),
+        std::collections::HashMap::from([(task, "middle".into())])
+    );
+    assert_eq!(store.read_positions("another").unwrap()[&task], "a");
+    let item = board.item(task);
+    assert!(read_position_advances(&item, Some("z-last-lexically"), "a"));
+    assert!(!read_position_advances(&item, Some("middle"), "a"));
+    assert!(!read_position_advances(&item, None, "unknown"));
+    for id in ["middle", "a", "z-last-lexically"] {
+        assert!(board
+            .write(Request::MarkRead {
+                id: task,
+                reader: "owner".into(),
+                message_id: id.into()
+            })
+            .unwrap()
+            .1
+            .is_empty());
+    }
+    assert!(board
+        .write(Request::MarkRead {
+            id: task,
+            reader: "owner".into(),
+            message_id: "unknown".into()
+        })
+        .is_err());
+    board
+        .write(Request::PostMessage {
+            id: task,
+            message: Comment {
+                id: "0-new".into(),
+                author: "owner".into(),
+                text: "new".into(),
+                at: None,
+                source: None,
+            },
+        })
+        .unwrap();
+    assert_eq!(store.read_positions("owner").unwrap()[&task], "middle");
+    assert!(read_position_advances(
+        &board.item(task),
+        Some("middle"),
+        "0-new"
+    ));
+    assert!(!board
+        .write(Request::MarkRead {
+            id: task,
+            reader: "owner".into(),
+            message_id: "0-new".into()
+        })
+        .unwrap()
+        .1
+        .is_empty());
+    assert_eq!(store.read_positions("owner").unwrap()[&task], "0-new");
 }

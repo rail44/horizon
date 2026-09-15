@@ -7,7 +7,7 @@ mod rank;
 mod store;
 pub mod wire;
 
-pub use model::{Comment, Item};
+pub use model::{read_position_advances, Comment, Item};
 pub use store::{ListResult, Position, Store, StoreError, SubscribeStream};
 
 // Re-exported for `horizon-logd`'s write path (the append logic that moved

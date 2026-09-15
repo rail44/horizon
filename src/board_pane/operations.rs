@@ -175,14 +175,15 @@ impl BoardPaneView {
         let BoardPaneMode::Detail { item, .. } = &self.mode else {
             return;
         };
-        if !newly_displayed(item, self.read_messages.get(&id), &message) {
+        if !horizon_board::read_position_advances(
+            item,
+            self.read_positions.get(&id).map(String::as_str),
+            &message,
+        ) {
             return;
         }
-        self.read_messages
-            .entry(id)
-            .or_default()
-            .insert(message.clone());
-        let unread = unread_tasks(&self.list.read(cx).delegate().all, &self.read_messages);
+        self.read_positions.insert(id, message.clone());
+        let unread = unread_tasks(&self.list.read(cx).delegate().all, &self.read_positions);
         self.list.update(cx, |list, cx| {
             list.delegate_mut().unread = unread;
             cx.notify();

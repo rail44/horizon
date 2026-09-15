@@ -25,6 +25,17 @@ pub struct Item {
     pub session_id: Option<String>,
     pub review_session_id: Option<String>,
 }
+/// Whether a message extends the read prefix in this task's conversation order.
+/// Unknown current positions are treated as unread; unknown next IDs never advance.
+pub fn read_position_advances(item: &Item, current: Option<&str>, next: &str) -> bool {
+    let Some(next_index) = item.comments.iter().position(|message| message.id == next) else {
+        return false;
+    };
+    current
+        .and_then(|id| item.comments.iter().position(|message| message.id == id))
+        .is_none_or(|current_index| next_index > current_index)
+}
+
 pub fn fold(envelopes: &[Envelope]) -> HashMap<u64, Item> {
     let mut items = HashMap::new();
     for env in envelopes {

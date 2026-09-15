@@ -17,7 +17,7 @@ pub struct Envelope {
     pub event: BoardEvent,
 }
 
-/// Ordinary task transactions, messages, per-message read marks, and delivery cursors.
+/// Ordinary task transactions, messages, read positions, and delivery cursors.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum BoardEvent {
@@ -27,7 +27,7 @@ pub enum BoardEvent {
     ItemStored { id: u64, item: crate::Item },
     #[serde(rename = "message-added")]
     MessageAdded { id: u64, message: crate::Comment },
-    /// Records only this displayed message ID, never an implicit prefix.
+    /// Advances the reader through this message, including all earlier task posts.
     #[serde(rename = "read-advanced")]
     ReadAdvanced {
         id: u64,
