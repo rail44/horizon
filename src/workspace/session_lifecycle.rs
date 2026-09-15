@@ -462,12 +462,62 @@ impl WorkspaceShell {
                         .unwrap_or(false)
                     })
                     .unwrap_or(false);
-                if surface {
-                    crate::desktop_notify::notify(notification.title, notification.body);
+                if !surface {
+                    continue;
                 }
+                // The click watch is a task of its own: awaiting the
+                // banner's response inline would make one unnoticed
+                // notification stall every later one. The future resolves
+                // `true` on a banner-body click, which the shell answers by
+                // revealing the session's pane and foregrounding the
+                // window.
+                let Some(clicked) =
+                    crate::desktop_notify::send_clickable(notification.title, notification.body)
+                else {
+                    continue;
+                };
+                let _ = this.update(cx, |shell, cx| {
+                    let window_handle = shell.window;
+                    cx.spawn(async move |shell, cx| {
+                        if clicked.await {
+                            let _ = window_handle.update(cx, |_, window, cx| {
+                                let _ = shell.update(cx, |shell, cx| {
+                                    shell.reveal_session(session_id, window, cx)
+                                });
+                            });
+                        }
+                    })
+                    .detach();
+                });
             }
         })
         .detach();
+    }
+
+    /// Brings the pane hosting `session_id` to the front — the answer to a
+    /// clicked notification banner: activate the pane's tab and split
+    /// position (`Workspace::pane_location_for_session` +
+    /// `activate_pane_index`, the pair the model documents for exactly
+    /// this resolution), refocus, and foreground the window so the pane is
+    /// actually on screen. A detached or terminated session has no pane to
+    /// reveal — no layout change, no window steal.
+    fn reveal_session(
+        &mut self,
+        session_id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.restoring_workspace {
+            return;
+        }
+        let Some((tab_index, pane_index)) = self.workspace.pane_location_for_session(session_id)
+        else {
+            return;
+        };
+        self.workspace.activate_pane_index(tab_index, pane_index);
+        self.focus_active(window, cx);
+        cx.notify();
+        window.activate_window();
     }
 
     /// Terminates the workspace session whose shell just exited -- whether
