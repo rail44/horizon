@@ -1,14 +1,14 @@
 # Board redesign: implementation and transition plan
 
-**Status: implementation integrated into main; live cutover awaits approval,
-2026-09-16.** Commit `8e057dd` contains A–E and the verification tooling.
-Matching workspace binaries are built. The full host quality gate, isolated
-daemon flow, native GUI inspection, and selected-data migration rehearsal
-passed. Automatic approval review rejected the live service stop and data
-replacement pending explicit owner approval of that action. The running app
-and live board records have not been changed.
+**Status: implemented, integrated, and live cutover verified, 2026-09-16.**
+Commit `8e057dd` contains A–E and the verification tooling. The full host quality
+gate, isolated daemon flow, native GUI inspection, selected-data rehearsal,
+and live transition passed. After explicit owner approval, matching binaries
+from main at `eb6c99c` were activated and 47 tasks / 185 messages migrated.
+The existing terminal daemon, terminal and ordinary agent session identities,
+attachments, and workspace layout were preserved.
 
-### Implementation map and remaining verification
+### Implementation map
 
 | Package | Current code |
 | --- | --- |
@@ -17,7 +17,7 @@ and live board records have not been changed.
 | C. Environment and resume | `providers/rig/session/environment.rs`, `horizon-agentd/src/session/{run,resume}.rs`, and `worktree.rs`. |
 | D. Common view | `src/board_pane.rs` and `src/board_pane/`, with ordinary session-history entry through workspace commands. |
 | E. Roles and routing | `horizon-board/src/agents.rs`, embedded organizer/task/reviewer skills, and `horizon-agentd/src/board_flow/`. |
-| F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, full host gate, importer tests, isolated flow, native GUI, and selected-record rehearsal passed. Live cutover is prepared and awaits approval. |
+| F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, full host gate, importer tests, isolated flow, native GUI, selected-record rehearsal, and live cutover passed. The original data and matching old binaries are retained locally for recovery. |
 
 Read state stores a **set of actually seen message IDs** per reader and task,
 not a greatest-message cursor: jumping past a message leaves it unread.
@@ -59,8 +59,7 @@ Historical board-data migration concerns tasks and board conversations;
 it does not migrate the agent conversation-log format or replace session
 management. The old board-specific automation in agentd is also retired.
 The contracts and work packages below retain the accepted implementation
-boundaries. A–E and isolated verification are complete; the live transition
-remains open as summarized above.
+boundaries. A–F, including the live transition, are complete as summarized above.
 
 Retain the board's append-only storage, ordinary task identity, and native
 session-less pane. Replace the September 13 workflow's executable behavior
@@ -328,7 +327,7 @@ checks. The original source-only audit ran no new behavior tests.
 - Regenerated agent/log schemas; agent protocol is 20, log protocol is 5.
   The terminal artifact is unchanged. A full app restart with matching binaries
   is required at cutover.
-- Isolated importer: two Python unittest cases passed; live data is unchanged.
+- Isolated importer: two Python unittest cases passed before live migration.
 - `python scripts/check-board-flow.py --bin-dir target/debug --keep`: passed
   with 49 requests to a local deterministic provider. It exercised registration,
   priority/dependency updates, consultation without a worktree, daemon restart,
@@ -371,9 +370,9 @@ checks. The original source-only audit ran no new behavior tests.
 The flow and GUI fixtures use isolated repositories, dedicated daemons/sockets,
 and deterministic local providers. They verify runtime behavior and native UI,
 not a real model's judgment. Main was fast-forwarded to `8e057dd` and rebuilt;
-the running services and real board store are still the old versions.
+the documentation-only follow-up `eb6c99c` was the main revision at live cutover.
 
-### Prepared live cutover
+### Completed live cutover
 
 The retained selection is IDs **1–47**. IDs **48–49** are workflow-generated
 children of task 43 with no owner posts or comments; they concern the retired
@@ -391,12 +390,39 @@ actual running old binaries (including the unlinked agentd executable).
 The source SHA-256 is
 `613a19afe4a14ba94491e48f95cbf3ebffc406be1048c18ad0f9dd7fec02dc91`.
 
-The remaining operation must recheck that source and idle session state, stop
-the old UI/agentd/logd, save stable board/agent logs, database and workspace,
-replace the board with the verified conversion, and start the matching new UI
-and daemons. Keep terminald running throughout. Verify the existing terminal
-and ordinary agent session IDs, pane/tab layout, exact task/message contents,
-and absence of spontaneous imported work. A failure requires restoration of
-the saved data together with its matching old binaries. No live cutover step
-has run: automatic approval review rejected the stop/replacement before
-execution, so explicit approval of this final operation is outstanding.
+The owner explicitly authorized the live transition after automatic approval
+review had blocked the earlier attempt. The cutover ran in an independent
+process with file logging, so the terminal hosting Codex was not its lifetime
+owner. It rechecked the original source hash, settled agent state, binary
+hashes, process identities, and configured paths before stopping the old UI,
+agentd and logd. It saved the stable board/agent logs, DuckDB and workspace,
+atomically installed the converted board, and started the new UI and agentd.
+The runner completed successfully in approximately 4.5 seconds. No rollback
+was needed.
+
+Independent post-startup verification confirmed:
+
+- New UI PID 22784, agentd PID 22842, and logd PID 23909 use the prepared
+  binaries. Logd starts on demand; a read-only board subscription started it
+  and returned the expected cursor 48 (47 task imports plus ID high-water).
+- Terminald PID 1863 has the same process start time and binary hash as before
+  cutover. The terminal hosting Codex continued running.
+- Terminal session `3d81c861-9c71-4cfe-b7e5-22007234e353` and ordinary agent
+  session `d511ed71-a3e3-4264-ba41-a6462044746d` are the same two attached
+  sessions. The saved and restored tabs and active tab match exactly.
+- All 47 complete task records and 185 messages match the prepared conversion.
+  The new board SHA-256 is
+  `8551d39868dc9fbb9ba279d1c74a9da92c0df63896ce08733dfe2fb7c78b1f0d`;
+  it remained unchanged after startup and the read-only subscription.
+- Retired-role sessions are absent from the live inventory. All six agent
+  events appended during startup belong to the existing ordinary agent session;
+  no imported task triggered new board work.
+
+The local transition directory contains `runner-result.json`,
+`cutover-result.json`, `live-verification.json`, `live-subscription.json`,
+and the stable original data set in `stable-data/`. Its rollback routine was
+also checked in six isolated success/failure scenarios using real temporary
+files and simulated process/CLI boundaries, including WAL restoration and
+failure to write diagnostics. Those checks do not claim a live rollback was
+performed. A future rollback must restore the saved data together with its
+matching saved binaries.

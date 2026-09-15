@@ -1,13 +1,15 @@
 # Board redesign: tasks, consultation, implementation, and review
 
-**Status: implementation integrated into main; live cutover awaits approval,
-2026-09-16.** Commit `8e057dd` contains the replacement data model, view,
-session runtime changes and operating roles. Matching workspace binaries,
-the full host gate (1,952 tests passed), isolated flow, native GUI verification,
-and selected-data migration rehearsal are complete. Automatic approval review
-rejected the live stop/data replacement pending explicit approval; the running
-app and board store are unchanged. Validation and cutover details are recorded
-in the implementation plan below.
+**Status: implementation and approved live cutover complete, 2026-09-16.**
+Commit `8e057dd` contains the replacement data model, view, session runtime
+changes and operating roles; the live cutover used revision `eb6c99c`.
+The full host gate (1,952 tests passed), isolated flow, native GUI verification,
+and selected-data migration rehearsal passed. The approved cutover preserved
+exactly 47 tasks and 185 messages, the ordinary agent and terminal session IDs,
+and the workspace layout. The terminal daemon remained running. Independent
+live verification confirmed matching prepared binaries and an unchanged board
+hash after import, with no retired roles or new board work. Validation and
+cutover details are recorded in the implementation plan below.
 
 Current implementation entry points are `crates/horizon-board` and
 `horizon-logd` for data, `horizon-agent/src/providers/rig/session/` and
@@ -421,8 +423,8 @@ reading the board consultation; this design does not assume shared read state
 between those two histories.
 
 The active `Item` no longer carries legacy workflow, assignee or structured
-links fields. Selected useful task/conversation content is extracted by the
-isolated importer; live migration has not occurred.
+links fields. Selected useful task/conversation content was extracted by the
+isolated importer and migrated during the approved live cutover.
 
 #### Fractional indexing and historical audit
 
@@ -898,12 +900,12 @@ are implementation work under the established responsibilities.
 > and the owner's directions. Proceed with direct integration or PR submission,
 > or obtain human confirmation, as that project's policy requires.
 
-## 5. Remaining design work
+## 5. Design and transition completion
 
 The owner asked to focus further consultation on consequential design choices;
 routine implementation judgments do not each need a separate consultation.
-The following is an assistant assessment of remaining work, not adoption of
-additional features or authorization to implement a prototype.
+The following records the completed scope; it does not adopt additional
+features or authorize a prototype.
 
 ### Current product design basis
 
@@ -911,8 +913,8 @@ The main responsibilities, execution flow, and list/detail content and
 navigation are agreed. The initial skills need to include the intent agreed
 so far; their wording is adjustable later. The technical direction and change
 scope are also accepted. Implementation, automated validation, native GUI
-inspection, and selected-record migration rehearsal are complete. Only the live
-cutover and its recovery checks remain, pending explicit approval.
+inspection, selected-record migration rehearsal, approved live cutover, and
+recovery checks are complete.
 
 Concrete controls and visual treatment should follow the accepted outline.
 Validate readability and navigation with representative task content as part
@@ -934,16 +936,17 @@ The revised migration proposal confines historical workflow decoding to an
 isolated importer and carries selected useful task/conversation content into
 the new model. Ordinary rank/edit writes and startup/resume paths have been
 replaced and integrated into main. Import-only startup produced no provider
-requests or new board events in the isolated rehearsal; live recovery remains
-to be checked.
+requests or new board events in the isolated rehearsal. Live recovery preserved
+the ordinary session IDs and layout; verification found no new board work and
+confirmed the imported board hash remained unchanged.
 
 The proposal starts with data and session contracts, then sequences the shared
 runtime changes while allowing view work against stable interfaces in parallel.
 Organizer/task/reviewer wiring, the full host workspace gate, isolated complete
 flow, native GUI checks, and the selected legacy inventory/rehearsal have passed.
-The planned live replacement preserves tasks 1–47 and all 185 messages, archives
-the original log, and excludes only workflow-generated tasks 48–49 from active
-data. Live migration has not occurred because automatic approval review rejected
-the stop/replacement action. Routine technical details can be resolved within
-these choices; material changes to accepted behavior or scope should return with
-concrete options and evidence.
+The approved live replacement preserved tasks 1–47 and all 185 messages, archived
+the original log, and excluded only workflow-generated tasks 48–49 from active
+data. The full app restart used matching prepared binaries while retaining the
+running terminal daemon. Independent live verification passed. Routine technical
+details can be resolved within these choices; material changes to accepted
+behavior or scope should return with concrete options and evidence.

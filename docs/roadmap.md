@@ -23,42 +23,6 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-**Board redesign (2026-09-16):** implementation integrated into main at
-`8e057dd` and matching workspace binaries built. The full host gate passed
-(1,952 tests; 11 skips), along with isolated daemon flow, native GUI input and
-rendering, and real-runtime migration rehearsal for 47 tasks and 185 messages.
-Live cutover is prepared but awaits explicit approval after automatic approval
-review rejected the service stop/data replacement. Existing board records and
-running services have not been changed.
-See [accepted design](board-redesign-design.md) and
-[implementation and validation](board-redesign-implementation-plan.md).
-
-The replacement keeps ordinary recursive tasks, fractional sibling order,
-separate dependencies, project-defined status, recognizable completion, and
-board consultation. A milestone is simply a larger task. The native list has
-a top-level filter; common task detail shows description, prerequisites,
-ranked children, and consultation vertically. Read state tracks displayed
-message IDs and preserves unread gaps and descendant indications.
-
-The organizer maintains priorities/dependencies and selects consultations;
-parent priority guides selection, with independent work under subsequent
-parents eligible to run in parallel. The task's ordinary session consults
-and implements, activating a worktree at an explicit base. An owner post can
-resume that same ended session; passive notifications do not restart it.
-Each review uses a separate ordinary session/worktree pinned to its requested
-tip, reviewing the complete multi-commit range. Final answers follow the
-trigger's destination through durable harness delivery. Consultation depth,
-readiness, parallelism and project integration policy remain skill prompts.
-
-The September 13 special workflow, coordinator/wake logic, dedicated UI,
-operations and unused fields have been removed from the replacement. Its
-historical record is [board-milestone-flow-design.md](board-milestone-flow-design.md).
-Legacy decoding is confined to an explicit, one-time selected-record importer.
-Cutover requires rechecking the retained-data snapshot and a full app restart
-with matching agent protocol 20 / log protocol 5 binaries. The terminal protocol
-is unchanged, and the running terminal daemon will be retained.
-This is product behavior, not a repository-wide development-flow policy.
-
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
@@ -617,6 +581,8 @@ external notification path.
   the now-retired custom winit layer (`docs/native-gpui-platform-design.md`).
 
 ## Shipped (index — details in the named docs and git history)
+
+- **Board redesign (2026-09-16):** implemented at `8e057dd`; approved live cutover at `eb6c99c` preserved 47 tasks, 185 messages, ordinary session IDs, layout, and the running terminal daemon. Full host gate (1,952 tests), native GUI, isolated flow, migration rehearsal and independent live recovery verification passed. See [design](board-redesign-design.md) and [implementation and validation](board-redesign-implementation-plan.md).
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,
