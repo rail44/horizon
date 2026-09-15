@@ -37,6 +37,7 @@ use std::collections::HashMap;
 use gpui::*;
 use gpui_component::list::ListState;
 use gpui_component::StyledExt as _;
+use horizon_terminal_core::TerminalNotification;
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
@@ -362,6 +363,12 @@ pub(crate) struct WorkspaceShell {
     // `session_title_rx` pump spawned in `new`
     // (`wire_session_title_updates`).
     session_title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
+    // Handed to every `TerminalSession::spawn` (cloned per session) so an
+    // OSC 9/777 desktop-notification request reaches the shell, which
+    // gates it on window/pane focus (`wire_terminal_notifications` +
+    // `should_surface_notification`) before the OS hop
+    // (`crate::desktop_notify`).
+    terminal_notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
 }
 
 impl WorkspaceShell {
@@ -383,6 +390,7 @@ impl WorkspaceShell {
         );
         let (terminal_exit_tx, terminal_exit_rx) = futures::channel::mpsc::unbounded();
         let (session_title_tx, session_title_rx) = futures::channel::mpsc::unbounded();
+        let (terminal_notify_tx, terminal_notify_rx) = futures::channel::mpsc::unbounded();
         let mut shell = Self {
             workspace,
             workspace_state,
@@ -413,6 +421,7 @@ impl WorkspaceShell {
             last_focused_terminal: None,
             terminal_exit_tx,
             session_title_tx,
+            terminal_notify_tx,
         };
         // Window activation/deactivation doesn't otherwise touch the
         // model, so it needs its own observer alongside `focus_active`'s
@@ -426,6 +435,7 @@ impl WorkspaceShell {
         shell.wire_workspace_root_updates(workspace_root_rx, cx);
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         shell.wire_session_title_updates(session_title_rx, cx);
+        shell.wire_terminal_notifications(terminal_notify_rx, cx);
         if shell.restoring_workspace {
             shell.spawn_workspace_restore(agentd, terminald, cx);
         } else {
@@ -524,6 +534,22 @@ impl WorkspaceShell {
             self.send_terminal_focus(session_id, true, cx);
         }
         self.last_focused_terminal = focus;
+    }
+
+    /// Whether an OSC 9/777 notification from `session_id` should escalate
+    /// to the OS notification center. The rule mirrors how the terminal
+    /// itself treats focus: the user must not already be looking at the
+    /// session — either the window is inactive, or the session isn't the
+    /// active terminal pane (a background pane finishing a build while the
+    /// user works elsewhere still deserves its banner; the pane they are
+    /// typing in does not). Workspace restore is excluded like every other
+    /// session-driven reaction (`sync_terminal_focus`'s guard).
+    fn should_surface_notification(&self, session_id: SessionId, window: &Window) -> bool {
+        if self.restoring_workspace {
+            return false;
+        }
+        !window.is_window_active()
+            || self.workspace.active_terminal_session_id() != Some(session_id)
     }
 
     fn send_terminal_focus(&self, session_id: SessionId, focused: bool, cx: &mut Context<Self>) {

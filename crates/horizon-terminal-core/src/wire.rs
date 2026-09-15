@@ -59,7 +59,11 @@ use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, 
 /// Version 19: wire-only `Unknown` catch-alls removed; no decode compat
 /// (owner decision 2026-08-03 — this is a personal project, so backward
 /// compatibility is not carried by default).
-pub const TERMINAL_PROTOCOL_VERSION: u32 = 19;
+///
+/// Version 20: `TerminalUpdate::Notification` added — OSC 9/777
+/// desktop-notification requests extracted from the PTY stream
+/// (`contract::TerminalNotification`).
+pub const TERMINAL_PROTOCOL_VERSION: u32 = 20;
 
 /// The oldest terminal-wire version this build is still willing to
 /// negotiate down to in [`TerminalHub::hello`] — the low end of the
@@ -77,7 +81,7 @@ pub const TERMINAL_PROTOCOL_VERSION: u32 = 19;
 /// KeyInput` is sent unconditionally now — no per-keystroke gate survives
 /// at all, versioned or otherwise (`src/terminal/session.rs`'s key-dispatch
 /// path).
-pub const MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION: u32 = 19;
+pub const MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION: u32 = 20;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-terminald`.
@@ -223,11 +227,11 @@ mod tests {
     /// version pairs are independent constants but stay equal in practice
     /// (the phase-2 split started them equal, and the v19 `Unknown`-removal
     /// bump moved both in lockstep too). Neither crate may name the other,
-    /// so each pins its half against the literal 19.
+    /// so each pins its half against the literal 20.
     #[test]
     fn the_split_started_at_the_pre_split_version() {
-        assert_eq!(TERMINAL_PROTOCOL_VERSION, 19);
-        assert_eq!(MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, 19);
+        assert_eq!(TERMINAL_PROTOCOL_VERSION, 20);
+        assert_eq!(MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION, 20);
     }
 
     /// [`TerminalHub`]'s mechanical method-surface snapshot — the guard

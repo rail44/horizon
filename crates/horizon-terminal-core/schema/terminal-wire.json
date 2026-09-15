@@ -785,6 +785,26 @@
       ],
       "type": "object"
     },
+    "TerminalNotification": {
+      "description": "A desktop-notification request a terminal app posted through the PTY\nstream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`\n(rxvt-style: optional summary + body). Extracted from the raw bytes\nbefore the VT parser sees them (`core::osc_notify` — alacritty_terminal\nrecognizes neither code and would drop both silently) and delivered to\nthe client as [`TerminalUpdate::Notification`].",
+      "properties": {
+        "body": {
+          "description": "The message body (OSC 9's whole payload, OSC 777's second argument).",
+          "type": "string"
+        },
+        "title": {
+          "description": "The summary line (OSC 777's `notify ; <title> ; <body>` first\nargument); `None` for OSC 9, which carries only a body.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "body"
+      ],
+      "type": "object"
+    },
     "TerminalScroll": {
       "properties": {
         "lines": {
@@ -1117,6 +1137,19 @@
         },
         {
           "additionalProperties": false,
+          "description": "Daemon → client: a desktop-notification request (OSC 9 / OSC 777\n`notify`) a terminal app posted — see [`TerminalNotification`].\nWhether it actually surfaces is the client's call: Horizon escalates\nto the OS notification center only when the session isn't already\nthe focused pane of the focused window.",
+          "properties": {
+            "Notification": {
+              "$ref": "#/$defs/TerminalNotification"
+            }
+          },
+          "required": [
+            "Notification"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "Error": {
               "type": "string"
@@ -1231,5 +1264,5 @@
     }
   },
   "title": "horizon-terminal-wire",
-  "x-session-protocol-version": 19
+  "x-session-protocol-version": 20
 }

@@ -218,7 +218,7 @@ fn process_pty_chunk(
     flush_armed: &mut bool,
     flush_rx: &mut Receiver<Instant>,
 ) {
-    let events = core.write_vt(bytes);
+    let mut events = core.write_vt(bytes);
     tracing::debug!(
         target: "horizon_terminal_core::session_loop",
         visible_dirty = events.visible_dirty,
@@ -238,6 +238,9 @@ fn process_pty_chunk(
             text,
             destination: ClipboardDestination::Clipboard,
         });
+    }
+    for notification in events.notifications.drain(..) {
+        let _ = update_tx.send(TerminalUpdate::Notification(notification));
     }
     rearm_sync_flush(core, sync_flush_rx);
     // Only a chunk that actually reached the grid deserves
@@ -580,7 +583,7 @@ pub fn run_terminal_core(
                 flush_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
             }
             recv(sync_flush_rx) -> _ => {
-                let events = core.flush_sync_update();
+                let mut events = core.flush_sync_update();
                 tracing::debug!(
                     target: "horizon_terminal_core::session_loop",
                     "sync_flush_fired"
@@ -599,6 +602,9 @@ pub fn run_terminal_core(
                         text,
                         destination: ClipboardDestination::Clipboard,
                     });
+                }
+                for notification in events.notifications.drain(..) {
+                    let _ = update_tx.send(TerminalUpdate::Notification(notification));
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
@@ -1068,6 +1074,72 @@ mod tests {
     /// disturb the live frame watch: serving a window is a pure read, so no
     /// new `TerminalFrame` is produced and the live viewport stays at the tail
     /// (the no-side-effect invariant, §2.2).
+    #[test]
+    fn run_terminal_core_forwards_osc_notifications_as_updates() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
+        let receivers = CoreReceivers {
+            resize_rx: crossbeam_channel::never(),
+            scroll_rx: crossbeam_channel::never(),
+            mouse_rx: crossbeam_channel::never(),
+            paste_rx: crossbeam_channel::never(),
+            key_rx: crossbeam_channel::never(),
+            text_rx: crossbeam_channel::never(),
+            selection_rx: crossbeam_channel::never(),
+            focus_rx: crossbeam_channel::never(),
+            color_scheme_rx: crossbeam_channel::never(),
+            window_rx: crossbeam_channel::never(),
+        };
+
+        std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 5),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            );
+        });
+
+        // One OSC 9 (BEL-terminated), plain output between, and one OSC 777
+        // `notify` (ST-terminated) — the full daemon-side pipeline: PTY
+        // bytes in, `TerminalUpdate::Notification`s out on the events mpsc.
+        pty_tx
+            .send(b"\x1b]9;build finished\x07plain text\x1b]777;notify;Deploy;ok\x1b\\".to_vec())
+            .unwrap();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut saw_body = false;
+        let mut saw_titled = false;
+        while Instant::now() < deadline && !(saw_body && saw_titled) {
+            match update_rx.recv_timeout(Duration::from_millis(50)) {
+                Ok(TerminalUpdate::Notification(notification)) => {
+                    if notification.title.is_none() && notification.body == "build finished" {
+                        saw_body = true;
+                    }
+                    if notification.title.as_deref() == Some("Deploy") && notification.body == "ok"
+                    {
+                        saw_titled = true;
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {}
+            }
+        }
+        assert!(
+            saw_body,
+            "the OSC 9 body should arrive as a Notification update"
+        );
+        assert!(
+            saw_titled,
+            "the OSC 777 notify should arrive as a Notification update"
+        );
+    }
+
     #[test]
     fn run_terminal_core_serves_a_scroll_window_without_touching_the_live_frame() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();

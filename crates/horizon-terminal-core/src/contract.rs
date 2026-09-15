@@ -130,6 +130,21 @@ pub enum TerminalCommand {
     },
 }
 
+/// A desktop-notification request a terminal app posted through the PTY
+/// stream — OSC 9 (iTerm2-style: body only) or OSC 777 `notify`
+/// (rxvt-style: optional summary + body). Extracted from the raw bytes
+/// before the VT parser sees them (`core::osc_notify` — alacritty_terminal
+/// recognizes neither code and would drop both silently) and delivered to
+/// the client as [`TerminalUpdate::Notification`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct TerminalNotification {
+    /// The summary line (OSC 777's `notify ; <title> ; <body>` first
+    /// argument); `None` for OSC 9, which carries only a body.
+    pub title: Option<String>,
+    /// The message body (OSC 9's whole payload, OSC 777's second argument).
+    pub body: String,
+}
+
 /// The non-frame terminal events, carried on the attachment's `events`
 /// mpsc channel (`TerminalAttachment::events`). Since wire v11 the frame
 /// snapshots that used to be a `Snapshot`/`FrameDiff` variant here travel
@@ -145,6 +160,12 @@ pub enum TerminalUpdate {
         text: String,
         destination: ClipboardDestination,
     },
+    /// Daemon → client: a desktop-notification request (OSC 9 / OSC 777
+    /// `notify`) a terminal app posted — see [`TerminalNotification`].
+    /// Whether it actually surfaces is the client's call: Horizon escalates
+    /// to the OS notification center only when the session isn't already
+    /// the focused pane of the focused window.
+    Notification(TerminalNotification),
     Exited,
     Error(String),
     /// Daemon → client: a served scrollback window, the reply to

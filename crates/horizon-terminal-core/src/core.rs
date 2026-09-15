@@ -13,6 +13,7 @@ use self::color::resolve_query_color;
 pub use self::color::TerminalColorScheme;
 use self::events::{EventSink, TerminalEvents};
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
+use self::osc_notify::OscNotificationScanner;
 use crate::protocol::kitty_keyboard;
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseKind, TerminalMouseReport, TerminalScroll,
@@ -22,6 +23,7 @@ use crate::types::{
 mod color;
 mod events;
 mod input;
+mod osc_notify;
 mod render;
 
 /// Built-in fallback for `Term`'s `scrolling_history` (`TermConfig`), used
@@ -75,6 +77,10 @@ pub struct TerminalCore {
     term: Term<EventSink>,
     parser: Processor,
     events: EventSink,
+    /// Strips desktop-notification OSC sequences (OSC 9 / OSC 777
+    /// `notify`) off the PTY stream ahead of `parser` — see
+    /// `core::osc_notify` for why this cannot be an `EventSink` arm.
+    osc_notifications: OscNotificationScanner,
     size: TerminalSize,
     /// Default colors for OSC 4/10/11/12 query replies
     /// (`core::color::resolve_query_color`) — see [`TerminalColorScheme`]'s
@@ -117,6 +123,7 @@ impl TerminalCore {
             term,
             parser: Processor::new(),
             events,
+            osc_notifications: OscNotificationScanner::default(),
             size,
             color_scheme: TerminalColorScheme::default(),
         }
@@ -143,7 +150,14 @@ impl TerminalCore {
         // true when the query was made, not by the state its own
         // terminating ESU leaves behind. See `rewrite_sync_update_decrqm`.
         let sync_output_was_active = self.parser.sync_timeout().pending_timeout();
-        self.parser.advance(&mut self.term, bytes);
+        // Notification OSCs come off the stream *before* the parser:
+        // alacritty_terminal doesn't know either code, so left in they are
+        // dropped silently with no event to observe. They are extracted
+        // even from inside a synchronized-update window (the scanner sees
+        // the raw chunk, not the sync-buffered view) — a notification
+        // surfacing "early" beats not surfacing at all.
+        let (bytes, notifications) = self.osc_notifications.feed(bytes);
+        self.parser.advance(&mut self.term, &bytes);
 
         // Did this call actually touch the grid, or did it just add to an
         // still-open synchronized-update buffer? Mirrors the criterion
@@ -154,9 +168,15 @@ impl TerminalCore {
         // to the grid; any other outcome — no window was open, or one
         // opened and closed within this very call — means content reached
         // the grid.
+        // `bytes` here is the post-scan stream (notification OSCs
+        // removed), so the criterion below judges the bytes the parser
+        // actually saw — a chunk that was nothing but a notification never
+        // touches the grid and correctly reports not-dirty.
         let visible_dirty = self.parser.sync_bytes_count() < bytes.len();
 
-        self.finish_advance(sync_output_was_active, visible_dirty)
+        let mut events = self.finish_advance(sync_output_was_active, visible_dirty);
+        events.notifications = notifications;
+        events
     }
 
     /// The real-time deadline `vte::ansi::Processor` would use to abort a

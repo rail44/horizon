@@ -15,7 +15,8 @@ use futures::StreamExt;
 use gpui::*;
 use horizon_terminal_core::{
     ClipboardDestination, KeyEventKind, TerminalCommand, TerminalFrame, TerminalKeyInput,
-    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSize, TerminalUpdate,
+    TerminalMouseReport, TerminalNotification, TerminalScroll, TerminalScrollWindow, TerminalSize,
+    TerminalUpdate,
 };
 use horizon_workspace::SessionId;
 
@@ -853,6 +854,11 @@ pub(crate) struct TerminalSession {
     /// can terminate the workspace session and replace it if it was the last
     /// pane.
     exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
+    /// Reports desktop-notification requests (`TerminalUpdate::Notification`,
+    /// OSC 9/777) to the shell, which owns the surface/no-surface decision
+    /// and the OS hop (`crate::desktop_notify`) — same unbounded-mpsc shape
+    /// as `exit_tx`/`title_tx`.
+    notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
     /// The latest content-derived title this session reported
     /// (`TerminalUpdate::Title`, already sanitized/clamped by
     /// [`derive_session_title`]) -- `None` both before any title arrives
@@ -887,6 +893,7 @@ impl TerminalSession {
         session_id: SessionId,
         exit_tx: futures::channel::mpsc::UnboundedSender<SessionId>,
         title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
+        notify_tx: futures::channel::mpsc::UnboundedSender<(SessionId, TerminalNotification)>,
         cx: &mut Context<Self>,
     ) -> Self {
         let mut frames_rx = handle.frames();
@@ -973,6 +980,7 @@ impl TerminalSession {
             error: RefCell::new(None),
             traffic_trace: TrafficTraceStats::new(),
             exit_tx,
+            notify_tx,
             scrollback: RefCell::new(Scrollback::Live),
             scrollback_generation: 0,
             derived_title: None,
@@ -1041,6 +1049,15 @@ impl TerminalSession {
                 true
             }
             Incoming::Event(TerminalUpdate::Bell) => true,
+            Incoming::Event(TerminalUpdate::Notification(notification)) => {
+                // The shell decides whether this deserves an OS-level
+                // interruption (focused-window/focused-pane gate) — the
+                // session itself only forwards.
+                let _ = self
+                    .notify_tx
+                    .unbounded_send((self.session_id, notification));
+                true
+            }
             Incoming::Event(TerminalUpdate::ScrollWindow(window)) => {
                 let install = self.scrollback.borrow_mut().install_window(window);
                 if install.installed {

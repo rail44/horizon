@@ -12,3 +12,12 @@ dev *ARGS:
 dev-release *ARGS:
     cargo build --workspace --release
     ./target/release/horizon {{ARGS}}
+
+# Build everything and launch Horizon from a minimal ad-hoc-signed .app
+# bundle — the only launch shape macOS's UNUserNotificationCenter delivers
+# desktop notifications for (a bare ./target/debug/horizon is silently
+# ignored; NSUserNotification, which needed no bundle, stopped routing on
+# macOS 26). See scripts/dev-bundle.sh.
+dev-bundle *ARGS:
+    cargo build --workspace
+    ./scripts/dev-bundle.sh {{ARGS}}

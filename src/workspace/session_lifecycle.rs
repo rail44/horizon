@@ -165,9 +165,12 @@ impl WorkspaceShell {
                             .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
                         let exit_tx = self.terminal_exit_tx.clone();
                         let title_tx = self.session_title_tx.clone();
+                        let notify_tx = self.terminal_notify_tx.clone();
                         self.sessions.insert(
                             id,
-                            cx.new(|cx| TerminalSession::spawn(wire, id, exit_tx, title_tx, cx)),
+                            cx.new(|cx| {
+                                TerminalSession::spawn(wire, id, exit_tx, title_tx, notify_tx, cx)
+                            }),
                         );
                     }
                 }
@@ -424,6 +427,44 @@ impl WorkspaceShell {
                         cx.notify();
                     }
                 });
+            }
+        })
+        .detach();
+    }
+
+    /// Wires the receiving end of every session's `notify_tx`: OSC 9/777
+    /// desktop-notification requests (`TerminalUpdate::Notification`).
+    /// Surfacing is decided per request against live focus state
+    /// (`should_surface_notification`), and the OS hop
+    /// (`crate::desktop_notify`) deliberately runs on this pump's
+    /// background-executor thread — `mac_usernotifications`' blocking
+    /// wrappers may park until the user answers the first-run permission
+    /// dialog, which must never be the UI thread. Same async shape as
+    /// `wire_session_title_updates`: `futures` unbounded senders, no
+    /// blocking-to-async bridge needed.
+    pub(super) fn wire_terminal_notifications(
+        &self,
+        mut notify_rx: futures::channel::mpsc::UnboundedReceiver<(
+            SessionId,
+            horizon_terminal_core::TerminalNotification,
+        )>,
+        cx: &mut Context<Self>,
+    ) {
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            while let Some((session_id, notification)) = notify_rx.next().await {
+                let surface = window_handle
+                    .update(cx, |_, window, cx| {
+                        this.update(cx, |shell, _cx| {
+                            shell.should_surface_notification(session_id, window)
+                        })
+                        .unwrap_or(false)
+                    })
+                    .unwrap_or(false);
+                if surface {
+                    crate::desktop_notify::notify(notification.title, notification.body);
+                }
             }
         })
         .detach();
@@ -766,10 +807,18 @@ impl WorkspaceShell {
                         {
                             let exit_tx = shell.terminal_exit_tx.clone();
                             let title_tx = shell.session_title_tx.clone();
+                            let notify_tx = shell.terminal_notify_tx.clone();
                             shell.sessions.insert(
                                 session_id,
                                 cx.new(|cx| {
-                                    TerminalSession::spawn(wire, session_id, exit_tx, title_tx, cx)
+                                    TerminalSession::spawn(
+                                        wire,
+                                        session_id,
+                                        exit_tx,
+                                        title_tx,
+                                        notify_tx,
+                                        cx,
+                                    )
                                 }),
                             );
                         }
@@ -896,10 +945,13 @@ impl WorkspaceShell {
                             .register_detached_session(PaneKind::Terminal, session_id);
                         let exit_tx = shell.terminal_exit_tx.clone();
                         let title_tx = shell.session_title_tx.clone();
+                        let notify_tx = shell.terminal_notify_tx.clone();
                         shell.sessions.insert(
                             session_id,
                             cx.new(|cx| {
-                                TerminalSession::spawn(wire, session_id, exit_tx, title_tx, cx)
+                                TerminalSession::spawn(
+                                    wire, session_id, exit_tx, title_tx, notify_tx, cx,
+                                )
                             }),
                         );
                     }

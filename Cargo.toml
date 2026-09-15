@@ -93,6 +93,16 @@ toml_edit = "0.25"
 unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
+# Desktop notifications (`src/desktop_notify.rs`, fed by OSC 9/777 via
+# horizon-terminal-core): the UNUserNotificationCenter wrapper. macOS-only
+# for now — Linux would want notify-rust / org.freedesktop.Notifications
+# instead. UNUserNotificationCenter refuses to deliver from a bare
+# executable: the process must run from a bundled, (ad-hoc) code-signed
+# .app (`just dev-bundle`), so the module degrades to a log line rather
+# than depending on deployment shape.
+[target.'cfg(target_os = "macos")'.dependencies]
+mac-usernotifications = "0.3.1"
+
 [lints.clippy]
 all = { level = "warn", priority = -1 }
 

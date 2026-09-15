@@ -30,7 +30,7 @@ pub mod wire;
 
 pub use contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalKeyInput,
-    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
+    TerminalNotification, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};

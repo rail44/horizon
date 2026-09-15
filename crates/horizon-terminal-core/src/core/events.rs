@@ -4,6 +4,8 @@ use std::sync::{Arc, Mutex};
 use alacritty_terminal::event::{Event, EventListener, WindowSize};
 use alacritty_terminal::vte::ansi::Rgb;
 
+use crate::contract::TerminalNotification;
+
 /// Formatter alacritty_terminal hands back for a color query
 /// (`Event::ColorRequest`): it doesn't own "what color is index N", so the
 /// embedder resolves the RGB value and calls this to get the response
@@ -31,6 +33,14 @@ pub(crate) struct TerminalEvents {
     pub pty_writes: Vec<Vec<u8>>,
     pub title: Option<String>,
     pub bell_count: usize,
+    /// Desktop-notification requests extracted from the raw PTY stream
+    /// during the parser call that produced this batch (OSC 9 / OSC 777
+    /// `notify`, `core::osc_notify`) — the one event family that never
+    /// travels through `EventSink::send_event`, because
+    /// `alacritty_terminal` never parses those codes into `Event`s. Set
+    /// directly by `TerminalCore::write_vt` after `finish_advance`'s
+    /// drain, exactly like `visible_dirty`.
+    pub notifications: Vec<TerminalNotification>,
     /// OSC 52 clipboard-write payloads (`Event::ClipboardStore`) accepted
     /// this call, already capped at `OSC52_CLIPBOARD_WRITE_CAP` -- see
     /// `EventSink::send_event`. Both OSC 52 targets alacritty_terminal
@@ -79,6 +89,7 @@ impl fmt::Debug for TerminalEvents {
             .field("pty_writes", &self.pty_writes)
             .field("title", &self.title)
             .field("bell_count", &self.bell_count)
+            .field("notifications", &self.notifications)
             .field("clipboard_writes", &self.clipboard_writes)
             .field("color_requests", &self.color_requests.len())
             .field("window_size_requests", &self.window_size_requests.len())
