@@ -1,12 +1,13 @@
 # Board redesign: tasks, consultation, implementation, and review
 
-**Status: accepted foundation with A–E implementation written, 2026-09-16.**
-The `board-redesign-foundation` worktree contains the replacement data model,
-view, session runtime changes and operating roles. The full workspace build/gate
-and isolated flow fixture passed; changes are uncommitted, not on main, and no
-live migration has run. Manual GUI verification, selected legacy inventory and
-cutover remain pending. Validation details are recorded in the implementation
-plan below.
+**Status: implementation integrated into main; live cutover awaits approval,
+2026-09-16.** Commit `8e057dd` contains the replacement data model, view,
+session runtime changes and operating roles. Matching workspace binaries,
+the full host gate (1,952 tests passed), isolated flow, native GUI verification,
+and selected-data migration rehearsal are complete. Automatic approval review
+rejected the live stop/data replacement pending explicit approval; the running
+app and board store are unchanged. Validation and cutover details are recorded
+in the implementation plan below.
 
 Current implementation entry points are `crates/horizon-board` and
 `horizon-logd` for data, `horizon-agent/src/providers/rig/session/` and
@@ -27,7 +28,7 @@ Section 1 records accepted owner requirements. Later sections retain proposal
 history and examples where marked; they do not establish additional product
 requirements. Source observations about the old implementation refer to audit
 revision `07ca0c8d87790092d935eed4e845fbf93d7dd1b3`, not the replacement
-code now under validation.
+code now integrated into main.
 
 ## 1. Accepted foundation and its sources
 
@@ -414,7 +415,7 @@ not represent whether a task is ready or whether a decision has been settled.
 The view records each actually displayed message ID independently. It does not
 use a monotonic prefix: jumping to a later message leaves skipped messages
 unread. Opening a detail without viewing the consultation marks nothing read.
-The visibility implementation still needs representative GUI validation.
+Representative native GUI checks confirmed this visibility behavior.
 Viewing the ordinary session transcript is a different operation from
 reading the board consultation; this design does not assume shared read state
 between those two histories.
@@ -909,14 +910,15 @@ additional features or authorization to implement a prototype.
 The main responsibilities, execution flow, and list/detail content and
 navigation are agreed. The initial skills need to include the intent agreed
 so far; their wording is adjustable later. The technical direction and change
-scope are also accepted. Implementation and automated validation are complete;
-native GUI inspection and live-data cutover remain.
+scope are also accepted. Implementation, automated validation, native GUI
+inspection, and selected-record migration rehearsal are complete. Only the live
+cutover and its recovery checks remain, pending explicit approval.
 
 Concrete controls and visual treatment should follow the accepted outline.
 Validate readability and navigation with representative task content as part
-of the view work. These remaining details do not each require a separate
-design consultation. The native board view is implemented and awaiting
-representative GUI verification.
+of the view work. These details do not each require a separate design
+consultation. The native board view passed representative GUI verification,
+including actual input, visible-only read state, and same-ID session resumption.
 
 ### Technical design and transition work
 
@@ -930,14 +932,18 @@ result delivery. Automated runtime validation passed; see the implementation pla
 correction requires deleting unnecessary existing features and active data.
 The revised migration proposal confines historical workflow decoding to an
 isolated importer and carries selected useful task/conversation content into
-the new model. Ordinary rank/edit writes and startup/resume paths have been replaced in the
-worktree; transition validation must confirm no old automation runs.
+the new model. Ordinary rank/edit writes and startup/resume paths have been
+replaced and integrated into main. Import-only startup produced no provider
+requests or new board events in the isolated rehearsal; live recovery remains
+to be checked.
 
 The proposal starts with data and session contracts, then sequences the shared
 runtime changes while allowing view work against stable interfaces in parallel.
-Organizer/task/reviewer wiring, the full workspace gate, and isolated complete-flow
-verification have passed. Manual GUI checks, selected legacy inventory and
-cutover remain. No live
-migration or main integration has occurred. Routine technical details can be
-resolved within these choices; material changes to accepted behavior or scope
-should return with concrete options and evidence.
+Organizer/task/reviewer wiring, the full host workspace gate, isolated complete
+flow, native GUI checks, and the selected legacy inventory/rehearsal have passed.
+The planned live replacement preserves tasks 1–47 and all 185 messages, archives
+the original log, and excludes only workflow-generated tasks 48–49 from active
+data. Live migration has not occurred because automatic approval review rejected
+the stop/replacement action. Routine technical details can be resolved within
+these choices; material changes to accepted behavior or scope should return with
+concrete options and evidence.

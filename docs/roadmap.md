@@ -23,12 +23,13 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-**Board redesign (2026-09-16):** implemented and automatically validated in
-`board-redesign-foundation`; uncommitted and not integrated into main.
-The workspace gate passed (1,815 tests; 73 existing sandbox-profile skips),
-as did the isolated daemon flow with a local deterministic provider.
-Manual native GUI verification, retained-record selection/migration rehearsal,
-and live cutover remain. Existing board records have not been changed.
+**Board redesign (2026-09-16):** implementation integrated into main at
+`8e057dd` and matching workspace binaries built. The full host gate passed
+(1,952 tests; 11 skips), along with isolated daemon flow, native GUI input and
+rendering, and real-runtime migration rehearsal for 47 tasks and 185 messages.
+Live cutover is prepared but awaits explicit approval after automatic approval
+review rejected the service stop/data replacement. Existing board records and
+running services have not been changed.
 See [accepted design](board-redesign-design.md) and
 [implementation and validation](board-redesign-implementation-plan.md).
 
@@ -53,8 +54,9 @@ The September 13 special workflow, coordinator/wake logic, dedicated UI,
 operations and unused fields have been removed from the replacement. Its
 historical record is [board-milestone-flow-design.md](board-milestone-flow-design.md).
 Legacy decoding is confined to an explicit, one-time selected-record importer.
-Cutover requires retained-data verification and a full app restart with matching
-agent protocol 20 / log protocol 5 binaries; the terminal protocol is unchanged.
+Cutover requires rechecking the retained-data snapshot and a full app restart
+with matching agent protocol 20 / log protocol 5 binaries. The terminal protocol
+is unchanged, and the running terminal daemon will be retained.
 This is product behavior, not a repository-wide development-flow policy.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring

@@ -1,10 +1,12 @@
 # Board redesign: implementation and transition plan
 
-**Status: A–E implementation and automated integration validation passed,
-2026-09-16.** The changes are in the `board-redesign-foundation` worktree,
-uncommitted and not integrated into main. No live board migration or cutover
-has occurred. The full workspace gate and isolated daemon fixture passed.
-Native GUI inspection and the selected-data cutover remain outstanding.
+**Status: implementation integrated into main; live cutover awaits approval,
+2026-09-16.** Commit `8e057dd` contains A–E and the verification tooling.
+Matching workspace binaries are built. The full host quality gate, isolated
+daemon flow, native GUI inspection, and selected-data migration rehearsal
+passed. Automatic approval review rejected the live service stop and data
+replacement pending explicit owner approval of that action. The running app
+and live board records have not been changed.
 
 ### Implementation map and remaining verification
 
@@ -15,7 +17,7 @@ Native GUI inspection and the selected-data cutover remain outstanding.
 | C. Environment and resume | `providers/rig/session/environment.rs`, `horizon-agentd/src/session/{run,resume}.rs`, and `worktree.rs`. |
 | D. Common view | `src/board_pane.rs` and `src/board_pane/`, with ordinary session-history entry through workspace commands. |
 | E. Roles and routing | `horizon-board/src/agents.rs`, embedded organizer/task/reviewer skills, and `horizon-agentd/src/board_flow/`. |
-| F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, workspace gate, importer tests, and isolated fixture passed; representative manual GUI verification, selected legacy inventory, and live cutover remain pending. |
+| F. Verification and transition | `scripts/check-board-flow.py` and the migration inventory/converter. Build, full host gate, importer tests, isolated flow, native GUI, and selected-record rehearsal passed. Live cutover is prepared and awaits approval. |
 
 Read state stores a **set of actually seen message IDs** per reader and task,
 not a greatest-message cursor: jumping past a message leaves it unread.
@@ -57,8 +59,8 @@ Historical board-data migration concerns tasks and board conversations;
 it does not migrate the agent conversation-log format or replace session
 management. The old board-specific automation in agentd is also retired.
 The contracts and work packages below retain the accepted implementation
-boundaries. A–E code is now written; the verification and transition obligations
-remain open as summarized above.
+boundaries. A–E and isolated verification are complete; the live transition
+remains open as summarized above.
 
 Retain the board's append-only storage, ordinary task identity, and native
 session-less pane. Replace the September 13 workflow's executable behavior
@@ -326,7 +328,7 @@ checks. The original source-only audit ran no new behavior tests.
 - Regenerated agent/log schemas; agent protocol is 20, log protocol is 5.
   The terminal artifact is unchanged. A full app restart with matching binaries
   is required at cutover.
-- Isolated importer: two Python unittest cases passed; no live data converted.
+- Isolated importer: two Python unittest cases passed; live data is unchanged.
 - `python scripts/check-board-flow.py --bin-dir target/debug --keep`: passed
   with 49 requests to a local deterministic provider. It exercised registration,
   priority/dependency updates, consultation without a worktree, daemon restart,
@@ -340,9 +342,61 @@ checks. The original source-only audit ran no new behavior tests.
   ordering. Stop priority, retained grants, delivery replay/retry, and sparse
   read state are also covered by automated tests.
 
-The integration fixture uses only an isolated temporary repository, dedicated
-daemons/sockets, and a local fake provider. It verifies transport and runtime
-behavior, not a real model's judgment or the visual quality of the native GUI.
-Manual GUI inspection, explicit selection of retained live records, migration
-rehearsal on that selection, and live cutover remain outstanding. Main and the
-running board were not changed by implementation or verification.
+- Full default host gate at commit `8e057dd`: formatting, workspace Clippy,
+  **1,952 nextest tests passed (11 skipped)**, and wire checker passed. This also
+  covers the boundary tests excluded by the sandboxed profile. The host run
+  exposed an obsolete logd assertion for `item-created`; it now checks the
+  typed current-version `ItemStored` envelope. The full gate passed afterward.
+- Native GPUI on isolated Xvfb, inspected as screenshots and driven with real
+  keyboard/mouse events: hierarchy/top-level filter, common child detail,
+  scroll/selection restoration, prerequisite search/add/remove, free state plus
+  independent completion, sibling move/drag, owner consultation, and ordinary
+  working history passed. Only displayed messages were marked read; skipped
+  parent messages and unopened child consultation stayed unread.
+- Explicit CLI termination followed by a native owner post resumed the same
+  task session ID, emitted `SessionResumed`, and displayed both old and new
+  inputs/replies in its ordinary history. All isolated fixture processes were
+  stopped afterward. Native inspection also found and fixed dark-theme
+  Markdown text color in the task body and consultation.
+- A shared-lock snapshot of the actual legacy log was inventoried and converted
+  in isolation. The real CLI/logd loaded all **47 retained tasks and 185 messages**
+  exactly, including 30 owner posts. Edit/reorder/parent/dependency/free-state
+  writes passed. The next created task was ID 50, preserving high-water 49.
+- Starting the replacement agentd against an import-only fixture produced zero
+  provider requests, agent events, or extra board events during the five-second
+  observation; imported bytes remained unchanged. Startup and explicit resume
+  skip retired keeper/planner/worker/verifier roles without deleting their
+  history, branches, or worktrees.
+
+The flow and GUI fixtures use isolated repositories, dedicated daemons/sockets,
+and deterministic local providers. They verify runtime behavior and native UI,
+not a real model's judgment. Main was fast-forwarded to `8e057dd` and rebuilt;
+the running services and real board store are still the old versions.
+
+### Prepared live cutover
+
+The retained selection is IDs **1–47**. IDs **48–49** are workflow-generated
+children of task 43 with no owner posts or comments; they concern the retired
+workflow/structured-links features and are omitted from the active conversion.
+The original log keeps their full historical content. Task 25 is preserved
+conservatively despite a later task describing it as mistakenly created.
+All retained relationship references are closed, and original text, authors,
+message order, duplicates, and timestamps are preserved. Historical runtime
+references are archived rather than rebound to new execution.
+
+The main checkout's ignored `.horizon/board-redesign-cutover/` directory holds
+the source snapshot, selection and exact comparison results, converted log,
+native GUI screenshots/action journal, session inventory, and copies of the
+actual running old binaries (including the unlinked agentd executable).
+The source SHA-256 is
+`613a19afe4a14ba94491e48f95cbf3ebffc406be1048c18ad0f9dd7fec02dc91`.
+
+The remaining operation must recheck that source and idle session state, stop
+the old UI/agentd/logd, save stable board/agent logs, database and workspace,
+replace the board with the verified conversion, and start the matching new UI
+and daemons. Keep terminald running throughout. Verify the existing terminal
+and ordinary agent session IDs, pane/tab layout, exact task/message contents,
+and absence of spontaneous imported work. A failure requires restoration of
+the saved data together with its matching old binaries. No live cutover step
+has run: automatic approval review rejected the stop/replacement before
+execution, so explicit approval of this final operation is outstanding.
