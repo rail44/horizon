@@ -58,10 +58,9 @@
 //! projecting every later append live instead of only at the next restart
 //! (`docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 
+mod board_flow;
 mod hub;
-mod milestone;
 mod session;
-mod wake;
 mod worktree;
 
 use std::path::Path;
@@ -147,60 +146,9 @@ async fn main() -> anyhow::Result<()> {
         horizon_config::trusted_projects(raw_config),
     ));
 
-    // Register the board keeper role and its skill from `horizon-board` —
-    // the first instance of a board "package" (feature + agent definition +
-    // skill) contributed by an external crate. `horizon-agentd` is the
-    // composition root: it depends on both `horizon-agent` (which owns
-    // `RoleDefinition`/`SkillRegistry`) and `horizon-board` (which owns the
-    // keeper role's `pub const` fields and `SKILL_SOURCE`), so it assembles
-    // the `RoleDefinition` from board's data and registers it here, at
-    // startup, before any session is spawned. See
-    // `docs/board-keeper-design.md` §1.
-    let mut board_roles = vec![horizon_agent::roles::RoleDefinition {
-        id: horizon_board::keeper::ROLE_ID,
-        title: horizon_board::keeper::ROLE_TITLE,
-        prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
-        allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
-        model: horizon_board::keeper::ROLE_MODEL,
-        iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
-        include_repository_instructions:
-            horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
-        skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
-        summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
-        standing: horizon_board::keeper::ROLE_STANDING,
-    }];
-    board_roles.extend(milestone::roles::definitions());
-    horizon_agent::roles::register_external(board_roles);
-    horizon_agent::skills::register_external_skill_sources(vec![
-        horizon_board::keeper::SKILL_SOURCE,
-    ]);
-
-    // The event-log path is needed by the v2 wake action's seed-spawn path
-    // (it folds the prior keeper's MemoryDigest sequence). Clone it before
-    // `agent_config` is moved into `spawn_resume_task`.
-    let event_log_path = agent_config.persistence.event_log_path.clone();
-
+    board_flow::roles::register();
     spawn_resume_task(state.clone(), agent_config, duckdb_cell);
-    milestone::spawn(state.clone(), std::env::current_dir().ok());
-
-    // Spawn the board wake subscriber. The wake action is a swappable seam
-    // (`WakeAction` trait); the default is v2 (`ResumeKeeper`, board #39) —
-    // a persistent keeper session that resumes on wake and seed-spawns from
-    // the prior keeper's folded memory if the session was lost. v1
-    // (`SpawnKeeper`, board #35) spawns a fresh keeper per wake and remains
-    // available as a fallback impl. See `docs/board-keeper-design.md` §5
-    // and `docs/standing-agent-memory-design.md` §"#35との接続".
-    {
-        let provider_id = state.providers.lock().unwrap().default_provider_id();
-        let workspace_root = std::env::current_dir().ok();
-        let action = Box::new(wake::ResumeKeeper::new(
-            state.clone(),
-            provider_id.clone(),
-            workspace_root.clone(),
-            Some(event_log_path),
-        ));
-        wake::spawn_subscriber(action, provider_id, workspace_root, state.clone());
-    }
+    board_flow::spawn(state.clone(), std::env::current_dir().ok());
 
     run(listener, &socket_path, state).await
 }

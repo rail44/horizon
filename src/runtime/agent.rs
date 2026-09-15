@@ -51,6 +51,10 @@ pub(super) enum Op {
     SessionList {
         reply: crossbeam_channel::Sender<Result<Vec<wire::SessionSummary>, String>>,
     },
+    WatchBoard {
+        root: PathBuf,
+        reply: crossbeam_channel::Sender<Result<(), String>>,
+    },
     HostToolResponse(HostToolResponse),
     Drain,
     /// Fire-and-forget request to rebuild `[provider]` in the running
@@ -512,6 +516,13 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             tokio::spawn(async move {
                 let result = with_deadline(OP_TIMEOUT, "agent list", hub.list_agents()).await;
+                let _ = reply.send(result);
+            });
+        }
+        Op::WatchBoard { root, reply } => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let result = with_deadline(OP_TIMEOUT, "watch board", hub.watch_board(root)).await;
                 let _ = reply.send(result);
             });
         }

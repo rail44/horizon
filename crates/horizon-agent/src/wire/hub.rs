@@ -106,6 +106,8 @@ use crate::contract::{Command, SessionId};
 /// - **v19 — wire-only `Unknown` catch-alls removed; no decode compat**
 ///   (owner decision 2026-08-03 — this is a personal project, so backward
 ///   compatibility is not carried by default).
+/// - **v20 — board session routing and environment activation**: durable
+///   session inputs/outcomes, in-session worktree handoff, and `watch_board`.
 ///
 /// Additive since v19, no bump (the v12 precedent): **live background-task
 /// progress** — `AgentWireEvent::TaskProgress` (`contract::TaskProgress`),
@@ -113,7 +115,7 @@ use crate::contract::{Command, SessionId};
 /// (current tool, reasoning vs tool-running) onto the requester's
 /// attachment channel. Ephemeral UI feedback: never persisted, dropped
 /// while no client is attached, not replayed on attach.
-pub const AGENT_PROTOCOL_VERSION: u32 = 19;
+pub const AGENT_PROTOCOL_VERSION: u32 = 20;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -123,7 +125,7 @@ pub const AGENT_PROTOCOL_VERSION: u32 = 19;
 /// interop, they need honest restart, so a mismatched `hello` is rejected
 /// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
 /// adoption-design.md` §3/§6) rather than bridged by gate constants.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 19;
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 20;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -215,6 +217,9 @@ pub trait SessionHub {
     /// `Control::SessionList`/`SessionListResult`.
     async fn list_agents(&self) -> Result<Vec<SessionSummary>, HubError>;
 
+    /// Registers a project's board for task/session event delivery.
+    async fn watch_board(&self, workspace_root: std::path::PathBuf) -> Result<(), HubError>;
+
     /// Spawns a fresh agent session (`Control::SessionNew`) and attaches
     /// to it.
     async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError>;
@@ -258,16 +263,12 @@ mod tests {
         );
     }
 
-    /// The two hubs' version pairs are independent constants but stay
-    /// equal in practice: the phase-2 split started them equal (a crate
-    /// reorganization, not a wire event), and the v19 `Unknown`-removal
-    /// bump moved both in lockstep too. (The terminal side pins the mirror
-    /// image of this assertion; neither crate may name the other, so the
-    /// property is checked from both ends against the literal 19.)
+    /// Board routing and environment handoff require matching shell/agentd
+    /// builds. The terminal protocol evolves independently.
     #[test]
-    fn the_split_started_at_the_pre_split_version() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 19);
-        assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, 19);
+    fn board_routing_requires_the_current_agent_protocol() {
+        assert_eq!(AGENT_PROTOCOL_VERSION, 20);
+        assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, AGENT_PROTOCOL_VERSION);
     }
 
     /// The hub *method surface*, snapshotted mechanically from the serde
@@ -287,7 +288,7 @@ mod tests {
             };
         assert_eq!(
             variants,
-            "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `NewAgent`, \
+            "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `WatchBoard`, `NewAgent`, \
              `AttachAgent`, `Drain`, `ReloadProviderConfig` at line 1 column 10",
         );
 

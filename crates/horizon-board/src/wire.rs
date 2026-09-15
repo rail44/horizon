@@ -33,12 +33,12 @@ use crate::store::Position;
 /// policy (`MIN_SUPPORTED_LOG_PROTOCOL_VERSION == LOG_PROTOCOL_VERSION`),
 /// same-machine self-spawned daemons need no cross-version interop, only
 /// honest restart.
-pub const LOG_PROTOCOL_VERSION: u32 = 4;
+pub const LOG_PROTOCOL_VERSION: u32 = 5;
 
 /// The oldest log-wire version this build is still willing to negotiate down
 /// to in [`LogHub::hello`]. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
-pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 4;
+pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 5;
 
 /// The version range this build advertises in every `hello` to `horizon-logd`.
 pub fn log_version_range() -> VersionRange {
@@ -66,15 +66,39 @@ pub struct LogHubHello {
 ///
 /// `BoardEvent` is reused internally (logd constructs it from these
 /// parameters when appending to the JSONL) — the wire type is the operation,
-/// not the event, because operations like `add` need context the event does
-/// not carry (e.g. `Position` for rank computation) and because `claim` must
-/// find-and-append atomically.
+/// not the event, because operations like `add` need sibling rank context.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum IngestRequest {
-    Workflow {
+    SetParent {
         id: u64,
-        expected_revision: u64,
-        mutation: crate::workflow::Mutation,
+        parent: Option<u64>,
+        position: Position,
+    },
+    SetCompleted {
+        id: u64,
+        completed: bool,
+    },
+    SetDependencies {
+        id: u64,
+        depends_on: Vec<u64>,
+    },
+    BindSession {
+        id: u64,
+        session_id: String,
+        review: bool,
+    },
+    PostMessage {
+        id: u64,
+        message: crate::Comment,
+    },
+    MarkRead {
+        id: u64,
+        reader: String,
+        message_id: String,
+    },
+    AdvanceCursor {
+        consumer: String,
+        position: u64,
     },
     /// `Store::add`: create a new item, optionally with a parent.
     Add {
@@ -90,13 +114,17 @@ pub enum IngestRequest {
         text: String,
     },
     /// `Store::set_status`: set an item's status string.
-    SetStatus { id: u64, status: String },
-    /// `Store::assign`: set an item's assignee.
-    Assign { id: u64, who: String },
+    SetStatus {
+        id: u64,
+        status: String,
+    },
+
     /// `Store::move_item`: re-rank an item to a new position.
-    MoveItem { id: u64, position: Position },
-    /// `Store::claim`: atomically claim the first ready+unassigned item.
-    Claim { who: String },
+    MoveItem {
+        id: u64,
+        position: Position,
+    },
+
     /// `Store::edit`: update an item's title and/or body. Each `Option` is
     /// `None` for "leave unchanged", matching how `ItemUpdated` models partial
     /// updates.
@@ -111,14 +139,12 @@ pub enum IngestRequest {
 /// corresponding `Store` method returns.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum IngestReply {
-    /// `add` / `claim`: the new or claimed item (with assigned id and rank).
+    /// The created task or atomically bound task session.
     Item(Item),
-    /// `comment` / `set_status` / `assign`: success, no data.
+    /// Successful mutation with no returned data.
     Done,
     /// `move_item`: the new rank string.
     Rank(String),
-    /// `claim` when no ready+unassigned item was found.
-    MaybeItem(Option<Item>),
 }
 
 /// The domain error `ingest` returns. Distinct from [`HubError`] (which is
@@ -129,7 +155,7 @@ pub enum IngestReply {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
 pub enum LogError {
     #[error("{0}")]
-    InvalidWorkflow(String),
+    InvalidOperation(String),
     #[error("item {0} not found")]
     ItemNotFound(u64),
     #[error("rank space exhausted (rebalance needed)")]
@@ -218,7 +244,7 @@ mod tests {
 
     #[test]
     fn the_lockstep_pair_is_equal() {
-        assert_eq!(LOG_PROTOCOL_VERSION, 4);
-        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 4);
+        assert_eq!(LOG_PROTOCOL_VERSION, 5);
+        assert_eq!(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, 5);
     }
 }

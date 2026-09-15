@@ -161,6 +161,14 @@ impl SessionHub for Hub {
     /// Readiness-gated exactly as the JSONL `session_list` was (bind-first
     /// fix in `main`): a client connecting while the startup resume is
     /// still running must not see a partial view.
+    async fn watch_board(&self, workspace_root: std::path::PathBuf) -> Result<(), HubError> {
+        self.hello.require()?;
+        self.connection.wait_until_resume_ready().await;
+        self.connection
+            .register_board(workspace_root)
+            .map_err(HubError::Call)
+    }
+
     async fn list_agents(&self) -> Result<Vec<SessionSummary>, HubError> {
         self.hello.require()?;
         self.connection.wait_until_resume_ready().await;

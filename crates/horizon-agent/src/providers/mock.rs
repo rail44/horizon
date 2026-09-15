@@ -286,6 +286,26 @@ impl Provider for MockProvider {
                         }
                         let _ = events_tx.send(tool_result_message(&result).into());
                     }
+                    Command::SessionInput(input) => {
+                        let _ = events_tx.send(
+                            Event::InputOutcome(crate::contract::SessionInputOutcome {
+                                input_ids: vec![input.id.clone()],
+                                delivery_id: format!("input-result:{}", input.id),
+                                reply_to: input.reply_to,
+                                outcome: crate::contract::InputResult::Success {
+                                    text: format!("Mock response: {}", input.text),
+                                },
+                            })
+                            .into(),
+                        );
+                    }
+                    Command::ActivateWorktree { base } => {
+                        let _ = events_tx.send(Event::EnvironmentReady { base }.into());
+                    }
+                    Command::EnvironmentPrepared { .. }
+                    | Command::EnvironmentActivationFailed { .. }
+                    | Command::AcknowledgeDelivery { .. }
+                    | Command::SendSessionInput { .. } => {}
                     Command::ContinueTurn => {
                         // The mock provider has no turn-loop guard, so it
                         // never halts a turn in the first place -- a safe

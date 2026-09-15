@@ -1757,7 +1757,7 @@ fn output_cap_truncated_ignores_a_cancelled_turn() {
 /// the turn as `Failed`, and auto-continues with a synthetic prompt — reusing
 /// the same consecutive-continue guard (`record_truncation_continue`), not a
 /// new one. The fallback turn (non-truncated) lets the loop exit and the
-/// function return `None`.
+/// return the recovered round for checkpoint processing before finalization.
 #[tokio::test]
 async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
     let cap = RigAgentConfig::default().max_output_tokens;
@@ -1785,10 +1785,11 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
 
     let result = state.handle_truncation_recovery(outcome).await;
 
-    assert!(
-        result.is_none(),
-        "a cap-truncated turn should be fully handled"
-    );
+    let recovered =
+        result.expect("recovered round must still pass through final checkpoint processing");
+    assert!(!recovered.cap_truncated);
+    assert!(!recovered.failed);
+    assert!(recovered.final_text.is_some());
 
     let events: Vec<_> = rx.try_iter().collect();
 
@@ -3771,4 +3772,232 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
             ..
         })
     ));
+}
+
+#[test]
+fn identified_input_additions_wait_for_tool_results_and_keep_answer_destinations() {
+    let (tx, rx) = start_fallback_rig_session();
+    let input = |id: &str, text: &str, route: &str| {
+        Command::SessionInput(crate::contract::SessionInput {
+            resume_work: false,
+            id: id.into(),
+            origin: "owner".into(),
+            text: text.into(),
+            reply_to: Some(route.into()),
+        })
+    };
+    tx.send(input("first", "multi tool please", "first-route"))
+        .unwrap();
+    let mut calls = Vec::new();
+    while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
+        if let Event::ToolCallRequested(call) = recv(&rx).event {
+            calls.push(call.call_id);
+        }
+    }
+    tx.send(input("addition", "include this detail", "first-route"))
+        .unwrap();
+    tx.send(input("other", "separate question", "other-route"))
+        .unwrap();
+    for call in calls {
+        tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call,
+            None,
+            serde_json::json!({"ok":true}),
+        )))
+        .unwrap();
+    }
+    let mut outcomes = Vec::new();
+    while outcomes.len() < 2 {
+        let event = recv(&rx).event;
+        assert!(!matches!(event, Event::TurnEnded(TurnEndReason::Cancelled)));
+        if let Event::InputOutcome(outcome) = event {
+            outcomes.push(outcome);
+        }
+    }
+    assert_eq!(outcomes[0].input_ids, ["first", "addition"]);
+    assert_eq!(outcomes[0].reply_to.as_deref(), Some("first-route"));
+    assert_eq!(outcomes[1].input_ids, ["other"]);
+    assert_eq!(outcomes[1].reply_to.as_deref(), Some("other-route"));
+    tx.send(Command::Shutdown).unwrap();
+}
+
+#[test]
+fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_round() {
+    let (tx, rx) = start_fallback_rig_session();
+    tx.send(Command::UserMessage {
+        text: "multi tool please".into(),
+    })
+    .unwrap();
+    let mut calls = Vec::new();
+    while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
+        if let Event::ToolCallRequested(call) = recv(&rx).event {
+            calls.push(call.call_id);
+        }
+    }
+    tx.send(Command::ActivateWorktree {
+        base: "explicit-base".into(),
+    })
+    .unwrap();
+    for call in &calls[..calls.len() - 1] {
+        tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call.clone(),
+            None,
+            serde_json::json!({"ok":true}),
+        )))
+        .unwrap();
+    }
+    assert!(rx
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .is_err());
+    tx.send(Command::ToolCallResult(ToolCallResult::new(
+        calls.last().unwrap().clone(),
+        None,
+        serde_json::json!({"ok":true}),
+    )))
+    .unwrap();
+    loop {
+        if let Event::EnvironmentReady { base } = recv(&rx).event {
+            assert_eq!(base, "explicit-base");
+            break;
+        }
+    }
+    assert!(rx
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .is_err());
+    tx.send(Command::EnvironmentPrepared {
+        workspace_root: std::env::current_dir().unwrap(),
+        trusted_project: false,
+    })
+    .unwrap();
+    loop {
+        if matches!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed)) {
+            break;
+        }
+    }
+    tx.send(Command::Shutdown).unwrap();
+}
+
+#[test]
+fn cancel_preserves_queued_requests_without_automatically_starting_them() {
+    let (tx, rx) = start_fallback_rig_session();
+    let input = |id: &str, text: &str| {
+        Command::SessionInput(crate::contract::SessionInput {
+            resume_work: false,
+            id: id.into(),
+            origin: "owner".into(),
+            text: text.into(),
+            reply_to: Some(id.into()),
+        })
+    };
+    tx.send(input("active", "multi tool please")).unwrap();
+    let mut count = 0;
+    while count < MULTI_TOOL_TEST_BATCH_SIZE {
+        if matches!(recv(&rx).event, Event::ToolCallRequested(_)) {
+            count += 1;
+        }
+    }
+    tx.send(input("queued", "later question")).unwrap();
+    tx.send(Command::Cancel { request_id: None }).unwrap();
+    loop {
+        if matches!(
+            recv(&rx).event,
+            Event::StateChanged(SessionState::WaitingForUser)
+        ) {
+            break;
+        }
+    }
+    for event in rx.try_iter() {
+        assert!(!matches!(
+            event.event,
+            Event::InputOutcome(crate::contract::SessionInputOutcome {
+                outcome: crate::contract::InputResult::Success { .. },
+                ..
+            })
+        ));
+    }
+    assert!(rx
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .is_err());
+    tx.send(Command::SessionInput(crate::contract::SessionInput {
+        resume_work: false,
+        id: "passive".into(),
+        origin: "external".into(),
+        text: "dependency update".into(),
+        reply_to: None,
+    }))
+    .unwrap();
+    assert!(rx
+        .recv_timeout(std::time::Duration::from_millis(100))
+        .is_err());
+    tx.send(Command::SessionInput(crate::contract::SessionInput {
+        resume_work: true,
+        id: "owner".into(),
+        origin: "opaque".into(),
+        text: "resume the work".into(),
+        reply_to: Some("owner".into()),
+    }))
+    .unwrap();
+    loop {
+        if matches!(
+            recv(&rx).event,
+            Event::InputOutcome(crate::contract::SessionInputOutcome {
+                outcome: crate::contract::InputResult::Success { .. },
+                ..
+            })
+        ) {
+            break;
+        }
+    }
+    tx.send(Command::Shutdown).unwrap();
+}
+
+#[test]
+fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
+    let (tx, rx) = start_fallback_rig_session();
+    tx.send(Command::UserMessage {
+        text: "multi tool please".into(),
+    })
+    .unwrap();
+    let mut calls = Vec::new();
+    while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
+        if let Event::ToolCallRequested(call) = recv(&rx).event {
+            calls.push(call.call_id);
+        }
+    }
+    tx.send(Command::ActivateWorktree {
+        base: "base".into(),
+    })
+    .unwrap();
+    for call in calls {
+        tx.send(Command::ToolCallResult(ToolCallResult::new(
+            call,
+            None,
+            serde_json::json!({"ok":true}),
+        )))
+        .unwrap();
+    }
+    loop {
+        if matches!(recv(&rx).event, Event::EnvironmentReady { .. }) {
+            break;
+        }
+    }
+    tx.send(Command::Shutdown).unwrap();
+    tx.send(Command::EnvironmentPrepared {
+        workspace_root: std::env::current_dir().unwrap(),
+        trusted_project: false,
+    })
+    .unwrap();
+    loop {
+        let event = recv(&rx).event;
+        assert!(!matches!(
+            event,
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::Assistant,
+                ..
+            })
+        ));
+        if matches!(event, Event::StateChanged(SessionState::Terminated)) {
+            break;
+        }
+    }
 }

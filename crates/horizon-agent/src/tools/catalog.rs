@@ -646,21 +646,13 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        // `board.read` / `board.comment` (`docs/board-keeper-design.md`):
-        // the board keeper's (and any future board-aware role's) interface to
-        // the task board. Both are `AutoAllowRead` — `board.read` is a read,
-        // and `board.comment` is an append-only write whose audit trail is
-        // the board event log (same reasoning as `knowledge.write`).
-        // Structural enforcement of "comments only" is at the role level:
-        // the keeper role's allowlist names `board.comment` but no
-        // state-mutation tool, and no such tool exists in this catalog.
         Definition {
             id: "board.read".to_string(),
             title: "Read Board".to_string(),
             description: "Read the task board. If `id` is given, show that item with its \
                 full comment thread; otherwise list all items in rank order, optionally \
-                filtered by status. Items include id, title, body, status, rank, assignee, \
-                parent, dependencies, links, and comments."
+                filtered by status. Items include their hierarchy, priority, dependencies, \
+                completion, associated sessions, and conversation."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -680,10 +672,17 @@ pub(crate) fn definitions() -> Vec<Definition> {
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {
-            id: "board.report".to_string(),
-            title: "Save Milestone Report".to_string(),
-            description: "Save the assigned milestone attempt's plan, task result, or blocker. Only the assigned session can report. Use the id and attempt token from the assignment. Task checks must name commands actually run and their outcomes. The report is applied when your turn ends.".to_string(),
-            input_schema: super::board::report_schema(),
+            id: "board.update".into(),
+            title: "Update Board Task".into(),
+            description: "Create or edit ordinary tasks, set parent/dependencies, reorder among siblings, or record project-defined state and completion. For move, provide position and relative_to for before/after. Completion is separate from the state label.".into(),
+            input_schema: super::board::update_schema(),
+            permission: ToolPermission::AutoAllowRead,
+        },
+        Definition {
+            id: "board.session".into(),
+            title: "Work on Board Task".into(),
+            description: "consult: send a task session a request whose final answer goes to that task's board conversation. implement: request a worktree at explicit base for your assigned task, retaining this session. Wait for the environment outcome before editing. review: ask the task's separate reviewer to inspect base..tip with checks; its final answer returns to you. send: deliver text to a session, optionally requesting a reply to a session UUID. Inputs never cancel a running tool.".into(),
+            input_schema: super::board::session_schema(),
             permission: ToolPermission::AutoAllowRead,
         },
         Definition {

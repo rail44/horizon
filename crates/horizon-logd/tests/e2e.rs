@@ -169,7 +169,11 @@ async fn ingest_appends_and_assigns_seq() {
     let text = std::fs::read_to_string(&path).expect("read events.jsonl");
     let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
     assert_eq!(lines.len(), 2);
-    assert!(lines[0].contains("\"item-created\""));
+    let event: horizon_board::Envelope = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(event.version, horizon_board::VERSION);
+    assert!(
+        matches!(event.event, horizon_board::BoardEvent::ItemStored { id: 1, item } if item.id == 1)
+    );
     assert!(lines[0].contains("\"id\":1"));
     assert!(lines[1].contains("\"id\":2"));
 }
@@ -272,12 +276,11 @@ async fn board_store_client_round_trip_through_real_logd() {
     assert_eq!(shown.comments.len(), 1);
     assert_eq!(shown.comments[0].text, "a note");
 
-    // claim on the same store through the same daemon.
-    let claimed = store.claim("alice").await.expect("claim through logd");
-    let claimed = claimed.expect("a ready+unassigned item exists");
-    assert_eq!(claimed.id, 1);
-    assert_eq!(claimed.status, "in-progress");
-    assert_eq!(claimed.assignee, "alice");
+    store
+        .set_completed(1, true)
+        .await
+        .expect("complete through logd");
+    assert!(store.show(1).unwrap().unwrap().completed);
 
     drop(logd);
     std::env::remove_var("HORIZON_LOGD_BINARY");

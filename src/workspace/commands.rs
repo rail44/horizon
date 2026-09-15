@@ -46,17 +46,160 @@ fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> b
             ))
 }
 
+/// Binding writes precede asynchronous daemon installation. Retry only this
+/// board's missing bindings; never start a session or adopt unrelated sessions.
+fn load_board_summaries(
+    mut list: impl FnMut() -> Result<Vec<horizon_agent::wire::SessionSummary>, String>,
+    needed: &std::collections::HashSet<SessionId>,
+) -> Result<Vec<horizon_agent::wire::SessionSummary>, String> {
+    for attempt in 0..20 {
+        let summaries = list()?;
+        if attempt == 19
+            || needed.iter().all(|id| {
+                summaries
+                    .iter()
+                    .any(|summary| summary.session_id.as_uuid() == id.as_uuid())
+            })
+        {
+            return Ok(summaries);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    unreachable!("last attempt returns")
+}
+
+fn board_session_still_requested(was_registered: bool, is_registered: bool) -> bool {
+    // Removing an already-known session while lookup was running is an
+    // explicit termination; a stale summary must not add it back.
+    !was_registered || is_registered
+}
+
+fn register_board_summary(
+    workspace: &mut Workspace,
+    summary: &horizon_agent::wire::SessionSummary,
+) -> Result<SessionId, String> {
+    let id = SessionId::from_uuid(summary.session_id.as_uuid());
+    if workspace
+        .session_pane_kind(id)
+        .is_some_and(|kind| kind != horizon_workspace::PaneKind::Agent)
+    {
+        return Err("The task session ID belongs to a different session kind".into());
+    }
+    workspace.register_detached_session(horizon_workspace::PaneKind::Agent, id);
+    if let Some(root) = summary.workspace_root.clone() {
+        workspace.set_session_workspace_root(id, root);
+    }
+    if let Some(parent) = summary.parent_session_id {
+        workspace.set_session_parent(id, SessionId::from_uuid(parent.as_uuid()));
+    }
+    Ok(id)
+}
+
 impl WorkspaceShell {
-    fn open_board_milestone_session(&self, cx: &mut Context<Self>) {
+    fn adopt_board_session(
+        &mut self,
+        handle: &crate::runtime::AgentdHandle,
+        summary: horizon_agent::wire::SessionSummary,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        let id = register_board_summary(&mut self.workspace, &summary)?;
+        if let Some(session) = self.agent_sessions.get(&id) {
+            if session.read(cx).runtime_unreachable() {
+                session.update(cx, |session, cx| {
+                    session.reattach(|| handle.attach_session(summary.session_id), cx)
+                });
+            }
+        } else {
+            let wire = handle.attach_session(summary.session_id);
+            let title = self.session_title_tx.clone();
+            self.agent_sessions
+                .insert(id, cx.new(|cx| AgentSession::new(wire, id, title, cx)));
+        }
+        Ok(())
+    }
+
+    pub(super) fn refresh_board_sessions(
+        &self,
+        view: Entity<crate::board_pane::BoardPaneView>,
+        sessions: Vec<SessionId>,
+        cx: &mut Context<Self>,
+    ) {
+        let needed = sessions
+            .iter()
+            .copied()
+            .filter(|id| {
+                self.workspace.session_pane_kind(*id).is_none()
+                    || self
+                        .agent_sessions
+                        .get(id)
+                        .is_none_or(|session| session.read(cx).runtime_unreachable())
+            })
+            .collect::<std::collections::HashSet<_>>();
+        if needed.is_empty() || self.agentd.is_none() {
+            view.update(cx, |view, _| view.finish_inventory_refresh(&sessions));
+            return;
+        }
+        let registered_at_request = needed
+            .iter()
+            .copied()
+            .filter(|id| self.workspace.session_pane_kind(*id).is_some())
+            .collect::<std::collections::HashSet<_>>();
+        let handle = self.agentd.clone().expect("checked above");
+        let epoch = view.read(cx).navigation_epoch();
+        cx.spawn(async move |this, cx| {
+            let request = handle.clone();
+            let requested = needed.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { load_board_summaries(|| request.session_list(), &requested) })
+                .await;
+            let _ = this.update(cx, |shell, cx| {
+                view.update(cx, |view, _| view.finish_inventory_refresh(&sessions));
+                if shell.restoring_workspace
+                    || shell
+                        .agentd
+                        .as_ref()
+                        .is_none_or(|current| !current.same_runtime(&handle))
+                {
+                    return;
+                }
+                let result = result.and_then(|summaries| {
+                    for summary in summaries {
+                        let id = SessionId::from_uuid(summary.session_id.as_uuid());
+                        if needed.contains(&id)
+                            && board_session_still_requested(
+                                registered_at_request.contains(&id),
+                                shell.workspace.session_pane_kind(id).is_some(),
+                            )
+                        {
+                            shell.adopt_board_session(&handle, summary, cx)?;
+                        }
+                    }
+                    Ok(())
+                });
+                if let Err(error) = result {
+                    if view.read(cx).navigation_epoch() == epoch {
+                        view.update(cx, |view, cx| view.set_error(error, cx));
+                    }
+                }
+                shell.persist_workspace();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn open_board_task_session(&self, cx: &mut Context<Self>) {
         let Some(view) = self.active_board_pane() else {
             return;
         };
-        let Some(session_id) = view.read(cx).milestone_session() else {
+        let Some(session_id) = view.read(cx).task_session() else {
             return;
         };
         let Some(handle) = self.agentd.clone() else {
             return;
         };
+        let navigation_epoch = view.read(cx).navigation_epoch();
         let window_handle = self.window;
         cx.spawn(async move |this, cx| {
             let list_handle = handle.clone();
@@ -66,7 +209,8 @@ impl WorkspaceShell {
                 .await;
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.restoring_workspace
+                    if view.read(cx).navigation_epoch() != navigation_epoch
+                        || shell.restoring_workspace
                         || shell
                             .agentd
                             .as_ref()
@@ -81,32 +225,19 @@ impl WorkspaceShell {
                     });
                     let Some(summary) = summary else {
                         view.update(cx, |view, cx| {
-                            view.set_workflow_error(
+                            view.set_error(
                                 "The session is not available in the current agent runtime".into(),
                                 cx,
                             )
                         });
                         return;
                     };
-                    if !shell.agent_sessions.contains_key(&session_id) {
-                        shell.workspace.register_detached_session(
-                            horizon_workspace::PaneKind::Agent,
-                            session_id,
-                        );
-                        if let Some(root) = summary.workspace_root {
-                            shell.workspace.set_session_workspace_root(session_id, root);
-                        }
-                        let session_handle = handle.attach_session(summary.session_id);
-                        let title_tx = shell.session_title_tx.clone();
-                        shell.agent_sessions.insert(
-                            session_id,
-                            cx.new(|cx| {
-                                AgentSession::new(session_handle, session_id, title_tx, cx)
-                            }),
-                        );
+                    if let Err(error) = shell.adopt_board_session(&handle, summary, cx) {
+                        view.update(cx, |view, cx| view.set_error(error, cx));
+                        return;
                     }
                     if let Err(error) = shell.external_attach(session_id, true, window, cx) {
-                        view.update(cx, |view, cx| view.set_workflow_error(error, cx));
+                        view.update(cx, |view, cx| view.set_error(error, cx));
                     }
                 });
             });
@@ -190,20 +321,22 @@ impl WorkspaceShell {
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
             CommandId::OpenBoard => self.open_board_pane(window, cx),
-            CommandId::EnableBoardMilestone
-            | CommandId::SubmitBoardDecision
-            | CommandId::PauseBoardMilestone
-            | CommandId::ResumeBoardMilestone
-            | CommandId::ReplanBoardMilestone
-            | CommandId::ToggleBoardHistory
-            | CommandId::OpenBoardRelatedItem
-            | CommandId::SelectBoardDecision
-            | CommandId::ToggleBoardMilestoneFilter => {
+            CommandId::OpenBoardRelatedItem
+            | CommandId::BackBoardList
+            | CommandId::AddBoardTask
+            | CommandId::PostBoardMessage
+            | CommandId::MoveBoardTaskUp
+            | CommandId::MoveBoardTaskDown
+            | CommandId::ReorderBoardTask
+            | CommandId::SaveBoardState
+            | CommandId::ToggleBoardCompleted
+            | CommandId::AddBoardDependency
+            | CommandId::RemoveBoardDependency => {
                 if let Some(view) = self.active_board_pane() {
-                    view.update(cx, |view, cx| view.workflow_command(id, window, cx));
+                    view.update(cx, |view, cx| view.board_command(id, window, cx));
                 }
             }
-            CommandId::OpenBoardMilestoneSession => self.open_board_milestone_session(cx),
+            CommandId::OpenBoardTaskSession => self.open_board_task_session(cx),
             CommandId::ToggleBoardExpansion => {
                 if let Some(view) = self.active_board_pane() {
                     view.update(cx, |view, cx| view.toggle_expansion(cx));
@@ -565,6 +698,81 @@ mod tests {
     use horizon_workspace::{PaneKind, SessionKind, Workspace};
 
     use super::{command_blocked_by_restore, prepare_workspace_for_terminal_runtime_reload};
+    #[test]
+    fn stale_board_lookup_cannot_restore_a_just_terminated_session() {
+        assert!(!super::board_session_still_requested(true, false));
+        assert!(super::board_session_still_requested(true, true));
+        // A later owner post starts a fresh lookup for the now-absent ID.
+        assert!(super::board_session_still_requested(false, false));
+    }
+
+    #[test]
+    fn board_inventory_retries_a_binding_before_daemon_installation() {
+        let summary = horizon_agent::wire::SessionSummary {
+            session_id: horizon_agent::contract::SessionId::new(),
+            provider_id: horizon_agent::contract::ProviderId("mock".into()),
+            role_id: None,
+            parent_session_id: None,
+            workspace_root: None,
+        };
+        let requested = std::collections::HashSet::from([horizon_workspace::SessionId::from_uuid(
+            summary.session_id.as_uuid(),
+        )]);
+        let mut calls = 0;
+        let result = super::load_board_summaries(
+            || {
+                calls += 1;
+                Ok(if calls == 1 {
+                    vec![]
+                } else {
+                    vec![summary.clone()]
+                })
+            },
+            &requested,
+        )
+        .unwrap();
+        assert_eq!(calls, 2);
+        assert_eq!(result, vec![summary]);
+    }
+
+    #[test]
+    fn board_binding_registration_is_detached_idempotent_and_resumable() {
+        let mut workspace = Workspace::mvp();
+        let tabs = workspace.tab_count();
+        let active = workspace.active_session_id();
+        let summary = horizon_agent::wire::SessionSummary {
+            session_id: horizon_agent::contract::SessionId::new(),
+            provider_id: horizon_agent::contract::ProviderId("mock".into()),
+            role_id: None,
+            parent_session_id: None,
+            workspace_root: Some("/task".into()),
+        };
+        let id = super::register_board_summary(&mut workspace, &summary).unwrap();
+        super::register_board_summary(&mut workspace, &summary).unwrap();
+        assert_eq!(
+            workspace
+                .session_summaries()
+                .iter()
+                .filter(|s| s.id == id)
+                .count(),
+            1
+        );
+        assert_eq!(workspace.tab_count(), tabs);
+        assert_eq!(workspace.active_session_id(), active);
+        assert!(workspace.pane_location_for_session(id).is_none());
+        workspace.terminate_session(id);
+        super::register_board_summary(&mut workspace, &summary).unwrap();
+        assert_eq!(
+            workspace
+                .session_summaries()
+                .iter()
+                .filter(|s| s.id == id)
+                .count(),
+            1
+        );
+        assert!(workspace.pane_location_for_session(id).is_none());
+    }
+
     // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
     // mod`), not here -- unlike `command_blocked_by_restore`/
     // `prepare_workspace_for_terminal_runtime_reload`, both defined in this

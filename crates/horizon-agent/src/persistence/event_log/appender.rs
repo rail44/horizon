@@ -40,6 +40,27 @@ impl Appender {
     /// Stamps the same host-authored placement metadata onto every later
     /// record. Callers which do not know a context (legacy fixtures and
     /// compatibility tests) keep emitting the pre-field envelope.
+    pub fn set_session_context(&mut self, context: PersistedSessionContext) {
+        self.session_context = Some(context);
+    }
+
+    /// Commit an environment transition with its new placement, restoring the
+    /// old placement on failure so consultation can continue coherently.
+    pub fn activate_context(
+        &mut self,
+        context: PersistedSessionContext,
+        event: ProviderEvent,
+    ) -> Result<()> {
+        let previous = self.session_context.replace(context);
+        let result = self
+            .append_provider_events(vec![event])
+            .and_then(|()| self.writer.flush());
+        if result.is_err() {
+            self.session_context = previous;
+        }
+        result
+    }
+
     pub fn with_session_context(mut self, session_context: PersistedSessionContext) -> Self {
         self.session_context = Some(session_context);
         self

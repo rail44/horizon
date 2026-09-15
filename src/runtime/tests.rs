@@ -301,6 +301,10 @@ impl TerminalHub for FakeTerminalHub {
 }
 
 impl SessionHub for FakeSessionHub {
+    async fn watch_board(&self, _root: std::path::PathBuf) -> Result<(), HubError> {
+        Ok(())
+    }
+
     async fn hello(&self, _client: ClientHello) -> Result<HubHello, HubError> {
         if self.behavior.lock().unwrap().hang_hello {
             std::future::pending::<()>().await;

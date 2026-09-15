@@ -250,9 +250,11 @@ fn spawn_host(
     approval: Option<HostExecutionApproval>,
     result_tx: Sender<BashCompletion>,
 ) {
+    let work_guard = super::work_boundary::begin(session_id);
     registry::enqueue(
         session_id,
         Box::new(move || {
+            let _work_guard = work_guard;
             let run_call_id = call_id.clone();
             run_job_body(session_id, call_id, &result_tx, move || {
                 let mut output = exec::run(&run_call_id, &input, &cwd, &config);
@@ -323,9 +325,11 @@ pub(crate) fn spawn_sandboxed(
     git_metadata_roots: Option<Vec<PathBuf>>,
     result_tx: Sender<BashCompletion>,
 ) {
+    let work_guard = super::work_boundary::begin(session_id);
     registry::enqueue(
         session_id,
         Box::new(move || {
+            let _work_guard = work_guard;
             let run_call_id = call_id.clone();
             // `network` (an `Option<Arc<SessionNetworkProxy>>`) holds its
             // own locks/oneshot channels internally, which makes it

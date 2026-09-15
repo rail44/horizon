@@ -720,7 +720,7 @@ fn fold_until_terminal(
                     // task child (a standing role never spawns task children).
                     | Event::MemoryDigest(_)
                     | Event::MemoryCheckpointMissed
-                    | Event::MemorySeeded => {}
+                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded => {}
                 }
                 if emitted.as_ref() != Some(&activity) {
                     on_activity(activity.clone());

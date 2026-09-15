@@ -1,164 +1,206 @@
-//! The daemon-side implementation of `BoardHost` (`tools::board::BoardHost`),
-//! the board read/comment capability installed on every session's
-//! `ToolSessionState`. Uses `horizon_board::Store` for reads (synchronous file
-//! folds) and writes (async logd round-trips).
-//!
-//! Board reads (`list`/`show`) are synchronous file folds — no tokio runtime
-//! needed. Board writes (`comment`) are async (one remoc rtc round-trip to
-//! `horizon-logd`); since the session thread is a plain OS thread (not a
-//! tokio worker), `comment` builds a current-thread tokio runtime per call
-//! and blocks on it. This is cheap relative to a logd socket round-trip and
-//! happens infrequently (a few comments per keeper session), so the overhead
-//! of a per-call runtime beats the complexity of threading a `Handle`
-//! through `AgentdState`.
+//! Board data and task-session tools at the agent/board composition boundary.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use horizon_agent::contract::{Event, SessionId, ToolCallRequest};
 use horizon_agent::tools::BoardHost;
+use horizon_board::{Position, Store};
 use serde_json::Value;
 
-/// Model JSON uses readable tags; board wire enums use external tags to
-/// round-trip the binary Postbag codec as well as the JSON event log.
-#[derive(serde::Deserialize)]
-#[serde(tag = "kind", rename_all = "kebab-case")]
-enum SubmittedReport {
-    Plan {
-        plan: horizon_board::workflow::PlanDraft,
-    },
-    Task {
-        summary: String,
-        checks: Vec<String>,
-        commit: String,
-    },
-    Discussion {
-        reply: String,
-        resolution: Option<String>,
-        acceptance: Option<Vec<String>>,
-    },
-    Verification {
-        verification: horizon_board::workflow::Verification,
-    },
-    Blocked {
-        reason: String,
-    },
-}
-
-impl From<SubmittedReport> for horizon_board::workflow::Report {
-    fn from(report: SubmittedReport) -> Self {
-        match report {
-            SubmittedReport::Plan { plan } => Self::Plan { plan },
-            SubmittedReport::Task {
-                summary,
-                checks,
-                commit,
-            } => Self::Task {
-                summary,
-                checks,
-                commit,
-            },
-            SubmittedReport::Discussion {
-                reply,
-                resolution,
-                acceptance,
-            } => Self::Discussion {
-                reply,
-                resolution,
-                acceptance,
-            },
-            SubmittedReport::Verification { verification } => Self::Verification { verification },
-            SubmittedReport::Blocked { reason } => Self::Blocked { reason },
-        }
-    }
-}
-
-/// The daemon's `BoardHost` implementation: wraps a `horizon_board::Store`
-/// resolved from the session's workspace root, so board reads and writes
-/// target the same board the board CLI and the board pane see.
 pub(super) struct AgentdBoardHost {
-    store: horizon_board::Store,
+    store: Store,
+    root: PathBuf,
+    state: Arc<super::AgentdState>,
 }
 
 impl AgentdBoardHost {
-    /// Constructs a board host for `workspace_root`, resolving the board's
-    /// events path the same way `horizon_board::Store::from_dir` does (through
-    /// the main git root, so a linked worktree shares the main checkout's
-    /// board). Returns `None` if the workspace root is not in a git repo —
-    /// `board.read`/`board.comment` then degrade to an actionable error
-    /// rather than panicking.
-    pub(super) fn new(workspace_root: &Path) -> Option<Self> {
-        let store = horizon_board::Store::from_dir(workspace_root).ok()?;
-        Some(Self { store })
+    pub(super) fn new(root: &Path, state: Arc<super::AgentdState>) -> Option<Self> {
+        let store = Store::from_dir(root).ok()?;
+        Some(Self {
+            store,
+            root: root.to_path_buf(),
+            state,
+        })
+    }
+
+    async fn update(&self, input: &Value) -> Result<Value, String> {
+        let action = string(input, "action")?;
+        if action == "add" {
+            let item = self
+                .store
+                .add(
+                    string(input, "title")?,
+                    input.get("body").and_then(Value::as_str).unwrap_or(""),
+                    optional_id(input, "parent")?,
+                    position(input)?,
+                )
+                .await
+                .map_err(render)?;
+            return serde_json::to_value(item).map_err(render);
+        }
+        let id = id(input, "id")?;
+        match action {
+            "edit" => {
+                self.store
+                    .edit(
+                        id,
+                        optional_string(input, "title")?,
+                        optional_string(input, "body")?,
+                    )
+                    .await
+            }
+            "parent" => {
+                self.store
+                    .set_parent(id, optional_id(input, "parent")?, position(input)?)
+                    .await
+            }
+            "dependencies" => {
+                let dependencies = serde_json::from_value::<Vec<u64>>(
+                    input
+                        .get("depends_on")
+                        .cloned()
+                        .ok_or("Missing depends_on")?,
+                )
+                .map_err(render)?;
+                self.store.set_dependencies(id, dependencies).await
+            }
+            "move" => self.store.move_item(id, position(input)?).await.map(|_| ()),
+            "status" => self.store.set_status(id, string(input, "status")?).await,
+            "complete" => {
+                self.store
+                    .set_completed(
+                        id,
+                        input
+                            .get("completed")
+                            .and_then(Value::as_bool)
+                            .ok_or("Missing completed boolean")?,
+                    )
+                    .await
+            }
+            _ => return Err(format!("Unknown board update action: {action}")),
+        }
+        .map_err(render)?;
+        serde_json::to_value(self.store.show(id).map_err(render)?).map_err(render)
     }
 }
 
 impl BoardHost for AgentdBoardHost {
-    fn report(&self, id: u64, token: &str, session: &str, report: Value) -> Result<Value, String> {
-        let item = self
-            .store
-            .show(id)
-            .map_err(|e| e.to_string())?
-            .ok_or("Milestone not found")?;
-        let flow = item.workflow.as_ref().ok_or("Item is not a milestone")?;
-        let report = serde_json::from_value::<SubmittedReport>(report)
-            .map_err(|e| format!("Invalid report: {e}"))?
-            .into();
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let updated = runtime
-            .block_on(self.store.workflow(
-                id,
-                flow.revision,
-                horizon_board::workflow::Mutation::Report {
-                    token: token.into(),
-                    session: session.into(),
-                    report,
-                },
-            ))
-            .map_err(|e| e.to_string())?;
-        serde_json::to_value(updated.workflow).map_err(|e| e.to_string())
-    }
-
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String> {
-        let result = self
-            .store
-            .list(status_filter, true)
-            .map_err(|e| e.to_string())?;
-        // `ListResult` doesn't derive `Serialize`, but `Item` does — the
-        // model cares about the items, not the status-vocabulary summary.
-        serde_json::to_value(&result.items).map_err(|e| e.to_string())
+        self.state.register_board(self.root.clone());
+        serde_json::to_value(self.store.list(status_filter, true).map_err(render)?.items)
+            .map_err(render)
     }
-
     fn show(&self, id: u64) -> Result<Value, String> {
-        let item = self.store.show(id).map_err(|e| e.to_string())?;
-        serde_json::to_value(&item).map_err(|e| e.to_string())
+        self.state.register_board(self.root.clone());
+        serde_json::to_value(self.store.show(id).map_err(render)?).map_err(render)
     }
-
     fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), String> {
-        // The session thread is a plain OS thread (not a tokio worker), so a
-        // current-thread runtime is safe here — `block_on` from a non-tokio
-        // thread never panics. Built per call: comment writes are infrequent,
-        // and avoiding a process-wide `Handle` in `AgentdState` keeps this
-        // self-contained.
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("failed to create runtime for board write: {e}"))?;
-        runtime
+        self.state.register_board(self.root.clone());
+        runtime()?
             .block_on(self.store.comment(id, author, text))
-            .map_err(|e| e.to_string())
+            .map_err(render)
+    }
+    fn operate(
+        &self,
+        session: SessionId,
+        request: &ToolCallRequest,
+    ) -> Result<(Value, Vec<Event>), String> {
+        self.state.register_board(self.root.clone());
+        let runtime = runtime()?;
+        match request.tool_id.as_str() {
+            "board.update" => runtime
+                .block_on(self.update(&request.input))
+                .map(|value| (value, Vec::new())),
+            "board.session" => runtime.block_on(crate::board_flow::operate(
+                self.state.clone(),
+                &self.store,
+                &self.root,
+                session,
+                request,
+            )),
+            _ => Err("Unknown board operation".into()),
+        }
     }
 }
 
-/// Convenience: constructs an `AgentdBoardHost` for `workspace_root` (if
-/// possible) and wraps it in an `Arc<dyn BoardHost>`, ready to install on a
-/// session's `ToolSessionState`. Returns `None` when the workspace root is
-/// absent or not in a git repo — the tool executor surfaces an actionable
-/// error, never a silent no-op.
-pub(super) fn board_host_for(workspace_root: Option<&Path>) -> Option<Arc<dyn BoardHost>> {
-    let root = workspace_root?;
-    let host = AgentdBoardHost::new(root)?;
-    Some(Arc::new(host))
+pub(crate) fn string<'a>(input: &'a Value, key: &str) -> Result<&'a str, String> {
+    input
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| format!("Missing or empty {key}"))
+}
+pub(crate) fn id(input: &Value, key: &str) -> Result<u64, String> {
+    input
+        .get(key)
+        .and_then(Value::as_u64)
+        .filter(|id| *id > 0)
+        .ok_or_else(|| format!("Missing positive {key}"))
+}
+fn optional_id(input: &Value, key: &str) -> Result<Option<u64>, String> {
+    match input.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        _ => id(input, key).map(Some),
+    }
+}
+fn optional_string(input: &Value, key: &str) -> Result<Option<String>, String> {
+    match input.get(key) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .map(|s| Some(s.into()))
+            .ok_or_else(|| format!("{key} must be text")),
+    }
+}
+fn position(input: &Value) -> Result<Position, String> {
+    match input
+        .get("position")
+        .and_then(Value::as_str)
+        .unwrap_or("last")
+    {
+        "first" => Ok(Position::Top),
+        "last" => Ok(Position::Bottom),
+        "before" => Ok(Position::Before(id(input, "relative_to")?)),
+        "after" => Ok(Position::After(id(input, "relative_to")?)),
+        other => Err(format!("Unknown position: {other}")),
+    }
+}
+fn runtime() -> Result<tokio::runtime::Runtime, String> {
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(render)
+}
+fn render(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+pub(super) fn board_host_for(
+    root: Option<&Path>,
+    state: Arc<super::AgentdState>,
+) -> Option<Arc<dyn BoardHost>> {
+    Some(Arc::new(AgentdBoardHost::new(root?, state)?))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    #[test]
+    fn relative_reorder_requires_an_existing_target_argument() {
+        assert!(position(&json!({"position":"before"})).is_err());
+        assert_eq!(
+            position(&json!({"position":"after","relative_to":7})).unwrap(),
+            Position::After(7)
+        );
+    }
+    #[test]
+    fn malformed_parent_is_not_silently_cleared() {
+        assert!(optional_id(&json!({"parent":"3"}), "parent").is_err());
+        assert_eq!(
+            optional_id(&json!({"parent":null}), "parent").unwrap(),
+            None
+        );
+    }
 }

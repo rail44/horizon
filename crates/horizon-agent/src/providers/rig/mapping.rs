@@ -167,7 +167,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // checkpoint-miss marker is transparency-only.
             | Event::MemoryDigest(_)
             | Event::MemoryCheckpointMissed
-            | Event::MemorySeeded => None,
+            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded => None,
         })
         .collect();
     repair_replayed_message_pairing(messages)

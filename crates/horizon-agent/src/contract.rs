@@ -111,9 +111,95 @@ pub(crate) struct StartSession {
     pub trusted_project: bool,
 }
 
+/// Retained Git environment identity; base is the resolved commit, never an
+/// implicit fallback selected during restoration.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SessionWorktree {
+    pub repository: std::path::PathBuf,
+    pub path: std::path::PathBuf,
+    pub branch: String,
+    pub base: String,
+}
+
+/// Identified input from a host, session, or passive notification.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SessionInput {
+    /// Explicit user instruction may resume a paused request queue. Passive
+    /// notifications and autonomous session requests leave it paused.
+    #[serde(default)]
+    pub resume_work: bool,
+    pub id: String,
+    pub origin: String,
+    pub text: String,
+    pub reply_to: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub enum InputResult {
+    Success { text: String },
+    Failure { message: String },
+    Interrupted,
+}
+
+/// The settled result, selected from a successful provider round, never from
+/// an arbitrary committed transcript message. Delivery IDs survive replay.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct SessionInputOutcome {
+    pub input_ids: Vec<String>,
+    pub delivery_id: String,
+    pub reply_to: Option<String>,
+    pub outcome: InputResult,
+}
+
+/// Rebuild the durable outbox without relying on a potentially stale projection.
+pub fn pending_input_outcomes(events: &[Event]) -> Vec<SessionInputOutcome> {
+    let acknowledged: std::collections::HashSet<&str> = events
+        .iter()
+        .filter_map(|event| {
+            if let Event::DeliveryAcknowledged(id) = event {
+                Some(id.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    events
+        .iter()
+        .filter_map(|event| match event {
+            Event::InputOutcome(outcome)
+                if !acknowledged.contains(outcome.delivery_id.as_str()) =>
+            {
+                Some(outcome.clone())
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Command {
     Initialize(Initialization),
+    /// Durable, non-cancelling input; external addresses are opaque to providers.
+    SessionInput(SessionInput),
+    /// Request activation; provider stops at the next settled tool boundary.
+    ActivateWorktree {
+        base: String,
+    },
+    /// Host response to EnvironmentReady. Internal coordination command.
+    EnvironmentPrepared {
+        workspace_root: std::path::PathBuf,
+        trusted_project: bool,
+    },
+    EnvironmentActivationFailed {
+        message: String,
+    },
+    SendSessionInput {
+        session_id: SessionId,
+        input: SessionInput,
+    },
+    AcknowledgeDelivery {
+        delivery_id: String,
+    },
     UserMessage {
         text: String,
     },
@@ -154,6 +240,22 @@ pub struct Initialization {
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub enum Event {
+    InputAccepted(SessionInput),
+    InputStarted(Vec<String>),
+    InputQueuePaused(bool),
+    EnvironmentReady {
+        base: String,
+    },
+    EnvironmentActivated(SessionWorktree),
+    EnvironmentActivationFailed(String),
+    SessionResumed,
+
+    InputOutcome(SessionInputOutcome),
+    DeliveryAcknowledged(String),
+    SessionInputSent {
+        session_id: SessionId,
+        input: SessionInput,
+    },
     StateChanged(SessionState),
     ReasoningDelta(MessageDelta),
     AssistantTextDelta(MessageDelta),
@@ -449,6 +551,16 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::MemoryDigest(_) => "memory_digest",
         Event::MemoryCheckpointMissed => "memory_checkpoint_missed",
         Event::MemorySeeded => "memory_seeded",
+        Event::SessionInputSent { .. } => "session_input_sent",
+        Event::InputAccepted(_) => "input_accepted",
+        Event::InputStarted(_) => "input_started",
+        Event::InputQueuePaused(_) => "input_queue_paused",
+        Event::EnvironmentReady { .. } => "environment_ready",
+        Event::EnvironmentActivated(_) => "environment_activated",
+        Event::EnvironmentActivationFailed(_) => "environment_activation_failed",
+        Event::SessionResumed => "session_resumed",
+        Event::InputOutcome(_) => "input_outcome",
+        Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
     }
 }
 

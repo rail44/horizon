@@ -19,7 +19,7 @@ use horizon_workspace::types::SessionKind;
 use horizon_workspace::{PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind};
 use uuid::Uuid;
 
-use super::{ensure_workspace_has_pane, PaneView, WorkspaceShell};
+use super::{ensure_workspace_has_pane, CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
 use crate::runtime::{wait_for_drain, AgentdHandle, AgentdResponder, TerminaldHandle};
@@ -281,11 +281,52 @@ impl WorkspaceShell {
                     },
                 );
                 view.update(cx, |view, _| view.command_subscription = Some(subscription));
+                let inventory_subscription = cx.subscribe(
+                    &view,
+                    |shell, view, event: &crate::board_pane::BoardSessionsRefreshed, cx| {
+                        shell.refresh_board_sessions(view, event.0.clone(), cx);
+                    },
+                );
+                view.update(cx, |view, _| {
+                    view.inventory_subscription = Some(inventory_subscription)
+                });
+                self.watch_board_pane(view.clone(), cx);
                 self.panes.insert(pane_id, PaneView::board(view));
             }
         }
         self.persist_workspace();
         cx.notify();
+    }
+
+    fn watch_board_pane(&self, view: Entity<BoardPaneView>, cx: &mut Context<Self>) {
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let Some(root) = view.read(cx).root() else {
+            return;
+        };
+        let epoch = view.read(cx).navigation_epoch();
+        cx.spawn(async move |this, cx| {
+            let request = handle.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { request.watch_board(root) })
+                .await;
+            let _ = this.update(cx, |shell, cx| {
+                if shell
+                    .agentd
+                    .as_ref()
+                    .is_none_or(|current| !current.same_runtime(&handle))
+                    || view.read(cx).navigation_epoch() != epoch
+                {
+                    return;
+                }
+                if let Err(error) = result {
+                    view.update(cx, |view, cx| view.set_error(error, cx));
+                }
+            });
+        })
+        .detach();
     }
 
     /// Wires the host-tool responder for the already-adopted runtime:
@@ -560,6 +601,11 @@ impl WorkspaceShell {
     /// just reattached — a no-op at startup (no agent panes exist yet)
     /// and the reload's actual pane-rebuild step.
     pub(super) fn spawn_agent_resume(&self, handle: AgentdHandle, cx: &mut Context<Self>) {
+        for pane in self.panes.values() {
+            if let PaneView::Cached(CachedPaneLeaf::Board(view)) = pane {
+                self.watch_board_pane(view.clone(), cx);
+            }
+        }
         let window_handle = self.window;
         let (startup_tx, mut startup_rx) = futures::channel::mpsc::unbounded();
         let list_handle = handle.clone();

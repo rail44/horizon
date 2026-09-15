@@ -224,9 +224,22 @@ pub(crate) fn apply_agent_event_to_frame(
             frame.items.push(AgentFrameItem::MemoryCheckpointMissed);
         }
         // Audit/observability-only (board #41): no frame item.
-        Event::MemorySeeded => {}
+        Event::SessionInputSent { .. }
+        | Event::EnvironmentReady { .. }
+        | Event::EnvironmentActivated(_)
+        | Event::EnvironmentActivationFailed(_)
+        | Event::SessionResumed
+        | Event::InputQueuePaused(_)
+        | Event::InputStarted(_)
+        | Event::InputAccepted(_)
+        | Event::InputOutcome(_)
+        | Event::DeliveryAcknowledged(_)
+        | Event::MemorySeeded => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
-        Event::Exited(exit) => frame.items.push(AgentFrameItem::Exited(exit.clone())),
+        Event::Exited(exit) => {
+            frame.state = Some(SessionState::Terminated);
+            frame.items.push(AgentFrameItem::Exited(exit.clone()));
+        }
         // Operator-intervention audit records (`Event::ApprovalResolved` /
         // `Event::ContinueTurnRequested`): deliberately fold into no frame
         // item. Their audit purpose is fully served by the raw record in

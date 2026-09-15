@@ -147,7 +147,17 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                 }
             }
             Event::MemoryCheckpointMissed => lines.push("memory: checkpoint missed".to_string()),
-            Event::MemorySeeded => lines.push("memory: seeded".to_string()),
+            Event::SessionInputSent { .. }
+            | Event::EnvironmentReady { .. }
+            | Event::EnvironmentActivated(_)
+            | Event::EnvironmentActivationFailed(_)
+            | Event::SessionResumed
+            | Event::InputQueuePaused(_)
+            | Event::InputStarted(_)
+            | Event::InputAccepted(_)
+            | Event::InputOutcome(_)
+            | Event::DeliveryAcknowledged(_)
+            | Event::MemorySeeded => lines.push("memory: seeded".to_string()),
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),

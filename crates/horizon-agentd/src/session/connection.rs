@@ -54,6 +54,13 @@ impl Connection {
         Self { state }
     }
 
+    pub(crate) fn register_board(&self, root: std::path::PathBuf) -> Result<(), String> {
+        let root =
+            crate::worktree::project_root(&root).ok_or("Board root is not a Git repository")?;
+        self.state.register_board(root);
+        Ok(())
+    }
+
     /// Installs the current connection's host-tool bridge (the local half
     /// behind `HubHello::host_tools`) — the connection-global counterpart
     /// of the per-attachment subscribers [`Self::subscribe_agent`] installs.

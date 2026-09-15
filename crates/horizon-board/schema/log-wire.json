@@ -1,86 +1,6 @@
 {
   "$comment": "Generated from the live wire types (the LogHub rtc trait and the IngestRequest/IngestReply vocabularies). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent -p horizon-terminal-core -p horizon-board wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
-    "Attempt": {
-      "properties": {
-        "attention": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "generation": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "report": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Report"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Provisional until a real assignment turn boundary is observed."
-        },
-        "session": {
-          "type": "string"
-        },
-        "token": {
-          "type": "string"
-        },
-        "work": {
-          "$ref": "#/$defs/Work"
-        }
-      },
-      "required": [
-        "token",
-        "session",
-        "work",
-        "generation"
-      ],
-      "type": "object"
-    },
-    "AttemptOutcome": {
-      "properties": {
-        "attempt": {
-          "$ref": "#/$defs/Attempt"
-        },
-        "problem": {
-          "type": [
-            "string",
-            "null"
-          ]
-        }
-      },
-      "required": [
-        "attempt"
-      ],
-      "type": "object"
-    },
-    "ChangeScope": {
-      "properties": {
-        "functions": {
-          "default": [],
-          "description": "Shared behavior/interface identifiers assessed by the planner.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "paths": {
-          "default": [],
-          "description": "Repository-relative file or directory paths. '*' denotes the project.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
     "ClientHello": {
       "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
       "properties": {
@@ -98,125 +18,35 @@
       "type": "object"
     },
     "Comment": {
-      "description": "A comment attached to an item. `author` is a free-form string\n(convention: `owner` / `session:<uuid>` / future prefix-tagged forms).",
       "properties": {
         "at": {
           "format": "uint64",
           "minimum": 0,
-          "type": "integer"
+          "type": [
+            "integer",
+            "null"
+          ]
         },
         "author": {
           "type": "string"
         },
+        "id": {
+          "type": "string"
+        },
+        "source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "text": {
           "type": "string"
         }
       },
       "required": [
+        "id",
         "author",
-        "text",
-        "at"
-      ],
-      "type": "object"
-    },
-    "Decision": {
-      "properties": {
-        "affected_tasks": {
-          "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "type": "array"
-        },
-        "consequence": {
-          "type": "string"
-        },
-        "context": {
-          "type": "string"
-        },
-        "key": {
-          "type": "string"
-        },
-        "messages": {
-          "items": {
-            "$ref": "#/$defs/DiscussionMessage"
-          },
-          "type": "array"
-        },
-        "question": {
-          "type": "string"
-        },
-        "recommendation": {
-          "type": "string"
-        },
-        "resolution": {
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "retired": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "key",
-        "question",
-        "context",
-        "recommendation",
-        "consequence",
-        "affected_tasks",
-        "messages",
-        "retired"
-      ],
-      "type": "object"
-    },
-    "DiscussionMessage": {
-      "properties": {
-        "owner": {
-          "type": "boolean"
-        },
-        "text": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "owner",
         "text"
-      ],
-      "type": "object"
-    },
-    "Evidence": {
-      "properties": {
-        "check": {
-          "description": "Exact successful verification command supporting automated evidence.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "criterion": {
-          "type": "string"
-        },
-        "decision": {
-          "description": "Human-evaluated evidence references a settled decision on the milestone.",
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "detail": {
-          "type": "string"
-        },
-        "satisfied": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "criterion",
-        "detail",
-        "satisfied"
       ],
       "type": "object"
     },
@@ -291,7 +121,7 @@
       "oneOf": [
         {
           "additionalProperties": false,
-          "description": "`add` / `claim`: the new or claimed item (with assigned id and rank).",
+          "description": "The created task or atomically bound task session.",
           "properties": {
             "Item": {
               "$ref": "#/$defs/Item"
@@ -304,7 +134,7 @@
         },
         {
           "const": "Done",
-          "description": "`comment` / `set_status` / `assign`: success, no data.",
+          "description": "Successful mutation with no returned data.",
           "type": "string"
         },
         {
@@ -319,61 +149,212 @@
             "Rank"
           ],
           "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "`claim` when no ready+unassigned item was found.",
-          "properties": {
-            "MaybeItem": {
-              "anyOf": [
-                {
-                  "$ref": "#/$defs/Item"
-                },
-                {
-                  "type": "null"
-                }
-              ]
-            }
-          },
-          "required": [
-            "MaybeItem"
-          ],
-          "type": "object"
         }
       ]
     },
     "IngestRequest": {
-      "description": "One board write operation, sent over the socket to logd. Each variant\nmirrors a `Store` write method; logd performs the full read-fold-compute-\nappend atomically under its exclusive flock (the same sequence the library\nused to do in-process) and returns the result.\n\n`BoardEvent` is reused internally (logd constructs it from these\nparameters when appending to the JSONL) — the wire type is the operation,\nnot the event, because operations like `add` need context the event does\nnot carry (e.g. `Position` for rank computation) and because `claim` must\nfind-and-append atomically.",
+      "description": "One board write operation, sent over the socket to logd. Each variant\nmirrors a `Store` write method; logd performs the full read-fold-compute-\nappend atomically under its exclusive flock (the same sequence the library\nused to do in-process) and returns the result.\n\n`BoardEvent` is reused internally (logd constructs it from these\nparameters when appending to the JSONL) — the wire type is the operation,\nnot the event, because operations like `add` need sibling rank context.",
       "oneOf": [
         {
           "additionalProperties": false,
           "properties": {
-            "Workflow": {
+            "SetParent": {
               "properties": {
-                "expected_revision": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                },
                 "id": {
                   "format": "uint64",
                   "minimum": 0,
                   "type": "integer"
                 },
-                "mutation": {
-                  "$ref": "#/$defs/Mutation"
+                "parent": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "position": {
+                  "$ref": "#/$defs/Position"
                 }
               },
               "required": [
                 "id",
-                "expected_revision",
-                "mutation"
+                "position"
               ],
               "type": "object"
             }
           },
           "required": [
-            "Workflow"
+            "SetParent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SetCompleted": {
+              "properties": {
+                "completed": {
+                  "type": "boolean"
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "completed"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SetCompleted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SetDependencies": {
+              "properties": {
+                "depends_on": {
+                  "items": {
+                    "format": "uint64",
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "type": "array"
+                },
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "depends_on"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SetDependencies"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "BindSession": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "review": {
+                  "type": "boolean"
+                },
+                "session_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "session_id",
+                "review"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "BindSession"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "PostMessage": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "$ref": "#/$defs/Comment"
+                }
+              },
+              "required": [
+                "id",
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "PostMessage"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "MarkRead": {
+              "properties": {
+                "id": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message_id": {
+                  "type": "string"
+                },
+                "reader": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "reader",
+                "message_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "MarkRead"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AdvanceCursor": {
+              "properties": {
+                "consumer": {
+                  "type": "string"
+                },
+                "position": {
+                  "format": "uint64",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "consumer",
+                "position"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "AdvanceCursor"
           ],
           "type": "object"
         },
@@ -474,33 +455,6 @@
         },
         {
           "additionalProperties": false,
-          "description": "`Store::assign`: set an item's assignee.",
-          "properties": {
-            "Assign": {
-              "properties": {
-                "id": {
-                  "format": "uint64",
-                  "minimum": 0,
-                  "type": "integer"
-                },
-                "who": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "id",
-                "who"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Assign"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
           "description": "`Store::move_item`: re-rank an item to a new position.",
           "properties": {
             "MoveItem": {
@@ -523,27 +477,6 @@
           },
           "required": [
             "MoveItem"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "description": "`Store::claim`: atomically claim the first ready+unassigned item.",
-          "properties": {
-            "Claim": {
-              "properties": {
-                "who": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "who"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Claim"
           ],
           "type": "object"
         },
@@ -584,40 +517,21 @@
         }
       ]
     },
-    "Integration": {
-      "properties": {
-        "base": {
-          "type": "string"
-        },
-        "head": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "base",
-        "head"
-      ],
-      "type": "object"
-    },
     "Item": {
-      "description": "The full state of one work item after folding all events.",
       "properties": {
-        "assignee": {
-          "description": "Free-form assignee. Empty = unassigned.",
-          "type": "string"
-        },
         "body": {
           "type": "string"
         },
         "comments": {
-          "description": "Comments in chronological order.",
           "items": {
             "$ref": "#/$defs/Comment"
           },
           "type": "array"
         },
+        "completed": {
+          "type": "boolean"
+        },
         "depends_on": {
-          "description": "Items this one depends on.",
           "items": {
             "format": "uint64",
             "minimum": 0,
@@ -630,15 +544,7 @@
           "minimum": 0,
           "type": "integer"
         },
-        "links": {
-          "description": "Free-form links (session ids, branch names, doc paths, …).",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
         "parent": {
-          "description": "Optional parent item id.",
           "format": "uint64",
           "minimum": 0,
           "type": [
@@ -647,26 +553,25 @@
           ]
         },
         "rank": {
-          "description": "Lexicographic rank string (lowercase a-z).",
           "type": "string"
         },
+        "review_session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "status": {
-          "description": "Free-form slug string (recommended vocabulary: proposed / ready /\nin-progress / review / done / blocked / archived). Empty until first\nset. `done` and `archived` are closed statuses — hidden from the\ndefault `list` view by `is_closed_status`.",
           "type": "string"
         },
         "title": {
           "type": "string"
-        },
-        "workflow": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Workflow"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
         }
       },
       "required": [
@@ -674,10 +579,9 @@
         "title",
         "body",
         "status",
+        "completed",
         "rank",
-        "assignee",
         "depends_on",
-        "links",
         "comments"
       ],
       "type": "object"
@@ -694,12 +598,12 @@
         {
           "additionalProperties": false,
           "properties": {
-            "InvalidWorkflow": {
+            "InvalidOperation": {
               "type": "string"
             }
           },
           "required": [
-            "InvalidWorkflow"
+            "InvalidOperation"
           ],
           "type": "object"
         },
@@ -763,504 +667,6 @@
       ],
       "type": "object"
     },
-    "Mutation": {
-      "oneOf": [
-        {
-          "enum": [
-            "Enable",
-            "Pause",
-            "Resume",
-            "Replan",
-            "BeginIntegration"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Answer": {
-              "properties": {
-                "key": {
-                  "type": "string"
-                },
-                "text": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "key",
-                "text"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Answer"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Start": {
-              "properties": {
-                "session": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                },
-                "work": {
-                  "$ref": "#/$defs/Work"
-                }
-              },
-              "required": [
-                "token",
-                "session",
-                "work"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Start"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "SetWorker": {
-              "properties": {
-                "worker": {
-                  "$ref": "#/$defs/Worker"
-                }
-              },
-              "required": [
-                "worker"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "SetWorker"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "SetVerifier": {
-              "properties": {
-                "worker": {
-                  "$ref": "#/$defs/Worker"
-                }
-              },
-              "required": [
-                "worker"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "SetVerifier"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "PrepareVerification": {
-              "properties": {
-                "base": {
-                  "type": "string"
-                },
-                "head": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "base",
-                "head"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "PrepareVerification"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Report": {
-              "properties": {
-                "report": {
-                  "$ref": "#/$defs/Report"
-                },
-                "session": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "token",
-                "session",
-                "report"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Report"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Finish": {
-              "properties": {
-                "token": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "token"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Finish"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Interrupt": {
-              "properties": {
-                "reason": {
-                  "type": "string"
-                },
-                "token": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "token",
-                "reason"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Interrupt"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Restart": {
-              "properties": {
-                "token": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "token"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Restart"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Attention": {
-              "properties": {
-                "message": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "token": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "token"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Attention"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Integrated": {
-              "properties": {
-                "commit": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "commit"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Integrated"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "IntegrationFailed": {
-              "properties": {
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "reason"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "IntegrationFailed"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Reverify": {
-              "properties": {
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "reason"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Reverify"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Repair": {
-              "properties": {
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "reason"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Repair"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Plan": {
-      "properties": {
-        "acceptance": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "decisions": {
-          "items": {
-            "$ref": "#/$defs/Decision"
-          },
-          "type": "array"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "tasks": {
-          "description": "Canonical board ids, not a second collection of task definitions.",
-          "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "type": "array"
-        }
-      },
-      "required": [
-        "summary",
-        "acceptance",
-        "tasks",
-        "decisions"
-      ],
-      "type": "object"
-    },
-    "PlanDraft": {
-      "properties": {
-        "acceptance": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "decisions": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/PlannedDecision"
-          },
-          "type": "array"
-        },
-        "implementation_decisions": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "priorities": {
-          "default": [],
-          "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "type": "array"
-        },
-        "reason": {
-          "default": "",
-          "type": "string"
-        },
-        "summary": {
-          "default": "",
-          "type": "string"
-        },
-        "tasks": {
-          "default": [],
-          "items": {
-            "$ref": "#/$defs/PlannedTask"
-          },
-          "type": "array"
-        }
-      },
-      "type": "object"
-    },
-    "PlannedDecision": {
-      "properties": {
-        "affected_tasks": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "consequence": {
-          "default": "",
-          "type": "string"
-        },
-        "context": {
-          "default": "",
-          "type": "string"
-        },
-        "key": {
-          "default": "",
-          "type": "string"
-        },
-        "question": {
-          "default": "",
-          "type": "string"
-        },
-        "recommendation": {
-          "default": "",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
-    "PlannedTask": {
-      "properties": {
-        "acceptance": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "depends_on": {
-          "default": [],
-          "description": "Draft keys, or #123 for an existing board item outside this draft.",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "instructions": {
-          "default": "",
-          "type": "string"
-        },
-        "item_id": {
-          "default": null,
-          "description": "Supply an existing board id to adopt or revise an existing task.",
-          "format": "uint64",
-          "minimum": 0,
-          "type": [
-            "integer",
-            "null"
-          ]
-        },
-        "key": {
-          "default": "",
-          "type": "string"
-        },
-        "retry": {
-          "default": false,
-          "type": "boolean"
-        },
-        "scope": {
-          "$ref": "#/$defs/ChangeScope",
-          "default": {
-            "functions": [],
-            "paths": []
-          }
-        },
-        "title": {
-          "default": "",
-          "type": "string"
-        }
-      },
-      "type": "object"
-    },
     "Position": {
       "description": "Where to place a new or moved item in the rank queue.",
       "oneOf": [
@@ -1296,137 +702,6 @@
           },
           "required": [
             "Before"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Report": {
-      "oneOf": [
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Plan": {
-              "properties": {
-                "plan": {
-                  "$ref": "#/$defs/PlanDraft"
-                }
-              },
-              "required": [
-                "plan"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Plan"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Discussion": {
-              "properties": {
-                "acceptance": {
-                  "description": "Only a resolved, explicitly authorized criteria change can set this.",
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": [
-                    "array",
-                    "null"
-                  ]
-                },
-                "reply": {
-                  "type": "string"
-                },
-                "resolution": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              },
-              "required": [
-                "reply"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Discussion"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Task": {
-              "properties": {
-                "checks": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
-                },
-                "commit": {
-                  "type": "string"
-                },
-                "summary": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "summary",
-                "checks",
-                "commit"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Task"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Verification": {
-              "properties": {
-                "verification": {
-                  "$ref": "#/$defs/Verification"
-                }
-              },
-              "required": [
-                "verification"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Verification"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Blocked": {
-              "properties": {
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "reason"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Blocked"
           ],
           "type": "object"
         }
@@ -1476,96 +751,6 @@
       },
       "type": "object"
     },
-    "TaskResult": {
-      "properties": {
-        "checks": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "commit": {
-          "type": "string"
-        },
-        "session": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "summary",
-        "checks",
-        "commit"
-      ],
-      "type": "object"
-    },
-    "TaskSpec": {
-      "properties": {
-        "acceptance": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "goal_revision": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "key": {
-          "type": "string"
-        },
-        "scope": {
-          "$ref": "#/$defs/ChangeScope"
-        }
-      },
-      "required": [
-        "key",
-        "acceptance",
-        "scope",
-        "goal_revision"
-      ],
-      "type": "object"
-    },
-    "Verification": {
-      "properties": {
-        "checks": {
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "commit": {
-          "type": "string"
-        },
-        "decisions": {
-          "items": {
-            "$ref": "#/$defs/PlannedDecision"
-          },
-          "type": "array"
-        },
-        "evidence": {
-          "items": {
-            "$ref": "#/$defs/Evidence"
-          },
-          "type": "array"
-        },
-        "summary": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "summary",
-        "commit",
-        "evidence",
-        "checks",
-        "decisions"
-      ],
-      "type": "object"
-    },
     "VersionRange": {
       "description": "An inclusive protocol-version range one peer supports, as exchanged in\n[`SessionHub::hello`].",
       "properties": {
@@ -1584,258 +769,6 @@
         "min_supported",
         "current"
       ],
-      "type": "object"
-    },
-    "Work": {
-      "oneOf": [
-        {
-          "enum": [
-            "Plan",
-            "Verify"
-          ],
-          "type": "string"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Discuss": {
-              "properties": {
-                "key": {
-                  "type": "string"
-                },
-                "turn": {
-                  "format": "uint",
-                  "minimum": 0,
-                  "type": "integer"
-                }
-              },
-              "required": [
-                "key",
-                "turn"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Discuss"
-          ],
-          "type": "object"
-        },
-        {
-          "additionalProperties": false,
-          "properties": {
-            "Task": {
-              "properties": {
-                "key": {
-                  "type": "string"
-                }
-              },
-              "required": [
-                "key"
-              ],
-              "type": "object"
-            }
-          },
-          "required": [
-            "Task"
-          ],
-          "type": "object"
-        }
-      ]
-    },
-    "Worker": {
-      "properties": {
-        "branch": {
-          "type": "string"
-        },
-        "session": {
-          "type": "string"
-        },
-        "worktree": {
-          "type": "string"
-        }
-      },
-      "required": [
-        "session",
-        "worktree",
-        "branch"
-      ],
-      "type": "object"
-    },
-    "Workflow": {
-      "properties": {
-        "achieved": {
-          "default": false,
-          "type": "boolean"
-        },
-        "active": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Attempt"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "before": {
-          "default": [],
-          "description": "Explicit owner ordering constraints; AI ranking cannot override them.",
-          "items": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "type": "array"
-        },
-        "goal_revision": {
-          "default": 0,
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "history": {
-          "default": [],
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
-        },
-        "integrated": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "integration": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Integration"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "last_attempt": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/AttemptOutcome"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "merging": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Integration"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "paused": {
-          "default": false,
-          "type": "boolean"
-        },
-        "plan": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Plan"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "plan_generation": {
-          "default": 0,
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "plan_requested": {
-          "default": false,
-          "type": "boolean"
-        },
-        "problem": {
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "result": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskResult"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "revision": {
-          "default": 0,
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "task": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/TaskSpec"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "verification": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Verification"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "verifier": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Worker"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "worker": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/Worker"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        }
-      },
       "type": "object"
     }
   },
@@ -1886,5 +819,5 @@
     }
   },
   "title": "horizon-log-wire",
-  "x-session-protocol-version": 4
+  "x-session-protocol-version": 5
 }

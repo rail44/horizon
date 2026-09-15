@@ -373,6 +373,129 @@
         },
         {
           "additionalProperties": false,
+          "description": "Durable, non-cancelling input; external addresses are opaque to providers.",
+          "properties": {
+            "SessionInput": {
+              "$ref": "#/$defs/SessionInput"
+            }
+          },
+          "required": [
+            "SessionInput"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Request activation; provider stops at the next settled tool boundary.",
+          "properties": {
+            "ActivateWorktree": {
+              "properties": {
+                "base": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "base"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ActivateWorktree"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Host response to EnvironmentReady. Internal coordination command.",
+          "properties": {
+            "EnvironmentPrepared": {
+              "properties": {
+                "trusted_project": {
+                  "type": "boolean"
+                },
+                "workspace_root": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "workspace_root",
+                "trusted_project"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "EnvironmentPrepared"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "EnvironmentActivationFailed": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "EnvironmentActivationFailed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SendSessionInput": {
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/SessionInput"
+                },
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "required": [
+                "session_id",
+                "input"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SendSessionInput"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "AcknowledgeDelivery": {
+              "properties": {
+                "delivery_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "delivery_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "AcknowledgeDelivery"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
           "properties": {
             "UserMessage": {
               "properties": {
@@ -511,6 +634,143 @@
     },
     "Event": {
       "oneOf": [
+        {
+          "enum": [
+            "SessionResumed"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "InputAccepted": {
+              "$ref": "#/$defs/SessionInput"
+            }
+          },
+          "required": [
+            "InputAccepted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "InputStarted": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "InputStarted"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "InputQueuePaused": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "InputQueuePaused"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "EnvironmentReady": {
+              "properties": {
+                "base": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "base"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "EnvironmentReady"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "EnvironmentActivated": {
+              "$ref": "#/$defs/SessionWorktree"
+            }
+          },
+          "required": [
+            "EnvironmentActivated"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "EnvironmentActivationFailed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "EnvironmentActivationFailed"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "InputOutcome": {
+              "$ref": "#/$defs/SessionInputOutcome"
+            }
+          },
+          "required": [
+            "InputOutcome"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "DeliveryAcknowledged": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "DeliveryAcknowledged"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "SessionInputSent": {
+              "properties": {
+                "input": {
+                  "$ref": "#/$defs/SessionInput"
+                },
+                "session_id": {
+                  "$ref": "#/$defs/SessionId"
+                }
+              },
+              "required": [
+                "session_id",
+                "input"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "SessionInputSent"
+          ],
+          "type": "object"
+        },
         {
           "additionalProperties": false,
           "properties": {
@@ -1038,6 +1298,56 @@
       ],
       "type": "object"
     },
+    "InputResult": {
+      "oneOf": [
+        {
+          "enum": [
+            "Interrupted"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Success": {
+              "properties": {
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Success"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Failure": {
+              "properties": {
+                "message": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "message"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Failure"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "JsonValue": {
       "$comment": "any JSON value; on the binary (Postbag) wire it travels as its JSON text in one string"
     },
@@ -1260,6 +1570,66 @@
       "format": "uuid",
       "type": "string"
     },
+    "SessionInput": {
+      "description": "Identified input from a host, session, or passive notification.",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "origin": {
+          "type": "string"
+        },
+        "reply_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resume_work": {
+          "default": false,
+          "description": "Explicit user instruction may resume a paused request queue. Passive\nnotifications and autonomous session requests leave it paused.",
+          "type": "boolean"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "origin",
+        "text"
+      ],
+      "type": "object"
+    },
+    "SessionInputOutcome": {
+      "description": "The settled result, selected from a successful provider round, never from\nan arbitrary committed transcript message. Delivery IDs survive replay.",
+      "properties": {
+        "delivery_id": {
+          "type": "string"
+        },
+        "input_ids": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "outcome": {
+          "$ref": "#/$defs/InputResult"
+        },
+        "reply_to": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "input_ids",
+        "delivery_id",
+        "outcome"
+      ],
+      "type": "object"
+    },
     "SessionNew": {
       "description": "Per `docs/agent-runtime-split-design.md` guardrail 5, spawning a fresh\nsession (`SessionHub::new_agent`) is distinct from attaching to an\nexisting one (`attach_agent`) and carries per-session overrides.",
       "properties": {
@@ -1365,6 +1735,30 @@
       "required": [
         "session_id",
         "provider_id"
+      ],
+      "type": "object"
+    },
+    "SessionWorktree": {
+      "description": "Retained Git environment identity; base is the resolved commit, never an\nimplicit fallback selected during restoration.",
+      "properties": {
+        "base": {
+          "type": "string"
+        },
+        "branch": {
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "repository": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "repository",
+        "path",
+        "branch",
+        "base"
       ],
       "type": "object"
     },
@@ -1660,5 +2054,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 19
+  "x-session-protocol-version": 20
 }

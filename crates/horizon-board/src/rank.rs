@@ -1,29 +1,22 @@
-//! Lexicographic rank strings for ordering items in a queue.
-//!
-//! Ranks are lowercase-ASCII strings (`a`-`z`) that sort lexicographically.
-//! New ranks are issued as midpoints between existing ones (or between an
-//! existing rank and a conceptual min/max), so inserting an item never
-//! requires renumbering its neighbours. The alphabet is `a`-`z` (26 glyphs);
-//! the midpoint glyph is `n` (index 13 of 0-25), giving roughly equal room
-//! above and below on the first insertion.
-//!
-//! `between` returns `None` only when the two bounds have converged to
-//! adjacent characters at every position (e.g. `"a"` vs the conceptual
-//! minimum) — extremely unlikely in practice because the first rank issued
-//! is `"n"` (centre of the alphabet). A future rebalance pass could
-//! re-derive all ranks if it ever happens; for v1 the caller reports an
-//! error.
-
+//! Fractional indexing over retained lowercase rank strings.
 /// Computes a rank strictly between `lo` and `hi`.
 ///
 /// `lo = None` represents the conceptual minimum (before everything);
 /// `hi = None` represents the conceptual maximum (after everything).
 /// Returns `None` if no midpoint exists in the `a`-`z` alphabet.
 pub fn between(lo: Option<&str>, hi: Option<&str>) -> Option<String> {
+    if lo
+        .into_iter()
+        .chain(hi)
+        .any(|s| s.is_empty() || !s.bytes().all(|c| c.is_ascii_lowercase()))
+        || matches!((lo,hi),(Some(l),Some(h)) if l>=h)
+    {
+        return None;
+    }
     match (lo, hi) {
         (None, None) => Some("n".to_string()),
         (None, Some(h)) => before(h),
-        (Some(l), None) => Some(format!("{l}n")),
+        (Some(l), None) => Some(after(l)),
         (Some(l), Some(h)) => between_strs(l, h),
     }
 }
@@ -32,7 +25,7 @@ pub fn between(lo: Option<&str>, hi: Option<&str>) -> Option<String> {
 fn before(hi: &str) -> Option<String> {
     let bytes = hi.as_bytes();
     if bytes.is_empty() {
-        return Some("n".to_string());
+        return None;
     }
     let hv = bytes[0] - b'a';
     if hv > 0 {
@@ -48,7 +41,7 @@ fn before(hi: &str) -> Option<String> {
         // hi starts with 'a' — recurse into the tail to find room below.
         if bytes.len() > 1 {
             let rest = std::str::from_utf8(&bytes[1..]).ok()?;
-            before(rest).map(|s| format!("a{s}"))
+            Some(before(rest).map_or_else(|| "a".into(), |s| format!("a{s}")))
         } else {
             None // hi is exactly "a" — nothing below in the a-z alphabet
         }
@@ -95,8 +88,8 @@ fn between_strs(lo: &str, hi: &str) -> Option<String> {
             } else {
                 // hi[i] == 'a': need room below 'a' at this position —
                 // recurse into hi's tail, prefixed by lo + 'a'.
-                let rest = std::str::from_utf8(&hi_b[i + 1..]).ok()?;
-                before(rest).map(|s| format!("{lo}a{s}"))
+                let rest = std::str::from_utf8(&hi_b[i..]).ok()?;
+                before(rest).map(|s| format!("{lo}{s}"))
             }
         }
         (Some(_), None) => {
@@ -105,137 +98,63 @@ fn between_strs(lo: &str, hi: &str) -> Option<String> {
             None
         }
         (None, None) => {
-            // lo == hi — append midpoint.
-            Some(format!("{lo}n"))
+            // Equal bounds have no strict midpoint.
+            None
         }
     }
 }
 
+// Fractional indexing: use spare space in the integer suffix before growing
+// a key. Existing rank strings retain their bytewise order.
+fn after(lo: &str) -> String {
+    let mut bytes = lo.as_bytes().to_vec();
+    if let Some(index) = bytes.iter().rposition(|b| *b < b'z') {
+        bytes[index] += 1;
+        bytes.truncate(index + 1);
+        String::from_utf8(bytes).expect("ASCII rank")
+    } else {
+        format!("{lo}n")
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Asserts that `between(lo, hi)` yields a string strictly between them.
-    fn assert_between(lo: Option<&str>, hi: Option<&str>) {
-        let mid = between(lo, hi).expect("midpoint should exist");
-        if let Some(l) = lo {
-            assert!(l < mid.as_str(), "{l:?} < {mid:?} failed");
-        }
-        if let Some(h) = hi {
-            assert!(mid.as_str() < h, "{mid:?} < {h:?} failed");
+    #[test]
+    fn invalid_and_adjacent_prefix_bounds() {
+        for (lo, hi) in [("n", "n"), ("z", "a"), ("a", "aa"), ("N", "z")] {
+            assert_eq!(between(Some(lo), Some(hi)), None);
         }
     }
-
     #[test]
-    fn first_item_gets_n() {
-        assert_eq!(between(None, None), Some("n".to_string()));
-    }
-
-    #[test]
-    fn midpoint_issuance() {
-        // between("n", "s") → "p" (midpoint of n=13, s=18 → 15 → 'p')
-        assert_eq!(between(Some("n"), Some("s")), Some("p".to_string()));
-        // between("n", "p") → "o" (midpoint of n=13, p=15 → 14 → 'o')
-        assert_eq!(between(Some("n"), Some("p")), Some("o".to_string()));
-    }
-
-    #[test]
-    fn adjacent_chars_append_n() {
-        // between("n", "o") → "nn" (adjacent, append midpoint-of-range)
-        let r = between(Some("n"), Some("o")).unwrap();
-        assert_between(Some("n"), Some("o"));
-        assert_eq!(r, "nn");
-    }
-
-    #[test]
-    fn between_insertion_stability() {
-        // Simulate a sequence of insertions and verify sort order is maintained.
-        let mut ranks = vec![between(None, None).unwrap()]; // "n"
-
-        // Insert before first
-        ranks.push(between(None, Some(&ranks[0])).unwrap()); // "g"
-        ranks.sort();
-        assert_eq!(ranks, vec!["g", "n"]);
-
-        // Insert between "g" and "n"
-        let mid = between(Some("g"), Some("n")).unwrap();
-        ranks.push(mid.clone());
-        ranks.sort();
-        assert_eq!(ranks, vec!["g", &mid, "n"]);
-
-        // Insert after last
-        ranks.push(between(Some(ranks.last().unwrap()), None).unwrap());
-        ranks.sort();
-        // All still sorted
-        for w in ranks.windows(2) {
-            assert!(w[0] < w[1], "{} < {}", w[0], w[1]);
+    fn repeated_insertions_preserve_strict_order() {
+        let mut keys = vec!["n".to_string()];
+        for _ in 0..1000 {
+            let next = between(keys.last().map(String::as_str), None).unwrap();
+            assert!(keys.last().unwrap() < &next);
+            keys.push(next);
+        }
+        assert!(keys.last().unwrap().len() < 100);
+        let mut upper = "n".to_string();
+        for _ in 0..1000 {
+            let next = between(None, Some(&upper)).unwrap();
+            assert!(next < upper);
+            upper = next;
         }
     }
-
     #[test]
-    fn before_first_item() {
-        // before("n") → "g" (midpoint of a=0, n=13 → 6 → 'g')
-        assert_eq!(before("n"), Some("g".to_string()));
-        // before("g") → "d" (midpoint of a=0, g=6 → 3 → 'd')
-        assert_eq!(before("g"), Some("d".to_string()));
-    }
-
-    #[test]
-    fn after_last_item() {
-        // after("n") → "nn"
-        assert_eq!(between(Some("n"), None), Some("nn".to_string()));
-    }
-
-    #[test]
-    fn deep_recursion_before() {
-        // before("an") → "a" + before("n") = "ag"
-        assert_eq!(before("an"), Some("ag".to_string()));
-        assert_between(None, Some("an"));
-    }
-
-    #[test]
-    fn many_insertions_at_top_stay_sorted() {
-        let mut ranks = vec!["n".to_string()];
-        for _ in 0..20 {
-            let first = ranks[0].as_str();
-            let new = between(None, Some(first)).expect("room should exist");
-            assert!(new.as_str() < first, "{new} < {first}");
-            ranks.push(new);
-            ranks.sort();
+    fn midpoint_checks_small_alphabet_pairs() {
+        let mut bounds = vec![];
+        for a in b'a'..=b'z' {
+            bounds.push(char::from(a).to_string());
+            for b in b'a'..=b'z' {
+                bounds.push(format!("{}{}", char::from(a), char::from(b)));
+            }
         }
-        // Verify global sort order
-        for w in ranks.windows(2) {
-            assert!(w[0] < w[1], "{} < {}", w[0], w[1]);
-        }
-    }
-
-    #[test]
-    fn many_insertions_at_bottom_stay_sorted() {
-        let mut ranks = vec!["n".to_string()];
-        for _ in 0..20 {
-            let last = ranks.last().unwrap().as_str();
-            let new = between(Some(last), None).unwrap();
-            assert!(last < new.as_str(), "{last} < {new}");
-            ranks.push(new);
-            ranks.sort();
-        }
-        for w in ranks.windows(2) {
-            assert!(w[0] < w[1], "{} < {}", w[0], w[1]);
-        }
-    }
-
-    #[test]
-    fn many_insertions_in_middle_stay_sorted() {
-        let mut ranks = vec!["g".to_string(), "n".to_string()];
-        for _ in 0..20 {
-            // Always insert between the first two
-            let mid = between(Some(&ranks[0]), Some(&ranks[1])).expect("room");
-            assert!(ranks[0] < mid, "{} < {}", ranks[0], mid);
-            assert!(mid < ranks[1], "{} < {}", mid, ranks[1]);
-            ranks.insert(1, mid);
-        }
-        for w in ranks.windows(2) {
-            assert!(w[0] < w[1], "{} < {}", w[0], w[1]);
+        bounds.sort();
+        for pair in bounds.windows(2) {
+            if let Some(mid) = between(Some(&pair[0]), Some(&pair[1])) {
+                assert!(pair[0] < mid && mid < pair[1]);
+            }
         }
     }
 }

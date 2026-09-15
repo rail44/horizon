@@ -33,12 +33,56 @@ impl SessionLoopState {
     /// [`super::state::SessionLoopState::run`] does its own arm-specific
     /// setup, then calls this with the prompt message and a fallback closure.
     pub(crate) async fn run_turn(&mut self, prompt: Message, fallback: impl FnOnce() -> Message) {
-        let outcome = self.run_cancellable_turn(prompt, fallback).await;
-        if let Some(outcome) = self.handle_truncation_recovery(outcome).await {
-            let Some(outcome) = self.handle_memory_checkpoint(outcome).await else {
+        self.collect_inputs();
+        self.activate_environment().await;
+        self.collect_inputs();
+        if self.has_pending_stop() {
+            self.pause_inputs(true);
+            self.rig_history.push(prompt);
+            self.apply_turn_outcome(TurnCompletion {
+                cancelled: true,
+                ..Default::default()
+            });
+            return;
+        }
+        let (prompt, injected) = self.inject_task_notification(prompt);
+        let mut outcome = self
+            .run_cancellable_turn(prompt, || match injected {
+                Some(text) => deterministic_rig_response(&text),
+                None => fallback(),
+            })
+            .await;
+        loop {
+            let Some(recovered) = self.handle_truncation_recovery(outcome).await else {
                 return;
             };
+            let Some(checked) = self.handle_memory_checkpoint(recovered).await else {
+                return;
+            };
+            outcome = checked;
+            if outcome.truncated || outcome.cap_truncated {
+                continue;
+            }
+            self.collect_inputs();
+            if self.has_pending_stop() && !outcome.cancelled {
+                outcome.cancelled = true;
+                self.pause_inputs(true);
+            }
+            if !outcome.cancelled && !outcome.failed && outcome.requested_tool_call_ids.is_empty() {
+                if let Some(text) = self.inputs.take_additions() {
+                    let _ = self
+                        .events_tx
+                        .send(crate::tools::notification_event(text.clone()).into());
+                    outcome = self
+                        .run_cancellable_turn(Message::user(text.clone()), || {
+                            deterministic_rig_response(&text)
+                        })
+                        .await;
+                    continue;
+                }
+            }
             self.apply_turn_outcome(outcome);
+            return;
         }
     }
 
@@ -64,7 +108,15 @@ impl SessionLoopState {
         &mut self,
         prompt: Message,
     ) -> (Message, Option<String>) {
-        let Some(text) = crate::tools::take_notification(self.session_id) else {
+        self.collect_inputs();
+        let mut additions = Vec::new();
+        if let Some(text) = self.inputs.take_additions() {
+            additions.push(text);
+        }
+        if let Some(text) = crate::tools::take_notification(self.session_id) {
+            additions.push(text);
+        }
+        let Some(text) = (!additions.is_empty()).then(|| additions.join("\n\n")) else {
             return (prompt, None);
         };
         self.rig_history.push(prompt);
@@ -109,7 +161,8 @@ impl SessionLoopState {
                 outcome = &mut turn => return outcome,
                 maybe_command = self.commands.recv() => {
                     match maybe_command {
-                        Some(Command::Cancel { .. }) => token.cancel(),
+                        Some(Command::Cancel { .. }) => { self.inputs_paused = true; if self.inputs.has_requests() { let _ = self.events_tx.send(Event::InputQueuePaused(true).into()); } token.cancel(); },
+                        Some(Command::Shutdown) => { self.inputs_paused = true; if self.inputs.has_requests() { let _ = self.events_tx.send(Event::InputQueuePaused(true).into()); } self.inbox.push_front(Command::Shutdown); token.cancel(); },
                         Some(other) => self.inbox.push_back(other),
                         None => return turn.await,
                     }
@@ -130,6 +183,7 @@ impl SessionLoopState {
     /// indistinguishable.
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnCompletion) {
         if outcome.cancelled {
+            self.finish_input(crate::contract::InputResult::Interrupted);
             self.cancelled_call_ids
                 .extend(outcome.requested_tool_call_ids.iter().cloned());
             append_cancelled_tool_results_to_history(
@@ -155,6 +209,9 @@ impl SessionLoopState {
         }
 
         if outcome.failed {
+            self.finish_input(crate::contract::InputResult::Failure {
+                message: "Provider request failed.".into(),
+            });
             let _ = self
                 .events_tx
                 .send(Event::TurnEnded(TurnEndReason::Failed).into());
@@ -165,6 +222,9 @@ impl SessionLoopState {
         }
 
         if outcome.requested_tool_call_ids.is_empty() {
+            self.finish_input(crate::contract::InputResult::Success {
+                text: outcome.final_text.unwrap_or_default(),
+            });
             let _ = self
                 .events_tx
                 .send(Event::TurnEnded(TurnEndReason::Completed).into());
@@ -231,6 +291,9 @@ impl SessionLoopState {
                 .send(Event::TurnEnded(TurnEndReason::Failed).into());
 
             if !self.guard.record_truncation_continue() {
+                self.finish_input(crate::contract::InputResult::Failure {
+                    message: "Provider truncation recovery exhausted.".into(),
+                });
                 // Consecutive truncation cap exhausted: stop auto-continuing
                 // and let the user take over.
                 let _ = self
@@ -260,8 +323,7 @@ impl SessionLoopState {
 
             if !outcome.truncated && !outcome.cap_truncated {
                 self.guard.reset_truncation_counter();
-                self.apply_turn_outcome(outcome);
-                return None;
+                return Some(outcome);
             }
         }
     }
@@ -288,8 +350,11 @@ impl SessionLoopState {
             // Only standing roles have a memory checkpoint (`self.memory` is
             // `Some` exclusively for standing roles — see `SessionLoopState::new`),
             // and only a completing turn reaches it.
-            let is_completing =
-                !outcome.cancelled && !outcome.failed && outcome.requested_tool_call_ids.is_empty();
+            let is_completing = !outcome.cancelled
+                && !outcome.failed
+                && !outcome.truncated
+                && !outcome.cap_truncated
+                && outcome.requested_tool_call_ids.is_empty();
             if self.memory.is_none() || !is_completing {
                 return Some(outcome);
             }
@@ -351,7 +416,8 @@ impl SessionLoopState {
         true
     }
 
-    pub(crate) fn emit_cancelled_turn(&self) {
+    pub(crate) fn emit_cancelled_turn(&mut self) {
+        self.finish_input(crate::contract::InputResult::Interrupted);
         let _ = self
             .events_tx
             .send(Event::TurnEnded(TurnEndReason::Cancelled).into());
@@ -422,6 +488,7 @@ impl SessionLoopState {
             self.pending_halt_result = Some((arrived_result.clone(), tool_id.to_string()));
         }
 
+        self.finish_input(crate::contract::InputResult::Interrupted);
         self.guard.reset();
         let _ = self
             .events_tx

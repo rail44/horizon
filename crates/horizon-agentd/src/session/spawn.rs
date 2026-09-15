@@ -74,6 +74,33 @@ pub(crate) fn spawn_session_thread(
     restored_worktree: Option<WorktreeInfo>,
     history: Vec<Event>,
 ) {
+    spawn_session_thread_with_context(
+        state,
+        session_id,
+        provider_id,
+        role_id,
+        workspace_root,
+        spawn_source_session_id,
+        isolate,
+        restored_worktree,
+        history,
+        None,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn spawn_session_thread_with_context(
+    state: Arc<AgentdState>,
+    session_id: SessionId,
+    provider_id: ProviderId,
+    role_id: Option<RoleId>,
+    workspace_root: Option<PathBuf>,
+    spawn_source_session_id: Option<SessionId>,
+    isolate: bool,
+    restored_worktree: Option<WorktreeInfo>,
+    history: Vec<Event>,
+    retained_context: Option<horizon_agent::persistence::event_log::PersistedSessionContext>,
+) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
     let model =
@@ -115,6 +142,9 @@ pub(crate) fn spawn_session_thread(
                 replay_rx,
                 history,
                 &phase,
+                retained_context
+                    .map(|context| context.filesystem_grants)
+                    .unwrap_or_default(),
             );
         });
         if let Err(failure) = outcome {
@@ -161,6 +191,7 @@ pub(crate) fn spawn_session_thread(
         // daemon-side "terminate" signal), never on a mere close/detach
         // (those leave the thread, and this session, running -- see the
         // module doc's "sessions are scoped to the process" note).
+        let _lifecycle = lock_unpoisoned(&thread_state.lifecycle);
         let entry = lock_unpoisoned(&thread_state.sessions).remove(&session_id);
         if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
             if !worktree::remove_worktree_if_clean(&worktree) {

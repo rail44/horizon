@@ -367,6 +367,17 @@ impl AgentdHandle {
             })?
     }
 
+    /// Register from a background task; the reply can wait for daemon startup.
+    pub(crate) fn watch_board(&self, root: std::path::PathBuf) -> Result<(), String> {
+        let (reply, receive) = crossbeam_channel::bounded(1);
+        self.ops
+            .send(agent::Op::WatchBoard { root, reply })
+            .map_err(|_| "Agent runtime stopped before board registration".to_string())?;
+        receive
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|error| format!("Board registration did not complete: {error}"))?
+    }
+
     fn drain(&self) {
         let _ = self.ops.send(agent::Op::Drain);
     }

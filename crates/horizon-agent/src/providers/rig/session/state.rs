@@ -45,6 +45,9 @@ enum Next {
 /// Bundling them lets the pipeline methods in [`super::turn`] take
 /// `&mut self` instead of threading each one as a separate argument.
 pub(crate) struct SessionLoopState {
+    pub(crate) inputs_paused: bool,
+    pub(crate) activation: VecDeque<String>,
+    pub(crate) inputs: super::input::Inputs,
     // --- Mutable loop state ---------------------------------------------
     /// The rig conversation history, grown and cleared as turns run.
     pub(crate) rig_history: Vec<Message>,
@@ -85,7 +88,7 @@ pub(crate) struct SessionLoopState {
     /// bounds the checkpoint to at most one reminder, then a missed event.
     pub(crate) memory_reminded: bool,
 
-    // --- Read-only inputs (fixed for the session's lifetime) ------------
+    // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
     pub(crate) environment: SessionEnvironment,
@@ -100,6 +103,9 @@ impl Default for SessionLoopState {
         let (_, task_wake) = tokio::sync::mpsc::unbounded_channel::<()>();
         let (events_tx, _) = crossbeam_channel::unbounded::<ProviderEvent>();
         Self {
+            inputs: super::input::Inputs::default(),
+            activation: VecDeque::new(),
+            inputs_paused: false,
             rig_history: Vec::new(),
             clearing: ClearingState::disabled(),
             commands,
@@ -150,6 +156,9 @@ impl SessionLoopState {
             None
         };
         Self {
+            inputs: super::input::Inputs::default(),
+            activation: VecDeque::new(),
+            inputs_paused: false,
             session_id,
             commands: super::bridge_commands(commands_rx),
             task_wake: crate::tools::register_wake(session_id),
@@ -178,6 +187,40 @@ impl SessionLoopState {
     /// only its own arm-specific setup before calling it.
     pub(super) async fn run(&mut self) {
         loop {
+            while let Ok(command) = self.commands.try_recv() {
+                self.inbox.push_back(command);
+            }
+            // Lifecycle controls must run before starting queued work, including
+            // controls observed while the provider awaited an environment swap.
+            if let Some(index) = self
+                .inbox
+                .iter()
+                .position(|command| matches!(command, Command::Shutdown | Command::Cancel { .. }))
+            {
+                let mut preceding = VecDeque::new();
+                for _ in 0..index {
+                    match self.inbox.pop_front().unwrap() {
+                        Command::SessionInput(input) => self
+                            .inputs
+                            .accept(input, !self.pending_tool_calls.is_empty()),
+                        command => preceding.push_back(command),
+                    }
+                }
+                let control = self.inbox.pop_front().unwrap();
+                preceding.append(&mut self.inbox);
+                self.inbox = preceding;
+                self.record_active_input();
+                self.inbox.push_front(control);
+            }
+            if self.inbox.is_empty() && self.pending_tool_calls.is_empty() {
+                self.activate_environment().await;
+                if !self.inputs_paused && !self.has_pending_stop() {
+                    if let Some(text) = self.inputs.start_next() {
+                        self.record_active_input();
+                        self.inbox.push_front(Command::UserMessage { text });
+                    }
+                }
+            }
             let next = match self.inbox.pop_front() {
                 Some(command) => Next::Command(command),
                 None => tokio::select! {
@@ -193,6 +236,9 @@ impl SessionLoopState {
                 Next::Closed => break,
                 Next::Command(command) => command,
                 Next::TaskWake => {
+                    if self.inputs_paused {
+                        continue;
+                    }
                     // A background `task` child finished. If a tool batch is
                     // still outstanding -- which includes a call parked on an
                     // approval -- a provider round is still coming, and the
@@ -238,6 +284,25 @@ impl SessionLoopState {
             };
 
             match command {
+                Command::SessionInput(input) => {
+                    let resume_work = input.resume_work;
+                    self.inputs
+                        .accept(input, !self.pending_tool_calls.is_empty());
+                    if resume_work {
+                        self.pause_inputs(false);
+                    }
+                    self.record_active_input();
+                }
+                Command::AcknowledgeDelivery { .. } | Command::SendSessionInput { .. } => {}
+                Command::ActivateWorktree { base } => {
+                    self.activation.push_back(base);
+                    if self.pending_tool_calls.is_empty() {
+                        self.activate_environment().await;
+                    }
+                }
+                Command::EnvironmentPrepared { .. }
+                | Command::EnvironmentActivationFailed { .. } => {}
+
                 crate::contract::Command::Initialize(_) => {
                     let _ = self.events_tx.send(
                         crate::contract::Event::StateChanged(
@@ -253,6 +318,7 @@ impl SessionLoopState {
                     );
                 }
                 crate::contract::Command::UserMessage { text } => {
+                    self.pause_inputs(false);
                     // A user message starts a new interaction rather than
                     // joining the previous turn's tool batch. This command can
                     // arrive while any kind of tool is still running or
@@ -397,6 +463,7 @@ impl SessionLoopState {
                     .await;
                 }
                 crate::contract::Command::ContinueTurn => {
+                    self.pause_inputs(false);
                     let Some((result, tool_id)) = self.pending_halt_result.take() else {
                         // Nothing halted to resume: a safe no-op. Covers a
                         // stale Continue arriving after a fresh user message
@@ -434,6 +501,7 @@ impl SessionLoopState {
                     .await;
                 }
                 crate::contract::Command::Cancel { .. } => {
+                    self.pause_inputs(true);
                     if !self.cancel_outstanding_tool_calls() {
                         // Nothing in flight (no running turn, no pending tool
                         // call) — cancel is a no-op in v1's "cancel whatever
@@ -443,6 +511,7 @@ impl SessionLoopState {
                     self.emit_cancelled_turn();
                 }
                 crate::contract::Command::Shutdown => {
+                    self.finish_input(crate::contract::InputResult::Interrupted);
                     let _ = self.events_tx.send(
                         crate::contract::Event::StateChanged(
                             crate::contract::SessionState::Terminated,

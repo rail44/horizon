@@ -23,17 +23,39 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-The board's milestone flow is implemented on `board-milestone-flow` following
-owner decisions on 2026-09-13: ordinary board tasks, automatic prioritization
-and replanning, parallel implementation in separate worktrees, focused decision
-conversations, and integration of verified finished branches into main.
-Decisions block only affected work; task and milestone acceptance have separate
-verification records. A real-daemon fixture covers concurrent work, stale-main
-reverification, conversation and restart through milestone achievement.
-Real-model judgment quality and native GUI usability still need dogfooding.
-See [`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
-agreed behavior, implementation, validation and separate improvement
-opportunities. This is product scope, not a repository development-flow policy.
+**Board redesign (2026-09-16):** implemented and automatically validated in
+`board-redesign-foundation`; uncommitted and not integrated into main.
+The workspace gate passed (1,815 tests; 73 existing sandbox-profile skips),
+as did the isolated daemon flow with a local deterministic provider.
+Manual native GUI verification, retained-record selection/migration rehearsal,
+and live cutover remain. Existing board records have not been changed.
+See [accepted design](board-redesign-design.md) and
+[implementation and validation](board-redesign-implementation-plan.md).
+
+The replacement keeps ordinary recursive tasks, fractional sibling order,
+separate dependencies, project-defined status, recognizable completion, and
+board consultation. A milestone is simply a larger task. The native list has
+a top-level filter; common task detail shows description, prerequisites,
+ranked children, and consultation vertically. Read state tracks displayed
+message IDs and preserves unread gaps and descendant indications.
+
+The organizer maintains priorities/dependencies and selects consultations;
+parent priority guides selection, with independent work under subsequent
+parents eligible to run in parallel. The task's ordinary session consults
+and implements, activating a worktree at an explicit base. An owner post can
+resume that same ended session; passive notifications do not restart it.
+Each review uses a separate ordinary session/worktree pinned to its requested
+tip, reviewing the complete multi-commit range. Final answers follow the
+trigger's destination through durable harness delivery. Consultation depth,
+readiness, parallelism and project integration policy remain skill prompts.
+
+The September 13 special workflow, coordinator/wake logic, dedicated UI,
+operations and unused fields have been removed from the replacement. Its
+historical record is [board-milestone-flow-design.md](board-milestone-flow-design.md).
+Legacy decoding is confined to an explicit, one-time selected-record importer.
+Cutover requires retained-data verification and a full app restart with matching
+agent protocol 20 / log protocol 5 binaries; the terminal protocol is unchanged.
+This is product behavior, not a repository-wide development-flow policy.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

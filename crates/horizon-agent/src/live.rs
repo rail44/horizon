@@ -139,6 +139,23 @@ impl LiveState {
         self.inner.borrow_mut().extend_provider_events(events)
     }
 
+    /// Persist transport/lifecycle records without swallowing writer failures.
+    /// The caller must flush the writer before publishing externally.
+    pub fn persist_provider_events(
+        &self,
+        events: impl IntoIterator<Item = ProviderEvent>,
+    ) -> Result<AgentFrame, String> {
+        let events: Vec<_> = events.into_iter().collect();
+        let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() else {
+            return Err("Session persistence is unavailable".into());
+        };
+        appender
+            .borrow_mut()
+            .append_provider_events(events.clone())
+            .map_err(|error| error.to_string())?;
+        Ok(self.inner.borrow_mut().extend_provider_events(events))
+    }
+
     /// Test-only: production always seeds `history` explicitly (even if
     /// empty, from a fresh session) via [`Self::with_event_log_and_history`]
     /// -- `horizon-agentd`'s `run_session` is the one real caller. Kept as
@@ -212,6 +229,26 @@ impl LiveState {
     /// reach when that event was written?" rather than only "what did it
     /// start with?". See
     /// `event_log::PersistedSessionContext::filesystem_grants`.
+    /// Publish the environment event only after both its context and record
+    /// have reached the acknowledged writer boundary.
+    pub fn activate_context(
+        &self,
+        context: event_log::PersistedSessionContext,
+        event: Event,
+    ) -> Result<(), String> {
+        let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() else {
+            return Err("Session persistence is unavailable".into());
+        };
+        appender
+            .borrow_mut()
+            .activate_context(context, event.clone().into())
+            .map_err(|error| error.to_string())?;
+        self.inner
+            .borrow_mut()
+            .extend_provider_events(vec![event.into()]);
+        Ok(())
+    }
+
     pub(crate) fn record_filesystem_grants(&self, grants: &[horizon_sandbox::FilesystemGrant]) {
         if let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() {
             appender.borrow_mut().set_filesystem_grants(grants.to_vec());

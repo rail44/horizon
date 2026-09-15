@@ -57,6 +57,20 @@ pub(super) fn load_rig_session_history(
     session_id: SessionId,
     fallback_events: &[Event],
 ) -> RigSessionHistory {
+    // Host restoration supplies the authoritative log, which may be ahead of
+    // an otherwise healthy projection. Memory-only cross-session seeds still
+    // use the projection path below.
+    if fallback_events
+        .iter()
+        .any(|event| matches!(event, Event::StateChanged(_) | Event::MessageCommitted(_)))
+    {
+        return RigSessionHistory {
+            messages: rig_messages_from_horizon_events(fallback_events),
+            cleared_call_ids: cleared_call_ids_from_events(fallback_events),
+            memory_document: memory_document_from_events_if_nonempty(fallback_events),
+            seed_from_fallback: false,
+        };
+    }
     let Some(store) = store else {
         if fallback_events.is_empty() {
             return RigSessionHistory::default();
