@@ -104,7 +104,7 @@ mod imp {
             Some(title) => eprintln!("[notification] {title}: {body}"),
             None => eprintln!("[notification] {body}"),
         }
-        None
+        None::<std::future::Ready<bool>>
     }
 }
 
