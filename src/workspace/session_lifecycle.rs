@@ -1449,9 +1449,12 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
-    /// External (control-plane) operations — the CLI's verbs, mirroring
-    /// the Floem shell's `external_commands` semantics: `activate:
-    /// false` never steals focus. `prompt` (agent sessions only) sends
+    /// Control-plane operations — the CLI's verbs, mirroring the Floem
+    /// shell's `external_commands` semantics. The Rust family was renamed
+    /// from `external_*` to `control_plane_*` so the prefix names the
+    /// caller (the CLI's stable verb surface), not the session; the
+    /// published string names are untouched. `activate: false` never
+    /// steals focus. `prompt` (agent sessions only) sends
     /// the first user message right after the session starts — the
     /// create-with-prompt composite from the CLI design. `role_id` is
     /// fixed by the caller (e.g. `new-config-agent`), never client-supplied

@@ -22,7 +22,7 @@
 //! move, no behavior change: [`bindings`] (keybinding derivation/apply),
 //! [`session_lifecycle`] (session creation, agentd resume/reload,
 //! `reconcile`), [`commands`] (`execute`/`execute_control_plane` and the
-//! session-targeted `external_*` family), [`modals`] (the palette/
+//! session-targeted `control_plane_*` family), [`modals`] (the palette/
 //! session-manager/view-chooser lifecycles), and [`render`]
 //! (`render_tab_strip`/`render_node`/the `Render` impl, plus the
 //! pane-chrome pure functions). This file keeps the `WorkspaceShell`
