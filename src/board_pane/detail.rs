@@ -1,20 +1,49 @@
 use super::*;
 
+/// Tone selector for board command buttons: calm actions are `outline`
+/// and the positive commit is `primary`. Destructive commands that need a
+/// custom click handler (dependency removal) build the outline-danger
+/// pairing inline, the same one the agent pane's Stop button uses.
+#[derive(Clone, Copy)]
+pub(super) enum BoardButtonTone {
+    Calm,
+    Positive,
+}
+
 impl BoardPaneView {
+    /// Board command buttons use the shell's stock `Button` (the same
+    /// widget the agent pane and theme settings use) instead of bare
+    /// accent-text divs, so hover/pressed feedback comes from the shared
+    /// widget rather than being re-implemented per control.
     pub(super) fn command_button(
-        id: &'static str,
+        id: impl Into<ElementId>,
         label: &'static str,
         command: CommandId,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        div()
-            .id(id)
-            .px_2()
-            .py_1()
-            .text_size(px(12.0))
-            .text_color(theme::accent())
-            .child(label)
-            .on_click(cx.listener(move |_, _, _, cx| cx.emit(BoardCommand(command))))
+        Self::toned_command_button(id, label, BoardButtonTone::Calm, command, cx)
+    }
+
+    pub(super) fn toned_command_button(
+        id: impl Into<ElementId>,
+        label: &'static str,
+        tone: BoardButtonTone,
+        command: CommandId,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut button = Button::new(id).xsmall().label(label);
+        button = match tone {
+            BoardButtonTone::Calm => button.outline(),
+            BoardButtonTone::Positive => button.primary(),
+        };
+        button.on_click(cx.listener(move |_, _, _, cx| cx.emit(BoardCommand(command))))
+    }
+
+    /// Same derivation as the agent composer's border (`text_subtle`
+    /// washed toward the background), so the two conversation surfaces
+    /// share their input chrome.
+    fn composer_border() -> Hsla {
+        theme::text_subtle().alpha(0.4)
     }
 
     pub(super) fn task_link(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement {
@@ -22,6 +51,11 @@ impl BoardPaneView {
         div()
             .id(("board-task-link", id))
             .text_color(theme::accent())
+            // Pointer feedback via the shell's shared hover idiom (the
+            // agent pane's pill rows); the link previously had none.
+            .cursor_pointer()
+            .rounded_sm()
+            .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
             .child(format!("#{} {}", item.id, item.title))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.navigation_item = Some(id);
@@ -76,7 +110,15 @@ impl BoardPaneView {
                     }),
             )
             .when_some(self.error.clone(), |view, error| {
-                view.child(div().px_2().child(error))
+                // Danger-toned small text, matching the list mode's error
+                // line and the agent pane's status line.
+                view.child(
+                    div()
+                        .px_2()
+                        .text_size(px(11.0))
+                        .text_color(theme::danger())
+                        .child(error),
+                )
             })
             .child(
                 v_flex()
@@ -98,7 +140,12 @@ impl BoardPaneView {
                                     .text_size(px(18.0))
                                     .child(format!("#{} {}", item.id, item.title)),
                             )
-                            .child(task_state(item)),
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(task_state_color(item))
+                                    .child(task_state(item)),
+                            ),
                     )
                     .child(
                         h_flex()
@@ -110,12 +157,19 @@ impl BoardPaneView {
                                 CommandId::SaveBoardState,
                                 cx,
                             ))
-                            .child(Self::command_button(
+                            // Marking complete is the row's positive commit
+                            // (primary); reopening is the calm undo.
+                            .child(Self::toned_command_button(
                                 "board-completed",
                                 if item.completed {
                                     "Reopen"
                                 } else {
                                     "Mark complete"
+                                },
+                                if item.completed {
+                                    BoardButtonTone::Calm
+                                } else {
+                                    BoardButtonTone::Positive
                                 },
                                 CommandId::ToggleBoardCompleted,
                                 cx,
@@ -134,10 +188,13 @@ impl BoardPaneView {
                             .map(|task| format!("#{} {}", task.id, task.title))
                             .unwrap_or_else(|| format!("Task #{id}"));
                         h_flex().gap_2().child(name).child(
-                            div()
-                                .id(("board-remove-dependency", id))
-                                .text_color(theme::accent())
-                                .child("Remove")
+                            // Outline-danger, the destructive pairing (the same
+                            // one the agent pane's Stop button uses).
+                            Button::new(("board-remove-dependency", id))
+                                .outline()
+                                .danger()
+                                .xsmall()
+                                .label("Remove")
                                 .on_click(cx.listener(move |view, _, _, cx| {
                                     view.pending_dependency = Some(id);
                                     cx.emit(BoardCommand(CommandId::RemoveBoardDependency));
@@ -150,6 +207,10 @@ impl BoardPaneView {
                         div()
                             .id(("board-add-dependency", id))
                             .text_color(theme::accent())
+                            // Same hover idiom as task_link.
+                            .cursor_pointer()
+                            .rounded_sm()
+                            .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
                             .child(format!("#{} {}", candidate.id, candidate.title))
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.pending_dependency = Some(id);
@@ -230,6 +291,10 @@ impl BoardPaneView {
                                         },
                                         id,
                                     ))
+                                    // Same hover idiom as task_link.
+                                    .cursor_pointer()
+                                    .rounded_sm()
+                                    .hover(|this| this.bg(theme::text_subtle().alpha(0.12)))
                                     .child(label)
                                     .on_click(cx.listener(move |view, _, _, cx| {
                                         view.navigation_item = Some(id);
@@ -295,7 +360,37 @@ impl BoardPaneView {
                                 .size_full(),
                             )
                     }))
-                    .child(Input::new(comment_input).appearance(false)),
+                    .child(
+                        // The consultation composer mirrors the agent pane's
+                        // composer chrome (rounded bordered row + trailing send
+                        // button) so the two conversation surfaces read the same
+                        // way. Enter still posts (`submit_on_enter` on the input
+                        // state); the button emits the same `PostBoardMessage`
+                        // command the Enter path emits.
+                        h_flex()
+                            .items_end()
+                            .gap_2()
+                            .mt_1()
+                            .px(px(6.0))
+                            .py(px(4.0))
+                            .rounded(px(10.0))
+                            .border_1()
+                            .border_color(Self::composer_border())
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .child(Input::new(comment_input).appearance(false)),
+                            )
+                            .child(
+                                Button::new("board-comment-send")
+                                    .primary()
+                                    .xsmall()
+                                    .label("↑")
+                                    .on_click(cx.listener(|_view, _, _, cx| {
+                                        cx.emit(BoardCommand(CommandId::PostBoardMessage));
+                                    })),
+                            ),
+                    ),
             )
     }
 }

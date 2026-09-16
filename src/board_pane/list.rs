@@ -107,7 +107,9 @@ impl ListDelegate for BoardListDelegate {
         let item = self.filtered.get(index.row)?;
         let depth = self.depths.get(index.row).copied().unwrap_or(0);
         let mut title_color = theme::text_primary();
-        let mut status_color = theme::text_muted();
+        // Completed tasks take the success tone (see `task_state_color`);
+        // everything else stays muted.
+        let mut status_color = task_state_color(item);
         if self.selected == Some(index) {
             let surface = theme::surface_selected();
             title_color = theme::readable_on(title_color, surface);

@@ -250,6 +250,19 @@ pub(super) fn task_state(item: &Item) -> String {
     }
 }
 
+/// The tone for a task's displayed state: `completed` is the one state fact
+/// the product itself vouches for (the separate completion flag), so it
+/// earns the success tone. The free-form `status` text is project-defined,
+/// so it stays muted rather than inventing semantics for project-specific
+/// words.
+pub(super) fn task_state_color(item: &Item) -> Hsla {
+    if item.completed {
+        theme::success()
+    } else {
+        theme::text_muted()
+    }
+}
+
 pub(super) fn unread_tasks(
     items: &[Item],
     positions: &std::collections::HashMap<u64, String>,

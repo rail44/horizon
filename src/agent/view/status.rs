@@ -22,6 +22,23 @@ struct StatusProjection {
     turn_in_flight: bool,
 }
 
+/// The display label for one folded `SessionState`, shared by the status
+/// line and the transcript's running card so the two wordings can't
+/// drift. `None` for the quiet states (`Created`/`WaitingForUser`) the
+/// status line hides entirely; each caller picks its own fallback.
+pub(super) fn session_state_label(state: SessionState) -> Option<&'static str> {
+    match state {
+        SessionState::Running => Some("running…"),
+        SessionState::ToolRunning => Some("tool running…"),
+        SessionState::WaitingForApproval => Some("waiting for approval"),
+        SessionState::Cancelled => Some("cancelled"),
+        SessionState::Completed => Some("completed"),
+        SessionState::Failed => Some("failed"),
+        SessionState::Terminated => Some("terminated"),
+        SessionState::Created | SessionState::WaitingForUser => None,
+    }
+}
+
 fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> StatusProjection {
     // A dead agentd channel wins over the folded session state: all pane
     // interactions are otherwise heading nowhere. The independent in-flight
@@ -34,16 +51,7 @@ fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> Sta
         };
     }
 
-    let text = match state {
-        Some(SessionState::Running) => "running…",
-        Some(SessionState::ToolRunning) => "tool running…",
-        Some(SessionState::WaitingForApproval) => "waiting for approval",
-        Some(SessionState::WaitingForUser) | Some(SessionState::Created) | None => "",
-        Some(SessionState::Cancelled) => "cancelled",
-        Some(SessionState::Completed) => "completed",
-        Some(SessionState::Failed) => "failed",
-        Some(SessionState::Terminated) => "terminated",
-    };
+    let text = state.and_then(session_state_label).unwrap_or("");
     StatusProjection {
         text,
         tone: StatusTone::Muted,

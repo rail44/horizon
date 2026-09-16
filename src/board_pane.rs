@@ -8,10 +8,11 @@ use futures::channel::{mpsc, oneshot};
 use futures::StreamExt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_component::text::TextView;
-use gpui_component::{h_flex, v_flex, IndexPath};
+use gpui_component::{h_flex, v_flex, IndexPath, Sizable as _};
 use horizon_board::{tree_order, Item, Position, Store, StoreError, SubscribeStream};
 
 use crate::theme;
@@ -447,7 +448,16 @@ impl Render for BoardPaneView {
                     v_flex()
                         .size_full()
                         .when_some(self.error.clone(), |view, error| {
-                            view.child(div().p_2().child(error))
+                            // Danger-toned small text, the same error treatment
+                            // as detail mode and the agent pane's status line --
+                            // not an alarm-styled banner.
+                            view.child(
+                                div()
+                                    .p_2()
+                                    .text_size(px(11.0))
+                                    .text_color(theme::danger())
+                                    .child(error),
+                            )
                         })
                         .child(
                             h_flex()

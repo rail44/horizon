@@ -1221,14 +1221,10 @@ fn escape_markdown(text: &str) -> String {
 /// The running card's header label for the three in-flight
 /// `SessionState`s (`state_indicates_turn_in_flight`'s own set) — any
 /// other state falls back to the generic label defensively, since this
-/// is only ever called while a turn is in flight.
+/// is only ever called while a turn is in flight. The label set itself
+/// lives in `session_state_label` (shared with the status line).
 fn running_state_label(state: SessionState) -> &'static str {
-    match state {
-        SessionState::Running => "running…",
-        SessionState::ToolRunning => "tool running…",
-        SessionState::WaitingForApproval => "waiting for approval",
-        _ => "running…",
-    }
+    super::status::session_state_label(state).unwrap_or("running…")
 }
 
 #[cfg(test)]
