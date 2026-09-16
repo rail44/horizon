@@ -21,7 +21,7 @@
 //! Split (2026-07-18) into responsibility-focused submodules -- a pure
 //! move, no behavior change: [`bindings`] (keybinding derivation/apply),
 //! [`session_lifecycle`] (session creation, agentd resume/reload,
-//! `reconcile`), [`commands`] (`execute`/`execute_external` and the
+//! `reconcile`), [`commands`] (`execute`/`execute_control_plane` and the
 //! session-targeted `external_*` family), [`modals`] (the palette/
 //! session-manager/view-chooser lifecycles), and [`render`]
 //! (`render_tab_strip`/`render_node`/the `Render` impl, plus the
@@ -170,7 +170,7 @@ fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bo
 /// the command that kills them on purpose.) A zero-tab workspace is now a valid,
 /// persistable state (`WorkspaceState::validate` accepts it), so every
 /// *other* termination path (`TerminateActiveSession`, the session
-/// manager's secondary-confirm terminate, `external_terminate`, a PTY
+/// manager's secondary-confirm terminate, `control_plane_terminate`, a PTY
 /// exit via `handle_terminal_exited`) leaves the workspace empty as-is
 /// rather than calling this -- auto-creating a terminal there would
 /// silently work against a user closing or terminating everything on
@@ -293,7 +293,7 @@ pub(crate) struct WorkspaceShell {
     // and terminating is the explicit destructive path.
     sessions: HashMap<SessionId, Entity<TerminalSession>>,
     agent_sessions: HashMap<SessionId, Entity<AgentSession>>,
-    // Staged by `external_new_session` (a role-tagged create, e.g.
+    // Staged by `control_plane_new_session` (a role-tagged create, e.g.
     // `new-config-agent`) and consumed by `reconcile` when it actually
     // starts the session — the model's `open_tab_with_new_session_*`
     // call only yields a `SessionId`, so the role has nowhere else to

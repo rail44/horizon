@@ -1,6 +1,6 @@
 //! Session-creation and daemon-runtime lifecycle: the one interactive
 //! and control-plane session-creation paths (`create_session`/
-//! `external_new_session`), pending-spawn staging consumed by
+//! `control_plane_new_session`), pending-spawn staging consumed by
 //! `reconcile`, the startup/reload resume sweeps
 //! (`spawn_terminal_resume`/`spawn_agent_resume`/`spawn_workspace_restore`),
 //! the two independent reload paths (`reload_agent_runtime` for
@@ -1287,7 +1287,7 @@ impl WorkspaceShell {
     /// Stages an agent spawn's source pane and isolation choice for
     /// `reconcile` to consume -- `isolate` here is already the fully
     /// resolved per-spawn choice (origin default folded with any explicit
-    /// override; see `create_session`/`external_new_session`), not a
+    /// override; see `create_session`/`control_plane_new_session`), not a
     /// further default to apply.
     fn pending_agent_spawn(
         &self,
@@ -1371,7 +1371,7 @@ impl WorkspaceShell {
         }
         // Palette origin: the new session is a child of the focused pane
         // (the "current pane" gesture) -- the active session is the spawn
-        // source, no explicit target. Contrast `external_new_session`'s
+        // source, no explicit target. Contrast `control_plane_new_session`'s
         // control-plane path, which parents to the issuer instead (issue
         // 013).
         let active = self.workspace.active_session_id();
@@ -1477,7 +1477,7 @@ impl WorkspaceShell {
     /// the parent is `spawn_source_session_id` itself, not the
     /// worktree-derivation result.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn external_new_session(
+    pub(crate) fn control_plane_new_session(
         &mut self,
         kind: PaneKind,
         role_id: Option<horizon_agent::roles::RoleId>,

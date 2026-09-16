@@ -1,8 +1,8 @@
-//! The command-model dispatch point (`execute`/`execute_external`) plus
-//! the session-targeted `external_*` family the CLI control plane drives
-//! (everything but `external_new_session`, which pairs with
-//! `create_session` in `session_lifecycle` instead -- see that module's
-//! doc comment).
+//! The command-model dispatch point (`execute`/`execute_control_plane`)
+//! plus the session-targeted `control_plane_*` family the CLI control
+//! plane drives (everything but `control_plane_new_session`, which pairs
+//! with `create_session` in `session_lifecycle` instead -- see that
+//! module's doc comment).
 
 use gpui::*;
 use horizon_workspace::commands::{CommandId, CommandState};
@@ -540,7 +540,7 @@ impl WorkspaceShell {
 
     /// `execute` for control-plane callers — public without exposing the
     /// whole command surface.
-    pub(crate) fn execute_external(
+    pub(crate) fn execute_control_plane(
         &mut self,
         id: CommandId,
         window: &mut Window,
@@ -586,11 +586,12 @@ impl WorkspaceShell {
         self.workspace.session_summaries()
     }
 
-    /// External (control-plane) operations — the CLI's verbs, mirroring
-    /// the Floem shell's `external_commands` semantics. "external" names
-    /// the caller (the CLI's stable verb surface), not the session — an
-    /// earlier `external_attach` spelling read as "attach an external
-    /// session". `activate: false` never steals focus.
+    /// Control-plane operations — the CLI's verbs, mirroring the Floem
+    /// shell's `external_commands` semantics. The Rust family was renamed
+    /// from `external_*` to `control_plane_*` so the prefix names the
+    /// caller (the CLI's stable verb surface) instead of reading as
+    /// "attach an external session"; the published string names are
+    /// untouched. `activate: false` never steals focus.
     ///
     /// The one CLI verb with a fallback: an id the model has never seen may
     /// still exist inside `horizon-agentd` (a board-organizer/keeper
@@ -604,7 +605,7 @@ impl WorkspaceShell {
     /// wrong as a scripting check. The Manage Sessions modal and the board
     /// session openers use the strict [`Self::attach_known_session`]
     /// instead, so their error surfaces keep reporting the miss.
-    pub(crate) fn external_attach_session(
+    pub(crate) fn control_plane_attach_session(
         &mut self,
         session_id: SessionId,
         activate: bool,
@@ -645,7 +646,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    /// The lookup half of `external_attach_session`'s fallback: one
+    /// The lookup half of `control_plane_attach_session`'s fallback: one
     /// `session_list` pull on the background executor (the same async shape
     /// as `refresh_board_sessions`, with the same `same_runtime`/restore
     /// guards), then adoption through the common path and the normal
@@ -708,7 +709,7 @@ impl WorkspaceShell {
         .detach();
     }
 
-    pub(crate) fn external_terminate(
+    pub(crate) fn control_plane_terminate(
         &mut self,
         session_id: SessionId,
         window: &mut Window,
@@ -729,7 +730,7 @@ impl WorkspaceShell {
     /// pane is active" (unlike `CommandId::ApproveToolCall`/`DenyToolCall`/
     /// `CancelAgentTurn`/`ContinueAgentTurn`, which resolve against
     /// `active_agent_session`).
-    pub(crate) fn external_approve(
+    pub(crate) fn control_plane_approve(
         &mut self,
         session_id: SessionId,
         call_id: horizon_agent::contract::ToolCallId,
@@ -743,7 +744,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_deny(
+    pub(crate) fn control_plane_deny(
         &mut self,
         session_id: SessionId,
         call_id: horizon_agent::contract::ToolCallId,
@@ -758,7 +759,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_cancel(
+    pub(crate) fn control_plane_cancel(
         &mut self,
         session_id: SessionId,
         cx: &mut Context<Self>,
@@ -771,7 +772,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_continue_turn(
+    pub(crate) fn control_plane_continue_turn(
         &mut self,
         session_id: SessionId,
         cx: &mut Context<Self>,
@@ -791,7 +792,7 @@ impl WorkspaceShell {
     /// without any additional semantics to implement. v1 is attached-only:
     /// a detached session is not in `agent_sessions` and surfaces as
     /// "unknown session" (see issue 011's Notes).
-    pub(crate) fn external_send(
+    pub(crate) fn control_plane_send(
         &mut self,
         session_id: SessionId,
         text: String,
@@ -805,7 +806,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_terminate_all_detached(
+    pub(crate) fn control_plane_terminate_all_detached(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -901,7 +902,7 @@ mod tests {
     // `prepare_workspace_for_terminal_runtime_reload`, both defined in this
     // file, it's no longer called by any production code in `commands.rs`
     // (the 2026-07-18 "empty workspace is valid" change removed its
-    // `TerminateActiveSession`/`external_terminate` call sites); its one
+    // `TerminateActiveSession`/`control_plane_terminate` call sites); its one
     // remaining caller is `reload_terminal_runtime` in
     // `session_lifecycle`.
     use super::super::ensure_workspace_has_pane;

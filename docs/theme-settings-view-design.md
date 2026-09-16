@@ -75,7 +75,7 @@ Consequences handled in the plumbing slice (slice 1, shipped):
   `pending_roles` bookkeeping entirely (nothing to spawn). The CLI
   `CreateSession` vocabulary (`control_plane.rs`'s `new-terminal`/
   `new-agent`/`new-config-agent`) is **not** extended in this slice --
-  `external_new_session` always mints a `SessionId` and spawns a
+  `control_plane_new_session` always mints a `SessionId` and spawns a
   process, which doesn't fit a session-less pane without its own
   parallel path; left for later if a CLI-driven Theme Settings pane is
   ever wanted.
