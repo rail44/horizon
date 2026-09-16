@@ -40,6 +40,7 @@ use super::common::{
     connect_hub, establish_timeout, wait_until_refusing, with_deadline, ConnTask, Connected,
     EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
 };
+use super::connection::connect_or_spawn_terminald_retrying;
 use super::routing::TerminalRoutes;
 
 /// The daemon this module talks to, named in every classified error.
@@ -109,7 +110,7 @@ pub(super) fn spawn(
             let mut consecutive_silences: u32 = 0;
             loop {
                 let stream = tokio::select! {
-                    result = horizon_wire::spawn::connect_or_spawn_terminald_retrying(
+                    result = connect_or_spawn_terminald_retrying(
                         &socket_path,
                         &control_socket,
                     ) => match result {

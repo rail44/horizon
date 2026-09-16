@@ -106,6 +106,10 @@ lands:
   until the owner retired it on 2026-08-01: a still-running pre-remoc
   daemon is stopped by hand now, and the shell's recovery is the
   version-stable rtc `drain` alone.
+  Recovery unit tests now use a connect-only connector so replacing an
+  in-process fake daemon cannot launch a real daemon with inherited user
+  data paths; production recovery and real-daemon e2e coverage keep their
+  existing paths ([issue 018](issues/018-runtime-unit-tests-spawn-live-daemons.md)).
 - **Inter-agent messaging.** Sessions addressing sessions — the
   coordination substrate for project → domain → task teams. Designed
   on the same derivation tree as the relationship model; a

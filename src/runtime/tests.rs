@@ -21,6 +21,12 @@
 //! bodies block it (crossbeam `recv_timeout`, thread joins) exactly like the
 //! production sync world does -- on a current-thread runtime that would
 //! freeze the daemon.
+//!
+//! Socket-based cases use `connection`'s connect-only test implementation.
+//! A listener gap during simulated recovery must not start a real daemon;
+//! process spawning is covered separately by the daemon e2e suites.
+
+mod spawn_isolation;
 
 use std::collections::HashMap;
 use std::sync::Mutex as StdMutex;

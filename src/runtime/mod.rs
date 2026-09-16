@@ -23,6 +23,7 @@
 
 mod agent;
 mod common;
+mod connection;
 mod link;
 mod notify;
 mod routing;

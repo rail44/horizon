@@ -194,13 +194,9 @@ fn spawn_agentd_with_duckdb_options(
     event_log_path: PathBuf,
     state_db_path: PathBuf,
 ) -> AgentdProcess {
-    agentd_spawn(AgentdPaths {
-        socket_path,
-        event_log_path,
-        state_db_path,
-    })
-    .capture_stderr()
-    .spawn()
+    let mut paths = AgentdPaths::scratch_at("agentd-e2e", socket_path, event_log_path);
+    paths.state_db_path = state_db_path;
+    agentd_spawn(paths).capture_stderr().spawn()
 }
 
 // --- the remoc hub test harness --------------------------------------------

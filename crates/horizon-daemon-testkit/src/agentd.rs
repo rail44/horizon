@@ -23,13 +23,14 @@ use crate::binary::spawn_with_link_retry;
 use crate::process::{scratch_file, scratch_socket};
 
 /// Everything one hermetically-spawned `horizon-agentd` owns on disk: the
-/// socket it binds plus the two persistence paths it must be pointed away
-/// from real user data at.
+/// socket it binds, the two agent persistence paths, and a data home for
+/// board/knowledge storage that must also stay away from real user data.
 #[derive(Clone, Debug)]
 pub struct AgentdPaths {
     pub socket_path: PathBuf,
     pub event_log_path: PathBuf,
     pub state_db_path: PathBuf,
+    pub data_home: PathBuf,
 }
 
 impl AgentdPaths {
@@ -41,6 +42,7 @@ impl AgentdPaths {
             socket_path: scratch_socket(tag),
             event_log_path: scratch_file(&format!("{tag}-events"), "jsonl"),
             state_db_path: scratch_file(&format!("{tag}-state"), "duckdb"),
+            data_home: scratch_file(&format!("{tag}-data"), "dir"),
         }
     }
 
@@ -53,6 +55,7 @@ impl AgentdPaths {
             socket_path,
             event_log_path,
             state_db_path: scratch_file(&format!("{tag}-state"), "duckdb"),
+            data_home: scratch_file(&format!("{tag}-data"), "dir"),
         }
     }
 }
@@ -79,6 +82,12 @@ impl AgentdPaths {
 ///   comment): unset resolves to a real default path
 ///   (`$XDG_DATA_HOME/horizon/agent-state.duckdb`), which would make every
 ///   test process fight over the *same* real file.
+/// * `XDG_DATA_HOME` at a scratch directory. Agentd watches the board for
+///   its startup cwd; a linked worktree still resolves to the main project.
+///   Isolating only the agent event log and DuckDB file leaves that watcher
+///   consuming the developer's real board. Knowledge storage uses this
+///   same data home. `HORIZON_LOGD_SOCKET` is separate too, so any board
+///   writes cannot connect to the running user's log daemon.
 /// * `GIT_CONFIG_GLOBAL`/`GIT_CONFIG_SYSTEM` at `/dev/null`, so the git
 ///   invocations agentd makes (worktree setup, session setup) see none of
 ///   the running user's git configuration.
@@ -99,6 +108,11 @@ pub fn agentd_hermetic_command(binary: &Path, paths: &AgentdPaths) -> Command {
         .env("HORIZON_CONFIG", &missing_config_path)
         .env("HORIZON_AGENT_EVENT_LOG", &paths.event_log_path)
         .env("HORIZON_AGENT_STATE_DB", &paths.state_db_path)
+        .env("XDG_DATA_HOME", &paths.data_home)
+        .env(
+            "HORIZON_LOGD_SOCKET",
+            paths.socket_path.with_extension("log.sock"),
+        )
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null");
     command
@@ -271,5 +285,32 @@ impl Drop for AgentdProcess {
         let _ = std::fs::remove_file(&self.socket_path);
         let _ = std::fs::remove_file(&self.event_log_path);
         let _ = std::fs::remove_file(&self.state_db_path);
+        let _ = std::fs::remove_dir_all(&self.spawn.paths.data_home);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn agentd_fixture_overrides_board_storage_and_logd_discovery() {
+        let first = AgentdPaths::scratch("board-isolation");
+        let second = AgentdPaths::scratch("board-isolation");
+        assert_ne!(first.data_home, second.data_home);
+        assert!(!first.data_home.exists());
+
+        let command = agentd_hermetic_command(Path::new("horizon-agentd"), &first);
+        let environment: std::collections::HashMap<_, _> = command.get_envs().collect();
+        // Explicit overrides are required: removing these keys would make
+        // the child fall back to the real user's data home and log daemon.
+        assert_eq!(
+            environment[OsStr::new("XDG_DATA_HOME")],
+            Some(first.data_home.as_os_str())
+        );
+        assert_eq!(
+            environment[OsStr::new("HORIZON_LOGD_SOCKET")],
+            Some(first.socket_path.with_extension("log.sock").as_os_str())
+        );
     }
 }
