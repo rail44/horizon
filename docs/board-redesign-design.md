@@ -285,6 +285,18 @@ skill and review judgments. Concrete routing context, queueing, and delivery
 recovery are implemented in the session input/outcome and board dispatcher
 modules; automated validation is recorded in the implementation plan.
 
+**Review continuation routing, 2026-09-17:** a board review request records
+both the requesting task session and the originating board task. The reviewer
+returns its detailed findings to that session. The harness delivers those
+findings as an input whose final-answer destination is the recorded task's
+board conversation, so the task session's correction or completion report
+reaches the owner even after its previous turn has ended. The skill still
+guides the report's content and depth. The route survives log replay and uses
+the existing input queue without replacing an in-flight answer's destination.
+This applies to new board review requests; ordinary session messages retain
+their existing routing. Already-recorded review requests containing only a
+session address lack the board destination and are not retroactively changed.
+
 **Failure and interruption, 2026-09-16:** the owner accepted having the harness
 deliver failure or interruption to the specified return destination when no
 final answer is produced. For a board destination, the task detail exposes the
@@ -604,7 +616,8 @@ The following develops that scope; exact controls remain proposals.
    evidence. The range may contain multiple commits. Code-level findings and
    corrections are handled between the agents. The review request specifies S
    as the destination for R's final answer; the harness delivers the findings
-   to S. Design questions return to the owner.
+   to S with A's board conversation as S's final-answer destination. S reports
+   its assessment or corrections there; the skill guides what the owner reads.
 
 The minimum conceptual linkage is:
 
@@ -647,7 +660,8 @@ and detail for that audience. The destination need not be the event's sender.
 | The owner posts in a task's consultation. | That task's board conversation. |
 | The organizer asks a task session to begin consultation with the owner. | That task's board conversation. |
 | A task session requests review. | The requesting task session. |
-| A completion or result notification arrives. | No automatic return destination; the skill guides subsequent work. |
+| A board review result reaches the requesting task session. | The originating task's board conversation, retained by the review request. |
+| A prerequisite completion or ordinary session result notification arrives. | No automatic return destination; the skill guides subsequent work. |
 
 The harness forwards only the final answer. Investigation records, intermediate
 output, and implementation details remain in the session's working history.

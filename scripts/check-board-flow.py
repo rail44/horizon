@@ -25,6 +25,8 @@ OWNER = "FIXTURE_IMPLEMENT: proceed with the agreed output and review policy."
 CONSULTATION = "FIXTURE_CONSULTATION: Shall I implement alpha with a separate review?"
 REVIEW_FIX = "FIXTURE_REVIEW_FIX: alpha.txt must contain final, not draft."
 REVIEW_OK = "FIXTURE_REVIEW_OK: the complete multi-commit change satisfies the checks."
+WAITING_REVIEW = "FIXTURE_WAITING_REVIEW: requested independent review."
+WAITING_REREVIEW = "FIXTURE_WAITING_REREVIEW: correction awaits independent review."
 COMPLETE = "FIXTURE_COMPLETE: reviewed output is available on main."
 DEPENDENCY_SEEN = "FIXTURE_DEPENDENCY_SEEN: prerequisite output is now available."
 
@@ -54,6 +56,22 @@ class Provider(http.server.BaseHTTPRequestHandler):
     repository = None
     base = None
     review_checks = {}
+    task_session = None
+
+    def wait_for_settled_task_answer(self, text):
+        # A fast reviewer can otherwise return before the owner-triggered
+        # turn ends, hiding a missing reply address on the next turn.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            history = [r["event"] for r in records(self.root / "agent.jsonl")
+                       if r["session_id"] == self.task_session and isinstance(r["event"], dict)]
+            answered = any(e.get("InputOutcome", {}).get("outcome") == {"Success": {"text": text}}
+                           for e in history)
+            states = [e["StateChanged"] for e in history if "StateChanged" in e]
+            if answered and states and states[-1] == "WaitingForUser":
+                return
+            time.sleep(0.05)
+        raise AssertionError(f"Task did not settle before review delivery: {text}")
 
     def log_message(self, *_args):
         pass
@@ -174,6 +192,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             assert Path(lines[1]).resolve() != self.repository.resolve(), output
             with self.lock:
                 self.review_checks[target] = {"root": lines[1], "head": lines[2], "content": lines[3]}
+            self.wait_for_settled_task_answer(WAITING_REREVIEW if lines[3] == "final" else WAITING_REVIEW)
             return None, REVIEW_OK if lines[3] == "final" else REVIEW_FIX
         if "Read the board-task skill" in system:
             assert "board-integration" in system, "Project policy must be advertised to task sessions"
@@ -208,7 +227,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if tool:
                 return tool, None
             if REVIEW_FIX not in text:
-                return None, "FIXTURE_WAITING_REVIEW: requested independent review."
+                return None, WAITING_REVIEW
             tool = once("bash", {"command": self.commands()["correct"]})
             if tool:
                 return tool, None
@@ -217,7 +236,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if tool:
                 return tool, None
             if REVIEW_OK not in text:
-                return None, "FIXTURE_WAITING_REREVIEW: correction awaits independent review."
+                return None, WAITING_REREVIEW
             command = f"git -C {shlex.quote(str(self.repository))} merge --ff-only {corrected_tip}"
             tool = once("bash", {"command": command}) or once("board.update", {"action": "complete", "id": 1, "completed": True})
             return tool, None if tool else COMPLETE
@@ -342,6 +361,7 @@ def main():
         wait_for("automatic organizer consultation", lambda: has_message(1, CONSULTATION))
         initial = item(1)
         task_session = initial["session_id"]
+        Provider.task_session = task_session
         assert task_session and not activated(task_session), "Consultation must not allocate a worktree"
         wait_for("dependent consultation", lambda: has_message(2, "FIXTURE_WAITING"))
         assert item(2)["depends_on"] == [1]
@@ -355,6 +375,11 @@ def main():
         agentd = start("horizon-agentd", "agentd.sock")
         cli("comment", "1", "--author", "owner", OWNER, json_output=False)
         wait_for("reviewed implementation and dependency notification", lambda: item(1)["completed"] and item(2)["completed"])
+        wait_for("task's post-review final answer on the board", lambda: has_message(1, COMPLETE))
+        messages = [message["text"] for message in item(1)["comments"]]
+        assert messages.count(WAITING_REREVIEW) == 1, "Correction report must return to the board"
+        assert messages.count(COMPLETE) == 1, "Post-review completion report must return once"
+        assert REVIEW_FIX not in messages and REVIEW_OK not in messages, "Review details go to the task session"
         assert item(1)["session_id"] == task_session
         assert all(message in [m["id"] for m in item(1)["comments"]] for message in before_ids)
         assert sum(CONSULTATION in m["text"] for m in item(1)["comments"]) == 1
@@ -404,6 +429,7 @@ def main():
         passed = True
         print("PASS: registration → priorities/dependencies → consultation → restart → same-session worktree → multi-commit review/correction → main integration → dependent notification")
         print(f"PASS: fresh pinned reviewers exclude uncommitted task changes; stable messages and explicit base; {Provider.requests_seen} local provider requests")
+        print("PASS: reviews resume settled task turns; task reports return to the board, review details stay in session history")
     finally:
         for process in reversed(processes):
             if process.poll() is None:

@@ -122,12 +122,13 @@ pub(crate) async fn operate(
             if commit(&working_root, "HEAD")? != tip {
                 return Err("Review target must match the task worktree's current tip".into());
             }
+            let reply_to = ReplyAddress::review_result(root, id, caller)?;
             let target = reviewer_session(&state, store, root, id, caller, &tip).await?;
             let events = queue(target, SessionInput {
                 id: source,
                 origin: format!("session:{}", caller.as_uuid()),
                 text: format!("Review task #{id} from {base} to {tip}. Checks: {checks}\nYour dedicated worktree is pinned to this exact target tip. Read the task's requirements and consultation with board.read. Inspect the full range and independently verify it without modifying the implementation. Return findings to the requesting task session."),
-                reply_to: Some(ReplyAddress::session(caller)),
+                reply_to: Some(reply_to),
                 resume_work: false,
             })?;
             Ok((

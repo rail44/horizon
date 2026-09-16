@@ -20,8 +20,20 @@ pub(crate) use operations::{operate, organizer_session};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 enum ReplyAddress {
-    Board { root: PathBuf, task: u64 },
-    Session { id: String },
+    Board {
+        root: PathBuf,
+        task: u64,
+    },
+    Session {
+        id: String,
+    },
+    /// Return review details to the requester, then route that task's
+    /// continuation answer to its board conversation.
+    ReviewResult {
+        id: String,
+        root: PathBuf,
+        task: u64,
+    },
 }
 impl ReplyAddress {
     fn board(root: &Path, task: u64) -> Result<String, String> {
@@ -33,6 +45,15 @@ impl ReplyAddress {
             id: id.as_uuid().to_string(),
         })
         .expect("session address serializes")
+    }
+    fn review_result(root: &Path, task: u64, id: SessionId) -> Result<String, String> {
+        let root = crate::worktree::project_root(root).ok_or("Board root is unavailable")?;
+        serde_json::to_string(&Self::ReviewResult {
+            id: id.as_uuid().to_string(),
+            root,
+            task,
+        })
+        .map_err(|e| e.to_string())
     }
 }
 

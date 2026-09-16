@@ -379,6 +379,17 @@ and deterministic local providers. They verify runtime behavior and native UI,
 not a real model's judgment. Main was fast-forwarded to `8e057dd` and rebuilt;
 the documentation-only follow-up `eb6c99c` was the main revision at live cutover.
 
+### Review continuation regression (2026-09-17)
+
+The isolated flow fixture now waits for the task session to finish its turn
+before returning each review result. Against the preceding implementation,
+the task completed but the fixture timed out waiting for its final board
+report. With the originating task retained in the review route, all 49 local
+provider requests completed successfully: the correction and completion
+reports each appeared once on the board, while detailed review findings went
+to the task session. Dispatcher tests also cover replay before and after a
+durable receipt, project matching, and unchanged ordinary session replies.
+
 ### Completed live cutover
 
 The retained selection is IDs **1–47**. IDs **48–49** are workflow-generated

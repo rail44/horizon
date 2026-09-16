@@ -203,6 +203,25 @@ impl Runner {
                                 },
                             )
                         }
+                        ReplyAddress::ReviewResult {
+                            id: target,
+                            root,
+                            task,
+                        } => {
+                            let target = operations::parse_session(&target)?;
+                            self.source_project(source, &root)?;
+                            self.source_project(target, &root)?;
+                            self.deliver_input(
+                                target,
+                                SessionInput {
+                                    id: format!("session:{}:{id}", source.as_uuid()),
+                                    origin: author,
+                                    text,
+                                    reply_to: Some(ReplyAddress::board(&root, task)?),
+                                    resume_work: false,
+                                },
+                            )
+                        }
                     }
                 }
             },
@@ -239,7 +258,9 @@ fn recipient_key(pending: &Pending) -> Option<String> {
         Pending::Send { target, .. } => Some(format!("session:{}", target.as_uuid())),
         Pending::Answer { outcome, .. } => {
             match serde_json::from_str::<ReplyAddress>(outcome.reply_to.as_deref()?).ok()? {
-                ReplyAddress::Session { id } => Some(format!("session:{id}")),
+                ReplyAddress::Session { id } | ReplyAddress::ReviewResult { id, .. } => {
+                    Some(format!("session:{id}"))
+                }
                 ReplyAddress::Board { root, task } => {
                     Some(format!("board:{}:{task}", root.display()))
                 }
@@ -431,6 +452,9 @@ fn task_id(event: &BoardEvent) -> Option<u64> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod review_tests;
 
 #[cfg(test)]
 mod retry_tests {

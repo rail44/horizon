@@ -590,6 +590,9 @@ external notification path.
   `Open Board Organizer` now creates or resumes the project's organizer from
   a board cursor and opens its ordinary agent view, reusing an existing pane.
   Opening supplies no work input; conversation begins with the owner's message.
+  Board review requests now retain the originating task so that findings
+  delivered to the task session also route its subsequent final report back
+  to the board (2026-09-17; see the design's review continuation routing).
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

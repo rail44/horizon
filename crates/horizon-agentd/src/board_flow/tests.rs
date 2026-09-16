@@ -3,7 +3,7 @@ use horizon_agent::contract::{Event, InputResult, SessionId, SessionInput, Sessi
 use horizon_agent::persistence::event_log::Record;
 use std::io::Write;
 
-fn record(session_id: SessionId, event: Event) -> Record {
+pub(super) fn record(session_id: SessionId, event: Event) -> Record {
     Record {
         schema: "horizon.agent.event_log".into(),
         version: 1,
