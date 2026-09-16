@@ -68,7 +68,7 @@ impl Workspace {
     /// [`Self::active_tab`] is restored to whatever it was before this
     /// call, leaving the caller's own focus-follow (`workspace::
     /// request_active_pane_focus`) with nothing to move. See
-    /// `WorkspaceShell::create_session`/`external_new_session` in
+    /// `WorkspaceShell::create_session`/`control_plane_new_session` in
     /// `src/workspace.rs`, its callers (`activate: true` for a human
     /// surface's dive, `false` for the control plane's default).
     pub fn open_tab_with_new_session_activated(

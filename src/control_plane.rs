@@ -166,7 +166,7 @@ fn dispatch_invoke(
             if isolate.is_some() && kind != PaneKind::Agent {
                 return error_body("`isolate` is only accepted for agent sessions");
             }
-            match shell.external_new_session(
+            match shell.control_plane_new_session(
                 kind, role_id, split, issuer, activate, prompt, isolate, window, cx,
             ) {
                 Ok(session_id) => EnvelopeBody::Ok {
@@ -184,7 +184,7 @@ fn dispatch_invoke(
                 Ok(activate) => activate,
                 Err(message) => return error_body(message),
             };
-            match shell.external_attach(session_id, activate, window, cx) {
+            match shell.control_plane_attach_session(session_id, activate, window, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -194,21 +194,21 @@ fn dispatch_invoke(
                 Ok(id) => id,
                 Err(message) => return error_body(message),
             };
-            match shell.external_terminate(session_id, window, cx) {
+            match shell.control_plane_terminate(session_id, window, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
         "terminate-all-detached" => {
-            shell.external_terminate_all_detached(window, cx);
+            shell.control_plane_terminate_all_detached(window, cx);
             ok_body()
         }
         "reload-config" => {
-            shell.execute_external(CommandId::ReloadConfig, window, cx);
+            shell.execute_control_plane(CommandId::ReloadConfig, window, cx);
             ok_body()
         }
         "open-terminal-in-session-directory" => {
-            shell.execute_external(CommandId::OpenTerminalInSessionDirectory, window, cx);
+            shell.execute_control_plane(CommandId::OpenTerminalInSessionDirectory, window, cx);
             ok_body()
         }
         "approve" => {
@@ -220,7 +220,7 @@ fn dispatch_invoke(
                 Ok(id) => id,
                 Err(message) => return error_body(message),
             };
-            match shell.external_approve(session_id, call_id, cx) {
+            match shell.control_plane_approve(session_id, call_id, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -238,7 +238,7 @@ fn dispatch_invoke(
                 Ok(reason) => reason,
                 Err(message) => return error_body(message),
             };
-            match shell.external_deny(session_id, call_id, reason, cx) {
+            match shell.control_plane_deny(session_id, call_id, reason, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -248,7 +248,7 @@ fn dispatch_invoke(
                 Ok(id) => id,
                 Err(message) => return error_body(message),
             };
-            match shell.external_cancel(session_id, cx) {
+            match shell.control_plane_cancel(session_id, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -258,7 +258,7 @@ fn dispatch_invoke(
                 Ok(id) => id,
                 Err(message) => return error_body(message),
             };
-            match shell.external_continue_turn(session_id, cx) {
+            match shell.control_plane_continue_turn(session_id, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
@@ -275,17 +275,17 @@ fn dispatch_invoke(
             if text.is_empty() {
                 return error_body("`text` must not be empty");
             }
-            match shell.external_send(session_id, text, cx) {
+            match shell.control_plane_send(session_id, text, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }
         }
         "reload-agent-runtime" | "reload-session-runtime" => {
-            shell.execute_external(CommandId::ReloadAgentRuntime, window, cx);
+            shell.execute_control_plane(CommandId::ReloadAgentRuntime, window, cx);
             ok_body()
         }
         "reload-terminal-runtime" => {
-            shell.execute_external(CommandId::ReloadTerminalRuntime, window, cx);
+            shell.execute_control_plane(CommandId::ReloadTerminalRuntime, window, cx);
             ok_body()
         }
         other => error_body(format!("unknown external command `{other}`")),
@@ -408,7 +408,7 @@ fn optional_string_arg(args: &serde_json::Value, key: &str) -> Result<Option<Str
 /// `docs/session-relationship-design.md` decision 3's per-spawn isolation
 /// override: `None` (the key omitted, or explicit `null`) means "apply the
 /// origin default" (control-plane origin: isolated -- see
-/// `WorkspaceShell::external_new_session`), mirroring `activate_arg`'s own
+/// `WorkspaceShell::control_plane_new_session`), mirroring `activate_arg`'s own
 /// omitted-means-apply-the-surface-default shape.
 fn isolate_arg(args: &serde_json::Value) -> Result<Option<bool>, String> {
     match args.get("isolate") {

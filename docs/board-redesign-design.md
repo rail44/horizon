@@ -801,9 +801,14 @@ for each task called a milestone.
 pane; `src/agent/view/mod.rs` owns transcript, composer, and status presentation.
 `src/workspace/modals.rs` implements ordinary session-manager attach/jump.
 These are implementation seams to assess, not evidence that task consultation
-is already implemented. In particular, daemon-created sessions are not all
-pushed into the shell's session inventory immediately (board #46); registration
-of a consultation the shell creates must be explicit.
+is already implemented. Daemon-created sessions are not pushed into the
+shell's session inventory live (board #46). They enter it through exactly one
+path -- `WorkspaceShell::adopt_daemon_agent_session`, which registers the id,
+applies the daemon-authoritative `workspace_root`/parent, and inserts the
+pane entity -- from the startup/reload resume sweeps, the board session
+openers, and (for an id only the daemon knows) the attach-time lookup
+fallback on `horizon attach <id>`. Nothing adopts a daemon-side session
+until one of those paths runs.
 
 The September 13 discussion path in
 `crates/horizon-agentd/src/milestone/launch.rs` instead allocates a fresh session

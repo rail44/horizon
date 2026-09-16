@@ -256,7 +256,7 @@ gap) also landed: the view chooser (`New Tab…`/`Split Right…`/`Split
 Down…`) gained a dedicated "Agent (Isolated Worktree)…" choice alongside
 plain "Agent" -- `ViewChoice` grew an `isolate: bool` (`true` only for that
 one choice), threaded through `WorkspaceShell::create_session` to the same
-`pending_agent_spawn` staging `external_new_session` (the CLI path) already
+`pending_agent_spawn` staging `control_plane_new_session` (the CLI path) already
 used. No redesign of the placement flow itself.
 
 2026-07-19 dogfooding fix: session manager rows now show the session's

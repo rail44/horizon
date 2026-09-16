@@ -1,14 +1,15 @@
-//! The command-model dispatch point (`execute`/`execute_external`) plus
-//! the session-targeted `external_*` family the CLI control plane drives
-//! (everything but `external_new_session`, which pairs with
-//! `create_session` in `session_lifecycle` instead -- see that module's
-//! doc comment).
+//! The command-model dispatch point (`execute`/`execute_control_plane`)
+//! plus the session-targeted `control_plane_*` family the CLI control
+//! plane drives (everything but `control_plane_new_session`, which pairs
+//! with `create_session` in `session_lifecycle` instead -- see that
+//! module's doc comment).
 
 use gpui::*;
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
 
+use super::session_lifecycle::{daemon_summary_for, DaemonAgentAdoption, ExistingAgentEntity};
 use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
 use crate::theme;
@@ -74,48 +75,26 @@ fn board_session_still_requested(was_registered: bool, is_registered: bool) -> b
     !was_registered || is_registered
 }
 
-fn register_board_summary(
-    workspace: &mut Workspace,
-    summary: &horizon_agent::wire::SessionSummary,
-) -> Result<SessionId, String> {
-    let id = SessionId::from_uuid(summary.session_id.as_uuid());
-    if workspace
-        .session_pane_kind(id)
-        .is_some_and(|kind| kind != horizon_workspace::PaneKind::Agent)
-    {
-        return Err("The task session ID belongs to a different session kind".into());
-    }
-    workspace.register_detached_session(horizon_workspace::PaneKind::Agent, id);
-    if let Some(root) = summary.workspace_root.clone() {
-        workspace.set_session_workspace_root(id, root);
-    }
-    if let Some(parent) = summary.parent_session_id {
-        workspace.set_session_parent(id, SessionId::from_uuid(parent.as_uuid()));
-    }
-    Ok(id)
-}
-
 impl WorkspaceShell {
+    /// Board-side adoption: `refresh_board_sessions`/
+    /// `open_board_organizer`/`open_board_task_session` all funnel through
+    /// this thin wrapper. The full adoption sequence -- registration, the
+    /// daemon-authoritative root/parent refresh, and the `AgentSession`
+    /// entity -- lives in
+    /// [`WorkspaceShell::adopt_daemon_agent_session`].
     fn adopt_board_session(
         &mut self,
         handle: &crate::runtime::AgentdHandle,
         summary: horizon_agent::wire::SessionSummary,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let id = register_board_summary(&mut self.workspace, &summary)?;
-        if let Some(session) = self.agent_sessions.get(&id) {
-            if session.read(cx).runtime_unreachable() {
-                session.update(cx, |session, cx| {
-                    session.reattach(|| handle.attach_session(summary.session_id), cx)
-                });
-            }
-        } else {
-            let wire = handle.attach_session(summary.session_id);
-            let title = self.session_title_tx.clone();
-            self.agent_sessions
-                .insert(id, cx.new(|cx| AgentSession::new(wire, id, title, cx)));
-        }
-        Ok(())
+        self.adopt_daemon_agent_session(
+            DaemonAgentAdoption::from(&summary),
+            ExistingAgentEntity::Reattach,
+            || handle.attach_session(summary.session_id),
+            cx,
+        )
+        .map(|_| ())
     }
 
     pub(super) fn refresh_board_sessions(
@@ -253,7 +232,7 @@ impl WorkspaceShell {
                             cx.notify();
                             Ok(())
                         } else {
-                            shell.external_attach(id, true, window, cx)
+                            shell.attach_known_session(id, true, window, cx)
                         }
                     });
                     if let Err(error) = result {
@@ -312,7 +291,7 @@ impl WorkspaceShell {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                         return;
                     }
-                    if let Err(error) = shell.external_attach(session_id, true, window, cx) {
+                    if let Err(error) = shell.attach_known_session(session_id, true, window, cx) {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                     }
                 });
@@ -561,7 +540,7 @@ impl WorkspaceShell {
 
     /// `execute` for control-plane callers — public without exposing the
     /// whole command surface.
-    pub(crate) fn execute_external(
+    pub(crate) fn execute_control_plane(
         &mut self,
         id: CommandId,
         window: &mut Window,
@@ -607,10 +586,47 @@ impl WorkspaceShell {
         self.workspace.session_summaries()
     }
 
-    /// External (control-plane) operations — the CLI's verbs, mirroring
-    /// the Floem shell's `external_commands` semantics: `activate:
-    /// false` never steals focus.
-    pub(crate) fn external_attach(
+    /// Control-plane operations — the CLI's verbs, mirroring the Floem
+    /// shell's `external_commands` semantics. The Rust family was renamed
+    /// from `external_*` to `control_plane_*` so the prefix names the
+    /// caller (the CLI's stable verb surface) instead of reading as
+    /// "attach an external session"; the published string names are
+    /// untouched. `activate: false` never steals focus.
+    ///
+    /// The one CLI verb with a fallback: an id the model has never seen may
+    /// still exist inside `horizon-agentd` (a board-organizer/keeper
+    /// session the daemon spawned on its own, invisible to the shell's
+    /// pull-only registry until the next resume sweep). Instead of failing
+    /// with "unknown session", the id is resolved against the daemon's
+    /// inventory off-thread and adopted through the common adoption path
+    /// when found. The reply is therefore optimistic: an id that isn't in
+    /// the daemon's inventory either returns `Ok` and silently does
+    /// nothing — acceptable for the human at the desktop this verb serves,
+    /// wrong as a scripting check. The Manage Sessions modal and the board
+    /// session openers use the strict [`Self::attach_known_session`]
+    /// instead, so their error surfaces keep reporting the miss.
+    pub(crate) fn control_plane_attach_session(
+        &mut self,
+        session_id: SessionId,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
+        if self.workspace.session_pane_kind(session_id).is_none() {
+            self.spawn_agent_lookup_attach(session_id, activate, cx);
+            return Ok(());
+        }
+        self.attach_known_session(session_id, activate, window, cx)
+    }
+
+    /// The strict attach: the model must already know the id. Shared by the
+    /// CLI verb (once its lookup fallback has made the id known), the
+    /// Manage Sessions modal, and the board session openers, whose error
+    /// surfaces must keep reporting an actual miss.
+    fn attach_known_session(
         &mut self,
         session_id: SessionId,
         activate: bool,
@@ -630,7 +646,70 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_terminate(
+    /// The lookup half of `control_plane_attach_session`'s fallback: one
+    /// `session_list` pull on the background executor (the same async shape
+    /// as `refresh_board_sessions`, with the same `same_runtime`/restore
+    /// guards), then adoption through the common path and the normal
+    /// attach. Reports nothing on failure — the CLI reply already went out,
+    /// and an id the daemon doesn't know either is simply not attached.
+    /// `session_list` is a blocking pull (up to `SYNC_REPLY_TIMEOUT`),
+    /// which is exactly why this must never run on the UI thread.
+    fn spawn_agent_lookup_attach(
+        &self,
+        session_id: SessionId,
+        activate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            let list_handle = handle.clone();
+            let summary = cx
+                .background_executor()
+                .spawn(async move {
+                    match list_handle.session_list() {
+                        Ok(items) => daemon_summary_for(items, session_id),
+                        Err(error) => {
+                            eprintln!("attach lookup: failed to list agent sessions: {error}");
+                            None
+                        }
+                    }
+                })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.restoring_workspace
+                        || shell
+                            .agentd
+                            .as_ref()
+                            .is_none_or(|current| !current.same_runtime(&handle))
+                    {
+                        return;
+                    }
+                    let Some(summary) = summary else {
+                        return;
+                    };
+                    if shell
+                        .adopt_daemon_agent_session(
+                            DaemonAgentAdoption::from(&summary),
+                            ExistingAgentEntity::Reattach,
+                            || handle.attach_session(summary.session_id),
+                            cx,
+                        )
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = shell.attach_known_session(session_id, activate, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    pub(crate) fn control_plane_terminate(
         &mut self,
         session_id: SessionId,
         window: &mut Window,
@@ -651,7 +730,7 @@ impl WorkspaceShell {
     /// pane is active" (unlike `CommandId::ApproveToolCall`/`DenyToolCall`/
     /// `CancelAgentTurn`/`ContinueAgentTurn`, which resolve against
     /// `active_agent_session`).
-    pub(crate) fn external_approve(
+    pub(crate) fn control_plane_approve(
         &mut self,
         session_id: SessionId,
         call_id: horizon_agent::contract::ToolCallId,
@@ -665,7 +744,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_deny(
+    pub(crate) fn control_plane_deny(
         &mut self,
         session_id: SessionId,
         call_id: horizon_agent::contract::ToolCallId,
@@ -680,7 +759,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_cancel(
+    pub(crate) fn control_plane_cancel(
         &mut self,
         session_id: SessionId,
         cx: &mut Context<Self>,
@@ -693,7 +772,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_continue_turn(
+    pub(crate) fn control_plane_continue_turn(
         &mut self,
         session_id: SessionId,
         cx: &mut Context<Self>,
@@ -713,7 +792,7 @@ impl WorkspaceShell {
     /// without any additional semantics to implement. v1 is attached-only:
     /// a detached session is not in `agent_sessions` and surfaces as
     /// "unknown session" (see issue 011's Notes).
-    pub(crate) fn external_send(
+    pub(crate) fn control_plane_send(
         &mut self,
         session_id: SessionId,
         text: String,
@@ -727,7 +806,7 @@ impl WorkspaceShell {
         Ok(())
     }
 
-    pub(crate) fn external_terminate_all_detached(
+    pub(crate) fn control_plane_terminate_all_detached(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -813,50 +892,17 @@ mod tests {
         assert_eq!(result, vec![summary]);
     }
 
-    #[test]
-    fn board_binding_registration_is_detached_idempotent_and_resumable() {
-        let mut workspace = Workspace::mvp();
-        let tabs = workspace.tab_count();
-        let active = workspace.active_session_id();
-        let summary = horizon_agent::wire::SessionSummary {
-            session_id: horizon_agent::contract::SessionId::new(),
-            provider_id: horizon_agent::contract::ProviderId("mock".into()),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: Some("/task".into()),
-        };
-        let id = super::register_board_summary(&mut workspace, &summary).unwrap();
-        super::register_board_summary(&mut workspace, &summary).unwrap();
-        assert_eq!(
-            workspace
-                .session_summaries()
-                .iter()
-                .filter(|s| s.id == id)
-                .count(),
-            1
-        );
-        assert_eq!(workspace.tab_count(), tabs);
-        assert_eq!(workspace.active_session_id(), active);
-        assert!(workspace.pane_location_for_session(id).is_none());
-        workspace.terminate_session(id);
-        super::register_board_summary(&mut workspace, &summary).unwrap();
-        assert_eq!(
-            workspace
-                .session_summaries()
-                .iter()
-                .filter(|s| s.id == id)
-                .count(),
-            1
-        );
-        assert!(workspace.pane_location_for_session(id).is_none());
-    }
+    // The board-adoption registration test moved to
+    // `session_lifecycle::tests` with its implementation
+    // (`register_daemon_agent_summary`), which is where the model-level
+    // half of every daemon-agent adoption now lives.
 
     // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
     // mod`), not here -- unlike `command_blocked_by_restore`/
     // `prepare_workspace_for_terminal_runtime_reload`, both defined in this
     // file, it's no longer called by any production code in `commands.rs`
     // (the 2026-07-18 "empty workspace is valid" change removed its
-    // `TerminateActiveSession`/`external_terminate` call sites); its one
+    // `TerminateActiveSession`/`control_plane_terminate` call sites); its one
     // remaining caller is `reload_terminal_runtime` in
     // `session_lifecycle`.
     use super::super::ensure_workspace_has_pane;
