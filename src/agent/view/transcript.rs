@@ -1219,10 +1219,12 @@ fn escape_markdown(text: &str) -> String {
 }
 
 /// The running card's header label for the three in-flight
-/// `SessionState`s (`state_indicates_turn_in_flight`'s own set) — any
-/// other state falls back to the generic label defensively, since this
-/// is only ever called while a turn is in flight. The label set itself
-/// lives in `session_state_label` (shared with the status line).
+/// `SessionState`s (`state_indicates_turn_in_flight`'s own set). The
+/// label set itself lives in `session_state_label` (shared with the
+/// status line): terminal states return their own labels, and only the
+/// quiet states (`Created`/`WaitingForUser`) fall back to the generic
+/// label — purely defensive, since the card only ever renders while a
+/// turn is in flight.
 fn running_state_label(state: SessionState) -> &'static str {
     super::status::session_state_label(state).unwrap_or("running…")
 }
@@ -1245,6 +1247,29 @@ mod tests {
             model: Some("test-model".to_string()),
             elapsed: Duration::from_secs(2),
         }
+    }
+
+    #[test]
+    fn running_state_label_covers_in_flight_and_falls_back_for_quiet_states() {
+        use horizon_agent::contract::SessionState;
+
+        use super::running_state_label;
+        assert_eq!(running_state_label(SessionState::Running), "running…");
+        assert_eq!(
+            running_state_label(SessionState::ToolRunning),
+            "tool running…"
+        );
+        assert_eq!(
+            running_state_label(SessionState::WaitingForApproval),
+            "waiting for approval"
+        );
+        // Defensive fallback: the card never renders in these states, but
+        // the mapping stays total.
+        assert_eq!(running_state_label(SessionState::Created), "running…");
+        assert_eq!(
+            running_state_label(SessionState::WaitingForUser),
+            "running…"
+        );
     }
 
     #[test]

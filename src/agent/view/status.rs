@@ -118,6 +118,37 @@ mod tests {
     use super::{project_status, StatusTone};
 
     #[test]
+    fn session_state_label_covers_every_state_and_hides_the_quiet_ones() {
+        use super::session_state_label;
+
+        assert_eq!(session_state_label(SessionState::Running), Some("running…"));
+        assert_eq!(
+            session_state_label(SessionState::ToolRunning),
+            Some("tool running…")
+        );
+        assert_eq!(
+            session_state_label(SessionState::WaitingForApproval),
+            Some("waiting for approval")
+        );
+        assert_eq!(
+            session_state_label(SessionState::Cancelled),
+            Some("cancelled")
+        );
+        assert_eq!(
+            session_state_label(SessionState::Completed),
+            Some("completed")
+        );
+        assert_eq!(session_state_label(SessionState::Failed), Some("failed"));
+        assert_eq!(
+            session_state_label(SessionState::Terminated),
+            Some("terminated")
+        );
+        // The quiet states the status line hides entirely.
+        assert_eq!(session_state_label(SessionState::Created), None);
+        assert_eq!(session_state_label(SessionState::WaitingForUser), None);
+    }
+
+    #[test]
     fn runtime_failure_wins_and_turn_state_controls_the_stop_affordance() {
         let projection = project_status(Some(SessionState::Running), true);
         assert_eq!(projection.tone, StatusTone::Danger);

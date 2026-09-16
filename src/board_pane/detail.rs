@@ -278,7 +278,12 @@ impl BoardPaneView {
                                 |row| row.border_b_2().border_color(theme::accent()),
                             )
                             .child(self.task_link(child, cx))
-                            .child(task_state(child))
+                            .child(
+                                div()
+                                    .text_size(px(11.0))
+                                    .text_color(task_state_color(child))
+                                    .child(task_state(child)),
+                            )
                             .child(dependencies)
                             .child(if unread.contains(&id) { "●" } else { "" })
                             .children([(true, "↑"), (false, "↓")].into_iter().map(|(up, label)| {
