@@ -22,46 +22,18 @@ pub fn try_run(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write
     Some(run_board(rest, stdout, stderr))
 }
 
-const BOARD_USAGE: &str = "\
-Usage: horizon board <command> [options]
-
-Commands:
-  milestone <id>
-      Enable automatic planning and serial implementation for this item's goal.
-  flow <id>
-      Show the current plan, outstanding decisions and implementation results.
-  answer <id> <decision-key> <text>
-      Save a free-form answer; the planner incorporates it before implementation.
-  pause <id> | resume <id> | replan <id>
-      Pause automatic work, retry/resume, or request a revised plan.
-  add <title> [--body <text>] [--parent <id>] [--after <id> | --before <id> | --top]
-      Create a new item. Default position is the bottom of the queue.
-  list [--status <s>] [--all] [--top]
-      List items as a parent→child tree (children indented under their parent,
-      rank order within each level). Closed items hidden by default; --all shows
-      them. --top shows top-level items only (roadmap view). Always shows all
-      existing statuses.
-  show <id>
-      Show all fields and comments for one item.
+const BOARD_USAGE: &str = "Usage: horizon board <command> [options]
+  add <title> [--body <text>] [--parent <id>] [--top | --before <id> | --after <id>]
+  list [--status <text>] [--all] [--top] [--json]
+  show <id> [--json]
   comment <id> --author <author> <text>
-      Add a comment to an item.
-  set-status <id> <status>
-      Set an item's status (free-form; recommended: proposed / ready /
-      in-progress / review / done / blocked / archived). `done` and `archived`
-      are hidden from the default `list` view; use `list --all` to see them.
-  assign <id> <who>
-      Assign an item (empty string to unassign).
-  edit <id> [--title <t>] [--body <text>]
-      Edit an item's title and/or body. At least one of --title/--body is
-      required; fields not given are left unchanged.
-  move <id> [--after <id> | --before <id> | --top]
-      Re-rank an item within the queue.
-  claim [--as <who>]
-      Atomically claim the first ready+unassigned item: sets it to
-      in-progress and assigns it to <who> (default: owner).
+  set-status <id> <free-form-state>
+  complete <id> | reopen <id>
+  dependencies <id> [prerequisite-id ...]
+  parent <id> <parent-id | none>
+  edit <id> [--title <text>] [--body <text>]
+  move <id> [--top | --before <id> | --after <id>]
   watch [--since <seq>]
-      Stream subscription pokes as NDJSON lines. Pipe to jq or other
-      line-oriented tools. Runs until interrupted.
 ";
 
 fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> u8 {
@@ -84,7 +56,6 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
     let mut top = false;
     let mut status: Option<String> = None;
     let mut author: Option<String> = None;
-    let mut as_who: Option<String> = None;
     let mut since: Option<String> = None;
     let mut json = false;
     let mut all = false;
@@ -141,13 +112,6 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
                     return 2;
                 }
             },
-            "--as" => match iter.next() {
-                Some(v) => as_who = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --as requires a value");
-                    return 2;
-                }
-            },
             "--since" => match iter.next() {
                 Some(v) => since = Some(v.clone()),
                 None => {
@@ -198,7 +162,6 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
         top,
         &status,
         &author,
-        &as_who,
         &since,
         json,
         all,
@@ -225,7 +188,6 @@ async fn dispatch(
     top: bool,
     status: &Option<String>,
     author: &Option<String>,
-    as_who: &Option<String>,
     since: &Option<String>,
     json: bool,
     all: bool,
@@ -266,55 +228,6 @@ async fn dispatch(
                 print_list_json(stdout, &result);
             } else {
                 print_list_human(stdout, &result, top);
-            }
-            Ok(())
-        }
-        "milestone" | "flow" | "answer" | "pause" | "resume" | "replan" => {
-            use horizon_board::workflow::Mutation;
-            let id = positionals
-                .first()
-                .ok_or("milestone id required")?
-                .parse::<u64>()
-                .map_err(|_| "invalid milestone id")?;
-            let item = store
-                .show(id)
-                .map_err(|e| e.to_string())?
-                .ok_or("milestone not found")?;
-            let mutation = match command {
-                "milestone" => Some(Mutation::Enable),
-                "pause" => Some(Mutation::Pause),
-                "resume" => Some(Mutation::Resume),
-                "replan" => Some(Mutation::Replan),
-                "answer" => Some(Mutation::Answer {
-                    key: positionals.get(1).ok_or("decision key required")?.clone(),
-                    text: positionals
-                        .get(2..)
-                        .filter(|parts| !parts.is_empty())
-                        .ok_or("answer text required")?
-                        .join(" "),
-                }),
-                _ => None,
-            };
-            let item = if let Some(mutation) = mutation {
-                store
-                    .workflow(
-                        id,
-                        item.workflow.as_ref().map_or(0, |f| f.revision),
-                        mutation,
-                    )
-                    .await
-                    .map_err(|e| e.to_string())?
-            } else {
-                item
-            };
-            if json {
-                let _ = writeln!(
-                    stdout,
-                    "{}",
-                    serde_json::to_string_pretty(&item.workflow).map_err(|e| e.to_string())?
-                );
-            } else {
-                print_workflow(stdout, &item);
             }
             Ok(())
         }
@@ -397,18 +310,44 @@ async fn dispatch(
             let _ = writeln!(stdout, "Item {id} -> status: {s}");
             Ok(())
         }
-        "assign" => {
-            let id = parse_id(
-                positionals
-                    .first()
-                    .ok_or_else(|| "assign requires an <id>".to_string())?,
-            )
-            .map_err(|e| e.to_string())?;
-            let who = positionals
+        "complete" | "reopen" => {
+            let id = parse_id(positionals.first().ok_or("task id required")?)
+                .map_err(|e| e.to_string())?;
+            store
+                .set_completed(id, command == "complete")
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        "dependencies" => {
+            let id = parse_id(positionals.first().ok_or("task id required")?)
+                .map_err(|e| e.to_string())?;
+            let dependencies = positionals[1..]
+                .iter()
+                .map(|s| parse_id(s).map_err(|e| e.to_string()))
+                .collect::<Result<Vec<_>, _>>()?;
+            store
+                .set_dependencies(id, dependencies)
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(())
+        }
+        "parent" => {
+            let id = parse_id(positionals.first().ok_or("task id required")?)
+                .map_err(|e| e.to_string())?;
+            let parent = positionals
                 .get(1)
-                .ok_or_else(|| "assign requires a <who>".to_string())?;
-            store.assign(id, who).await.map_err(|e| e.to_string())?;
-            let _ = writeln!(stdout, "Item {id} -> assignee: {who}");
+                .filter(|s| s.as_str() != "none")
+                .map(|s| parse_id(s).map_err(|e| e.to_string()))
+                .transpose()?;
+            store
+                .set_parent(
+                    id,
+                    parent,
+                    resolve_position(top, after.as_deref(), before.as_deref())?,
+                )
+                .await
+                .map_err(|e| e.to_string())?;
             Ok(())
         }
         "move" => {
@@ -422,27 +361,6 @@ async fn dispatch(
             let rank = store.move_item(id, pos).await.map_err(|e| e.to_string())?;
             let _ = writeln!(stdout, "Item {id} -> rank: {rank}");
             Ok(())
-        }
-        "claim" => {
-            let who = as_who.as_deref().unwrap_or("owner");
-            match store.claim(who).await.map_err(|e| e.to_string())? {
-                Some(item) => {
-                    if json {
-                        let _ = writeln!(
-                            stdout,
-                            "{}",
-                            serde_json::to_string(&item_json(&item)).unwrap()
-                        );
-                    } else {
-                        print_item_brief(stdout, &item);
-                    }
-                    Ok(())
-                }
-                None => {
-                    let _ = writeln!(stdout, "No ready+unassigned items to claim");
-                    Ok(())
-                }
-            }
         }
         "watch" => {
             let since_seq = since
@@ -512,9 +430,6 @@ fn print_item_brief(stdout: &mut impl Write, item: &Item) {
         "#{:<3} [{:<12}] {}",
         item.id, status_display, item.title
     );
-    if !item.assignee.is_empty() {
-        let _ = writeln!(stdout, "     assigned: {}", item.assignee);
-    }
 }
 
 /// Like [`print_item_brief`] but indented by `depth` levels (two spaces per
@@ -532,115 +447,9 @@ fn print_item_at_depth(stdout: &mut impl Write, item: &Item, depth: usize) {
         "{indent}#{:<3} [{:<12}] {}",
         item.id, status_display, item.title
     );
-    if !item.assignee.is_empty() {
-        let _ = writeln!(stdout, "{indent}     assigned: {}", item.assignee);
-    }
-}
-
-fn print_workflow(stdout: &mut impl Write, item: &Item) {
-    let Some(flow) = &item.workflow else {
-        let _ = writeln!(stdout, "#{} is not a milestone", item.id);
-        return;
-    };
-    let _ = writeln!(
-        stdout,
-        "#{} {} — {} (revision {})",
-        item.id,
-        item.title,
-        flow.label(),
-        flow.revision
-    );
-    if let Some(problem) = &flow.problem {
-        let _ = writeln!(stdout, "Stopped: {problem}");
-    }
-    if let Some(active) = &flow.active {
-        let _ = writeln!(stdout, "Session: {}", active.session);
-        if let Some(attention) = &active.attention {
-            let _ = writeln!(stdout, "{attention}");
-        }
-    }
-    for decision in flow.unanswered() {
-        let _ = writeln!(
-            stdout,
-            "Decision [{}]: {}\n  {}\n  Recommendation: {}\n  Effect: {}",
-            decision.key,
-            decision.question,
-            decision.context,
-            decision.recommendation,
-            decision.consequence
-        );
-    }
-    if let Some(plan) = &flow.plan {
-        let _ = writeln!(stdout, "Plan: {}", plan.summary);
-        for criterion in &plan.acceptance {
-            let _ = writeln!(stdout, "  • {criterion}");
-        }
-        for task in &plan.tasks {
-            let _ = writeln!(stdout, "  Task #{task}");
-        }
-    }
-    if let Some(result) = &flow.result {
-        let _ = writeln!(
-            stdout,
-            "Implementation: {} ({})",
-            result.summary, result.commit
-        );
-        for check in &result.checks {
-            let _ = writeln!(stdout, "  Reported check: {check}");
-        }
-    }
-    if let Some(verification) = &flow.verification {
-        let _ = writeln!(
-            stdout,
-            "Verification: {} ({})",
-            verification.summary, verification.commit
-        );
-        for evidence in &verification.evidence {
-            let _ = writeln!(
-                stdout,
-                "  {}: {} — {}",
-                evidence.criterion,
-                if evidence.satisfied {
-                    "verified"
-                } else {
-                    "unverified"
-                },
-                evidence.detail
-            );
-        }
-    }
-    if let Some(commit) = &flow.integrated {
-        let _ = writeln!(stdout, "Integrated into main: {commit}");
-    }
-    if let Some(plan) = &flow.plan {
-        for d in &plan.decisions {
-            if let Some(resolution) = &d.resolution {
-                let _ = writeln!(stdout, "Decision [{}]: {resolution}", d.key);
-            }
-            if let Some(message) = d.messages.last() {
-                let _ = writeln!(
-                    stdout,
-                    "  {}: {}",
-                    if message.owner { "Owner" } else { "AI" },
-                    message.text
-                );
-            }
-        }
-    }
-
-    if let Some(worker) = &flow.worker {
-        let _ = writeln!(
-            stdout,
-            "Worktree: {}\nBranch: {}",
-            worker.worktree, worker.branch
-        );
-    }
 }
 
 fn print_item_full(stdout: &mut impl Write, item: &Item) {
-    if item.workflow.is_some() {
-        print_workflow(stdout, item);
-    }
     let _ = writeln!(stdout, "Item #{}", item.id);
     let _ = writeln!(stdout, "  title:    {}", item.title);
     let _ = writeln!(
@@ -653,23 +462,12 @@ fn print_item_full(stdout: &mut impl Write, item: &Item) {
         }
     );
     let _ = writeln!(stdout, "  rank:     {}", item.rank);
-    let _ = writeln!(
-        stdout,
-        "  assignee: {}",
-        if item.assignee.is_empty() {
-            "—"
-        } else {
-            &item.assignee
-        }
-    );
+    let _ = writeln!(stdout, "  completed: {}", item.completed);
     if let Some(p) = item.parent {
         let _ = writeln!(stdout, "  parent:   #{p}");
     }
     if !item.depends_on.is_empty() {
         let _ = writeln!(stdout, "  depends:  {:?}", item.depends_on);
-    }
-    if !item.links.is_empty() {
-        let _ = writeln!(stdout, "  links:    {:?}", item.links);
     }
     if !item.body.is_empty() {
         let _ = writeln!(stdout, "  body:");
@@ -680,7 +478,14 @@ fn print_item_full(stdout: &mut impl Write, item: &Item) {
     if !item.comments.is_empty() {
         let _ = writeln!(stdout, "  comments:");
         for c in &item.comments {
-            let _ = writeln!(stdout, "    [{}] {}: {}", c.at, c.author, c.text);
+            let _ = writeln!(
+                stdout,
+                "    [{}] {}: {}",
+                c.at.map(|at| at.to_string())
+                    .unwrap_or_else(|| "unknown time".into()),
+                c.author,
+                c.text
+            );
         }
     }
 }
@@ -712,17 +517,5 @@ fn print_list_json(stdout: &mut impl Write, result: &ListResult) {
 }
 
 fn item_json(item: &Item) -> serde_json::Value {
-    serde_json::json!({
-        "id": item.id,
-        "title": item.title,
-        "body": item.body,
-        "status": item.status,
-        "rank": item.rank,
-        "assignee": item.assignee,
-        "parent": item.parent,
-        "depends_on": item.depends_on,
-        "links": item.links,
-        "comments": item.comments,
-        "workflow": item.workflow,
-    })
+    serde_json::to_value(item).expect("item serialization")
 }

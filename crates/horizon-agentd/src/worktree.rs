@@ -23,6 +23,7 @@ pub(crate) struct WorktreeInfo {
     pub(crate) repo_root: PathBuf,
     pub(crate) path: PathBuf,
     pub(crate) branch: String,
+    pub(crate) base: String,
 }
 
 /// Resolves where a new isolated worktree should be created *from*: the one
@@ -213,11 +214,27 @@ pub(crate) fn create_isolated_worktree(
     source_dir: &Path,
     session_id: Uuid,
 ) -> Result<WorktreeInfo, String> {
+    create_isolated_worktree_at(source_dir, session_id, "HEAD")
+}
+
+pub(crate) fn create_isolated_worktree_at(
+    source_dir: &Path,
+    session_id: Uuid,
+    base: &str,
+) -> Result<WorktreeInfo, String> {
     let common_dir = git_common_dir(source_dir)?;
     let repo_root = repo_root_from_common_dir(&common_dir)?;
     ensure_horizon_ignored(&common_dir);
 
-    let base_ref = run_git(source_dir, &["rev-parse", "HEAD"])?;
+    let base_ref = run_git(
+        source_dir,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{base}^{{commit}}"),
+        ],
+    )?;
 
     let slug = short_slug(session_id);
     let worktree_path = repo_root.join(".horizon").join("worktrees").join(&slug);
@@ -245,6 +262,7 @@ pub(crate) fn create_isolated_worktree(
         repo_root,
         path: worktree_path,
         branch,
+        base: base_ref,
     })
 }
 
@@ -318,6 +336,7 @@ pub(crate) fn adopt_isolated_worktree(
     let branch = run_git(&canonical_path, &["branch", "--show-current"])?;
     Ok(WorktreeInfo {
         repo_root,
+        base: run_git(&canonical_path, &["rev-parse", "HEAD"])?,
         path: canonical_path,
         branch,
     })
@@ -350,6 +369,70 @@ pub(crate) fn remove_worktree_if_clean(info: &WorktreeInfo) -> bool {
     };
     let _ = std::fs::remove_dir_all(info.path.join(horizon_sandbox::SCRATCH_DIR_NAME));
     run_git(&info.repo_root, &["worktree", "remove", path_str]).is_ok()
+}
+
+impl WorktreeInfo {
+    pub(crate) fn identity(&self) -> horizon_agent::contract::SessionWorktree {
+        horizon_agent::contract::SessionWorktree {
+            repository: self.repo_root.clone(),
+            path: self.path.clone(),
+            branch: self.branch.clone(),
+            base: self.base.clone(),
+        }
+    }
+}
+
+/// Restore only the retained branch and exact owned placement. Never recreate
+/// a missing branch at an arbitrary base or overwrite a dirty existing tree.
+pub(crate) fn restore_worktree(
+    identity: &horizon_agent::contract::SessionWorktree,
+    session_id: Uuid,
+) -> Result<WorktreeInfo, String> {
+    let expected_branch = format!("horizon/{}", short_slug(session_id));
+    let repository =
+        std::fs::canonicalize(&identity.repository).map_err(|error| error.to_string())?;
+    let expected_path = repository
+        .join(".horizon/worktrees")
+        .join(short_slug(session_id));
+    if identity.path != expected_path || identity.branch != expected_branch {
+        return Err("Retained environment identity does not match session ownership".into());
+    }
+    run_git(
+        &repository,
+        &[
+            "rev-parse",
+            "--verify",
+            "--end-of-options",
+            &format!("{}^{{commit}}", identity.base),
+        ],
+    )?;
+    run_git(
+        &repository,
+        &[
+            "rev-parse",
+            "--verify",
+            &format!("refs/heads/{}", identity.branch),
+        ],
+    )?;
+    run_git(
+        &repository,
+        &[
+            "merge-base",
+            "--is-ancestor",
+            &identity.base,
+            &format!("refs/heads/{}", identity.branch),
+        ],
+    )?;
+    if !identity.path.exists() {
+        let path = identity.path.to_str().ok_or("Worktree path is not UTF-8")?;
+        run_git(&repository, &["worktree", "add", path, &identity.branch])?;
+    }
+    let mut adopted = adopt_isolated_worktree(&identity.path, session_id)?;
+    if adopted.repo_root != repository || adopted.branch != identity.branch {
+        return Err("Restored worktree differs from retained repository or branch".into());
+    }
+    adopted.base = identity.base.clone();
+    Ok(adopted)
 }
 
 #[cfg(test)]
@@ -583,6 +666,68 @@ mod tests {
         let canonical = std::fs::canonicalize(repo.path()).unwrap();
 
         assert_eq!(project_root(repo.path()), Some(canonical));
+    }
+
+    #[test]
+    fn explicit_base_and_retained_branch_restore_preserve_same_environment() {
+        let repo = scratch_repo();
+        init_repo(repo.path());
+        commit_file(repo.path(), "file", "base", "base");
+        let base = run_git(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+        commit_file(repo.path(), "file", "later", "later");
+        let id = Uuid::new_v4();
+        let worktree = create_isolated_worktree_at(repo.path(), id, &base).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(worktree.path.join("file")).unwrap(),
+            "base"
+        );
+        commit_file(&worktree.path, "file", "session tip", "session tip");
+        let identity = worktree.identity();
+        assert!(remove_worktree_if_clean(&worktree));
+        let restored = restore_worktree(&identity, id).unwrap();
+        assert_eq!(restored.base, base);
+        assert_eq!(
+            std::fs::read_to_string(restored.path.join("file")).unwrap(),
+            "session tip"
+        );
+        std::fs::write(restored.path.join("file"), "dirty").unwrap();
+        assert!(!remove_worktree_if_clean(&restored));
+        restore_worktree(&identity, id).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(restored.path.join("file")).unwrap(),
+            "dirty"
+        );
+        assert!(create_isolated_worktree_at(repo.path(), Uuid::new_v4(), "missing-base").is_err());
+    }
+
+    #[test]
+    fn retained_branch_must_still_descend_from_the_selected_base() {
+        let repo = scratch_repo();
+        init_repo(repo.path());
+        commit_file(repo.path(), "file", "old", "old");
+        let old = run_git(repo.path(), &["rev-parse", "HEAD"]).unwrap();
+        commit_file(repo.path(), "file", "base", "base");
+        let id = Uuid::new_v4();
+        let worktree = create_isolated_worktree_at(repo.path(), id, "HEAD").unwrap();
+        let identity = worktree.identity();
+        assert!(remove_worktree_if_clean(&worktree));
+        run_git(repo.path(), &["branch", "-f", &identity.branch, &old]).unwrap();
+        assert!(restore_worktree(&identity, id).is_err());
+        assert!(!identity.path.exists());
+    }
+
+    #[test]
+    fn removed_branch_never_falls_back_to_recorded_base() {
+        let repo = scratch_repo();
+        init_repo(repo.path());
+        commit_file(repo.path(), "file", "base", "base");
+        let id = Uuid::new_v4();
+        let worktree = create_isolated_worktree_at(repo.path(), id, "HEAD").unwrap();
+        let identity = worktree.identity();
+        assert!(remove_worktree_if_clean(&worktree));
+        run_git(repo.path(), &["branch", "-D", &identity.branch]).unwrap();
+        assert!(restore_worktree(&identity, id).is_err());
+        assert!(!identity.path.exists());
     }
 
     #[test]

@@ -15,7 +15,6 @@ use horizon_agent::persistence::event_log::{
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
-use super::spawn::spawn_session_thread;
 use super::state::{lock_unpoisoned, AgentdState};
 use crate::worktree;
 
@@ -79,10 +78,36 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .iter()
             .rev()
             .find_map(|record| record.role_id.clone());
+        if role_id.as_ref().is_some_and(|role| retired_role(&role.0)) {
+            continue;
+        }
+        let recorded_events: Vec<_> = session_records
+            .iter()
+            .map(|record| record.event.clone())
+            .collect();
+        if session_is_dead(&agent_frame_from_events(&recorded_events)) {
+            skipped_terminated += 1;
+            continue;
+        }
+        let retained_environment = recorded_events.iter().rev().find_map(|event| match event {
+            Event::EnvironmentActivated(identity) => Some(identity),
+            _ => None,
+        });
         let persisted_context = session_records
             .iter()
             .rev()
             .find_map(|record| record.session_context.clone());
+        if persisted_context.as_ref().is_some_and(|context| {
+            context
+                .filesystem_grants
+                .iter()
+                .any(|grant| horizon_sandbox::revalidate_grant(grant).is_err())
+        }) {
+            eprintln!(
+                "horizon-agentd: retained filesystem authority is unavailable for {session_id:?}"
+            );
+            continue;
+        }
         let (workspace_root, parent_session_id, restored_worktree) =
             match persisted_context.as_ref() {
                 Some(context) if context.isolated_worktree => {
@@ -93,7 +118,10 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
                         );
                         continue;
                     };
-                    match worktree::adopt_isolated_worktree(root, session_id.as_uuid()) {
+                    match retained_environment.map_or_else(
+                        || worktree::adopt_isolated_worktree(root, session_id.as_uuid()),
+                        |identity| worktree::restore_worktree(identity, session_id.as_uuid()),
+                    ) {
                         Ok(worktree) => (
                             Some(worktree.path.clone()),
                             context.parent_session_id,
@@ -142,7 +170,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             continue;
         }
 
-        if frame.is_turn_in_flight() {
+        if frame.is_turn_in_flight() || !interrupted_input_outcomes(&events).is_empty() {
             // Mirrors what a live `Command::Cancel` does (`providers::rig::
             // session`, `providers::mock`): finish every still-outstanding
             // tool call as cancelled *before* the turn-end/state-change
@@ -153,6 +181,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
                 .into_iter()
                 .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
                 .collect();
+            closing.extend(interrupted_input_outcomes(&events));
             closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
             closing.push(Event::StateChanged(SessionState::WaitingForUser));
 
@@ -180,7 +209,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             "horizon-agentd: resumed session {session_id:?} ({} event(s))",
             events.len()
         );
-        spawn_session_thread(
+        super::spawn::spawn_session_thread_with_context(
             state.clone(),
             session_id,
             provider_id,
@@ -190,6 +219,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             false,
             restored_worktree,
             events,
+            persisted_context,
         );
     }
 
@@ -276,10 +306,11 @@ fn terminate_orphaned_exploration(
 /// decide which sessions are worth spawning a thread for at all.
 pub(super) fn session_is_dead(frame: &AgentFrame) -> bool {
     matches!(frame.state, Some(SessionState::Terminated))
-        || frame
-            .items
-            .iter()
-            .any(|item| matches!(item, AgentFrameItem::Exited(_)))
+        || (frame.state.is_none()
+            && frame
+                .items
+                .iter()
+                .any(|item| matches!(item, AgentFrameItem::Exited(_))))
 }
 
 /// Every `ToolCallRequested` call id in `frame` that has no matching
@@ -303,6 +334,377 @@ fn outstanding_tool_call_ids(frame: &AgentFrame) -> Vec<ToolCallId> {
         }
     }
     outstanding
+}
+
+/// Explicit owner-triggered restoration of exactly one historical session.
+/// Reads acknowledged event-log records, retaining every termination record.
+/// Concurrent resume calls serialize through the lifecycle gate.
+pub(crate) fn resume_session(
+    state: &Arc<AgentdState>,
+    session_id: SessionId,
+) -> Result<(), String> {
+    let mut lifecycle = lock_unpoisoned(&state.lifecycle);
+    let writer = state.writer().ok_or("Session persistence is unavailable")?;
+    writer.flush().map_err(|error| error.to_string())?;
+    let path = lock_unpoisoned(&state.agent_config)
+        .persistence
+        .event_log_path
+        .clone();
+    let report =
+        horizon_agent::persistence::event_log::read(&path).map_err(|error| error.to_string())?;
+    let mut records: Vec<_> = report
+        .records
+        .into_iter()
+        .filter(|record| record.session_id == session_id)
+        .collect();
+    records.sort_by_key(|record| record.sequence);
+    if records.is_empty() {
+        if state.session_exists(session_id) {
+            return Ok(());
+        }
+        return Err(format!("No retained history for session {session_id:?}"));
+    }
+    let recorded_events: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
+    if state.session_exists(session_id) {
+        if !session_is_dead(&agent_frame_from_events(&recorded_events)) {
+            return Ok(());
+        }
+        // Terminated is persisted before the old thread removes its registry
+        // entry. Let cleanup acquire the same lifecycle gate before resuming.
+        drop(lifecycle);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.session_exists(session_id) {
+            if std::time::Instant::now() >= deadline {
+                return Err("Session termination is still settling".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        lifecycle = lock_unpoisoned(&state.lifecycle);
+        if state.session_exists(session_id) {
+            return Ok(());
+        }
+    }
+    let _lifecycle = lifecycle;
+
+    let provider_id = records
+        .iter()
+        .rev()
+        .find_map(|record| record.provider_id.clone())
+        .ok_or("Retained session has no provider identity")?;
+    let role_id = records
+        .iter()
+        .rev()
+        .find_map(|record| record.role_id.clone());
+    if role_id
+        .as_ref()
+        .is_some_and(|role| retired_role(&role.0) || horizon_agent::roles::resolve(role).is_none())
+    {
+        return Err("Historical role is retired or unavailable".into());
+    }
+    let context = records
+        .iter()
+        .rev()
+        .find_map(|record| record.session_context.clone())
+        .ok_or("Retained session has no environment context")?;
+    for grant in &context.filesystem_grants {
+        horizon_sandbox::revalidate_grant(grant).map_err(|error| error.to_string())?;
+    }
+    let mut events: Vec<_> = records.into_iter().map(|record| record.event).collect();
+    let identity = events.iter().rev().find_map(|event| match event {
+        Event::EnvironmentActivated(identity) => Some(identity),
+        _ => None,
+    });
+    let worktree = if context.isolated_worktree {
+        Some(match identity {
+            Some(identity) => worktree::restore_worktree(identity, session_id.as_uuid())?,
+            None => worktree::adopt_isolated_worktree(
+                context
+                    .workspace_root
+                    .as_deref()
+                    .ok_or("Missing retained worktree path")?,
+                session_id.as_uuid(),
+            )?,
+        })
+    } else {
+        None
+    };
+    if let Some(root) = &context.workspace_root {
+        if !root.is_dir() {
+            return Err(format!(
+                "Retained consultation directory {} is unavailable",
+                root.display()
+            ));
+        }
+    }
+    let mut transitions = interrupted_input_outcomes(&events);
+    transitions.extend([
+        Event::SessionResumed,
+        Event::StateChanged(SessionState::Created),
+    ]);
+    let mut appender = Appender::new(
+        writer.clone(),
+        session_id,
+        Some(provider_id.clone()),
+        role_id.clone(),
+    )
+    .with_session_context(context.clone());
+    appender
+        .append_provider_events(transitions.iter().cloned().map(Into::into).collect())
+        .map_err(|error| error.to_string())?;
+    writer.flush().map_err(|error| error.to_string())?;
+    events.extend(transitions);
+    super::spawn::spawn_session_thread_with_context(
+        state.clone(),
+        session_id,
+        provider_id,
+        role_id,
+        context.workspace_root.clone(),
+        context.parent_session_id,
+        false,
+        worktree,
+        events,
+        Some(context),
+    );
+    Ok(())
+}
+
+fn retired_role(id: &str) -> bool {
+    matches!(
+        id,
+        "keeper" | "milestone-planner" | "milestone-worker" | "milestone-verifier"
+    )
+}
+
+/// Settle only inputs that had actually entered work before the process died;
+/// accepted requests for other destinations remain queued for restoration.
+pub(super) fn interrupted_input_outcomes(events: &[Event]) -> Vec<Event> {
+    use horizon_agent::contract::{InputResult, SessionInputOutcome};
+    let mut active = Vec::new();
+    for event in events {
+        match event {
+            Event::InputStarted(ids) => active = ids.clone(),
+            Event::InputOutcome(outcome) => active.retain(|id| !outcome.input_ids.contains(id)),
+            _ => {}
+        }
+    }
+    if active.is_empty() {
+        return Vec::new();
+    }
+    let reply_to = events
+        .iter()
+        .find_map(|event| match event {
+            Event::InputAccepted(input) if input.id == active[0] => Some(input.reply_to.clone()),
+            _ => None,
+        })
+        .flatten();
+    vec![Event::InputOutcome(SessionInputOutcome {
+        delivery_id: format!("input-result:{}", active[0]),
+        input_ids: active,
+        reply_to,
+        outcome: InputResult::Interrupted,
+    })]
+}
+
+impl AgentdState {
+    /// Acknowledge an outbox record even after its source session ended.
+    /// This writes the authoritative log directly; transport records have no
+    /// provider-history or transcript projection to mutate in a live session.
+    pub(crate) fn acknowledge_delivery(
+        &self,
+        session_id: SessionId,
+        delivery_id: String,
+    ) -> Result<(), String> {
+        let _lifecycle = lock_unpoisoned(&self.lifecycle);
+        let writer = self.writer().ok_or("Session persistence is unavailable")?;
+        writer.flush().map_err(|error| error.to_string())?;
+        let path = lock_unpoisoned(&self.agent_config)
+            .persistence
+            .event_log_path
+            .clone();
+        let report =
+            horizon_agent::persistence::event_log::read(path).map_err(|error| error.to_string())?;
+        let records: Vec<_> = report
+            .records
+            .into_iter()
+            .filter(|record| record.session_id == session_id)
+            .collect();
+        if records.iter().any(
+            |record| matches!(&record.event, Event::DeliveryAcknowledged(id) if id == &delivery_id),
+        ) {
+            return Ok(());
+        }
+        let pending = records.iter().any(|record| match &record.event {
+            Event::InputOutcome(outcome) => outcome.delivery_id == delivery_id,
+            Event::SessionInputSent { input, .. } => input.id == delivery_id,
+            _ => false,
+        });
+        if !pending {
+            return Err("Delivery identity is not in the session outbox".into());
+        }
+        let record = records.last().ok_or("Session history is unavailable")?;
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            record.provider_id.clone(),
+            record.role_id.clone(),
+        );
+        if let Some(context) = record.session_context.clone() {
+            appender = appender.with_session_context(context);
+        }
+        appender
+            .append_provider_events(vec![Event::DeliveryAcknowledged(delivery_id).into()])
+            .map_err(|error| error.to_string())?;
+        writer.flush().map_err(|error| error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod delivery_tests {
+    use super::*;
+    use horizon_agent::contract::{InputResult, SessionInput, SessionInputOutcome};
+
+    #[test]
+    fn restart_interrupts_active_destination_and_preserves_other_queued_requests() {
+        let input = |id: &str, route: &str| {
+            Event::InputAccepted(SessionInput {
+                resume_work: false,
+                id: id.into(),
+                origin: "owner".into(),
+                text: id.into(),
+                reply_to: Some(route.into()),
+            })
+        };
+        let mut events = vec![
+            input("first", "one"),
+            input("later", "two"),
+            Event::InputStarted(vec!["first".into()]),
+        ];
+        let outcomes = interrupted_input_outcomes(&events);
+        assert!(
+            matches!(&outcomes[..], [Event::InputOutcome(SessionInputOutcome { input_ids, reply_to: Some(route), outcome: InputResult::Interrupted, .. })] if input_ids == &["first"] && route == "one")
+        );
+        events.extend(outcomes);
+        assert!(interrupted_input_outcomes(&events).is_empty());
+    }
+
+    #[test]
+    fn explicit_resume_keeps_same_id_and_retains_prior_termination_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let (writer, ready) = horizon_agent::persistence::event_log::WriterHandle::open(&path);
+        assert!(matches!(
+            ready.recv().unwrap(),
+            horizon_agent::persistence::event_log::WriterInit::Ready(_)
+        ));
+        let state = crate::session::test_support::judge_test_state();
+        state.set_writer(Some(writer.clone()));
+        lock_unpoisoned(&state.agent_config)
+            .persistence
+            .event_log_path = path.clone();
+        let session_id = SessionId::new();
+        let context = PersistedSessionContext {
+            workspace_root: Some(dir.path().to_path_buf()),
+            isolated_worktree: false,
+            parent_session_id: None,
+            filesystem_grants: vec![],
+        };
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            Some(ProviderId("builtin.agent.mock".into())),
+            None,
+        )
+        .with_session_context(context);
+        let original = Event::MessageCommitted(horizon_agent::contract::Message {
+            role: horizon_agent::contract::MessageRole::User,
+            text: "retained consultation".into(),
+        });
+        appender
+            .append_provider_events(vec![
+                original.clone().into(),
+                Event::StateChanged(SessionState::Terminated).into(),
+            ])
+            .unwrap();
+        resume_session(&state, session_id).unwrap();
+        resume_session(&state, session_id).unwrap();
+        assert!(state.session_exists(session_id));
+        let replay = lock_unpoisoned(&state.sessions)
+            .get(&session_id)
+            .unwrap()
+            .replay
+            .clone();
+        let (reply, receive) = crossbeam_channel::unbounded();
+        replay.send(reply).unwrap();
+        let events = receive
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(events.contains(&original));
+        assert!(events.contains(&Event::StateChanged(SessionState::Terminated)));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::SessionResumed))
+                .count(),
+            1
+        );
+        assert!(!session_is_dead(&agent_frame_from_events(&events)));
+        state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while state.session_exists(session_id) {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn historical_delivery_ack_is_durable_without_resuming_its_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let (writer, ready) = horizon_agent::persistence::event_log::WriterHandle::open(&path);
+        assert!(matches!(
+            ready.recv().unwrap(),
+            horizon_agent::persistence::event_log::WriterInit::Ready(_)
+        ));
+        let state = crate::session::test_support::judge_test_state();
+        state.set_writer(Some(writer.clone()));
+        lock_unpoisoned(&state.agent_config)
+            .persistence
+            .event_log_path = path.clone();
+        let session_id = SessionId::new();
+        let mut appender = Appender::new(writer.clone(), session_id, None, None);
+        appender
+            .append_provider_events(vec![
+                Event::InputOutcome(SessionInputOutcome {
+                    input_ids: vec!["input".into()],
+                    delivery_id: "delivery".into(),
+                    reply_to: Some("target".into()),
+                    outcome: InputResult::Interrupted,
+                })
+                .into(),
+                Event::StateChanged(SessionState::Terminated).into(),
+            ])
+            .unwrap();
+        state
+            .acknowledge_delivery(session_id, "delivery".into())
+            .unwrap();
+        state
+            .acknowledge_delivery(session_id, "delivery".into())
+            .unwrap();
+        let events: Vec<_> = horizon_agent::persistence::event_log::read(&path)
+            .unwrap()
+            .records
+            .into_iter()
+            .map(|record| record.event)
+            .collect();
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::DeliveryAcknowledged(_)))
+                .count(),
+            1
+        );
+        assert!(!state.session_exists(session_id));
+    }
 }
 
 #[cfg(test)]

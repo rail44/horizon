@@ -1,21 +1,7 @@
-//! `board.read` / `board.comment` tool dispatch — the board keeper's (and any
-//! future board-aware role's) interface to the task board.
-//!
-//! **The seam.** This crate cannot depend on `horizon-board` (owner decision —
-//! see `docs/board-keeper-design.md` §1), so board operations go through
-//! [`BoardHost`]: a daemon-provided capability handle, installed on
-//! `ToolSessionState` at session construction exactly like
-//! [`ExplorationHost`](crate::tools::ExplorationHost) already is. The daemon
-//! (`horizon-agentd`) implements `BoardHost` using `horizon_board::Store`; this
-//! crate never touches the board store or its types directly.
-//!
-//! **Permissions.** Both tools are `AutoAllowRead`: `board.read` is a read,
-//! and `board.comment` is an append-only write whose audit trail is the board
-//! event log itself (same reasoning as `knowledge.write`). Structural
-//! enforcement of "comments only" happens at the role level: the keeper role's
-//! `allowed_tool_ids` lists `board.comment` but no board state-mutation tool
-//! (`board.set_status`, `board.assign`, etc.) — and those tools do not exist
-//! in the catalog at all, so no role can express them.
+//! Board tools use a daemon-provided capability so the agent runtime and
+//! board data crate remain independent. Tool calls carry the actual session
+//! identity; models cannot impersonate another author. Operating policy lives
+//! in the board skills, while the host validates ordinary data operations.
 
 use serde_json::{json, Value};
 
@@ -24,36 +10,31 @@ use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
 use crate::tools::Execution;
 
-pub(crate) fn report_schema() -> Value {
-    let strings = json!({"type":"array","items":{"type":"string"}});
-    let decision = json!({"type":"object","additionalProperties":false,
-        "required":["key","question","context","recommendation","consequence","affected_tasks"],
-        "properties":{"key":{"type":"string"},"question":{"type":"string"},"context":{"type":"string"},
-            "recommendation":{"type":"string"},"consequence":{"type":"string"},"affected_tasks":strings}});
-    let task = json!({"type":"object","additionalProperties":false,
-        "required":["key","title","instructions","acceptance","depends_on","scope"],
-        "properties":{"key":{"type":"string"},"item_id":{"type":["integer","null"]},"title":{"type":"string"},
-            "instructions":{"type":"string"},"acceptance":strings,"depends_on":strings,"retry":{"type":"boolean"},
-            "scope":{"type":"object","additionalProperties":false,"required":["paths","functions"],
-                "properties":{"paths":strings,"functions":strings}}}});
-    let evidence = json!({"type":"object","additionalProperties":false,
-        "required":["criterion","detail","satisfied","decision","check"],
-        "properties":{"criterion":{"type":"string"},"detail":{"type":"string"},"satisfied":{"type":"boolean"},
-            "decision":{"type":["string","null"]},"check":{"type":["string","null"]}}});
-    json!({"type":"object","additionalProperties":false,"required":["id","attempt","report"],
-        "properties":{"id":{"type":"integer"},"attempt":{"type":"string"},
-            "report":{"type":"object","additionalProperties":false,"required":["kind"],
-                "properties":{"kind":{"type":"string","enum":["plan","discussion","task","verification","blocked"]},
-                    "summary":{"type":"string"},"checks":strings,"commit":{"type":"string"},"reason":{"type":"string"},
-                    "reply":{"type":"string"},"resolution":{"type":["string","null"]},
-                    "acceptance":{"type":["array","null"],"items":{"type":"string"}},
-                    "plan":{"type":"object","additionalProperties":false,"required":["summary","reason","acceptance","tasks","decisions"],
-                        "properties":{"summary":{"type":"string"},"reason":{"type":"string"},"acceptance":strings,
-                            "tasks":{"type":"array","items":task},"decisions":{"type":"array","items":decision},
-                            "priorities":{"type":"array","items":{"type":"integer"}},"implementation_decisions":strings}},
-                    "verification":{"type":"object","additionalProperties":false,"required":["summary","commit","evidence","checks","decisions"],
-                        "properties":{"summary":{"type":"string"},"commit":{"type":"string"},
-                            "evidence":{"type":"array","items":evidence},"checks":strings,"decisions":{"type":"array","items":decision}}}}}}})
+pub(crate) fn update_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false, "required":["action"],
+    "properties": {
+        "action":{"type":"string","enum":["add","edit","parent","dependencies","move","status","complete"]},
+        "id":{"type":"integer","minimum":1},
+        "title":{"type":"string"},"body":{"type":"string"},
+        "parent":{"type":["integer","null"]},
+        "depends_on":{"type":"array","items":{"type":"integer","minimum":1}},
+        "position":{"type":"string","enum":["first","last","before","after"]},
+        "relative_to":{"type":"integer","minimum":1},
+        "status":{"type":"string"},"completed":{"type":"boolean"}
+    }})
+}
+
+pub(crate) fn session_schema() -> Value {
+    json!({"type":"object", "additionalProperties":false, "required":["action"],
+    "properties": {
+        "action":{"type":"string","enum":["consult","implement","review","send"]},
+        "id":{"type":"integer","minimum":1},
+        "text":{"type":"string"},
+        "base":{"type":"string"},"tip":{"type":"string"},
+        "checks":{"type":"string"},
+        "session_id":{"type":"string"},
+        "reply_to":{"type":["string","null"],"description":"Session UUID for a requested reply. Omit for a passive notification."}
+    }})
 }
 
 /// The daemon capability `board.read` and `board.comment` are built on: read
@@ -73,7 +54,7 @@ pub(crate) fn report_schema() -> Value {
 /// types to JSON; the tool executor passes them straight through to the model.
 pub trait BoardHost: Send + Sync {
     /// Lists board items in rank order, optionally filtered by status.
-    /// Returns a JSON object `{ items: [...], statuses: [...] }`.
+    /// Returns a JSON array of task records.
     fn list(&self, status_filter: Option<&str>) -> Result<Value, String>;
 
     /// Shows one item with its full comment thread, or `None` if the id
@@ -85,15 +66,17 @@ pub trait BoardHost: Send + Sync {
     /// field. `Err` carries a message suitable for the model to read.
     fn comment(&self, id: u64, author: &str, text: &str) -> Result<(), String>;
 
-    /// Saves a structured report for an attempt owned by this session.
-    fn report(
+    /// Performs an ordinary task update or a task-session operation. The
+    /// daemon supplies board types and session routing; this crate keeps the
+    /// two domains independent. Caller identity comes from the tool runtime.
+    /// Outgoing requests are returned as events so the runtime persists them
+    /// before returning the tool result to the provider.
+    fn operate(
         &self,
-        _id: u64,
-        _token: &str,
-        _session: &str,
-        _report: Value,
-    ) -> Result<Value, String> {
-        Err("This session has no milestone reporting capability".into())
+        _session: SessionId,
+        _request: &ToolCallRequest,
+    ) -> Result<(Value, Vec<Event>), String> {
+        Err("Board operations are unavailable for this session".into())
     }
 }
 
@@ -164,7 +147,7 @@ pub(crate) fn execute_comment(
         );
     };
     // The author is the session id — the model never controls it, so a
-    // keeper session cannot impersonate the owner or another session.
+    // board session cannot impersonate the owner or another session.
     let author = format!("session:{}", session_id.as_uuid());
     let output = match host.comment(id, &author, text) {
         Ok(()) => json!({ "ok": true }),
@@ -173,40 +156,98 @@ pub(crate) fn execute_comment(
     synchronous(request, output)
 }
 
-/// Builds the `Execution::Auto` event list for a synchronous board tool result.
-pub(crate) fn execute_report(
+pub(crate) fn execute_operation(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     request: &ToolCallRequest,
 ) -> Execution {
-    let result = (|| {
-        let host = tool_state
-            .board_host()
-            .ok_or("No board host is installed")?;
-        let id = request
-            .input
-            .get("id")
-            .and_then(Value::as_u64)
-            .ok_or("Missing milestone id")?;
-        let token = request
-            .input
-            .get("attempt")
-            .and_then(Value::as_str)
-            .ok_or("Missing attempt token")?;
-        let report = request.input.get("report").ok_or("Missing report")?.clone();
-        host.report(id, token, &session_id.as_uuid().to_string(), report)
-    })();
-    synchronous(request, result.unwrap_or_else(error_output))
+    let result = tool_state
+        .board_host()
+        .ok_or_else(|| "No board host is installed".to_string())
+        .and_then(|host| host.operate(session_id, request));
+    let (output, events) = result.unwrap_or_else(|error| (error_output(error), Vec::new()));
+    with_events(request, output, events)
 }
 
 fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
-    Execution::Auto(vec![
+    with_events(request, output, Vec::new())
+}
+
+fn with_events(request: &ToolCallRequest, output: Value, events: Vec<Event>) -> Execution {
+    let mut batch = vec![
         Event::StateChanged(SessionState::ToolRunning),
         Event::ToolCallStarted(request.call_id.clone()),
-        Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            output,
-        )),
-    ])
+    ];
+    batch.extend(events);
+    batch.push(Event::ToolCallFinished(ToolCallResult::new(
+        request.call_id.clone(),
+        request.occurrence_id.clone(),
+        output,
+    )));
+    Execution::Auto(batch)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{SessionInput, ToolCallId};
+    use std::sync::Arc;
+
+    struct SendingHost(SessionId);
+    impl BoardHost for SendingHost {
+        fn list(&self, _: Option<&str>) -> Result<Value, String> {
+            unreachable!()
+        }
+        fn show(&self, _: u64) -> Result<Value, String> {
+            unreachable!()
+        }
+        fn comment(&self, _: u64, _: &str, _: &str) -> Result<(), String> {
+            unreachable!()
+        }
+        fn operate(
+            &self,
+            _: SessionId,
+            _: &ToolCallRequest,
+        ) -> Result<(Value, Vec<Event>), String> {
+            Ok((
+                json!({"queued": true}),
+                vec![Event::SessionInputSent {
+                    session_id: self.0,
+                    input: SessionInput {
+                        id: "review-request".into(),
+                        origin: "requester".into(),
+                        text: "Review the changes".into(),
+                        reply_to: None,
+                        resume_work: false,
+                    },
+                }],
+            ))
+        }
+    }
+
+    #[test]
+    fn operation_returns_its_outbox_before_reporting_success() {
+        let recipient = SessionId::new();
+        let state = ToolSessionState::without_root()
+            .with_board_host(Some(Arc::new(SendingHost(recipient))));
+        let request = ToolCallRequest {
+            call_id: ToolCallId("request".into()),
+            tool_id: "board.session".into(),
+            occurrence_id: None,
+            input: json!({"action":"review","id":1}).into(),
+        };
+        let Execution::Auto(events) = execute_operation(&state, SessionId::new(), &request) else {
+            panic!("board requests must return a persistable automatic batch");
+        };
+        let send = events.iter().position(|event| matches!(event,
+            Event::SessionInputSent { session_id, input } if *session_id == recipient && input.id == "review-request"
+        )).expect("durable outgoing request");
+        let completion = events.iter().position(|event| matches!(event,
+            Event::ToolCallFinished(result) if result.output.get("queued") == Some(&json!(true))
+        )).expect("successful tool result");
+        assert!(
+            send < completion,
+            "a replayable request must precede provider success"
+        );
+    }
 }

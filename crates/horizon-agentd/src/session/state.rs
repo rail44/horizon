@@ -48,6 +48,8 @@ pub(crate) struct AgentdState {
     /// (see `run`/`spawn`/`resume`); a running session keeps its spawn-time
     /// config for its whole lifetime, so a swap takes effect for the next
     /// session, not a running turn.
+    pub(super) lifecycle: Mutex<()>,
+    board_projects: Mutex<std::collections::HashSet<PathBuf>>,
     pub(crate) providers: Mutex<ProviderRegistry>,
     /// Same swap story as `providers`: `[provider]`'s `base_url` is read at
     /// spawn time for the enforcing judge (see `run_session`), so a live
@@ -144,6 +146,8 @@ impl AgentdState {
         trusted_projects: Vec<std::path::PathBuf>,
     ) -> Self {
         Self {
+            lifecycle: Mutex::new(()),
+            board_projects: Mutex::new(std::collections::HashSet::new()),
             providers: Mutex::new(providers),
             agent_config: Mutex::new(agent_config),
             writer: Mutex::new(writer),
@@ -160,6 +164,17 @@ impl AgentdState {
             project_grants,
             trusted_projects,
         }
+    }
+
+    pub(crate) fn register_board(&self, root: PathBuf) {
+        lock_unpoisoned(&self.board_projects).insert(root);
+    }
+
+    pub(crate) fn board_projects(&self) -> Vec<PathBuf> {
+        lock_unpoisoned(&self.board_projects)
+            .iter()
+            .cloned()
+            .collect()
     }
 
     pub(crate) fn writer(&self) -> Option<WriterHandle> {
@@ -453,6 +468,7 @@ mod tests {
             repo_root: std::path::PathBuf::from("/tmp/repo"),
             path: std::path::PathBuf::from("/tmp/repo/.horizon/worktrees/abcd1234"),
             branch: "horizon/abcd1234".to_string(),
+            base: "base".to_string(),
         };
         state.record_isolated_worktree(session_id, Some(parent_id), info.clone());
 

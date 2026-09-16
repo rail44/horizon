@@ -39,6 +39,8 @@ use super::model_limits::model_limits;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
+mod environment;
+mod input;
 mod state;
 mod turn;
 
@@ -61,8 +63,7 @@ pub(super) fn spawn_rig_session(
     let (commands_tx, commands_rx) = unbounded();
     let (events_tx, events_rx) = unbounded::<ProviderEvent>();
     // Gathered once, right as the session starts, and reused for every
-    // turn's system prompt — cwd/OS/git-repo status don't change over a
-    // session's lifetime. Computed here (before `request` is partially
+    // turn's system prompt until an explicit environment activation. Computed here (before `request` is partially
     // moved-from just below) from `request.workspace_root` -- the session's
     // own real root (an isolated worktree, post-isolation, when this
     // session is isolated), not this daemon process's own cwd -- so both
@@ -72,6 +73,17 @@ pub(super) fn spawn_rig_session(
     let provider_id = request.provider_id;
     let session_id = request.session_id;
     let fallback_events = request.history;
+    let restored_inputs = input::Inputs::restore(&fallback_events);
+    let inputs_paused = fallback_events
+        .iter()
+        .rev()
+        .find_map(|event| match event {
+            Event::InputQueuePaused(paused) => Some(*paused),
+            Event::InputAccepted(input) if input.resume_work => Some(false),
+            Event::InputStarted(_) => Some(false),
+            _ => None,
+        })
+        .unwrap_or(false);
     let trusted_project = request.trusted_project;
     // Thread `trusted_project` into the per-session config so
     // `rig_tool_definitions` can filter the knowledge tools out of the
@@ -170,6 +182,8 @@ pub(super) fn spawn_rig_session(
                     memory_document,
                 )
                 .await;
+                state.inputs = restored_inputs;
+                state.inputs_paused = inputs_paused;
                 state.run().await;
             });
         });

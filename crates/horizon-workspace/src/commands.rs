@@ -30,8 +30,8 @@ pub enum CommandId {
     OpenTerminalInSessionDirectory,
     /// Opens the task-board pane (`ViewKind::Board`): a session-less
     /// first-party view over the `horizon-board` event store where the owner
-    /// can browse items (rank order, with comment count and last-activity
-    /// time) and post comments. The pane is placed as a new tab or split
+    /// can browse the ranked task hierarchy and read or post consultation
+    /// messages. The pane is placed as a new tab or split
     /// via the view chooser's placement flow. Palette-only -- no default
     /// keybinding (see `keymap::command_for`'s `"open-board"` entry for an
     /// optional user binding).
@@ -56,16 +56,19 @@ pub enum CommandId {
     /// or the built-in default), ending a zoom session. Default chord /
     /// override id: `"reset-font-size"`.
     ResetFontSize,
-    EnableBoardMilestone,
-    SubmitBoardDecision,
-    PauseBoardMilestone,
-    ResumeBoardMilestone,
-    ReplanBoardMilestone,
-    OpenBoardMilestoneSession,
-    ToggleBoardHistory,
-    ToggleBoardMilestoneFilter,
+    OpenBoardOrganizer,
+    OpenBoardTaskSession,
     OpenBoardRelatedItem,
-    SelectBoardDecision,
+    BackBoardList,
+    AddBoardTask,
+    PostBoardMessage,
+    MoveBoardTaskUp,
+    MoveBoardTaskDown,
+    ReorderBoardTask,
+    SaveBoardState,
+    ToggleBoardCompleted,
+    AddBoardDependency,
+    RemoveBoardDependency,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,6 +97,8 @@ pub struct CommandState {
     pub tab_count: usize,
     pub visible_pane_count: usize,
     pub has_active_session: bool,
+    /// Whether the workspace cursor targets a board pane.
+    pub has_cursor_board: bool,
     pub detached_session_count: usize,
     pub has_pending_approval: bool,
     pub has_turn_in_flight: bool,
@@ -285,54 +290,69 @@ pub fn core_commands() -> Vec<CommandSpec> {
     commands.extend(
         [
             (
-                CommandId::EnableBoardMilestone,
-                "Plan and Run as Milestone",
-                "Plan and execute the open board item's goal.",
-            ),
-            (
-                CommandId::SubmitBoardDecision,
-                "Send Decision Message",
-                "Continue the displayed decision conversation.",
-            ),
-            (
-                CommandId::PauseBoardMilestone,
-                "Pause Milestone",
-                "Stop the current attempt and pause automatic work.",
-            ),
-            (
-                CommandId::ResumeBoardMilestone,
-                "Resume Milestone",
-                "Retry interrupted work or resume a paused milestone.",
-            ),
-            (
-                CommandId::ReplanBoardMilestone,
-                "Revise Milestone Plan",
-                "Investigate the goal again, preserving completed work.",
-            ),
-            (
-                CommandId::OpenBoardMilestoneSession,
-                "Open Milestone Session",
-                "Open the milestone's current planning or implementation session.",
-            ),
-            (
-                CommandId::ToggleBoardHistory,
-                "Toggle Milestone Discussion",
-                "Show or hide the milestone's comment history.",
+                CommandId::OpenBoardTaskSession,
+                "Open Task Working History",
+                "Open the ordinary agent session associated with this task.",
             ),
             (
                 CommandId::OpenBoardRelatedItem,
-                "Open Related Board Item",
-                "Open the selected task or milestone.",
+                "Open Board Task",
+                "Open the selected task in this board.",
             ),
             (
-                CommandId::SelectBoardDecision,
-                "Select Board Decision",
-                "Discuss the selected decision.",
+                CommandId::BackBoardList,
+                "Back to Task List",
+                "Return to the saved board list position.",
             ),
             (
-                CommandId::ToggleBoardMilestoneFilter,
-                "Toggle Milestones Only",
-                "Switch the board between milestones and all items.",
+                CommandId::AddBoardTask,
+                "Add Board Task",
+                "Create a task from the name entered in the board.",
+            ),
+            (
+                CommandId::PostBoardMessage,
+                "Send Board Message",
+                "Send the consultation input to this task session.",
+            ),
+            (
+                CommandId::MoveBoardTaskUp,
+                "Move Board Task Up",
+                "Move this task before its previous sibling.",
+            ),
+            (
+                CommandId::MoveBoardTaskDown,
+                "Move Board Task Down",
+                "Move this task after its next sibling.",
+            ),
+            (
+                CommandId::ReorderBoardTask,
+                "Reorder Board Task",
+                "Apply the dragged task position among its siblings.",
+            ),
+            (
+                CommandId::SaveBoardState,
+                "Save Task State",
+                "Save the project-defined state entered for this task.",
+            ),
+            (
+                CommandId::ToggleBoardCompleted,
+                "Toggle Task Completion",
+                "Change completion independently of the project-defined state.",
+            ),
+            (
+                CommandId::AddBoardDependency,
+                "Add Task Prerequisite",
+                "Add the task selected in prerequisite search.",
+            ),
+            (
+                CommandId::OpenBoardOrganizer,
+                "Open Board Organizer",
+                "Create or resume this board’s organizer and open its agent view.",
+            ),
+            (
+                CommandId::RemoveBoardDependency,
+                "Remove Task Prerequisite",
+                "Remove the selected prerequisite from this task.",
             ),
         ]
         .map(|(id, title, description)| CommandSpec {
@@ -366,16 +386,19 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize
-        | CommandId::EnableBoardMilestone
-        | CommandId::SubmitBoardDecision
-        | CommandId::PauseBoardMilestone
-        | CommandId::ResumeBoardMilestone
-        | CommandId::ReplanBoardMilestone
-        | CommandId::OpenBoardMilestoneSession
-        | CommandId::ToggleBoardHistory
+        | CommandId::OpenBoardTaskSession
         | CommandId::OpenBoardRelatedItem
-        | CommandId::SelectBoardDecision
-        | CommandId::ToggleBoardMilestoneFilter => true,
+        | CommandId::BackBoardList
+        | CommandId::AddBoardTask
+        | CommandId::PostBoardMessage
+        | CommandId::MoveBoardTaskUp
+        | CommandId::MoveBoardTaskDown
+        | CommandId::ReorderBoardTask
+        | CommandId::SaveBoardState
+        | CommandId::ToggleBoardCompleted
+        | CommandId::AddBoardDependency
+        | CommandId::RemoveBoardDependency => true,
+        CommandId::OpenBoardOrganizer => state.has_cursor_board,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
@@ -433,7 +456,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 32);
+        assert_eq!(commands.len(), 35);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -475,6 +498,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -483,6 +507,24 @@ mod tests {
                 has_active_session_workspace_root: false,
             }
         ));
+    }
+
+    #[test]
+    fn organizer_requires_the_cursor_to_target_a_board() {
+        let mut state = CommandState {
+            tab_count: 1,
+            visible_pane_count: 2,
+            has_active_session: true,
+            has_cursor_board: false,
+            detached_session_count: 0,
+            has_pending_approval: false,
+            has_turn_in_flight: false,
+            has_paused_turn: false,
+            has_active_session_workspace_root: true,
+        };
+        assert!(!command_enabled(CommandId::OpenBoardOrganizer, state));
+        state.has_cursor_board = true;
+        assert!(command_enabled(CommandId::OpenBoardOrganizer, state));
     }
 
     #[test]
@@ -528,6 +570,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
+            has_cursor_board: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -555,6 +598,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -568,6 +612,7 @@ mod tests {
             CommandState {
                 tab_count: 2,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -586,6 +631,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -605,6 +651,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -618,6 +665,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -631,6 +679,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -644,6 +693,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -665,6 +715,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -682,6 +733,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -695,6 +747,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -712,6 +765,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -725,6 +779,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 2,
                 has_pending_approval: false,
@@ -742,6 +797,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -755,6 +811,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -768,6 +825,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -781,6 +839,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -798,6 +857,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -811,6 +871,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -828,6 +889,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -841,6 +903,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -856,6 +919,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 2,
             visible_pane_count: 2,
+            has_cursor_board: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -885,6 +949,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -898,6 +963,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -911,6 +977,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,

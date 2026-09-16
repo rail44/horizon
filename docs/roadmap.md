@@ -23,18 +23,6 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-The board's milestone flow is implemented on `board-milestone-flow` following
-owner decisions on 2026-09-13: ordinary board tasks, automatic prioritization
-and replanning, parallel implementation in separate worktrees, focused decision
-conversations, and integration of verified finished branches into main.
-Decisions block only affected work; task and milestone acceptance have separate
-verification records. A real-daemon fixture covers concurrent work, stale-main
-reverification, conversation and restart through milestone achievement.
-Real-model judgment quality and native GUI usability still need dogfooding.
-See [`board-milestone-flow-design.md`](board-milestone-flow-design.md) for the
-agreed behavior, implementation, validation and separate improvement
-opportunities. This is product scope, not a repository development-flow policy.
-
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
@@ -593,6 +581,11 @@ external notification path.
   the now-retired custom winit layer (`docs/native-gpui-platform-design.md`).
 
 ## Shipped (index — details in the named docs and git history)
+
+- **Board redesign (2026-09-16):** implemented at `8e057dd`; approved live cutover at `eb6c99c` preserved 47 tasks, 185 messages, ordinary session IDs, layout, and the running terminal daemon. Full host gate (1,952 tests), native GUI, isolated flow, migration rehearsal and independent live recovery verification passed. See [design](board-redesign-design.md) and [implementation and validation](board-redesign-implementation-plan.md).
+  `Open Board Organizer` now creates or resumes the project's organizer from
+  a board cursor and opens its ordinary agent view, reusing an existing pane.
+  Opening supplies no work input; conversation begins with the owner's message.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

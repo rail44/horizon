@@ -1,19 +1,28 @@
 # Milestone planning and execution
 
+**Owner correction, 2026-09-15:** the owner stated that most of the September 13
+implementation did not reflect their intention and requested a redesign from
+the desired development flow. This document preserves that implementation's
+design and validation record; its earlier descriptions of agreement do not
+establish owner authorization. The current design foundation and its explicitly
+identified proposals are in [Board redesign](board-redesign-design.md).
+In particular, automatic integration and the existing UI are not adopted
+requirements of the redesign.
+
 The owner supplies a feature or outcome. Horizon investigates the repository,
 decomposes and prioritizes work, presents unresolved decisions concisely, and
 runs implementation tasks. Decisions must be understandable before the owner
 can decide whether to retain or delegate them. Reading a long comment thread
 is not a prerequisite for answering.
 
-**Status (2026-09-13):** implemented on `board-milestone-flow` after the
-owner's design discussion. The daemon fixture verifies parallel work,
+**Implementation status (2026-09-13, now in main):** implemented on
+`board-milestone-flow`. The daemon fixture verifies parallel work,
 decision conversations, integration into main, restart and milestone
 achievement. Real-model judgment quality and native GUI interaction still
 need dogfooding. This document describes Horizon product behavior, not a
 repository development-flow policy.
 
-## Agreed product behavior
+## September 13 design as implemented
 
 ### Milestones and board tasks
 

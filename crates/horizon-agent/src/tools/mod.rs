@@ -12,6 +12,8 @@ mod network;
 mod processing;
 mod recall;
 mod state;
+mod work_boundary;
+pub use work_boundary::session_tool_work_settled;
 pub(crate) mod web;
 
 pub use approval::{resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome};

@@ -2,7 +2,8 @@
 /.claude/settings.local.json
 /.claude/worktrees/
 /.claude/review-queue/
-/.horizon
+/.horizon/*
+!/.horizon/skills/
 /.envrc
 /.envrc.local
 

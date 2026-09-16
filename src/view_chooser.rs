@@ -245,28 +245,24 @@ mod tests {
     }
 
     #[test]
-    fn the_keeper_role_is_present_as_a_choice() {
-        // The shell registers the keeper role at startup (`main::run_gui`);
-        // in the test process the `EXTERNAL_ROLES` registry starts empty, so
-        // the same registration must happen here before `view_choices` can
-        // enumerate it.
+    fn externally_registered_roles_are_present_as_choices() {
         horizon_agent::roles::register_external(vec![horizon_agent::roles::RoleDefinition {
-            id: horizon_board::keeper::ROLE_ID,
-            title: horizon_board::keeper::ROLE_TITLE,
-            prompt_section: horizon_board::keeper::ROLE_PROMPT_SECTION,
-            allowed_tool_ids: horizon_board::keeper::ROLE_ALLOWED_TOOL_IDS,
-            model: horizon_board::keeper::ROLE_MODEL,
-            iteration_cap: horizon_board::keeper::ROLE_ITERATION_CAP,
-            include_repository_instructions:
-                horizon_board::keeper::ROLE_INCLUDE_REPOSITORY_INSTRUCTIONS,
-            skill_ids: horizon_board::keeper::ROLE_SKILL_IDS,
-            summarize_on_cap: horizon_board::keeper::ROLE_SUMMARIZE_ON_CAP,
-            standing: horizon_board::keeper::ROLE_STANDING,
+            id: "example-external-role",
+            title: "Example external role",
+            prompt_section: "A test role supplied by an external domain.",
+            allowed_tool_ids: Some(&[]),
+            model: None,
+            iteration_cap: None,
+            include_repository_instructions: true,
+            skill_ids: &[],
+            summarize_on_cap: false,
+            standing: false,
         }]);
         let choices = view_choices();
-        assert!(choices
-            .iter()
-            .any(|c| c.role_id.as_ref().is_some_and(|r| r.0 == "keeper")));
+        assert!(choices.iter().any(|choice| choice
+            .role_id
+            .as_ref()
+            .is_some_and(|role| role.0 == "example-external-role")));
     }
 
     #[test]

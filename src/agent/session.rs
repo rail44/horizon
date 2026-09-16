@@ -40,7 +40,8 @@ pub(crate) struct AgentSession {
     /// child's row again at its next activity. Read by the pane's
     /// background-tasks strip.
     pub(crate) tasks: Vec<TaskProgress>,
-    _wire: AgentSessionHandle,
+    _wire: Option<AgentSessionHandle>,
+    attachment_generation: u64,
     /// The command channel to `horizon-agentd` plus its reachability
     /// bookkeeping. Its notify pump forwards to the existing
     /// `cx.observe(&session, ...)` in the view (`view.rs`), which already
@@ -82,11 +83,24 @@ impl AgentSession {
         title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_attachment(handle, session_id, title_tx, 0, cx)
+    }
+
+    fn new_attachment(
+        handle: AgentSessionHandle,
+        session_id: SessionId,
+        title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
+        attachment_generation: u64,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let mut events = event_stream(handle.events());
         let live = LiveState::with_disabled_persistence();
         cx.spawn(async move |this, cx| {
             while let Some(event) = events.next().await {
                 let apply = this.update(cx, |session: &mut AgentSession, cx| {
+                    if session.attachment_generation != attachment_generation {
+                        return;
+                    }
                     // Ephemeral live-task progress never reaches the fold —
                     // handed there it would land as its placeholder event
                     // (see `ProviderEvent::task_progress`). Applied to the
@@ -132,8 +146,28 @@ impl AgentSession {
             title_tx,
             link: RuntimeLink::new(handle.sender(), cx),
             notify_coalescer: NotifyCoalescer::default(),
-            _wire: handle,
+            _wire: Some(handle),
+            attachment_generation,
         }
+    }
+
+    /// Replaces a dead board-linked attachment in the same view entity.
+    /// Drop the old UUID route before registering the new route.
+    pub(crate) fn reattach(
+        &mut self,
+        attach: impl FnOnce() -> AgentSessionHandle,
+        cx: &mut Context<Self>,
+    ) {
+        self._wire.take();
+        let generation = self.attachment_generation + 1;
+        *self = Self::new_attachment(
+            attach(),
+            self.session_id,
+            self.title_tx.clone(),
+            generation,
+            cx,
+        );
+        cx.notify();
     }
 
     /// Fixes this session's tab title from the transcript's first real

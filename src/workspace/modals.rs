@@ -6,7 +6,7 @@
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListEvent, ListState};
 use gpui_component::IndexPath;
-use horizon_workspace::commands::command_entries;
+use horizon_workspace::commands::{command_entries, CommandId};
 use horizon_workspace::PaneKind;
 
 use super::WorkspaceShell;
@@ -293,9 +293,18 @@ impl WorkspaceShell {
                     // Confirming a palette command exits workspace mode:
                     // creating commands dive, non-creating commands run in
                     // normal mode. Cancel (Esc) keeps the mode instead.
-                    shell.workspace.exit_workspace_mode();
+                    let entry = entry.filter(|entry| entry.enabled);
+                    // The organizer command must capture the board under the
+                    // cursor before leaving workspace mode, even when focus
+                    // still belongs to another pane.
+                    if !entry
+                        .as_ref()
+                        .is_some_and(|entry| entry.spec.id == CommandId::OpenBoardOrganizer)
+                    {
+                        shell.workspace.exit_workspace_mode();
+                    }
                     shell.close_palette(window, cx);
-                    if let Some(entry) = entry.filter(|entry| entry.enabled) {
+                    if let Some(entry) = entry {
                         shell.execute(entry.spec.id, window, cx);
                     }
                 }

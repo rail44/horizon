@@ -145,7 +145,7 @@ fn embedded_skills() -> &'static [Skill] {
 
 /// Externally-provided embedded skill sources, registered at runtime by the
 /// composition root (`horizon-agentd`) from crates `horizon-agent` does not
-/// depend on (e.g. `horizon_board::keeper::SKILL_SOURCE`). Populated once at
+/// depend on (e.g. `horizon_board::agents::TASK_SKILL`). Populated once at
 /// daemon startup, before any session is spawned; `embedded_skills` reads
 /// this lazily on first access, so registration must happen before the first
 /// `SkillRegistry` is composed (which happens at the first session spawn).
@@ -155,7 +155,7 @@ static EXTERNAL_SKILL_SOURCES: std::sync::OnceLock<Vec<&'static str>> = std::syn
 /// Registers externally-provided embedded skill sources so
 /// [`embedded_skills`] includes them. Each source is a `&'static str`
 /// pointing at a `SKILL.md` file `include_str!`-loaded by the providing crate
-/// (e.g. `horizon_board::keeper::SKILL_SOURCE`). Called once at
+/// (e.g. `horizon_board::agents::TASK_SKILL`). Called once at
 /// `horizon-agentd` startup.
 pub fn register_external_skill_sources(sources: Vec<&'static str>) {
     let _ = EXTERNAL_SKILL_SOURCES.set(sources);

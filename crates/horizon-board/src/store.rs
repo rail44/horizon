@@ -19,7 +19,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
 use crate::event::{self, ReadReport};
-use crate::model::{fold, is_closed_status, sorted_by_rank, Item};
+use crate::model::{fold, sorted_by_rank, Item};
 use crate::wire::{
     log_client_hello, IngestReply, IngestRequest, LogError, LogHub, LogHubClient, SubscribeRequest,
 };
@@ -104,28 +104,6 @@ pub struct Store {
 }
 
 impl Store {
-    /// Compare-and-swap a milestone operation against the displayed revision.
-    pub async fn workflow(
-        &self,
-        id: u64,
-        expected_revision: u64,
-        mutation: crate::workflow::Mutation,
-    ) -> Result<Item, StoreError> {
-        match self
-            .ingest(IngestRequest::Workflow {
-                id,
-                expected_revision,
-                mutation,
-            })
-            .await?
-        {
-            IngestReply::Item(item) => Ok(item),
-            _ => Err(StoreError::Io(std::io::Error::other(
-                "Unexpected workflow reply",
-            ))),
-        }
-    }
-
     /// Resolves the store from the current directory's main git root.
     pub fn from_cwd() -> Result<Self, StoreError> {
         let cwd = std::env::current_dir()?;
@@ -183,13 +161,9 @@ impl Store {
         Ok(report)
     }
 
-    /// Lists items in rank order, optionally filtered by status. When
-    /// `include_closed` is false and no explicit `status_filter` is given,
-    /// items whose status is closed (`done` / `archived`) are hidden — the
-    /// default view. An explicit `status_filter` always wins (asking for
-    /// `status=done` shows done items regardless of `include_closed`).
-    /// Always returns the full set of statuses across *all* items (for
-    /// vocabulary-drift visibility), not just the visible subset.
+    /// Lists items by rank, optionally filtered by project-defined state.
+    /// Without an explicit state filter, completed tasks are hidden unless
+    /// `include_closed` is true. Returns the full observed state vocabulary.
     pub fn list(
         &self,
         status_filter: Option<&str>,
@@ -219,7 +193,7 @@ impl Store {
                 .collect(),
             None => sorted
                 .into_iter()
-                .filter(|i| include_closed || !is_closed_status(&i.status))
+                .filter(|i| include_closed || !i.completed)
                 .cloned()
                 .collect(),
         };
@@ -247,9 +221,7 @@ impl Store {
     // runtime inside a sync method (which would panic if the caller was
     // already on a runtime: 'Cannot start a runtime from within a runtime').
 
-    /// Creates a new item. If `parent` is set, a follow-up `item-updated`
-    /// event is appended under the same lock so the item appears with its
-    /// parent on the next read.
+    /// Creates a task at a validated position among its siblings.
     pub async fn add(
         &self,
         title: &str,
@@ -286,29 +258,12 @@ impl Store {
         }
     }
 
-    /// Sets the status of item `id`. The status is a free-form string
-    /// (recommended vocabulary: proposed / ready / in-progress / review /
-    /// done / blocked / archived). `done` and `archived` are closed —
-    /// hidden from the default `list` view.
+    /// Sets project-defined progress text independently of completion.
     pub async fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
         let reply = self
             .ingest(IngestRequest::SetStatus {
                 id,
                 status: status.to_string(),
-            })
-            .await?;
-        match reply {
-            IngestReply::Done => Ok(()),
-            _ => Err(Self::type_mismatch()),
-        }
-    }
-
-    /// Assigns item `id` to `who` (empty string = unassign).
-    pub async fn assign(&self, id: u64, who: &str) -> Result<(), StoreError> {
-        let reply = self
-            .ingest(IngestRequest::Assign {
-                id,
-                who: who.to_string(),
             })
             .await?;
         match reply {
@@ -328,25 +283,9 @@ impl Store {
         }
     }
 
-    /// Atomically claims the first ready+unassigned item (by rank order):
-    /// sets `status = in-progress` and `assignee = who` under the exclusive
-    /// lock, so two concurrent claims never grab the same item.
-    pub async fn claim(&self, who: &str) -> Result<Option<Item>, StoreError> {
-        let reply = self
-            .ingest(IngestRequest::Claim {
-                who: who.to_string(),
-            })
-            .await?;
-        match reply {
-            IngestReply::MaybeItem(item) => Ok(item),
-            _ => Err(Self::type_mismatch()),
-        }
-    }
-
     /// Updates an item's title and/or body. Pass `None` for either field to
-    /// leave it unchanged — the append is a single `item-updated` event
-    /// carrying only the `Some` fields, so a partial edit does not clobber
-    /// the other.
+    /// leave it unchanged. The daemon folds and edits under one lock so
+    /// a partial edit cannot clobber another concurrently changed field.
     pub async fn edit(
         &self,
         id: u64,
@@ -356,6 +295,126 @@ impl Store {
         let reply = self.ingest(IngestRequest::Edit { id, title, body }).await?;
         match reply {
             IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
+        }
+    }
+
+    pub fn events(&self) -> Result<ReadReport, StoreError> {
+        self.read_locked()
+    }
+    pub fn cursor(&self, consumer: &str) -> Result<u64, StoreError> {
+        Ok(self
+            .events()?
+            .envelopes
+            .iter()
+            .filter_map(|e| match &e.event {
+                crate::BoardEvent::CursorAdvanced {
+                    consumer: c,
+                    position,
+                } if c == consumer => Some(*position),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0))
+    }
+    /// Furthest read message per task, ordered by the task's comment sequence.
+    /// Existing individual read events collapse into one inclusive read prefix.
+    pub fn read_positions(
+        &self,
+        reader: &str,
+    ) -> Result<std::collections::HashMap<u64, String>, StoreError> {
+        let report = self.events()?;
+        let items = fold(&report.envelopes);
+        let mut positions: std::collections::HashMap<u64, String> =
+            std::collections::HashMap::new();
+        for envelope in &report.envelopes {
+            if let crate::BoardEvent::ReadAdvanced {
+                id,
+                reader: owner,
+                message_id,
+            } = &envelope.event
+            {
+                if owner == reader
+                    && items.get(id).is_some_and(|item| {
+                        crate::read_position_advances(
+                            item,
+                            positions.get(id).map(String::as_str),
+                            message_id,
+                        )
+                    })
+                {
+                    positions.insert(*id, message_id.clone());
+                }
+            }
+        }
+        Ok(positions)
+    }
+    async fn done(&self, request: IngestRequest) -> Result<(), StoreError> {
+        match self.ingest(request).await? {
+            IngestReply::Done => Ok(()),
+            _ => Err(Self::type_mismatch()),
+        }
+    }
+    pub async fn set_parent(
+        &self,
+        id: u64,
+        parent: Option<u64>,
+        position: Position,
+    ) -> Result<(), StoreError> {
+        self.done(IngestRequest::SetParent {
+            id,
+            parent,
+            position,
+        })
+        .await
+    }
+    pub async fn set_completed(&self, id: u64, completed: bool) -> Result<(), StoreError> {
+        self.done(IngestRequest::SetCompleted { id, completed })
+            .await
+    }
+    pub async fn set_dependencies(&self, id: u64, depends_on: Vec<u64>) -> Result<(), StoreError> {
+        self.done(IngestRequest::SetDependencies { id, depends_on })
+            .await
+    }
+    pub async fn post_message(&self, id: u64, message: crate::Comment) -> Result<(), StoreError> {
+        self.done(IngestRequest::PostMessage { id, message }).await
+    }
+    pub async fn mark_read(
+        &self,
+        id: u64,
+        reader: &str,
+        message_id: &str,
+    ) -> Result<(), StoreError> {
+        self.done(IngestRequest::MarkRead {
+            id,
+            reader: reader.into(),
+            message_id: message_id.into(),
+        })
+        .await
+    }
+    pub async fn advance_cursor(&self, consumer: &str, position: u64) -> Result<(), StoreError> {
+        self.done(IngestRequest::AdvanceCursor {
+            consumer: consumer.into(),
+            position,
+        })
+        .await
+    }
+    pub async fn bind_session(&self, id: u64, session_id: &str) -> Result<Item, StoreError> {
+        self.bind(id, session_id, false).await
+    }
+    pub async fn bind_review_session(&self, id: u64, session_id: &str) -> Result<Item, StoreError> {
+        self.bind(id, session_id, true).await
+    }
+    async fn bind(&self, id: u64, session_id: &str, review: bool) -> Result<Item, StoreError> {
+        match self
+            .ingest(IngestRequest::BindSession {
+                id,
+                session_id: session_id.into(),
+                review,
+            })
+            .await?
+        {
+            IngestReply::Item(item) => Ok(item),
             _ => Err(Self::type_mismatch()),
         }
     }
@@ -476,257 +535,10 @@ fn hub_error_to_store(err: horizon_wire::HubError) -> StoreError {
 /// typed domain errors (`ItemNotFound`, `RankExhausted`).
 fn log_error_to_store(err: LogError) -> StoreError {
     match err {
-        LogError::InvalidWorkflow(msg) => StoreError::Io(std::io::Error::other(msg)),
+        LogError::InvalidOperation(msg) => StoreError::Io(std::io::Error::other(msg)),
         LogError::ItemNotFound(id) => StoreError::ItemNotFound(id),
         LogError::RankExhausted => StoreError::RankExhausted,
         LogError::Io(msg) => StoreError::Io(std::io::Error::other(msg)),
         LogError::Call(msg) => StoreError::Io(std::io::Error::other(msg)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::event::{BoardEvent, Envelope, SCHEMA, VERSION};
-    use std::io::Write;
-    use std::path::PathBuf;
-
-    /// A throwaway events.jsonl path for a test. No daemon, no socket — the
-    /// unit tests seed the file directly and read it back with `Store::show`/
-    /// `Store::list` (file folds that need no daemon). The write path (id
-    /// assignment, rank computation, claim) is tested end-to-end in
-    /// `crates/horizon-logd/tests/e2e.rs` against the real daemon.
-    fn tmp_path() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-board-test-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        dir.join("events.jsonl")
-    }
-
-    /// Seeds an `item-created` event at `at` ms, returning the id.
-    fn seed_item(path: &std::path::Path, id: u64, title: &str, rank: &str, at: u64) {
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
-        let env = Envelope {
-            schema: SCHEMA.to_string(),
-            version: VERSION,
-            at,
-            event: BoardEvent::ItemCreated {
-                id,
-                title: title.to_string(),
-                body: String::new(),
-                rank: rank.to_string(),
-            },
-        };
-        let mut file = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(path)
-            .unwrap();
-        serde_json::to_writer(&mut file, &env).unwrap();
-        file.write_all(b"\n").unwrap();
-    }
-
-    /// Seeds an `item-updated` event.
-    fn seed_update(
-        path: &std::path::Path,
-        id: u64,
-        at: u64,
-        status: Option<&str>,
-        rank: Option<&str>,
-        assignee: Option<&str>,
-        parent: Option<Option<u64>>,
-    ) {
-        let env = Envelope {
-            schema: SCHEMA.to_string(),
-            version: VERSION,
-            at,
-            event: BoardEvent::ItemUpdated {
-                id,
-                status: status.map(String::from),
-                rank: rank.map(String::from),
-                assignee: assignee.map(String::from),
-                parent,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
-            },
-        };
-        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
-        serde_json::to_writer(&mut file, &env).unwrap();
-        file.write_all(b"\n").unwrap();
-    }
-
-    /// Seeds a `comment-added` event.
-    fn seed_comment(path: &std::path::Path, id: u64, author: &str, text: &str, at: u64) {
-        let env = Envelope {
-            schema: SCHEMA.to_string(),
-            version: VERSION,
-            at,
-            event: BoardEvent::CommentAdded {
-                id,
-                author: author.to_string(),
-                text: text.to_string(),
-            },
-        };
-        let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
-        serde_json::to_writer(&mut file, &env).unwrap();
-        file.write_all(b"\n").unwrap();
-    }
-
-    #[test]
-    fn fold_roundtrip_create_update_comment() {
-        let path = tmp_path();
-        seed_item(&path, 1, "Task", "n", 1000);
-        seed_update(&path, 1, 2000, Some("ready"), None, Some("owner"), None);
-        seed_comment(&path, 1, "owner", "Starting now", 3000);
-
-        let store = Store::at(path);
-        let shown = store.show(1).unwrap().unwrap();
-        assert_eq!(shown.title, "Task");
-        assert_eq!(shown.status, "ready");
-        assert_eq!(shown.assignee, "owner");
-        assert_eq!(shown.comments.len(), 1);
-        assert_eq!(shown.comments[0].text, "Starting now");
-    }
-
-    #[test]
-    fn list_rank_order_and_statuses() {
-        let path = tmp_path();
-        // C at rank "a" (top), A at "n", B at "s" (bottom).
-        seed_item(&path, 1, "A", "n", 1000);
-        seed_item(&path, 2, "B", "s", 2000);
-        seed_item(&path, 3, "C", "a", 3000);
-
-        let store = Store::at(path.clone());
-        let result = store.list(None, true).unwrap();
-        assert_eq!(result.items.len(), 3);
-        // Sorted by rank: C (a), A (n), B (s).
-        assert_eq!(result.items[0].id, 3);
-        assert_eq!(result.items[1].id, 1);
-        assert_eq!(result.items[2].id, 2);
-        assert!(result.statuses.is_empty());
-
-        seed_update(&path, 1, 4000, Some("proposed"), None, None, None);
-        seed_update(&path, 2, 5000, Some("ready"), None, None, None);
-
-        let result = store.list(None, true).unwrap();
-        assert_eq!(result.statuses, vec!["proposed", "ready"]);
-
-        let result = store.list(Some("ready"), true).unwrap();
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].id, 2);
-    }
-
-    #[test]
-    fn claim_sees_ready_unassigned_items() {
-        let path = tmp_path();
-        seed_item(&path, 1, "A", "n", 1000);
-        seed_item(&path, 2, "B", "s", 2000);
-        // Both ready.
-        seed_update(&path, 1, 3000, Some("ready"), None, None, None);
-        seed_update(&path, 2, 4000, Some("ready"), None, None, None);
-
-        // The fold (read path) should show both as ready+unassigned.
-        let store = Store::at(path);
-        let result = store.list(Some("ready"), true).unwrap();
-        assert_eq!(result.items.len(), 2);
-        assert!(result.items[0].assignee.is_empty());
-        assert!(result.items[1].assignee.is_empty());
-    }
-
-    #[test]
-    fn unknown_status_and_author_dont_break() {
-        let path = tmp_path();
-        seed_item(&path, 1, "A", "n", 1000);
-        seed_update(
-            &path,
-            1,
-            2000,
-            Some("weird-custom-status"),
-            None,
-            None,
-            None,
-        );
-        seed_comment(&path, 1, "session:abc-123", "a note", 3000);
-
-        let store = Store::at(path);
-        let item = store.show(1).unwrap().unwrap();
-        assert_eq!(item.status, "weird-custom-status");
-        assert_eq!(item.comments[0].author, "session:abc-123");
-
-        let result = store.list(None, true).unwrap();
-        assert_eq!(result.statuses, vec!["weird-custom-status"]);
-    }
-
-    #[test]
-    fn add_with_parent() {
-        let path = tmp_path();
-        seed_item(&path, 1, "Parent", "n", 1000);
-        seed_item(&path, 2, "Child", "s", 2000);
-        seed_update(&path, 2, 3000, None, None, None, Some(Some(1)));
-
-        let store = Store::at(path);
-        let shown = store.show(2).unwrap().unwrap();
-        assert_eq!(shown.parent, Some(1));
-    }
-
-    #[test]
-    fn list_hides_archived_by_default() {
-        let path = tmp_path();
-        seed_item(&path, 1, "Open", "n", 1000);
-        seed_item(&path, 2, "Done", "s", 2000);
-        seed_item(&path, 3, "Archived", "t", 3000);
-        seed_update(&path, 2, 4000, Some("done"), None, None, None);
-        seed_update(&path, 3, 5000, Some("archived"), None, None, None);
-
-        let store = Store::at(path);
-        // Default: closed items hidden.
-        let result = store.list(None, false).unwrap();
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].id, 1);
-        // Statuses still reflect all items (vocabulary-drift visibility).
-        assert_eq!(result.statuses, vec!["archived", "done"]);
-
-        // --all: everything visible.
-        let result = store.list(None, true).unwrap();
-        assert_eq!(result.items.len(), 3);
-
-        // Explicit status filter wins even for closed statuses.
-        let result = store.list(Some("done"), false).unwrap();
-        assert_eq!(result.items.len(), 1);
-        assert_eq!(result.items[0].id, 2);
-    }
-
-    #[test]
-    fn show_nonexistent_returns_none() {
-        let store = Store::at(tmp_path());
-        assert!(store.show(99).unwrap().is_none());
-    }
-
-    #[test]
-    fn corrupt_lines_are_skipped_and_reported() {
-        let path = tmp_path();
-        seed_item(&path, 1, "A", "n", 1000);
-        // Append a corrupt line directly to the file
-        std::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .unwrap()
-            .write_all(b"this is corrupt\n")
-            .unwrap();
-        seed_item(&path, 2, "B", "s", 2000);
-
-        let store = Store::at(path);
-        let result = store.list(None, true).unwrap();
-        assert_eq!(result.items.len(), 2);
-        assert!(result.skipped.is_some());
-        assert!(result.skipped.as_ref().unwrap().contains("corrupt"));
     }
 }

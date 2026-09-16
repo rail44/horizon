@@ -475,6 +475,7 @@ pub(super) struct ToolCallDescriptor {
 /// still gets a well-formed outcome, just with `cancelled: true`.
 #[derive(Debug, Default)]
 pub(super) struct TurnCompletion {
+    pub(super) final_text: Option<String>,
     pub(super) requested_tool_call_ids: Vec<ToolCallId>,
     pub(super) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     pub(super) cancelled: bool,
@@ -585,10 +586,20 @@ pub(super) async fn complete_rig_turn(
     let requested = tool_call_requests_from_events(&events);
     let requested_tool_call_ids = requested.iter().map(|(id, _)| id.clone()).collect();
     let requested_tool_calls = requested.into_iter().collect();
+    let final_text = events
+        .iter()
+        .filter_map(|event| match &event.event {
+            Event::MessageCommitted(message) if message.role == MessageRole::Assistant => {
+                Some(message.text.clone())
+            }
+            _ => None,
+        })
+        .next_back();
     for event in events {
         let _ = events_tx.send(event);
     }
     TurnCompletion {
+        final_text,
         requested_tool_call_ids,
         requested_tool_calls,
         cancelled: false,
@@ -920,6 +931,7 @@ async fn rig_openai_turn_streaming(
     Ok((
         assistant_message,
         TurnCompletion {
+            final_text: (!cancelled && !truncated && !cap_truncated).then_some(text),
             requested_tool_call_ids,
             requested_tool_calls,
             cancelled,

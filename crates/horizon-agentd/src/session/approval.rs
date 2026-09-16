@@ -140,6 +140,77 @@ pub(super) fn dispatch_inbound_command(
     command: Command,
 ) {
     match command {
+        Command::SendSessionInput {
+            session_id: recipient,
+            input,
+        } => {
+            if live_state.events().iter().any(|event| matches!(event, Event::SessionInputSent { input: sent, .. } if sent.id == input.id)) { return; }
+            let event = Event::SessionInputSent {
+                session_id: recipient,
+                input,
+            };
+            if live_state
+                .persist_provider_events([event.clone().into()])
+                .is_err()
+            {
+                return;
+            }
+            let Some(writer) = state.writer() else {
+                return;
+            };
+            if writer.flush().is_err() {
+                return;
+            }
+            send_session_event(state, session_id, AgentWireEvent::Event(event));
+        }
+        Command::SessionInput(input) => {
+            if live_state.events().iter().any(
+                |event| matches!(event, Event::InputAccepted(accepted) if accepted.id == input.id),
+            ) {
+                return;
+            }
+            let event = Event::InputAccepted(input.clone());
+            if live_state
+                .persist_provider_events([event.clone().into()])
+                .is_err()
+            {
+                return;
+            }
+            let Some(writer) = state.writer() else {
+                return;
+            };
+            if writer.flush().is_err() {
+                return;
+            }
+            send_session_event(state, session_id, AgentWireEvent::Event(event));
+            let _ = commands_tx.send(Command::SessionInput(input));
+        }
+        Command::AcknowledgeDelivery { delivery_id } => {
+            let events = live_state.events();
+            let pending_result = horizon_agent::contract::pending_input_outcomes(&events)
+                .iter()
+                .any(|outcome| outcome.delivery_id == delivery_id);
+            let pending_send = events.iter().any(|event| matches!(event, Event::SessionInputSent { input, .. } if input.id == delivery_id))
+                && !events.iter().any(|event| matches!(event, Event::DeliveryAcknowledged(id) if id == &delivery_id));
+            if !pending_result && !pending_send {
+                return;
+            }
+            let event = Event::DeliveryAcknowledged(delivery_id);
+            if live_state
+                .persist_provider_events([event.clone().into()])
+                .is_err()
+            {
+                return;
+            }
+            let Some(writer) = state.writer() else {
+                return;
+            };
+            if writer.flush().is_err() {
+                return;
+            }
+            send_session_event(state, session_id, AgentWireEvent::Event(event));
+        }
+
         Command::ApproveToolCall { call_id } => resolve_and_forward(
             state,
             live_state,

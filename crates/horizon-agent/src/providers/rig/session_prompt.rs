@@ -2,7 +2,7 @@
 //! [`SessionEnvironment`] and the `extra_sections` a session's system
 //! prompt is composed from (`prompt::system_prompt`). Extracted from
 //! `session.rs` because it has no dependency on the session loop — these
-//! run once at session start, before the loop begins.
+//! run at session start and at the serialized environment activation boundary.
 
 use crate::{
     config::RigAgentConfig, contract::StartSession, prompt::SessionEnvironment,

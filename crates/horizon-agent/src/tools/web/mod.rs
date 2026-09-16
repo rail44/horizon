@@ -92,7 +92,9 @@ pub(crate) fn spawn(
         replaced.token.cancel();
     }
     let tool_id = tool_id.to_string();
+    let work_guard = super::work_boundary::begin(session_id);
     web_runtime().spawn(async move {
+        let _work_guard = work_guard;
         let work = AssertUnwindSafe(run(
             call_id.clone(),
             &tool_id,

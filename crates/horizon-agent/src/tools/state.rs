@@ -550,6 +550,12 @@ impl ToolSessionState {
     /// re-checked against the live filesystem first -- a grant whose target
     /// disappeared, changed kind, or became over-broad simply drops out
     /// instead of widening anything.
+    /// Additional grants only: the implicit workspace root is held separately.
+    /// Hosts validate this exact retained set before changing environments.
+    pub fn retained_filesystem_grants(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
+        self.inner.filesystem_grants.borrow().clone()
+    }
+
     pub(crate) fn filesystem_grants_snapshot(&self) -> Vec<horizon_sandbox::FilesystemGrant> {
         self.inner
             .filesystem_grants

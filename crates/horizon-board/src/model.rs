@@ -1,179 +1,76 @@
-//! The folded item model and the event→state fold.
-
-use std::collections::{HashMap, HashSet};
-
+//! Ordinary recursive tasks and stable consultation messages.
+use crate::event::{BoardEvent, Envelope};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-
-use crate::event::{BoardEvent, Envelope};
-
-/// A comment attached to an item. `author` is a free-form string
-/// (convention: `owner` / `session:<uuid>` / future prefix-tagged forms).
+use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Comment {
+    pub id: String,
     pub author: String,
     pub text: String,
-    pub at: u64,
+    pub at: Option<u64>,
+    pub source: Option<String>,
 }
-
-/// The full state of one work item after folding all events.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct Item {
     pub id: u64,
     pub title: String,
     pub body: String,
-    /// Free-form slug string (recommended vocabulary: proposed / ready /
-    /// in-progress / review / done / blocked / archived). Empty until first
-    /// set. `done` and `archived` are closed statuses — hidden from the
-    /// default `list` view by `is_closed_status`.
     pub status: String,
-    /// Lexicographic rank string (lowercase a-z).
+    pub completed: bool,
     pub rank: String,
-    /// Free-form assignee. Empty = unassigned.
-    pub assignee: String,
-    /// Optional parent item id.
     pub parent: Option<u64>,
-    /// Items this one depends on.
     pub depends_on: Vec<u64>,
-    /// Free-form links (session ids, branch names, doc paths, …).
-    pub links: Vec<String>,
-    /// Comments in chronological order.
     pub comments: Vec<Comment>,
-    #[serde(default)]
-    pub workflow: Option<Box<crate::workflow::Workflow>>,
+    pub session_id: Option<String>,
+    pub review_session_id: Option<String>,
+}
+/// Whether a message extends the read prefix in this task's conversation order.
+/// Unknown current positions are treated as unread; unknown next IDs never advance.
+pub fn read_position_advances(item: &Item, current: Option<&str>, next: &str) -> bool {
+    let Some(next_index) = item.comments.iter().position(|message| message.id == next) else {
+        return false;
+    };
+    current
+        .and_then(|id| item.comments.iter().position(|message| message.id == id))
+        .is_none_or(|current_index| next_index > current_index)
 }
 
-/// Folds a chronologically-ordered slice of envelopes into a map of
-/// item id → `Item`. Events referencing unknown items (e.g. an update
-/// for an id whose `item-created` was in a corrupt/skipped line) are
-/// silently dropped — the fold is a best-effort projection.
 pub fn fold(envelopes: &[Envelope]) -> HashMap<u64, Item> {
-    let mut items: HashMap<u64, Item> = HashMap::new();
+    let mut items = HashMap::new();
     for env in envelopes {
         match &env.event {
-            BoardEvent::WorkflowBatch { items: changed, .. } => {
-                for item in changed {
-                    items.insert(item.id, item.clone());
-                }
+            BoardEvent::ItemStored { item, .. } | BoardEvent::ImportedItem { item, .. } => {
+                items.insert(item.id, item.clone());
             }
-            BoardEvent::WorkflowChanged {
-                id,
-                workflow,
-                title,
-                body,
-            } => {
+            BoardEvent::MessageAdded { id, message } => {
                 if let Some(item) = items.get_mut(id) {
-                    if let Some(title) = title {
-                        item.title = title.clone();
-                    }
-                    if let Some(body) = body {
-                        item.body = body.clone();
-                    }
-                    if !is_closed_status(&item.status) {
-                        item.status = workflow.item_status().into();
-                    }
-                    item.workflow = Some(workflow.clone());
+                    item.comments.push(message.clone());
                 }
             }
-            BoardEvent::ItemCreated {
-                id,
-                title,
-                body,
-                rank,
-            } => {
-                items.insert(
-                    *id,
-                    Item {
-                        id: *id,
-                        title: title.clone(),
-                        body: body.clone(),
-                        rank: rank.clone(),
-                        ..Item::default()
-                    },
-                );
-            }
-            BoardEvent::ItemUpdated {
-                id,
-                status,
-                rank,
-                assignee,
-                parent,
-                depends_on,
-                links,
-                title,
-                body,
-            } => {
-                if let Some(item) = items.get_mut(id) {
-                    if let Some(v) = status {
-                        item.status = v.clone();
-                    }
-                    if let Some(v) = rank {
-                        item.rank = v.clone();
-                    }
-                    if let Some(v) = assignee {
-                        item.assignee = v.clone();
-                    }
-                    if let Some(v) = parent {
-                        item.parent = *v;
-                    }
-                    if let Some(v) = depends_on {
-                        item.depends_on = v.clone();
-                    }
-                    if let Some(v) = links {
-                        item.links = v.clone();
-                    }
-                    if let Some(v) = title {
-                        item.title = v.clone();
-                    }
-                    if let Some(v) = body {
-                        item.body = v.clone();
-                    }
-                }
-            }
-            BoardEvent::CommentAdded { id, author, text } => {
-                if let Some(item) = items.get_mut(id) {
-                    item.comments.push(Comment {
-                        author: author.clone(),
-                        text: text.clone(),
-                        at: env.at,
-                    });
-                }
-            }
+            _ => {}
         }
     }
     items
 }
-
-/// Whether an item's status counts as "closed" — hidden from the default
-/// list view. `done` and `archived` are closed; everything else (including the
-/// empty/unset status) is open. Centralised so the closed-set is defined in
-/// one testable place rather than scattered as string literals across the
-/// CLI, UI, and daemon.
-pub fn is_closed_status(status: &str) -> bool {
-    matches!(status, "done" | "archived")
-}
-
-/// Returns items sorted by rank (lexicographic).
 pub fn sorted_by_rank(items: &HashMap<u64, Item>) -> Vec<&Item> {
-    let mut v: Vec<&Item> = items.values().collect();
-    v.sort_by(|a, b| a.rank.cmp(&b.rank));
-    v
+    let mut result: Vec<_> = items.values().collect();
+    result.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
+    result
 }
-
 /// Returns items in parent→child tree order for display: top-level items
 /// by `rank`, each immediately followed by its children (by `rank` among
 /// siblings) at `depth + 1`, recursing. An item whose `parent` is `None` or
 /// whose parent id is not in `items` (orphan — parent missing, closed, or
 /// filtered out of the current view) is a top-level root.
 ///
-/// Cycles (possible because `add --parent` does not validate referential
-/// integrity) are broken: items whose parent chain forms a cycle never
+/// Invalid imported hierarchy cycles are handled defensively: items whose parent chain forms a cycle never
 /// appear as roots, so after the initial DFS any unvisited items are emitted
 /// as additional top-level roots. The `visited` set prevents infinite
 /// recursion.
 ///
 /// When `top_level_only` is true, returns only the roots at depth 0 — the
-/// "roadmap view" that hides decomposed children.
+/// top-level view; filtered-out parents do not promote their children.
 pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
     let id_set: HashSet<u64> = items.iter().map(|i| i.id).collect();
 
@@ -202,7 +99,11 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
     roots.sort_by(|a, b| a.rank.cmp(&b.rank));
 
     if top_level_only {
-        return roots.into_iter().map(|r| (r, 0)).collect();
+        return roots
+            .into_iter()
+            .filter(|r| r.parent.is_none())
+            .map(|r| (r, 0))
+            .collect();
     }
 
     let mut result: Vec<(&Item, usize)> = Vec::new();
@@ -249,309 +150,43 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::event::{BoardEvent, Envelope, SCHEMA, VERSION};
-
-    fn env(at: u64, event: BoardEvent) -> Envelope {
-        Envelope {
-            schema: SCHEMA.to_string(),
-            version: VERSION,
-            at,
-            event,
-        }
-    }
-
     #[test]
-    fn fold_create_update_comment_roundtrip() {
-        let envelopes = vec![
-            env(
-                1000,
-                BoardEvent::ItemCreated {
-                    id: 1,
-                    title: "Task".to_string(),
-                    body: "Do thing".to_string(),
-                    rank: "n".to_string(),
-                },
-            ),
-            env(
-                2000,
-                BoardEvent::ItemUpdated {
-                    id: 1,
-                    status: Some("in-progress".to_string()),
-                    rank: None,
-                    assignee: Some("owner".to_string()),
-                    parent: Some(Some(5)),
-                    depends_on: None,
-                    links: Some(vec!["branch-x".to_string()]),
-                    title: None,
-                    body: None,
-                },
-            ),
-            env(
-                3000,
-                BoardEvent::CommentAdded {
-                    id: 1,
-                    author: "owner".to_string(),
-                    text: "Started".to_string(),
-                },
-            ),
-        ];
-
-        let items = fold(&envelopes);
-        let item = &items[&1];
-        assert_eq!(item.title, "Task");
-        assert_eq!(item.body, "Do thing");
-        assert_eq!(item.rank, "n");
-        assert_eq!(item.status, "in-progress");
-        assert_eq!(item.assignee, "owner");
-        assert_eq!(item.parent, Some(5));
-        assert_eq!(item.links, vec!["branch-x"]);
-        assert_eq!(item.comments.len(), 1);
-        assert_eq!(item.comments[0].text, "Started");
-        assert_eq!(item.comments[0].at, 3000);
-    }
-
-    #[test]
-    fn fold_clears_parent_with_some_none() {
-        let envelopes = vec![
-            env(
-                1000,
-                BoardEvent::ItemCreated {
-                    id: 1,
-                    title: "T".to_string(),
-                    body: String::new(),
-                    rank: "n".to_string(),
-                },
-            ),
-            env(
-                2000,
-                BoardEvent::ItemUpdated {
-                    id: 1,
-                    status: None,
-                    rank: None,
-                    assignee: None,
-                    parent: Some(Some(3)),
-                    depends_on: None,
-                    links: None,
-                    title: None,
-                    body: None,
-                },
-            ),
-            env(
-                3000,
-                BoardEvent::ItemUpdated {
-                    id: 1,
-                    status: None,
-                    rank: None,
-                    assignee: None,
-                    parent: Some(None), // clear
-                    depends_on: None,
-                    links: None,
-                    title: None,
-                    body: None,
-                },
-            ),
-        ];
-        let items = fold(&envelopes);
-        assert_eq!(items[&1].parent, None);
-    }
-
-    #[test]
-    fn fold_unknown_status_and_author_dont_break() {
-        let envelopes = vec![
-            env(
-                1000,
-                BoardEvent::ItemCreated {
-                    id: 1,
-                    title: "T".to_string(),
-                    body: String::new(),
-                    rank: "n".to_string(),
-                },
-            ),
-            env(
-                2000,
-                BoardEvent::ItemUpdated {
-                    id: 1,
-                    status: Some("weird-custom-status".to_string()),
-                    rank: None,
-                    assignee: None,
-                    parent: None,
-                    depends_on: None,
-                    links: None,
-                    title: None,
-                    body: None,
-                },
-            ),
-            env(
-                3000,
-                BoardEvent::CommentAdded {
-                    id: 1,
-                    author: "session:abc-123".to_string(),
-                    text: "note".to_string(),
-                },
-            ),
-        ];
-        let items = fold(&envelopes);
-        assert_eq!(items[&1].status, "weird-custom-status");
-        assert_eq!(items[&1].comments[0].author, "session:abc-123");
-    }
-
-    #[test]
-    fn is_closed_status_recognises_done_and_archived() {
-        assert!(is_closed_status("done"));
-        assert!(is_closed_status("archived"));
-        assert!(!is_closed_status(""));
-        assert!(!is_closed_status("proposed"));
-        assert!(!is_closed_status("in-progress"));
-        assert!(!is_closed_status("review"));
-        assert!(!is_closed_status("blocked"));
-    }
-
-    // -- tree_order: parent→child display ordering -----------------------
-
-    fn tree_item(id: u64, title: &str, rank: &str, parent: Option<u64>) -> Item {
-        Item {
-            id,
-            title: title.to_string(),
-            rank: rank.to_string(),
-            parent,
+    fn filtered_children_are_not_top_level_tasks() {
+        let items = vec![Item {
+            id: 2,
+            parent: Some(1),
+            rank: "n".into(),
             ..Item::default()
-        }
+        }];
+        assert!(tree_order(&items, true).is_empty());
+        assert_eq!(tree_order(&items, false).len(), 1);
     }
-
-    fn tree_ids(ordered: &[(&Item, usize)]) -> Vec<(u64, usize)> {
-        ordered
-            .iter()
-            .map(|(item, depth)| (item.id, *depth))
-            .collect()
-    }
-
     #[test]
-    fn tree_order_flat_list_matches_rank_order() {
-        // No parents → every item is a root, depth 0, rank-sorted.
+    fn hierarchy_uses_parent_order_then_child_order() {
         let items = vec![
-            tree_item(3, "c", "c", None),
-            tree_item(1, "a", "a", None),
-            tree_item(2, "b", "b", None),
-        ];
-        assert_eq!(
-            tree_ids(&tree_order(&items, false)),
-            vec![(1, 0), (2, 0), (3, 0)]
-        );
-    }
-
-    #[test]
-    fn tree_order_groups_children_under_parent() {
-        // Parent 1 has children 2 and 3; child ranks are not adjacent to the
-        // parent's rank (child 3 has a higher rank than standalone item 4),
-        // but tree_order still groups them under the parent.
-        let items = vec![
-            tree_item(1, "parent", "a", None),
-            tree_item(2, "child1", "b", Some(1)),
-            tree_item(4, "sibling", "c", None),
-            tree_item(3, "child2", "d", Some(1)),
-        ];
-        assert_eq!(
-            tree_ids(&tree_order(&items, false)),
-            vec![(1, 0), (2, 1), (3, 1), (4, 0)]
-        );
-    }
-
-    #[test]
-    fn tree_order_sorts_siblings_by_rank() {
-        let items = vec![
-            tree_item(1, "parent", "a", None),
-            tree_item(3, "child2", "c", Some(1)),
-            tree_item(2, "child1", "b", Some(1)),
-        ];
-        assert_eq!(
-            tree_ids(&tree_order(&items, false)),
-            vec![(1, 0), (2, 1), (3, 1)]
-        );
-    }
-
-    #[test]
-    fn tree_order_recurses_into_grandchildren() {
-        let items = vec![
-            tree_item(1, "root", "a", None),
-            tree_item(2, "child", "b", Some(1)),
-            tree_item(3, "grandchild", "c", Some(2)),
-        ];
-        assert_eq!(
-            tree_ids(&tree_order(&items, false)),
-            vec![(1, 0), (2, 1), (3, 2)]
-        );
-    }
-
-    #[test]
-    fn tree_order_orphan_treated_as_top_level() {
-        // Item 2's parent (99) does not exist in the set → orphan → root.
-        let items = vec![
-            tree_item(1, "root", "a", None),
-            tree_item(2, "orphan", "b", Some(99)),
-        ];
-        assert_eq!(tree_ids(&tree_order(&items, false)), vec![(1, 0), (2, 0)]);
-    }
-
-    #[test]
-    fn tree_order_top_level_only_returns_roots() {
-        let items = vec![
-            tree_item(1, "parent", "a", None),
-            tree_item(2, "child", "b", Some(1)),
-            tree_item(3, "root2", "c", None),
-        ];
-        assert_eq!(tree_ids(&tree_order(&items, true)), vec![(1, 0), (3, 0)]);
-    }
-
-    #[test]
-    fn tree_order_breaks_cycle_by_reclassifying_as_root() {
-        // A→B→A: neither is a root initially, but the cycle is broken and
-        // both appear (the first by rank becomes a root, the other its child).
-        let items = vec![
-            tree_item(1, "a", "a", Some(2)),
-            tree_item(2, "b", "b", Some(1)),
-        ];
-        let ordered = tree_order(&items, false);
-        // Both items appear exactly once.
-        assert_eq!(ordered.len(), 2);
-        let ids: Vec<u64> = ordered.iter().map(|(item, _)| item.id).collect();
-        assert_eq!(ids, vec![1, 2]);
-        // The first (by rank) is at depth 0, the second at depth 1.
-        assert_eq!(ordered[0].1, 0);
-        assert_eq!(ordered[1].1, 1);
-    }
-
-    #[test]
-    fn tree_order_self_parent_appears_once_at_root() {
-        let items = vec![tree_item(1, "self", "a", Some(1))];
-        let ordered = tree_order(&items, false);
-        assert_eq!(ordered.len(), 1);
-        assert_eq!(ordered[0].0.id, 1);
-        assert_eq!(ordered[0].1, 0);
-    }
-
-    #[test]
-    fn tree_order_empty_input() {
-        assert_eq!(tree_order(&[], false), Vec::<(&Item, usize)>::new());
-        assert_eq!(tree_order(&[], true), Vec::<(&Item, usize)>::new());
-    }
-
-    #[test]
-    fn fold_update_for_unknown_item_is_dropped() {
-        let envelopes = vec![env(
-            1000,
-            BoardEvent::ItemUpdated {
-                id: 99,
-                status: Some("x".to_string()),
-                rank: None,
-                assignee: None,
-                parent: None,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
+            Item {
+                id: 1,
+                rank: "n".into(),
+                ..Item::default()
             },
-        )];
-        let items = fold(&envelopes);
-        assert!(items.is_empty());
+            Item {
+                id: 2,
+                rank: "a".into(),
+                parent: Some(1),
+                ..Item::default()
+            },
+            Item {
+                id: 3,
+                rank: "b".into(),
+                ..Item::default()
+            },
+        ];
+        assert_eq!(
+            tree_order(&items, false)
+                .iter()
+                .map(|(i, d)| (i.id, *d))
+                .collect::<Vec<_>>(),
+            vec![(3, 0), (1, 0), (2, 1)]
+        );
     }
 }

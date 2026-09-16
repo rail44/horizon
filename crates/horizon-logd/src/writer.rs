@@ -77,327 +77,277 @@ fn json_err(e: serde_json::Error) -> LogError {
     LogError::Io(e.to_string())
 }
 
-/// Computes the rank for a new/moved item at `position`, given the current
-/// folded items.
-fn compute_rank(items: &HashMap<u64, Item>, position: &Position) -> Result<String, LogError> {
-    let sorted = sorted_by_rank(items);
-    match position {
-        Position::Top => {
-            let hi = sorted.first().map(|i| i.rank.as_str());
-            rank_between(None, hi).ok_or(LogError::RankExhausted)
-        }
-        Position::Bottom => {
-            let lo = sorted.last().map(|i| i.rank.as_str());
-            rank_between(lo, None).ok_or(LogError::RankExhausted)
-        }
-        Position::After(id) => {
-            let item = items.get(id).ok_or(LogError::ItemNotFound(*id))?;
-            let idx = sorted
+fn invalid(text: &str) -> LogError {
+    LogError::InvalidOperation(text.into())
+}
+fn compute_rank(
+    items: &HashMap<u64, Item>,
+    parent: Option<u64>,
+    position: &Position,
+) -> Result<String, LogError> {
+    let siblings: HashMap<_, _> = items
+        .iter()
+        .filter(|(_, i)| i.parent == parent)
+        .map(|(id, i)| (*id, i.clone()))
+        .collect();
+    let sorted = sorted_by_rank(&siblings);
+    let (lo, hi) = match position {
+        Position::Top => (None, sorted.first().map(|i| i.rank.as_str())),
+        Position::Bottom => (sorted.last().map(|i| i.rank.as_str()), None),
+        Position::After(id) | Position::Before(id) => {
+            let index = sorted
                 .iter()
                 .position(|i| i.id == *id)
-                .expect("item in map but not in sorted list");
-            let lo = Some(item.rank.as_str());
-            let hi = sorted.get(idx + 1).map(|i| i.rank.as_str());
-            rank_between(lo, hi).ok_or(LogError::RankExhausted)
-        }
-        Position::Before(id) => {
-            let item = items.get(id).ok_or(LogError::ItemNotFound(*id))?;
-            let idx = sorted
-                .iter()
-                .position(|i| i.id == *id)
-                .expect("item in map but not in sorted list");
-            let lo = if idx > 0 {
-                Some(sorted[idx - 1].rank.as_str())
+                .ok_or_else(|| invalid("Reorder target must be another sibling"))?;
+            if matches!(position, Position::After(_)) {
+                (
+                    Some(sorted[index].rank.as_str()),
+                    sorted.get(index + 1).map(|i| i.rank.as_str()),
+                )
             } else {
-                None
-            };
-            let hi = Some(item.rank.as_str());
-            rank_between(lo, hi).ok_or(LogError::RankExhausted)
+                (
+                    index.checked_sub(1).map(|n| sorted[n].rank.as_str()),
+                    Some(sorted[index].rank.as_str()),
+                )
+            }
+        }
+    };
+    rank_between(lo, hi).ok_or(LogError::RankExhausted)
+}
+fn validate_dependencies(
+    items: &HashMap<u64, Item>,
+    id: u64,
+    dependencies: &[u64],
+) -> Result<(), LogError> {
+    let mut unique = std::collections::HashSet::new();
+    for dependency in dependencies {
+        if !unique.insert(dependency) {
+            return Err(invalid("Duplicate dependency"));
+        }
+        let mut pending = vec![*dependency];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(next) = pending.pop() {
+            if next == id {
+                return Err(invalid("Dependency cycle"));
+            }
+            if seen.insert(next) {
+                let item = items.get(&next).ok_or(LogError::ItemNotFound(next))?;
+                pending.extend(&item.depends_on);
+            }
         }
     }
+    Ok(())
 }
-
-/// Dispatches one `IngestRequest` to the matching write operation against
-/// `path`. Each operation opens the file with an exclusive lock, reads-folds,
-/// computes, appends, and flushes — the same atomic sequence the library's
-/// `Store` used to do in-process.
-///
-/// Returns the reply plus the 1-based line numbers (seqs) of every line
-/// appended, in order. The caller (the hub) fans these out as subscribe pokes
-/// so live subscribers learn that new events landed. The seq is the line index
-/// in the JSONL file — the durable cursor a consumer catches up from.
+/// Serializes validation and append under the board's exclusive file lock.
 pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<u64>), LogError> {
-    match request {
-        IngestRequest::Workflow {
-            id,
-            expected_revision,
-            mutation,
-        } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            let item = items.get(&id).ok_or(LogError::ItemNotFound(id))?;
-            let revision = item.workflow.as_ref().map_or(0, |flow| flow.revision);
-            if revision != expected_revision {
-                return Err(LogError::InvalidWorkflow(
-                    "The item changed; reload and try again".into(),
-                ));
-            }
-            let changed =
-                horizon_board::workflow::apply(&items, id, mutation, report.max_id.unwrap_or(0))
-                    .map_err(LogError::InvalidWorkflow)?;
-            let updated = changed.iter().find(|i| i.id == id).unwrap().clone();
-            let env = make_envelope(BoardEvent::WorkflowBatch {
-                id: changed.iter().map(|i| i.id).max().unwrap_or(id),
-                items: changed,
-            });
-            append(&mut file, &env)?;
-            Ok((IngestReply::Item(updated), vec![report.line_count + 1]))
-        }
+    let (mut file, report) = open_locked(path)?;
+    if report.corrupt_count > 0 || report.skipped_count > 0 || report.torn_trailing {
+        return Err(invalid("Board contains unreadable or legacy records; import or repair an isolated copy before writing"));
+    }
+    let mut items = fold(&report.envelopes);
+    let seq = report.line_count + 1;
+    let (event, reply) = match request {
         IngestRequest::Add {
             title,
             body,
             parent,
             position,
         } => {
-            let (mut file, report) = open_locked(path)?;
-            let mut seq = report.line_count;
-            let items = fold(&report.envelopes);
-            let id = report.max_id.map_or(1, |m| m + 1);
-            let rank = compute_rank(&items, &position)?;
-
-            let env = make_envelope(BoardEvent::ItemCreated {
+            if let Some(parent) = parent {
+                if !items.contains_key(&parent) {
+                    return Err(LogError::ItemNotFound(parent));
+                }
+            }
+            let id = report
+                .max_id
+                .unwrap_or(0)
+                .checked_add(1)
+                .ok_or_else(|| invalid("Task IDs exhausted"))?;
+            let rank = compute_rank(&items, parent, &position)?;
+            let item = Item {
                 id,
-                title: title.clone(),
-                body: body.clone(),
-                rank: rank.clone(),
-            });
-            seq += 1;
-            append(&mut file, &env)?;
-            let mut seqs = vec![seq];
-
-            if let Some(pid) = parent {
-                let upd = make_envelope(BoardEvent::ItemUpdated {
-                    id,
-                    status: None,
-                    rank: None,
-                    assignee: None,
-                    parent: Some(Some(pid)),
-                    depends_on: None,
-                    links: None,
-                    title: None,
-                    body: None,
-                });
-                seq += 1;
-                append(&mut file, &upd)?;
-                seqs.push(seq);
-            }
-
-            Ok((
-                IngestReply::Item(Item {
-                    id,
-                    title,
-                    body,
-                    rank,
-                    parent,
-                    ..Item::default()
-                }),
-                seqs,
-            ))
-        }
-        IngestRequest::Comment { id, author, text } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            if !items.contains_key(&id) {
-                return Err(LogError::ItemNotFound(id));
-            }
-            let env = make_envelope(BoardEvent::CommentAdded { id, author, text });
-            let seq = report.line_count + 1;
-            append(&mut file, &env)?;
-            Ok((IngestReply::Done, vec![seq]))
-        }
-        IngestRequest::SetStatus { id, status } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            if !items.contains_key(&id) {
-                return Err(LogError::ItemNotFound(id));
-            }
-            let env = make_envelope(BoardEvent::ItemUpdated {
-                id,
-                status: Some(status),
-                rank: None,
-                assignee: None,
-                parent: None,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
-            });
-            let seq = report.line_count + 1;
-            append(&mut file, &env)?;
-            Ok((IngestReply::Done, vec![seq]))
-        }
-        IngestRequest::Assign { id, who } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            if !items.contains_key(&id) {
-                return Err(LogError::ItemNotFound(id));
-            }
-            let env = make_envelope(BoardEvent::ItemUpdated {
-                id,
-                status: None,
-                rank: None,
-                assignee: Some(who),
-                parent: None,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
-            });
-            let seq = report.line_count + 1;
-            append(&mut file, &env)?;
-            Ok((IngestReply::Done, vec![seq]))
-        }
-        IngestRequest::MoveItem { id, position } => {
-            let (mut file, report) = open_locked(path)?;
-            let mut items = fold(&report.envelopes);
-            let rank = compute_rank(&items, &position)?;
-            let item = items.get_mut(&id).ok_or(LogError::ItemNotFound(id))?;
-            item.rank = rank.clone();
-            let order: Vec<_> = sorted_by_rank(&items).iter().map(|i| i.id).collect();
-            let index = order.iter().position(|i| *i == id).unwrap();
-            let mut changed = Vec::new();
-            for (item_id, mut item) in items {
-                if let Some(flow) = &mut item.workflow {
-                    flow.before.retain(|other| *other != id);
-                    if item_id == id {
-                        flow.before = order[index + 1..].to_vec();
-                    } else if order[..index].contains(&item_id) {
-                        flow.before.push(id);
-                    }
-                    flow.revision += 1;
-                    changed.push(item);
-                } else if item_id == id {
-                    changed.push(item);
-                }
-            }
-            let env = make_envelope(BoardEvent::WorkflowBatch {
-                id: changed.iter().map(|i| i.id).max().unwrap_or(id),
-                items: changed,
-            });
-            append(&mut file, &env)?;
-            Ok((IngestReply::Rank(rank), vec![report.line_count + 1]))
-        }
-        IngestRequest::Edit { id, title, body } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            if !items.contains_key(&id) {
-                return Err(LogError::ItemNotFound(id));
-            }
-            if let Some(mut workflow) = items[&id].workflow.clone() {
-                if workflow.active.is_some()
-                    || items.values().any(|i| {
-                        i.parent == Some(id)
-                            && i.workflow
-                                .as_ref()
-                                .is_some_and(|w| w.active.is_some() || w.merging.is_some())
-                    })
-                {
-                    return Err(LogError::InvalidWorkflow(
-                        "Pause affected work and wait for its sessions before changing its scope"
-                            .into(),
-                    ));
-                }
-                if workflow.task.is_some()
-                    && (workflow.result.is_some() || workflow.integrated.is_some())
-                {
-                    return Err(LogError::InvalidWorkflow(
-                        "Preserve implemented work and add a corrective task".into(),
-                    ));
-                }
-                let mut item = items[&id].clone();
-                if let Some(title) = title {
-                    item.title = title;
-                }
-                if let Some(body) = body {
-                    item.body = body;
-                }
-                workflow.revision += 1;
-                workflow.problem = None;
-                workflow.verification = None;
-                workflow.achieved = false;
-                if workflow.is_milestone() {
-                    workflow.plan_requested = true;
-                    workflow.plan_generation += 1;
-                    workflow.goal_revision += 1;
-                    if let Some(plan) = &mut workflow.plan {
-                        plan.acceptance.clear();
-                    }
-                }
-                item.status = workflow.item_status().into();
-                item.workflow = Some(workflow);
-                let mut changed = vec![item];
-                if let Some(parent_id) = items[&id].parent {
-                    if let Some(mut parent) = items.get(&parent_id).cloned() {
-                        if let Some(flow) = &mut parent.workflow {
-                            flow.revision += 1;
-                            flow.plan_generation += 1;
-                            flow.plan_requested = true;
-                            changed.push(parent);
-                        }
-                    }
-                }
-                let env = make_envelope(BoardEvent::WorkflowBatch {
-                    id: changed.iter().map(|i| i.id).max().unwrap_or(id),
-                    items: changed,
-                });
-                append(&mut file, &env)?;
-                return Ok((IngestReply::Done, vec![report.line_count + 1]));
-            }
-            let env = make_envelope(BoardEvent::ItemUpdated {
-                id,
-                status: None,
-                rank: None,
-                assignee: None,
-                parent: None,
-                depends_on: None,
-                links: None,
                 title,
                 body,
-            });
-            let seq = report.line_count + 1;
-            append(&mut file, &env)?;
-            Ok((IngestReply::Done, vec![seq]))
-        }
-        IngestRequest::Claim { who } => {
-            let (mut file, report) = open_locked(path)?;
-            let items = fold(&report.envelopes);
-            let sorted = sorted_by_rank(&items);
-
-            let found = sorted
-                .into_iter()
-                .find(|i| i.status == "ready" && i.assignee.is_empty() && i.workflow.is_none());
-
-            let Some(mut item) = found.cloned() else {
-                return Ok((IngestReply::MaybeItem(None), vec![]));
+                parent,
+                rank,
+                ..Item::default()
             };
-
-            let env = make_envelope(BoardEvent::ItemUpdated {
-                id: item.id,
-                status: Some("in-progress".to_string()),
-                rank: None,
-                assignee: Some(who.clone()),
-                parent: None,
-                depends_on: None,
-                links: None,
-                title: None,
-                body: None,
-            });
-            let seq = report.line_count + 1;
-            append(&mut file, &env)?;
-
-            item.status = "in-progress".to_string();
-            item.assignee = who;
-            Ok((IngestReply::MaybeItem(Some(item)), vec![seq]))
+            (
+                BoardEvent::ItemStored {
+                    id,
+                    item: item.clone(),
+                },
+                IngestReply::Item(item),
+            )
         }
-    }
+        IngestRequest::AdvanceCursor { consumer, position } => {
+            if position > report.line_count {
+                return Err(invalid("Cursor exceeds durable log"));
+            }
+            let old = report
+                .envelopes
+                .iter()
+                .filter_map(|e| match &e.event {
+                    BoardEvent::CursorAdvanced {
+                        consumer: c,
+                        position,
+                    } if c == &consumer => Some(*position),
+                    _ => None,
+                })
+                .max()
+                .unwrap_or(0);
+            if position <= old {
+                return Ok((IngestReply::Done, vec![]));
+            }
+            (
+                BoardEvent::CursorAdvanced { consumer, position },
+                IngestReply::Done,
+            )
+        }
+        request => {
+            let id = match &request {
+                IngestRequest::SetParent { id, .. }
+                | IngestRequest::Comment { id, .. }
+                | IngestRequest::SetStatus { id, .. }
+                | IngestRequest::MoveItem { id, .. }
+                | IngestRequest::Edit { id, .. }
+                | IngestRequest::SetCompleted { id, .. }
+                | IngestRequest::SetDependencies { id, .. }
+                | IngestRequest::BindSession { id, .. }
+                | IngestRequest::PostMessage { id, .. }
+                | IngestRequest::MarkRead { id, .. } => *id,
+                _ => unreachable!(),
+            };
+            let mut item = items.remove(&id).ok_or(LogError::ItemNotFound(id))?;
+            let mut reply = IngestReply::Done;
+            let special = match request {
+                IngestRequest::Comment { author, text, .. } => Some(BoardEvent::MessageAdded {
+                    id,
+                    message: horizon_board::Comment {
+                        id: format!("message:{seq}"),
+                        author,
+                        text,
+                        at: Some(unix_ms()),
+                        source: None,
+                    },
+                }),
+                IngestRequest::PostMessage { message, .. } => {
+                    if message.id.is_empty() {
+                        return Err(invalid("Message ID must not be empty"));
+                    }
+                    if let Some(existing) = item.comments.iter().find(|m| {
+                        m.id == message.id
+                            || message
+                                .source
+                                .as_ref()
+                                .is_some_and(|s| m.source.as_ref() == Some(s))
+                    }) {
+                        if existing != &message {
+                            return Err(invalid("Message identity already has different content"));
+                        }
+                        return Ok((IngestReply::Done, vec![]));
+                    }
+                    Some(BoardEvent::MessageAdded { id, message })
+                }
+                IngestRequest::MarkRead {
+                    reader, message_id, ..
+                } => {
+                    if !item.comments.iter().any(|message| message.id == message_id) {
+                        return Err(invalid("Read message must identify an existing message"));
+                    }
+                    let mut current: Option<&str> = None;
+                    for envelope in &report.envelopes {
+                        if let BoardEvent::ReadAdvanced {
+                            id: task,
+                            reader: owner,
+                            message_id: seen,
+                        } = &envelope.event
+                        {
+                            if *task == id
+                                && owner == &reader
+                                && horizon_board::read_position_advances(&item, current, seen)
+                            {
+                                current = Some(seen);
+                            }
+                        }
+                    }
+                    if !horizon_board::read_position_advances(&item, current, &message_id) {
+                        return Ok((IngestReply::Done, vec![]));
+                    }
+                    Some(BoardEvent::ReadAdvanced {
+                        id,
+                        reader,
+                        message_id,
+                    })
+                }
+                IngestRequest::SetParent {
+                    parent, position, ..
+                } => {
+                    let mut ancestor = parent;
+                    let mut seen = std::collections::HashSet::new();
+                    while let Some(next) = ancestor {
+                        if next == id || !seen.insert(next) {
+                            return Err(invalid("Parent cycle"));
+                        }
+                        ancestor = items.get(&next).ok_or(LogError::ItemNotFound(next))?.parent;
+                    }
+                    item.rank = compute_rank(&items, parent, &position)?;
+                    item.parent = parent;
+                    None
+                }
+                IngestRequest::SetStatus { status, .. } => {
+                    item.status = status;
+                    None
+                }
+                IngestRequest::SetCompleted { completed, .. } => {
+                    item.completed = completed;
+                    None
+                }
+                IngestRequest::SetDependencies { depends_on, .. } => {
+                    validate_dependencies(&items, id, &depends_on)?;
+                    item.depends_on = depends_on;
+                    None
+                }
+                IngestRequest::MoveItem { position, .. } => {
+                    item.rank = compute_rank(&items, item.parent, &position)?;
+                    reply = IngestReply::Rank(item.rank.clone());
+                    None
+                }
+                IngestRequest::Edit { title, body, .. } => {
+                    if let Some(title) = title {
+                        item.title = title;
+                    }
+                    if let Some(body) = body {
+                        item.body = body;
+                    }
+                    None
+                }
+                IngestRequest::BindSession {
+                    session_id, review, ..
+                } => {
+                    if session_id.trim().is_empty() {
+                        return Err(invalid("Session ID must not be empty"));
+                    }
+                    let slot = if review {
+                        &mut item.review_session_id
+                    } else {
+                        &mut item.session_id
+                    };
+                    if slot.as_deref() == Some(session_id.as_str()) || (!review && slot.is_some()) {
+                        return Ok((IngestReply::Item(item), vec![]));
+                    }
+                    *slot = Some(session_id);
+                    reply = IngestReply::Item(item.clone());
+                    None
+                }
+                _ => unreachable!(),
+            };
+            (
+                special.unwrap_or(BoardEvent::ItemStored { id, item }),
+                reply,
+            )
+        }
+    };
+    append(&mut file, &make_envelope(event))?;
+    Ok((reply, vec![seq]))
 }
