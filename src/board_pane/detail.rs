@@ -22,7 +22,7 @@ impl BoardPaneView {
         div()
             .id(("board-task-link", id))
             .text_color(theme::accent())
-            .child(item.title.clone())
+            .child(format!("#{} {}", item.id, item.title))
             .on_click(cx.listener(move |view, _, _, cx| {
                 view.navigation_item = Some(id);
                 cx.emit(BoardCommand(CommandId::OpenBoardRelatedItem));
@@ -92,7 +92,12 @@ impl BoardPaneView {
                     .child(
                         h_flex()
                             .gap_2()
-                            .child(div().flex_1().text_size(px(18.0)).child(item.title.clone()))
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .text_size(px(18.0))
+                                    .child(format!("#{} {}", item.id, item.title)),
+                            )
                             .child(task_state(item)),
                     )
                     .child(
@@ -126,7 +131,7 @@ impl BoardPaneView {
                         let name = all
                             .iter()
                             .find(|task| task.id == id)
-                            .map(|task| task.title.clone())
+                            .map(|task| format!("#{} {}", task.id, task.title))
                             .unwrap_or_else(|| format!("Task #{id}"));
                         h_flex().gap_2().child(name).child(
                             div()
@@ -145,7 +150,7 @@ impl BoardPaneView {
                         div()
                             .id(("board-add-dependency", id))
                             .text_color(theme::accent())
-                            .child(candidate.title.clone())
+                            .child(format!("#{} {}", candidate.id, candidate.title))
                             .on_click(cx.listener(move |view, _, _, cx| {
                                 view.pending_dependency = Some(id);
                                 cx.emit(BoardCommand(CommandId::AddBoardDependency));
@@ -158,7 +163,7 @@ impl BoardPaneView {
                             .depends_on
                             .iter()
                             .filter_map(|id| all.iter().find(|task| task.id == *id))
-                            .map(|task| task.title.as_str())
+                            .map(|task| format!("#{} {}", task.id, task.title))
                             .collect::<Vec<_>>()
                             .join(", ");
                         h_flex()

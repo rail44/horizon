@@ -222,7 +222,7 @@ impl ListDelegate for BoardListDelegate {
                             .text_color(title_color)
                             .flex_1()
                             .min_w_0()
-                            .child(item.title.clone()),
+                            .child(format!("#{} {}", item.id, item.title)),
                     )
                     .child(
                         div()
