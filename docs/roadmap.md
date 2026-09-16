@@ -583,6 +583,9 @@ external notification path.
 ## Shipped (index — details in the named docs and git history)
 
 - **Board redesign (2026-09-16):** implemented at `8e057dd`; approved live cutover at `eb6c99c` preserved 47 tasks, 185 messages, ordinary session IDs, layout, and the running terminal daemon. Full host gate (1,952 tests), native GUI, isolated flow, migration rehearsal and independent live recovery verification passed. See [design](board-redesign-design.md) and [implementation and validation](board-redesign-implementation-plan.md).
+  `Open Board Organizer` now creates or resumes the project's organizer from
+  a board cursor and opens its ordinary agent view, reusing an existing pane.
+  Opening supplies no work input; conversation begins with the owner's message.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

@@ -55,6 +55,10 @@ pub(super) enum Op {
         root: PathBuf,
         reply: crossbeam_channel::Sender<Result<(), String>>,
     },
+    EnsureBoardOrganizer {
+        root: PathBuf,
+        reply: crossbeam_channel::Sender<Result<contract::SessionId, String>>,
+    },
     HostToolResponse(HostToolResponse),
     Drain,
     /// Fire-and-forget request to rebuild `[provider]` in the running
@@ -523,6 +527,18 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             tokio::spawn(async move {
                 let result = with_deadline(OP_TIMEOUT, "watch board", hub.watch_board(root)).await;
+                let _ = reply.send(result);
+            });
+        }
+        Op::EnsureBoardOrganizer { root, reply } => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let result = with_deadline(
+                    OP_TIMEOUT,
+                    "board organizer",
+                    hub.ensure_board_organizer(root),
+                )
+                .await;
                 let _ = reply.send(result);
             });
         }

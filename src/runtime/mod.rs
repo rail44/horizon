@@ -378,6 +378,20 @@ impl AgentdHandle {
             .map_err(|error| format!("Board registration did not complete: {error}"))?
     }
 
+    /// Call from a background task: organizer restoration may read persisted history.
+    pub(crate) fn ensure_board_organizer(
+        &self,
+        root: std::path::PathBuf,
+    ) -> Result<contract::SessionId, String> {
+        let (reply, receive) = crossbeam_channel::bounded(1);
+        self.ops
+            .send(agent::Op::EnsureBoardOrganizer { root, reply })
+            .map_err(|_| "Agent runtime stopped before organizer creation".to_string())?;
+        receive
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|error| format!("Organizer creation did not complete: {error}"))?
+    }
+
     fn drain(&self) {
         let _ = self.ops.send(agent::Op::Drain);
     }

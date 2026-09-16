@@ -61,6 +61,14 @@ impl Connection {
         Ok(())
     }
 
+    pub(crate) fn ensure_board_organizer(
+        &self,
+        root: std::path::PathBuf,
+    ) -> Result<SessionId, String> {
+        self.register_board(root.clone())?;
+        crate::board_flow::organizer_session(&self.state, &root)
+    }
+
     /// Installs the current connection's host-tool bridge (the local half
     /// behind `HubHello::host_tools`) — the connection-global counterpart
     /// of the per-attachment subscribers [`Self::subscribe_agent`] installs.

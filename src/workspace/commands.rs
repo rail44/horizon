@@ -189,6 +189,82 @@ impl WorkspaceShell {
         .detach();
     }
 
+    fn open_board_organizer(&mut self, cx: &mut Context<Self>) {
+        let Some(view) = self.active_board_pane() else {
+            return;
+        };
+        let Some(root) = view.read(cx).root() else {
+            return;
+        };
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let origin = self.workspace.cursor_pane_id();
+        let registered_at_request = self
+            .workspace
+            .session_summaries()
+            .into_iter()
+            .map(|summary| summary.id)
+            .collect::<std::collections::HashSet<_>>();
+        self.workspace.commit_workspace_mode();
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            let request = handle.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let id = request.ensure_board_organizer(root)?;
+                    let needed = [SessionId::from_uuid(id.as_uuid())].into_iter().collect();
+                    load_board_summaries(|| request.session_list(), &needed)?
+                        .into_iter()
+                        .find(|summary| summary.session_id == id)
+                        .ok_or_else(|| "The board organizer is not available yet".to_string())
+                })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.restoring_workspace
+                        || shell
+                            .agentd
+                            .as_ref()
+                            .is_none_or(|current| !current.same_runtime(&handle))
+                    {
+                        return;
+                    }
+                    let result = result.and_then(|summary| {
+                        let id = SessionId::from_uuid(summary.session_id.as_uuid());
+                        if !board_session_still_requested(
+                            registered_at_request.contains(&id),
+                            shell.workspace.session_pane_kind(id).is_some(),
+                        ) {
+                            return Ok(());
+                        }
+                        shell.adopt_board_session(&handle, summary, cx)?;
+                        // Keep the session accessible in Manage Sessions if
+                        // the owner navigated away while it was starting.
+                        if shell.workspace.cursor_pane_id() != origin {
+                            shell.persist_workspace();
+                            return Ok(());
+                        }
+                        shell.workspace.commit_workspace_mode();
+                        if let Some((tab, pane)) = shell.workspace.pane_location_for_session(id) {
+                            shell.workspace.activate_pane_index(tab, pane);
+                            shell.focus_active(window, cx);
+                            cx.notify();
+                            Ok(())
+                        } else {
+                            shell.external_attach(id, true, window, cx)
+                        }
+                    });
+                    if let Err(error) = result {
+                        view.update(cx, |view, cx| view.set_error(error, cx));
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     fn open_board_task_session(&self, cx: &mut Context<Self>) {
         let Some(view) = self.active_board_pane() else {
             return;
@@ -336,6 +412,7 @@ impl WorkspaceShell {
                     view.update(cx, |view, cx| view.board_command(id, window, cx));
                 }
             }
+            CommandId::OpenBoardOrganizer => self.open_board_organizer(cx),
             CommandId::OpenBoardTaskSession => self.open_board_task_session(cx),
             CommandId::ToggleBoardExpansion => {
                 if let Some(view) = self.active_board_pane() {
@@ -679,6 +756,7 @@ impl WorkspaceShell {
             tab_count: self.workspace.tab_count(),
             visible_pane_count: self.workspace.visible_panes().len(),
             has_active_session: self.workspace.cursor_session_id().is_some(),
+            has_cursor_board: self.active_board_pane().is_some(),
             detached_session_count: self.workspace.detached_session_count(),
             has_pending_approval,
             has_turn_in_flight,

@@ -249,6 +249,12 @@ pub trait SessionHub {
     /// running session keeps its spawn-time config for its whole
     /// lifetime, so the new provider takes effect for the *next* session.
     async fn reload_provider_config(&self) -> Result<(), HubError>;
+
+    /// Creates or resumes the project organizer without submitting work.
+    async fn ensure_board_organizer(
+        &self,
+        workspace_root: std::path::PathBuf,
+    ) -> Result<SessionId, HubError>;
 }
 
 #[cfg(test)]
@@ -289,7 +295,7 @@ mod tests {
         assert_eq!(
             variants,
             "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `WatchBoard`, `NewAgent`, \
-             `AttachAgent`, `Drain`, `ReloadProviderConfig` at line 1 column 10",
+             `AttachAgent`, `Drain`, `ReloadProviderConfig`, `EnsureBoardOrganizer` at line 1 column 10",
         );
 
         // Argument names per method, from serde's missing-field errors.
@@ -317,6 +323,11 @@ mod tests {
             probe("NewAgent").starts_with("missing field `new`"),
             "{}",
             probe("NewAgent")
+        );
+        assert!(
+            probe("EnsureBoardOrganizer").starts_with("missing field `workspace_root`"),
+            "{}",
+            probe("EnsureBoardOrganizer")
         );
         assert!(
             probe("AttachAgent").starts_with("missing field `session_id`"),

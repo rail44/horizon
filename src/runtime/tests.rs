@@ -100,6 +100,7 @@ enum TerminalCall {
 /// One recorded agent-hub call.
 enum AgentCall {
     Hello,
+    EnsureBoardOrganizer(std::path::PathBuf, SessionId),
     NewAgent {
         new: SessionNew,
         peer: AgentPeer,
@@ -129,6 +130,7 @@ impl std::fmt::Debug for AgentCall {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let name = match self {
             AgentCall::Hello => "Hello",
+            AgentCall::EnsureBoardOrganizer(..) => "EnsureBoardOrganizer",
             AgentCall::NewAgent { .. } => "NewAgent",
             AgentCall::AttachAgent { .. } => "AttachAgent",
             AgentCall::ListAgents => "ListAgents",
@@ -301,6 +303,15 @@ impl TerminalHub for FakeTerminalHub {
 }
 
 impl SessionHub for FakeSessionHub {
+    async fn ensure_board_organizer(
+        &self,
+        _root: std::path::PathBuf,
+    ) -> Result<SessionId, HubError> {
+        let id = SessionId::new();
+        let _ = self.calls.send(AgentCall::EnsureBoardOrganizer(_root, id));
+        Ok(id)
+    }
+
     async fn watch_board(&self, _root: std::path::PathBuf) -> Result<(), HubError> {
         Ok(())
     }
@@ -1631,4 +1642,24 @@ async fn an_oversized_rtc_request_fails_the_op_and_stops_the_runtime() {
         late.events().recv_timeout(Duration::from_secs(10)).unwrap(),
         TerminalUpdate::Error(_)
     ));
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn organizer_request_uses_existing_agent_connection() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (agentd, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
+    let (mut calls, _connection, _serve) =
+        serve_fake_session_hub(server, FakeBehavior::default()).await;
+    let root = std::path::PathBuf::from("/project/organizer");
+    let expected_root = root.clone();
+    let request = tokio::task::spawn_blocking(move || agentd.ensure_board_organizer(root));
+    assert!(matches!(
+        next_agent_call(&mut calls).await,
+        AgentCall::Hello
+    ));
+    let AgentCall::EnsureBoardOrganizer(root, id) = next_agent_call(&mut calls).await else {
+        panic!("organizer request must reach the existing agent hub");
+    };
+    assert_eq!(root, expected_root);
+    assert_eq!(request.await.unwrap().unwrap(), id);
 }

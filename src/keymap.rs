@@ -143,6 +143,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "manage-sessions" => Some(CommandId::OpenSessionManager),
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
+        "open-board-organizer" => Some(CommandId::OpenBoardOrganizer),
         "open-board-task-session" => Some(CommandId::OpenBoardTaskSession),
         "open-board-related-item" => Some(CommandId::OpenBoardRelatedItem),
         "back-board-list" => Some(CommandId::BackBoardList),

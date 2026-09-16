@@ -253,7 +253,7 @@ pub(super) async fn task_session(
     Ok(target)
 }
 
-pub(super) fn organizer_session(
+pub(crate) fn organizer_session(
     state: &Arc<AgentdState>,
     root: &Path,
 ) -> Result<SessionId, String> {
@@ -450,6 +450,69 @@ mod review_tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn organizer_open_reuses_and_resumes_without_submitting_work() {
+        use horizon_agent::contract::{Command, Event, SessionState};
+        use horizon_agent::persistence::event_log::{WriterHandle, WriterInit};
+        roles::register();
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-q", "-b", "main"]);
+        let state = crate::session::test_support::state_with_rig_config(false, "mock");
+        let path = repository.path().join("agent-events.jsonl");
+        state
+            .agent_config
+            .lock()
+            .unwrap()
+            .persistence
+            .event_log_path = path.clone();
+        let (writer, ready) = WriterHandle::open(&path);
+        assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+        state.set_writer(Some(writer));
+        let connection = crate::session::Connection::new(state.clone());
+        let first = connection
+            .ensure_board_organizer(repository.path().into())
+            .unwrap();
+        assert_eq!(
+            connection
+                .ensure_board_organizer(repository.path().into())
+                .unwrap(),
+            first
+        );
+        let stop = || {
+            state.send_command(first, Command::Shutdown);
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            while state.session_exists(first) {
+                assert!(std::time::Instant::now() < deadline);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        stop();
+        assert_eq!(
+            connection
+                .ensure_board_organizer(repository.path().into())
+                .unwrap(),
+            first
+        );
+        stop();
+        let history = records(&state).unwrap();
+        assert!(history.iter().all(|record| record.session_id == first));
+        assert!(history
+            .iter()
+            .any(|record| matches!(record.event, Event::SessionResumed)));
+        assert!(history
+            .iter()
+            .any(|record| matches!(record.event, Event::StateChanged(SessionState::Terminated))));
+        assert!(!history.iter().any(|record| matches!(
+            record.event,
+            Event::InputAccepted(_)
+                | Event::InputStarted(_)
+                | Event::MessageCommitted(horizon_agent::contract::Message {
+                    role: horizon_agent::contract::MessageRole::User,
+                    ..
+                })
+        )));
     }
 
     #[test]

@@ -56,6 +56,7 @@ pub enum CommandId {
     /// or the built-in default), ending a zoom session. Default chord /
     /// override id: `"reset-font-size"`.
     ResetFontSize,
+    OpenBoardOrganizer,
     OpenBoardTaskSession,
     OpenBoardRelatedItem,
     BackBoardList,
@@ -96,6 +97,8 @@ pub struct CommandState {
     pub tab_count: usize,
     pub visible_pane_count: usize,
     pub has_active_session: bool,
+    /// Whether the workspace cursor targets a board pane.
+    pub has_cursor_board: bool,
     pub detached_session_count: usize,
     pub has_pending_approval: bool,
     pub has_turn_in_flight: bool,
@@ -342,6 +345,11 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Add the task selected in prerequisite search.",
             ),
             (
+                CommandId::OpenBoardOrganizer,
+                "Open Board Organizer",
+                "Create or resume this board’s organizer and open its agent view.",
+            ),
+            (
                 CommandId::RemoveBoardDependency,
                 "Remove Task Prerequisite",
                 "Remove the selected prerequisite from this task.",
@@ -390,6 +398,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ToggleBoardCompleted
         | CommandId::AddBoardDependency
         | CommandId::RemoveBoardDependency => true,
+        CommandId::OpenBoardOrganizer => state.has_cursor_board,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
         // closing the tab when the pane is the last one
@@ -447,7 +456,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 34);
+        assert_eq!(commands.len(), 35);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -489,6 +498,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -497,6 +507,24 @@ mod tests {
                 has_active_session_workspace_root: false,
             }
         ));
+    }
+
+    #[test]
+    fn organizer_requires_the_cursor_to_target_a_board() {
+        let mut state = CommandState {
+            tab_count: 1,
+            visible_pane_count: 2,
+            has_active_session: true,
+            has_cursor_board: false,
+            detached_session_count: 0,
+            has_pending_approval: false,
+            has_turn_in_flight: false,
+            has_paused_turn: false,
+            has_active_session_workspace_root: true,
+        };
+        assert!(!command_enabled(CommandId::OpenBoardOrganizer, state));
+        state.has_cursor_board = true;
+        assert!(command_enabled(CommandId::OpenBoardOrganizer, state));
     }
 
     #[test]
@@ -542,6 +570,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 1,
             visible_pane_count: 1,
+            has_cursor_board: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -569,6 +598,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 2,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -582,6 +612,7 @@ mod tests {
             CommandState {
                 tab_count: 2,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -600,6 +631,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -619,6 +651,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -632,6 +665,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -645,6 +679,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -658,6 +693,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -679,6 +715,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -696,6 +733,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -709,6 +747,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -726,6 +765,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -739,6 +779,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 2,
                 has_pending_approval: false,
@@ -756,6 +797,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -769,6 +811,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -782,6 +825,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -795,6 +839,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: true,
@@ -812,6 +857,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -825,6 +871,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -842,6 +889,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -855,6 +903,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -870,6 +919,7 @@ mod tests {
         let entries = command_entries(CommandState {
             tab_count: 2,
             visible_pane_count: 2,
+            has_cursor_board: false,
             has_active_session: true,
             detached_session_count: 0,
             has_pending_approval: false,
@@ -899,6 +949,7 @@ mod tests {
             CommandState {
                 tab_count: 0,
                 visible_pane_count: 0,
+                has_cursor_board: false,
                 has_active_session: false,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -912,6 +963,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,
@@ -925,6 +977,7 @@ mod tests {
             CommandState {
                 tab_count: 1,
                 visible_pane_count: 1,
+                has_cursor_board: false,
                 has_active_session: true,
                 detached_session_count: 0,
                 has_pending_approval: false,

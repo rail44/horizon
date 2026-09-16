@@ -81,6 +81,18 @@ current comment-only capabilities do not implement this responsibility. The
 concrete role packaging and operations remain technical design work; communication
 follows the response-routing and input-handling choices below.
 
+**Organizer entry point, 2026-09-16:** `Open Board Organizer` is enabled
+when the workspace cursor targets a board pane. It creates the project's
+organizer if none exists, reuses a running session, or resumes the recorded
+session after termination. Opening it supplies no work input; the owner can
+then discuss organization in the ordinary agent view. An already-open view
+is focused; otherwise the session opens in a split to the board's right.
+It is also adopted into the ordinary session inventory for Manage Sessions.
+The palette preserves the board cursor when focus belongs to another pane.
+If the owner navigates away during startup, the session remains available in
+Manage Sessions without moving focus. This adds an explicit entry point;
+task registration and completion keep their existing organizer triggers.
+
 **Task model clarification, 2026-09-16:** the owner uses “milestone” to mean
 an ordinary board task at a larger granularity. It is not a separate entity,
 task kind, or registration flow. Decomposition creates further ordinary tasks
