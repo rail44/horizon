@@ -65,6 +65,28 @@ fn run_client(args: &[String]) -> ExitCode {
 
 actions!(horizon, [Quit]);
 
+/// Minimal `log` backend: gpui and its platform crates — including the
+/// system-notification stack (authorization results, bundle gating,
+/// delivery failures, D-Bus absence) — report exclusively through the
+/// `log` facade, and with no backend installed every one of those
+/// diagnostics is silently dropped. Info cap keeps per-frame chatter out;
+/// warnings and errors always land.
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 /// Builds the application with GPUI's maintained native backend for the
 /// current OS. The backend owns its event loop, renderer, IME integration,
 /// and frame scheduling as one unit.
@@ -73,6 +95,12 @@ fn build_application() -> Application {
 }
 
 fn run_gui() {
+    // Install the stderr `log` backend before any platform code runs (see
+    // `StderrLogger`). The GUI path only; the CLI client keeps its
+    // stdout/stderr contract clean.
+    let _ = log::set_boxed_logger(Box::new(StderrLogger));
+    log::set_max_level(log::LevelFilter::Info);
+
     // Register the board keeper role from `horizon-board` — the same
     // registration `horizon-agentd` does at its startup. The shell process
     // and the agent daemon are separate processes with separate copies of

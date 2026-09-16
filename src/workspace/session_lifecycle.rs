@@ -435,13 +435,14 @@ impl WorkspaceShell {
     /// Wires the receiving end of every session's `notify_tx`: OSC 9/777
     /// desktop-notification requests (`TerminalUpdate::Notification`).
     /// Surfacing is decided per request against live focus state
-    /// (`should_surface_notification`), and the OS hop
-    /// (`crate::desktop_notify`) deliberately runs on this pump's
-    /// background-executor thread — `mac_usernotifications`' blocking
-    /// wrappers may park until the user answers the first-run permission
-    /// dialog, which must never be the UI thread. Same async shape as
-    /// `wire_session_title_updates`: `futures` unbounded senders, no
-    /// blocking-to-async bridge needed.
+    /// (`should_surface_notification`); a surfaced request is posted to
+    /// the OS via gpui's unified system-notification API
+    /// (`crate::desktop_notify::post`) and immediately forgotten — no
+    /// per-post future is awaited, so one unnoticed banner can never
+    /// stall later ones. A banner-body activation reaches
+    /// `wire_notification_responses`' router, which answers with
+    /// `reveal_session`. Same async shape as
+    /// `wire_session_title_updates`: `futures` unbounded senders.
     pub(super) fn wire_terminal_notifications(
         &self,
         mut notify_rx: futures::channel::mpsc::UnboundedReceiver<(
@@ -465,33 +466,46 @@ impl WorkspaceShell {
                 if !surface {
                     continue;
                 }
-                // The click watch is a task of its own: awaiting the
-                // banner's response inline would make one unnoticed
-                // notification stall every later one. The future resolves
-                // `true` on a banner-body click, which the shell answers by
-                // revealing the session's pane and foregrounding the
-                // window.
-                let Some(clicked) =
-                    crate::desktop_notify::send_clickable(notification.title, notification.body)
-                else {
-                    continue;
-                };
-                let _ = this.update(cx, |shell, cx| {
-                    let window_handle = shell.window;
-                    cx.spawn(async move |shell, cx| {
-                        if clicked.await {
-                            let _ = window_handle.update(cx, |_, window, cx| {
-                                let _ = shell.update(cx, |shell, cx| {
-                                    shell.reveal_session(session_id, window, cx)
-                                });
-                            });
-                        }
-                    })
-                    .detach();
-                });
+                // Fire-and-forget: gpui's platform backend owns delivery
+                // and reports its failures through the `log` facade. A
+                // banner-body activation arrives via
+                // `wire_notification_responses` — `reveal_session` lives
+                // there now — so nothing here waits on the user.
+                crate::desktop_notify::post(session_id, notification.title, notification.body, cx);
             }
         })
         .detach();
+    }
+
+    /// Registers the one system-notification response router: a
+    /// banner-body activation (`action_id: None` — Horizon posts no
+    /// action buttons) with a tag matching a session id reveals that
+    /// session's pane and foregrounds the window. This is the click
+    /// answer for every posted notification, one router instead of one
+    /// detached watcher per post; dismissals and expiries produce no
+    /// response, so nothing is parked awaiting them. Responses arrive on
+    /// the main thread (gpui pumps the platform backend's channel through
+    /// the foreground executor), where `reveal_session` needs to run
+    /// anyway.
+    pub(super) fn wire_notification_responses(&self, cx: &mut Context<Self>) {
+        let shell = cx.entity().downgrade();
+        let window_handle = self.window;
+        cx.on_system_notification_response(move |response, cx| {
+            if response.action_id.is_some() {
+                return;
+            }
+            let Some(session_id) = crate::desktop_notify::session_from_tag(&response.tag) else {
+                return;
+            };
+            let Some(shell) = shell.upgrade() else {
+                return;
+            };
+            let _ = window_handle.update(cx, |_, window, cx| {
+                shell.update(cx, |shell, cx| {
+                    shell.reveal_session(session_id, window, cx);
+                });
+            });
+        });
     }
 
     /// Brings the pane hosting `session_id` to the front — the answer to a

@@ -436,6 +436,7 @@ impl WorkspaceShell {
         shell.wire_terminal_exit(terminal_exit_rx, cx);
         shell.wire_session_title_updates(session_title_rx, cx);
         shell.wire_terminal_notifications(terminal_notify_rx, cx);
+        shell.wire_notification_responses(cx);
         if shell.restoring_workspace {
             shell.spawn_workspace_restore(agentd, terminald, cx);
         } else {

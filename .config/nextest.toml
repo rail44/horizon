@@ -141,6 +141,18 @@ max-threads = 1
 # enforces), so the collector's own soft-degrade path ("nothing new this
 # tick") is what runs, and the snapshot assertion cannot pass. The other
 # `macos::denials` tests are pure parsing/mapping logic and stay in.
+#
+# milestone::git fixture commits through the proto git shim --
+# `(binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))`
+# (2026-09-16). These build a fixture repo and run a real `git commit`; on
+# this machine `git` is wrapped by the proto toolchain shim, which fetches
+# `https://nodejs.org/download/release/index.json` and writes
+# `~/.proto/cache/requests-v2/content-v2/...` during the commit. Containment
+# denies both (the run's denial log shows the proxy/DNS refusals and the
+# cache-build failure), so fixture setup dies before any assertion runs.
+# Only the three commit-flavored tests fail; the module's other tests are
+# pure logic and stay in. The integrator's full gate runs them outside
+# containment.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -171,5 +183,6 @@ default-filter = '''
         + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^tests::sigterm_/))
         + (binary_id(horizon-sandbox::linux_supervised_helper) & test(/^loopback_connect_grant_/))
         + test(/bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully$/)
+        + (binary_id(horizon-agentd::bin/horizon-agentd) & test(/^milestone::git::tests::(actual_changed_paths_must_fit_the_declared_scope|dirty_main_and_changed_candidates_are_preserved|main_advancing_requires_new_combined_verification_and_merge_is_recoverable)$/))
     )
 '''

@@ -78,6 +78,12 @@ horizon-control = { path = "crates/horizon-control" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-wire = { path = "crates/horizon-wire" }
 horizon-workspace = { path = "crates/horizon-workspace" }
+# The `log` facade backend lives in the shell binary (`main.rs`'s
+# StderrLogger): gpui and its platform crates — including the
+# system-notification stack — report diagnostics through `log`, and with
+# no backend installed they all vanish. Already in the graph via gpui, so
+# this adds no transitive dependencies.
+log = "0.4"
 remoc = { workspace = true }
 serde_json = "1.0"
 termwiz = "0.23.3"
@@ -94,14 +100,15 @@ unicode-width = "0.2"
 uuid = { version = "1.18", features = ["v4", "serde"] }
 
 # Desktop notifications (`src/desktop_notify.rs`, fed by OSC 9/777 via
-# horizon-terminal-core): the UNUserNotificationCenter wrapper. macOS-only
-# for now — Linux would want notify-rust / org.freedesktop.Notifications
-# instead. UNUserNotificationCenter refuses to deliver from a bare
-# executable: the process must run from a bundled, (ad-hoc) code-signed
-# .app (`just dev-bundle`), so the module degrades to a log line rather
-# than depending on deployment shape.
-[target.'cfg(target_os = "macos")'.dependencies]
-mac-usernotifications = "0.3.1"
+# horizon-terminal-core) go through gpui's unified system-notification
+# API (`App::show_system_notification` / `on_system_notification_response`)
+# — macOS via UNUserNotificationCenter, Linux via
+# org.freedesktop.Notifications (gpui's notify-rust/zbus backend). No
+# per-platform dependency here: both backends ship inside the gpui-pre
+# platform crates already in the graph, and both report failures through
+# the `log` facade (see main.rs's StderrLogger). macOS still only
+# delivers from a bundled, (ad-hoc) code-signed .app (`just dev-bundle`);
+# gpui's bundle guard degrades to a log line instead of crashing.
 
 [lints.clippy]
 all = { level = "warn", priority = -1 }

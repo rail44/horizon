@@ -3,120 +3,119 @@
 //! from the PTY stream (`TerminalUpdate::Notification`), the workspace
 //! gate (`WorkspaceShell::should_surface_notification`) decides whether
 //! the user isn't already looking at the session, and this module hands
-//! the request to macOS's notification center.
+//! the request to the platform's notification center through gpui's
+//! unified system-notification API (`App::show_system_notification`):
+//! macOS via UNUserNotificationCenter, Linux via
+//! `org.freedesktop.Notifications` (gpui's notify-rust/zbus backend — one
+//! thread per posted notification, no async-runtime coupling).
 //!
-//! The API is `mac-usernotifications`' UNUserNotificationCenter wrapper,
-//! whose one hard requirement is structural: the process must run from an
-//! `.app` bundle with a `CFBundleIdentifier`, code-signed at least ad-hoc.
-//! A bare `target/debug/horizon` (what `just dev` launches) is *silently*
-//! ignored by macOS 26's notification routing — `check_bundle` catches the
-//! missing bundle id up front and points at `just dev-bundle` instead of
-//! failing invisibly. (The legacy NSUserNotification API older wrappers
-//! used needs no bundle, but stopped being delivered on macOS 26 entirely,
-//! which is why there is no fallback to it.)
+//! Both backends share one response contract: a banner-body activation
+//! arrives as `SystemNotificationResponse { action_id: None }` (macOS
+//! maps `UNNotificationDefaultActionIdentifier`, Linux the `"default"`
+//! action key). Horizon posts no action buttons, so no `Some(action_id)`
+//! response can originate from one of our posts. Dismissals and expiries
+//! produce no response at all — the click answer is the
+//! `on_system_notification_response` router installed once by
+//! `WorkspaceShell::wire_notification_responses`, which maps the tag
+//! back to the session and calls `reveal_session`; nothing is parked
+//! awaiting a dismissal.
 //!
-//! The shell decides whether the request surfaces at all (focused-window/
-//! focused-pane gate) and then awaits the returned future to learn whether
-//! the user **clicked the banner** — a click means "show me that session",
-//! which the shell answers by activating the hosting pane and bringing the
-//! window to the front.
+//! Platform requirements (both degrade to a log line, never a crash):
+//! - macOS delivers only from a bundled, (ad-hoc) code-signed `.app`
+//!   (`just dev-bundle`); gpui's bundle guard detects a bare
+//!   `target/debug/horizon` and disables the stack before the framework's
+//!   not-in-a-bundle abort can fire. First-use authorization is requested
+//!   asynchronously and never blocks the UI thread.
+//! - Linux needs a session bus with a notification daemon; without one
+//!   the post logs and drops.
 //!
-//! The API is `mac-usernotifications`' UNUserNotificationCenter wrapper,
-//! whose one hard requirement is structural: the process must run from an
-//! `.app` bundle with a `CFBundleIdentifier`, code-signed at least ad-hoc.
-//! A bare `target/debug/horizon` (what `just dev` launches) is *silently*
-//! ignored by macOS 26's notification routing — `check_bundle` catches the
-//! missing bundle id up front and points at `just dev-bundle` instead of
-//! failing invisibly. (The legacy NSUserNotification API older wrappers
-//! used needs no bundle, but stopped being delivered on macOS 26 entirely,
-//! which is why there is no fallback to it.)
-//!
-//! Called from the workspace's notification pump — a background-executor
-//! task, never the main thread — which is also why the first-use
-//! authorization request (`request_auth`, which blocks until the user
-//! answers the permission dialog) lives here rather than on any UI path.
+//! Both report through the `log` facade — `main.rs` installs the stderr
+//! backend so those diagnostics are actually visible.
 
-use std::future::Future;
+use gpui::AsyncApp;
+use horizon_workspace::SessionId;
 
-#[cfg(target_os = "macos")]
-mod imp {
-    use std::future::Future;
-    use std::sync::Once;
-
-    /// macOS asks once per bundle identifier; every later `request_auth`
-    /// is a cheap no-op confirmation. One process-wide attempt is enough —
-    /// a denial is sticky until the user flips it in System Settings, and
-    /// re-prompting on every notification would be hostile.
-    static AUTH_REQUESTED: Once = Once::new();
-
-    pub(super) fn dispatch_clickable(
-        title: Option<&str>,
-        body: &str,
-    ) -> Option<impl Future<Output = bool> + Send + 'static> {
-        if let Err(error) = mac_usernotifications::check_bundle() {
-            eprintln!(
-                "desktop notification dropped (not a bundle-signed process: {error}); \
-                 launch via `just dev-bundle` for the .app wrapper \
-                 UNUserNotificationCenter requires"
-            );
-            return None;
-        }
-        AUTH_REQUESTED.call_once(|| {
-            if let Err(error) = mac_usernotifications::blocking::request_auth() {
-                eprintln!("desktop notification authorization failed: {error}");
-            }
+/// Posts one notification on behalf of `session_id`. Fire-and-forget:
+/// gpui's platform backend owns delivery and its failure reporting; the
+/// pump has already gated on visibility. The tag is the session id, so
+/// the response router needs no per-post state.
+pub(crate) fn post(session_id: SessionId, title: Option<String>, body: String, cx: &AsyncApp) {
+    // OSC 9 carries a body only; the summary line is shown either way,
+    // so fall back to the app name.
+    let title = title.unwrap_or_else(|| "Horizon".to_string());
+    // Terminal-controlled text: many daemons render the body as markup
+    // (the XDG spec's body-markup capability), so escape it rather than
+    // let PTY bytes forge links or formatting. macOS takes plain text and
+    // is unaffected by the extra entities.
+    let body = escape_markup(&body);
+    cx.update(|app| {
+        app.show_system_notification(gpui::SystemNotification {
+            tag: notification_tag(session_id).into(),
+            title: title.into(),
+            body: body.into(),
+            actions: vec![],
         });
-        let mut notification = mac_usernotifications::Notification::new().message(body);
-        if let Some(title) = title {
-            notification = notification.title(title);
-        }
-        Some(async move {
-            match notification.send().await {
-                Ok(handle) => match handle.response().await {
-                    Ok(response) => response.is_default_action(),
-                    Err(error) => {
-                        eprintln!("desktop notification response wait failed: {error}");
-                        false
-                    }
-                },
-                Err(error) => {
-                    eprintln!("failed to post desktop notification: {error}");
-                    false
-                }
-            }
-        })
-    }
+    });
 }
 
-#[cfg(not(target_os = "macos"))]
-mod imp {
-    use std::future::Future;
-
-    /// Other platforms have no dispatcher yet — Linux would want
-    /// `notify-rust` / `org.freedesktop.Notifications`. The gate upstream
-    /// still works; only the OS hop is missing, so log instead of losing
-    /// the request silently. No future: there is nothing to click.
-    pub(super) fn dispatch_clickable(
-        title: Option<&str>,
-        body: &str,
-    ) -> Option<impl Future<Output = bool> + Send + 'static> {
-        match title {
-            Some(title) => eprintln!("[notification] {title}: {body}"),
-            None => eprintln!("[notification] {body}"),
-        }
-        None::<std::future::Ready<bool>>
-    }
+/// The tag posted with every notification: the session id in its UUID
+/// form, so the response router can find the session without extra
+/// state.
+pub(crate) fn notification_tag(session_id: SessionId) -> String {
+    session_id.as_uuid().to_string()
 }
 
-/// Post one desktop notification and hand back a future that resolves
-/// `true` exactly when the user clicked the banner body (the default
-/// action). `None` means nothing was posted (no bundle, no dispatcher on
-/// this platform) — the caller should not wait. Delivery and dismissal
-/// problems are logged, never propagated — a notification is best-effort
-/// by nature.
-pub(crate) fn send_clickable(
-    title: Option<String>,
-    body: String,
-) -> Option<impl Future<Output = bool> + Send + 'static> {
-    imp::dispatch_clickable(title.as_deref(), &body)
+/// Inverse of [`notification_tag`].
+pub(crate) fn session_from_tag(tag: &str) -> Option<SessionId> {
+    uuid::Uuid::parse_str(tag).ok().map(SessionId::from_uuid)
+}
+
+/// Escapes the XML entities XDG notification bodies interpret (`&`, `<`,
+/// `>`). Deliberately minimal: the body is terminal-controlled text, so
+/// the goal is only to keep PTY bytes from being read as markup.
+fn escape_markup(raw: &str) -> String {
+    let mut escaped = String::with_capacity(raw.len());
+    for character in raw.chars() {
+        match character {
+            '&' => escaped.push_str("&amp;"),
+            '<' => escaped.push_str("&lt;"),
+            '>' => escaped.push_str("&gt;"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plain_text_passes_through_unescaped() {
+        assert_eq!(
+            escape_markup("build finished in 3.2s"),
+            "build finished in 3.2s"
+        );
+        // Multibyte text must survive byte-for-byte.
+        assert_eq!(escape_markup("ビルド完了"), "ビルド完了");
+    }
+
+    #[test]
+    fn markup_metacharacters_are_escaped() {
+        assert_eq!(
+            escape_markup("a & b <link>tail</link>"),
+            "a &amp; b &lt;link&gt;tail&lt;/link&gt;"
+        );
+    }
+
+    #[test]
+    fn tag_round_trips_through_the_session_id() {
+        let session_id = SessionId::new();
+        assert_eq!(
+            session_from_tag(&notification_tag(session_id)),
+            Some(session_id)
+        );
+        // Not every string is a tag: a malformed one parses to nothing.
+        assert_eq!(session_from_tag("not-a-uuid"), None);
+    }
 }
