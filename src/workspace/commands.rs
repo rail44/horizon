@@ -9,6 +9,7 @@ use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
 
+use super::session_lifecycle::{DaemonAgentAdoption, ExistingAgentEntity};
 use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
 use crate::theme;
@@ -74,48 +75,26 @@ fn board_session_still_requested(was_registered: bool, is_registered: bool) -> b
     !was_registered || is_registered
 }
 
-fn register_board_summary(
-    workspace: &mut Workspace,
-    summary: &horizon_agent::wire::SessionSummary,
-) -> Result<SessionId, String> {
-    let id = SessionId::from_uuid(summary.session_id.as_uuid());
-    if workspace
-        .session_pane_kind(id)
-        .is_some_and(|kind| kind != horizon_workspace::PaneKind::Agent)
-    {
-        return Err("The task session ID belongs to a different session kind".into());
-    }
-    workspace.register_detached_session(horizon_workspace::PaneKind::Agent, id);
-    if let Some(root) = summary.workspace_root.clone() {
-        workspace.set_session_workspace_root(id, root);
-    }
-    if let Some(parent) = summary.parent_session_id {
-        workspace.set_session_parent(id, SessionId::from_uuid(parent.as_uuid()));
-    }
-    Ok(id)
-}
-
 impl WorkspaceShell {
+    /// Board-side adoption: `refresh_board_sessions`/
+    /// `open_board_organizer`/`open_board_task_session` all funnel through
+    /// this thin wrapper. The full adoption sequence -- registration, the
+    /// daemon-authoritative root/parent refresh, and the `AgentSession`
+    /// entity -- lives in
+    /// [`WorkspaceShell::adopt_daemon_agent_session`].
     fn adopt_board_session(
         &mut self,
         handle: &crate::runtime::AgentdHandle,
         summary: horizon_agent::wire::SessionSummary,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        let id = register_board_summary(&mut self.workspace, &summary)?;
-        if let Some(session) = self.agent_sessions.get(&id) {
-            if session.read(cx).runtime_unreachable() {
-                session.update(cx, |session, cx| {
-                    session.reattach(|| handle.attach_session(summary.session_id), cx)
-                });
-            }
-        } else {
-            let wire = handle.attach_session(summary.session_id);
-            let title = self.session_title_tx.clone();
-            self.agent_sessions
-                .insert(id, cx.new(|cx| AgentSession::new(wire, id, title, cx)));
-        }
-        Ok(())
+        self.adopt_daemon_agent_session(
+            DaemonAgentAdoption::from(&summary),
+            ExistingAgentEntity::Reattach,
+            || handle.attach_session(summary.session_id),
+            cx,
+        )
+        .map(|_| ())
     }
 
     pub(super) fn refresh_board_sessions(
@@ -816,43 +795,10 @@ mod tests {
         assert_eq!(result, vec![summary]);
     }
 
-    #[test]
-    fn board_binding_registration_is_detached_idempotent_and_resumable() {
-        let mut workspace = Workspace::mvp();
-        let tabs = workspace.tab_count();
-        let active = workspace.active_session_id();
-        let summary = horizon_agent::wire::SessionSummary {
-            session_id: horizon_agent::contract::SessionId::new(),
-            provider_id: horizon_agent::contract::ProviderId("mock".into()),
-            role_id: None,
-            parent_session_id: None,
-            workspace_root: Some("/task".into()),
-        };
-        let id = super::register_board_summary(&mut workspace, &summary).unwrap();
-        super::register_board_summary(&mut workspace, &summary).unwrap();
-        assert_eq!(
-            workspace
-                .session_summaries()
-                .iter()
-                .filter(|s| s.id == id)
-                .count(),
-            1
-        );
-        assert_eq!(workspace.tab_count(), tabs);
-        assert_eq!(workspace.active_session_id(), active);
-        assert!(workspace.pane_location_for_session(id).is_none());
-        workspace.terminate_session(id);
-        super::register_board_summary(&mut workspace, &summary).unwrap();
-        assert_eq!(
-            workspace
-                .session_summaries()
-                .iter()
-                .filter(|s| s.id == id)
-                .count(),
-            1
-        );
-        assert!(workspace.pane_location_for_session(id).is_none());
-    }
+    // The board-adoption registration test moved to
+    // `session_lifecycle::tests` with its implementation
+    // (`register_daemon_agent_summary`), which is where the model-level
+    // half of every daemon-agent adoption now lives.
 
     // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
     // mod`), not here -- unlike `command_blocked_by_restore`/

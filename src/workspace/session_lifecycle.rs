@@ -16,13 +16,15 @@ use std::collections::{HashMap, HashSet};
 use gpui::*;
 use horizon_terminal_core::{TerminalSize, TerminalSpawnSpec, DEFAULT_SCROLLBACK_LINES};
 use horizon_workspace::types::SessionKind;
-use horizon_workspace::{PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind};
+use horizon_workspace::{PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind, Workspace};
 use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
-use crate::runtime::{wait_for_drain, AgentdHandle, AgentdResponder, TerminaldHandle};
+use crate::runtime::{
+    wait_for_drain, AgentSessionHandle, AgentdHandle, AgentdResponder, TerminaldHandle,
+};
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
 use crate::theme_settings::ThemeSettingsView;
@@ -32,6 +34,80 @@ type AgentSessionId = horizon_agent::contract::SessionId;
 
 fn agent_session_id(id: SessionId) -> AgentSessionId {
     AgentSessionId::from_uuid(id.as_uuid())
+}
+
+/// Everything the shell records about a daemon-side agent session it is
+/// adopting, normalized out of where the knowledge came from: a
+/// `wire::SessionSummary` (daemon-reported board/resume/attach-lookup
+/// adoption) or the model plus the cwd default (`reconcile`'s brand-new
+/// spawn, which has no daemon report yet).
+pub(super) struct DaemonAgentAdoption {
+    session_id: SessionId,
+    workspace_root: Option<std::path::PathBuf>,
+    parent_session_id: Option<SessionId>,
+}
+
+impl From<&horizon_agent::wire::SessionSummary> for DaemonAgentAdoption {
+    fn from(summary: &horizon_agent::wire::SessionSummary) -> Self {
+        Self {
+            session_id: SessionId::from_uuid(summary.session_id.as_uuid()),
+            workspace_root: summary.workspace_root.clone(),
+            parent_session_id: summary
+                .parent_session_id
+                .map(|parent| SessionId::from_uuid(parent.as_uuid())),
+        }
+    }
+}
+
+/// What [`WorkspaceShell::adopt_daemon_agent_session`] does when the id is
+/// already taken -- either by a non-agent session kind or by an existing
+/// agent pane entity. Board adoption surfaces the kind conflict as an error
+/// and reattaches dead entities; resume sweeps, which run against the
+/// daemon's full inventory, just move on in both cases.
+pub(super) enum ExistingAgentEntity {
+    /// Reattach an existing-but-runtime-unreachable entity to a fresh wire;
+    /// a healthy entity is left alone. A kind conflict is an error.
+    Reattach,
+    /// Leave any existing entity alone; the adoption is a logged no-op for
+    /// it (and for a kind conflict).
+    Skip,
+}
+
+/// The model-side half of `adopt_daemon_agent_session`: the kind guard,
+/// idempotent detached registration, and the daemon-authoritative
+/// `workspace_root`/parent refresh. Pure `Workspace` work, so it stays
+/// unit-testable without a GPUI window; the entity half (wire construction
+/// plus `AgentSession` creation) lives in the shell method.
+fn register_daemon_agent_summary(
+    workspace: &mut Workspace,
+    adoption: &DaemonAgentAdoption,
+) -> Result<SessionId, String> {
+    if workspace
+        .session_pane_kind(adoption.session_id)
+        .is_some_and(|kind| kind != PaneKind::Agent)
+    {
+        return Err("the session id belongs to a different session kind".into());
+    }
+    workspace.register_detached_session(PaneKind::Agent, adoption.session_id);
+    // The daemon's own `SessionEntry` is authoritative for `workspace_root`
+    // -- for an isolated session this is the worktree path agentd actually
+    // created, which nothing on the shell side could have known at spawn
+    // time (worktree creation finishes asynchronously, after `start_session`
+    // already returned -- see `wire::SessionSummary::workspace_root`'s doc
+    // comment). Overwrites whatever the model already had, if anything.
+    if let Some(root) = &adoption.workspace_root {
+        workspace.set_session_workspace_root(adoption.session_id, root.clone());
+    }
+    // Same authoritative-daemon-report treatment as `workspace_root` above,
+    // for the lineage edge (`docs/session-relationship-design.md`
+    // decisions 1-3): the shell never guesses this at spawn time (isolation
+    // may fail and degrade to a shared, edge-less spawn), so it is only ever
+    // populated from daemon reports -- this helper and
+    // `spawn_workspace_restore`'s captured maps.
+    if let Some(parent) = adoption.parent_session_id {
+        workspace.set_session_parent(adoption.session_id, parent);
+    }
+    Ok(adoption.session_id)
 }
 
 #[derive(Clone)]
@@ -123,6 +199,63 @@ fn terminal_resume_candidates(
 }
 
 impl WorkspaceShell {
+    /// The one path through which a daemon-side agent session enters the
+    /// shell: idempotent detached registration, the daemon-authoritative
+    /// `workspace_root`/parent refresh, and the GPUI `AgentSession` entity
+    /// bound to the wire the caller chose (`attach_session` for an existing
+    /// daemon session, `start_session` for a brand-new spawn). Every
+    /// adopter -- board sessions, the startup/reload resume sweep,
+    /// `reconcile`'s fresh-spawn branch, the attach-time lookup fallback --
+    /// goes through here rather than composing those steps itself.
+    ///
+    /// The entity insert MUST precede any later `reconcile`: reconcile's
+    /// agent branch treats a model session without an entity as brand-new
+    /// and would issue `Op::NewAgent` for the very id this adoption just
+    /// attached to. The helper itself never reconciles -- callers do, after
+    /// adopting.
+    ///
+    /// Returns the adopted id, or `None` when the adoption was a no-op
+    /// (`Skip` over an entity that already exists, a kind conflict under
+    /// `Skip`, or a healthy entity under `Reattach`). `wire` is consumed
+    /// only when an entity is actually created or reattached, so passing a
+    /// closure that issues a daemon op is safe on every no-op path.
+    pub(super) fn adopt_daemon_agent_session(
+        &mut self,
+        adoption: DaemonAgentAdoption,
+        existing: ExistingAgentEntity,
+        wire: impl FnOnce() -> AgentSessionHandle,
+        cx: &mut Context<Self>,
+    ) -> Result<Option<SessionId>, String> {
+        let session_id = adoption.session_id;
+        match existing {
+            ExistingAgentEntity::Skip if self.agent_sessions.contains_key(&session_id) => {
+                return Ok(None);
+            }
+            _ => {}
+        }
+        register_daemon_agent_summary(&mut self.workspace, &adoption)?;
+        let Some(session) = self.agent_sessions.get(&session_id).cloned() else {
+            let session_handle = wire();
+            let title_tx = self.session_title_tx.clone();
+            self.agent_sessions.insert(
+                session_id,
+                cx.new(|cx| AgentSession::new(session_handle, session_id, title_tx, cx)),
+            );
+            return Ok(Some(session_id));
+        };
+        match existing {
+            ExistingAgentEntity::Skip => Ok(None),
+            ExistingAgentEntity::Reattach => {
+                if session.read(cx).runtime_unreachable() {
+                    session.update(cx, |session, cx| session.reattach(wire, cx));
+                    Ok(Some(session_id))
+                } else {
+                    Ok(None)
+                }
+            }
+        }
+    }
+
     /// Bring the session store and the PaneId → view map in line with
     /// the model. Sessions the model no longer knows (terminated) are
     /// shut down and dropped; sessions without panes stay alive
@@ -192,35 +325,41 @@ impl WorkspaceShell {
                     // one `spawn_agent_resume`/`spawn_workspace_restore`
                     // already adopted -- see their own doc comments) has no
                     // `workspace_root` recorded yet; default it here and
-                    // persist it on the model so `docs/session-relationship-
-                    // design.md` decision 4a's "Open Terminal in Session
-                    // Directory" command can read it back later, mirroring
-                    // exactly what used to be computed inside
-                    // `AgentdHandle::start_session` itself (see
-                    // `wire::SessionNew::workspace_root`'s doc comment).
-                    // For an isolated spawn this is only the *pre-isolation*
-                    // value -- agentd overrides it with the worktree path
-                    // it creates and reports the authoritative root back via
+                    // persist it on the model (through the adoption below)
+                    // so `docs/session-relationship-design.md` decision 4a's
+                    // "Open Terminal in Session Directory" command can read
+                    // it back later, mirroring exactly what used to be
+                    // computed inside `AgentdHandle::start_session` itself
+                    // (see `wire::SessionNew::workspace_root`'s doc
+                    // comment). For an isolated spawn this is only the
+                    // *pre-isolation* value -- agentd overrides it with the
+                    // worktree path it creates and reports the
+                    // authoritative root back via
                     // `wire::SessionSummary::workspace_root`, which the
-                    // resume/restore sweeps below re-apply with
-                    // `Workspace::set_session_workspace_root`.
+                    // resume/restore sweeps re-apply through the same
+                    // adoption path.
                     let workspace_root =
                         summary.workspace_root.or_else(default_agent_workspace_root);
-                    if let Some(root) = workspace_root.clone() {
-                        self.workspace.set_session_workspace_root(summary.id, root);
-                    }
-                    let session_handle = handle.start_session(
-                        agent_session_id(summary.id),
-                        provider_id,
-                        role_id,
-                        workspace_root,
-                        spawn.source_session_id.map(agent_session_id),
-                        spawn.isolate,
-                    );
-                    let title_tx = self.session_title_tx.clone();
-                    self.agent_sessions.insert(
-                        summary.id,
-                        cx.new(|cx| AgentSession::new(session_handle, summary.id, title_tx, cx)),
+                    // `Skip` cannot error, and its entity no-op is
+                    // unreachable behind the `contains_key` guard above.
+                    let _ = self.adopt_daemon_agent_session(
+                        DaemonAgentAdoption {
+                            session_id: summary.id,
+                            workspace_root: workspace_root.clone(),
+                            parent_session_id: None,
+                        },
+                        ExistingAgentEntity::Skip,
+                        || {
+                            handle.start_session(
+                                agent_session_id(summary.id),
+                                provider_id,
+                                role_id,
+                                workspace_root,
+                                spawn.source_session_id.map(agent_session_id),
+                                spawn.isolate,
+                            )
+                        },
+                        cx,
                     );
                 }
             }
@@ -632,54 +771,15 @@ impl WorkspaceShell {
                         return;
                     }
                     for summary in summaries {
-                        let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
-                        if shell.agent_sessions.contains_key(&session_id) {
-                            continue;
-                        }
-                        if shell
-                            .workspace
-                            .session_pane_kind(session_id)
-                            .is_some_and(|kind| kind != PaneKind::Agent)
-                        {
-                            eprintln!(
-                                "ignoring agent session {}: its id is already used by a terminal",
-                                session_id.as_uuid()
-                            );
-                            continue;
-                        }
-                        shell
-                            .workspace
-                            .register_detached_session(PaneKind::Agent, session_id);
-                        // The daemon's own `SessionEntry` is authoritative
-                        // for `workspace_root` -- for an isolated session
-                        // this is the worktree path agentd actually
-                        // created, which nothing on the shell side could
-                        // have known at spawn time (worktree creation
-                        // finishes asynchronously, after `start_session`
-                        // already returned -- see `wire::SessionSummary::
-                        // workspace_root`'s doc comment). Overwrites
-                        // whatever the model already had, if anything.
-                        if let Some(root) = summary.workspace_root.clone() {
-                            shell.workspace.set_session_workspace_root(session_id, root);
-                        }
-                        // Same authoritative-daemon-report treatment as
-                        // `workspace_root` above, for the lineage edge
-                        // (`docs/session-relationship-design.md` decisions
-                        // 1-3): the shell never guesses this at spawn time
-                        // (isolation may fail and degrade to a shared, edge-
-                        // less spawn), so it's only ever populated here and
-                        // in `spawn_workspace_restore`.
-                        if let Some(parent) = summary.parent_session_id {
-                            let parent_id = SessionId::from_uuid(parent.as_uuid());
-                            shell.workspace.set_session_parent(session_id, parent_id);
-                        }
-                        let session_handle = adopted.attach_session(summary.session_id);
-                        let title_tx = shell.session_title_tx.clone();
-                        shell.agent_sessions.insert(
-                            session_id,
-                            cx.new(|cx| {
-                                AgentSession::new(session_handle, session_id, title_tx, cx)
-                            }),
+                        // `Skip` cannot error: an entity the sweep already
+                        // has, or an id a terminal already took, is a logged
+                        // no-op -- expected when running against the
+                        // daemon's full inventory.
+                        let _ = shell.adopt_daemon_agent_session(
+                            DaemonAgentAdoption::from(&summary),
+                            ExistingAgentEntity::Skip,
+                            || adopted.attach_session(summary.session_id),
+                            cx,
                         );
                     }
                     shell.reconcile(window, cx);
@@ -1423,8 +1523,9 @@ mod tests {
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
     use super::{
-        control_plane_spawn_source, pinned_terminal_spawn, resolve_spawn_source,
-        terminal_fallback_cwd, terminal_resume_candidates,
+        control_plane_spawn_source, pinned_terminal_spawn, register_daemon_agent_summary,
+        resolve_spawn_source, terminal_fallback_cwd, terminal_resume_candidates,
+        DaemonAgentAdoption,
     };
 
     #[test]
@@ -1607,6 +1708,47 @@ mod tests {
             Some(isolated_root.as_path()),
             "the daemon-reported root must win over the shell's pre-spawn value"
         );
+    }
+
+    #[test]
+    fn daemon_agent_registration_is_detached_idempotent_and_resumable() {
+        // The model-level half of `adopt_daemon_agent_session` (formerly
+        // `register_board_summary`'s own test): adopting a daemon-reported
+        // session registers it detached -- no pane, tab count and active
+        // session untouched -- is idempotent, and re-registers after
+        // termination.
+        let mut workspace = Workspace::mvp();
+        let tabs = workspace.tab_count();
+        let active = workspace.active_session_id();
+        let adoption = DaemonAgentAdoption {
+            session_id: SessionId::new(),
+            workspace_root: Some("/task".into()),
+            parent_session_id: None,
+        };
+        let id = register_daemon_agent_summary(&mut workspace, &adoption).unwrap();
+        register_daemon_agent_summary(&mut workspace, &adoption).unwrap();
+        assert_eq!(
+            workspace
+                .session_summaries()
+                .iter()
+                .filter(|s| s.id == id)
+                .count(),
+            1
+        );
+        assert_eq!(workspace.tab_count(), tabs);
+        assert_eq!(workspace.active_session_id(), active);
+        assert!(workspace.pane_location_for_session(id).is_none());
+        workspace.terminate_session(id);
+        register_daemon_agent_summary(&mut workspace, &adoption).unwrap();
+        assert_eq!(
+            workspace
+                .session_summaries()
+                .iter()
+                .filter(|s| s.id == id)
+                .count(),
+            1
+        );
+        assert!(workspace.pane_location_for_session(id).is_none());
     }
 
     /// `wire_workspace_root_updates` is, like `spawn_agent_resume`/
