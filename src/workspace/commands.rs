@@ -9,7 +9,7 @@ use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
 
-use super::session_lifecycle::{DaemonAgentAdoption, ExistingAgentEntity};
+use super::session_lifecycle::{daemon_summary_for, DaemonAgentAdoption, ExistingAgentEntity};
 use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
 use crate::theme;
@@ -232,7 +232,7 @@ impl WorkspaceShell {
                             cx.notify();
                             Ok(())
                         } else {
-                            shell.external_attach_session(id, true, window, cx)
+                            shell.attach_known_session(id, true, window, cx)
                         }
                     });
                     if let Err(error) = result {
@@ -291,8 +291,7 @@ impl WorkspaceShell {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                         return;
                     }
-                    if let Err(error) = shell.external_attach_session(session_id, true, window, cx)
-                    {
+                    if let Err(error) = shell.attach_known_session(session_id, true, window, cx) {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                     }
                 });
@@ -592,7 +591,41 @@ impl WorkspaceShell {
     /// the caller (the CLI's stable verb surface), not the session — an
     /// earlier `external_attach` spelling read as "attach an external
     /// session". `activate: false` never steals focus.
+    ///
+    /// The one CLI verb with a fallback: an id the model has never seen may
+    /// still exist inside `horizon-agentd` (a board-organizer/keeper
+    /// session the daemon spawned on its own, invisible to the shell's
+    /// pull-only registry until the next resume sweep). Instead of failing
+    /// with "unknown session", the id is resolved against the daemon's
+    /// inventory off-thread and adopted through the common adoption path
+    /// when found. The reply is therefore optimistic: an id that isn't in
+    /// the daemon's inventory either returns `Ok` and silently does
+    /// nothing — acceptable for the human at the desktop this verb serves,
+    /// wrong as a scripting check. The Manage Sessions modal and the board
+    /// session openers use the strict [`Self::attach_known_session`]
+    /// instead, so their error surfaces keep reporting the miss.
     pub(crate) fn external_attach_session(
+        &mut self,
+        session_id: SessionId,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
+        if self.workspace.session_pane_kind(session_id).is_none() {
+            self.spawn_agent_lookup_attach(session_id, activate, cx);
+            return Ok(());
+        }
+        self.attach_known_session(session_id, activate, window, cx)
+    }
+
+    /// The strict attach: the model must already know the id. Shared by the
+    /// CLI verb (once its lookup fallback has made the id known), the
+    /// Manage Sessions modal, and the board session openers, whose error
+    /// surfaces must keep reporting an actual miss.
+    fn attach_known_session(
         &mut self,
         session_id: SessionId,
         activate: bool,
@@ -610,6 +643,69 @@ impl WorkspaceShell {
             self.focus_active(window, cx);
         }
         Ok(())
+    }
+
+    /// The lookup half of `external_attach_session`'s fallback: one
+    /// `session_list` pull on the background executor (the same async shape
+    /// as `refresh_board_sessions`, with the same `same_runtime`/restore
+    /// guards), then adoption through the common path and the normal
+    /// attach. Reports nothing on failure — the CLI reply already went out,
+    /// and an id the daemon doesn't know either is simply not attached.
+    /// `session_list` is a blocking pull (up to `SYNC_REPLY_TIMEOUT`),
+    /// which is exactly why this must never run on the UI thread.
+    fn spawn_agent_lookup_attach(
+        &self,
+        session_id: SessionId,
+        activate: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            let list_handle = handle.clone();
+            let summary = cx
+                .background_executor()
+                .spawn(async move {
+                    match list_handle.session_list() {
+                        Ok(items) => daemon_summary_for(items, session_id),
+                        Err(error) => {
+                            eprintln!("attach lookup: failed to list agent sessions: {error}");
+                            None
+                        }
+                    }
+                })
+                .await;
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.restoring_workspace
+                        || shell
+                            .agentd
+                            .as_ref()
+                            .is_none_or(|current| !current.same_runtime(&handle))
+                    {
+                        return;
+                    }
+                    let Some(summary) = summary else {
+                        return;
+                    };
+                    if shell
+                        .adopt_daemon_agent_session(
+                            DaemonAgentAdoption::from(&summary),
+                            ExistingAgentEntity::Reattach,
+                            || handle.attach_session(summary.session_id),
+                            cx,
+                        )
+                        .is_err()
+                    {
+                        return;
+                    }
+                    let _ = shell.attach_known_session(session_id, activate, window, cx);
+                });
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn external_terminate(

@@ -110,6 +110,17 @@ fn register_daemon_agent_summary(
     Ok(adoption.session_id)
 }
 
+/// The attach-time lookup fallback's filter: the daemon inventory entry
+/// for `session_id`, if the daemon reported one at all.
+pub(super) fn daemon_summary_for(
+    summaries: Vec<horizon_agent::wire::SessionSummary>,
+    session_id: SessionId,
+) -> Option<horizon_agent::wire::SessionSummary> {
+    summaries
+        .into_iter()
+        .find(|summary| summary.session_id.as_uuid() == session_id.as_uuid())
+}
+
 #[derive(Clone)]
 pub(super) struct PendingTerminalSpawn {
     source_session_id: Option<SessionId>,
@@ -1523,9 +1534,9 @@ mod tests {
     use horizon_workspace::{PaneKind, SessionId, Workspace};
 
     use super::{
-        control_plane_spawn_source, pinned_terminal_spawn, register_daemon_agent_summary,
-        resolve_spawn_source, terminal_fallback_cwd, terminal_resume_candidates,
-        DaemonAgentAdoption,
+        control_plane_spawn_source, daemon_summary_for, pinned_terminal_spawn,
+        register_daemon_agent_summary, resolve_spawn_source, terminal_fallback_cwd,
+        terminal_resume_candidates, DaemonAgentAdoption,
     };
 
     #[test]
@@ -1749,6 +1760,34 @@ mod tests {
             1
         );
         assert!(workspace.pane_location_for_session(id).is_none());
+    }
+
+    #[test]
+    fn daemon_summary_for_picks_the_requested_id_out_of_the_inventory() {
+        // The attach-time lookup fallback's filter: an id the daemon didn't
+        // report yields None (the fallback's silent no-op), a reported id
+        // yields its summary.
+        let summary =
+            |id: horizon_agent::contract::SessionId| horizon_agent::wire::SessionSummary {
+                session_id: id,
+                provider_id: horizon_agent::contract::ProviderId("mock".into()),
+                role_id: None,
+                parent_session_id: None,
+                workspace_root: None,
+            };
+        let target = horizon_agent::contract::SessionId::new();
+        let other = horizon_agent::contract::SessionId::new();
+        let model_id = SessionId::from_uuid(target.as_uuid());
+
+        assert_eq!(
+            daemon_summary_for(vec![summary(other)], model_id).map(|s| s.session_id),
+            None
+        );
+        assert_eq!(
+            daemon_summary_for(vec![summary(other), summary(target)], model_id)
+                .map(|s| s.session_id),
+            Some(target)
+        );
     }
 
     /// `wire_workspace_root_updates` is, like `spawn_agent_resume`/

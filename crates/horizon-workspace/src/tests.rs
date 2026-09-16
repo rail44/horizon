@@ -531,6 +531,27 @@ fn session_identity_survives_detach_and_reattach() {
 }
 
 #[test]
+fn a_registered_detached_session_is_attachable() {
+    // The attach-time lookup fallback's model claim (shell board task
+    // #46): a daemon-side session the shell has never seen becomes
+    // attachable the moment `register_detached_session` records it -- the
+    // same model half `adopt_daemon_agent_session` performs before the
+    // attach. An unregistered id must still refuse to attach.
+    let mut workspace = Workspace::mvp();
+    let session_id = SessionId::new();
+    assert_eq!(
+        workspace.attach_existing_session_to_split_activated(session_id, true),
+        None,
+        "an unregistered id must not attach"
+    );
+
+    workspace.register_detached_session(PaneKind::Agent, session_id);
+    workspace
+        .attach_existing_session_to_split_activated(session_id, true)
+        .expect("the registered session attaches");
+}
+
+#[test]
 fn session_display_numbers_are_not_reused_after_terminate() {
     let mut workspace = Workspace::mvp();
     let second_session = SessionId::new();
