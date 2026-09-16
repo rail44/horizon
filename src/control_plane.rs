@@ -184,7 +184,7 @@ fn dispatch_invoke(
                 Ok(activate) => activate,
                 Err(message) => return error_body(message),
             };
-            match shell.external_attach(session_id, activate, window, cx) {
+            match shell.external_attach_session(session_id, activate, window, cx) {
                 Ok(()) => ok_body(),
                 Err(message) => error_body(message),
             }

@@ -253,7 +253,7 @@ impl WorkspaceShell {
                             cx.notify();
                             Ok(())
                         } else {
-                            shell.external_attach(id, true, window, cx)
+                            shell.external_attach_session(id, true, window, cx)
                         }
                     });
                     if let Err(error) = result {
@@ -312,7 +312,8 @@ impl WorkspaceShell {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                         return;
                     }
-                    if let Err(error) = shell.external_attach(session_id, true, window, cx) {
+                    if let Err(error) = shell.external_attach_session(session_id, true, window, cx)
+                    {
                         view.update(cx, |view, cx| view.set_error(error, cx));
                     }
                 });
@@ -608,9 +609,11 @@ impl WorkspaceShell {
     }
 
     /// External (control-plane) operations — the CLI's verbs, mirroring
-    /// the Floem shell's `external_commands` semantics: `activate:
-    /// false` never steals focus.
-    pub(crate) fn external_attach(
+    /// the Floem shell's `external_commands` semantics. "external" names
+    /// the caller (the CLI's stable verb surface), not the session — an
+    /// earlier `external_attach` spelling read as "attach an external
+    /// session". `activate: false` never steals focus.
+    pub(crate) fn external_attach_session(
         &mut self,
         session_id: SessionId,
         activate: bool,
