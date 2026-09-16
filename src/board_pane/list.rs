@@ -2,6 +2,8 @@ use super::*;
 pub(super) struct BoardListDelegate {
     pub(super) all: Vec<Item>,
     pub(super) unread: std::collections::HashSet<u64>,
+    pub(super) session_states:
+        std::collections::HashMap<horizon_workspace::SessionId, BoardSessionState>,
     pub(super) filtered: Vec<Item>,
     /// Display depth per row in `filtered`, parallel to it. 0 for top-level
     /// items, incremented for each level of nesting under a parent. Rebuilt
@@ -35,6 +37,7 @@ impl BoardListDelegate {
         Self {
             all: Vec::new(),
             unread: Default::default(),
+            session_states: Default::default(),
             filtered: Vec::new(),
             depths: Vec::new(),
             top_level_only: false,
@@ -225,6 +228,21 @@ impl ListDelegate for BoardListDelegate {
                             .flex_1()
                             .min_w_0()
                             .child(format!("#{} {}", item.id, item.title)),
+                    )
+                    .when(
+                        task_has_running_session(item, &self.session_states),
+                        |row| {
+                            row.child(
+                                div()
+                                    .id(("board-session-activity", item.id))
+                                    .flex_none()
+                                    .child(
+                                        gpui_component::spinner::Spinner::new()
+                                            .with_size(px(12.0))
+                                            .color(theme::accent()),
+                                    ),
+                            )
+                        },
                     )
                     .child(
                         div()

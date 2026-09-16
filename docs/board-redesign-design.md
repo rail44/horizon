@@ -269,6 +269,17 @@ the investigation, implementation judgments, and open questions needed for
 the work. Limiting what the owner reads must not suppress those working records.
 The skill guides the content and depth of answers for the owner.
 
+**Session state display, 2026-09-17:** the owner requested a simple list
+indicator and English state text in the detail. A list row shows a spinner
+while either its task session or its latest reviewer is running or executing
+a tool. The detail shows each associated session's state separately. A normal
+`WaitingForUser` state is labelled `Idle`; it does not establish that the owner
+needs to act. The view observes the existing session entities, so changes
+appear without a board write or an open agent pane. These are derived display
+values, independent of the task's free-form status, completion, and unread
+messages. Board views do not keep sessions alive after termination. A missing
+or unreachable session is shown as `Unavailable` rather than as still running.
+
 **Response routing, 2026-09-16:** the owner accepted having the triggering event
 specify the final answer's destination and the harness deliver that answer
 automatically when the turn completes. The destination can differ from the

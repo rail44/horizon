@@ -444,6 +444,7 @@ impl WorkspaceShell {
                 self.panes.insert(pane_id, PaneView::board(view));
             }
         }
+        self.sync_board_session_states(cx);
         self.persist_workspace();
         cx.notify();
     }

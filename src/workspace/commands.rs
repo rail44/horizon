@@ -97,6 +97,16 @@ impl WorkspaceShell {
         .map(|_| ())
     }
 
+    pub(super) fn sync_board_session_states(&self, cx: &mut Context<Self>) {
+        for pane in self.panes.values() {
+            if let PaneView::Cached(CachedPaneLeaf::Board(view)) = pane {
+                view.update(cx, |view, cx| {
+                    view.observe_sessions(&self.agent_sessions, cx)
+                });
+            }
+        }
+    }
+
     pub(super) fn refresh_board_sessions(
         &self,
         view: Entity<crate::board_pane::BoardPaneView>,
@@ -115,9 +125,15 @@ impl WorkspaceShell {
             })
             .collect::<std::collections::HashSet<_>>();
         if needed.is_empty() || self.agentd.is_none() {
-            view.update(cx, |view, _| view.finish_inventory_refresh(&sessions));
+            view.update(cx, |view, cx| {
+                view.finish_inventory_refresh(&sessions);
+                view.observe_sessions(&self.agent_sessions, cx);
+            });
             return;
         }
+        view.update(cx, |view, cx| {
+            view.observe_sessions(&self.agent_sessions, cx)
+        });
         let registered_at_request = needed
             .iter()
             .copied()
@@ -156,6 +172,7 @@ impl WorkspaceShell {
                     }
                     Ok(())
                 });
+                shell.sync_board_session_states(cx);
                 if let Err(error) = result {
                     if view.read(cx).navigation_epoch() == epoch {
                         view.update(cx, |view, cx| view.set_error(error, cx));

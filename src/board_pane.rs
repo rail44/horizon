@@ -23,10 +23,12 @@ mod list;
 mod live;
 mod model;
 mod operations;
+mod sessions;
 use list::*;
 use live::*;
 pub(crate) use model::board_root_dir;
 use model::*;
+use sessions::*;
 
 pub(crate) struct BoardCommand(pub(crate) CommandId);
 impl EventEmitter<BoardCommand> for BoardPaneView {}
@@ -54,6 +56,7 @@ pub(crate) struct BoardPaneView {
     pub(crate) command_subscription: Option<Subscription>,
     pub(crate) inventory_subscription: Option<Subscription>,
     inventory_pending: std::collections::HashSet<horizon_workspace::SessionId>,
+    session_watches: std::collections::HashMap<horizon_workspace::SessionId, SessionWatch>,
     error: Option<String>,
     navigation_item: Option<u64>,
     pending_dependency: Option<u64>,
@@ -139,6 +142,7 @@ impl BoardPaneView {
             command_subscription: None,
             inventory_subscription: None,
             inventory_pending: Default::default(),
+            session_watches: Default::default(),
             error: None,
             navigation_item: None,
             pending_dependency: None,
@@ -187,9 +191,7 @@ impl BoardPaneView {
                                 .into_iter()
                                 .filter(|id| view.inventory_pending.insert(*id))
                                 .collect::<Vec<_>>();
-                            if !sessions.is_empty() {
-                                cx.emit(BoardSessionsRefreshed(sessions));
-                            }
+                            cx.emit(BoardSessionsRefreshed(sessions));
                             view.read_positions = positions;
                             let unread = unread_tasks(&items, &view.read_positions);
                             view.list.update(cx, |list, cx| {

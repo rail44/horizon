@@ -390,6 +390,22 @@ reports each appeared once on the board, while detailed review findings went
 to the task session. Dispatcher tests also cover replay before and after a
 durable receipt, project matching, and unchanged ordinary session replies.
 
+### Session state display validation (2026-09-17)
+
+An isolated native Xvfb run with a local deterministic provider verified the
+list spinner for the task session and for the reviewer alone, and English
+detail labels updating from `Running` to `Idle` without navigation or board
+writes. Terminating the task session changed its label to `Unavailable` while
+the reviewer remained `Idle`. Provider failure returned to the runtime's
+`WaitingForUser` state and therefore displayed `Idle`; the view reports the
+runtime state, not a separate inference from error history. A regression test
+covers either bound session's activity, retired bindings, and independence
+from task completion.
+
+The board UI, tool messages, packaged organizer/task/reviewer skills, and
+Horizon's board-integration skill were audited for Japanese text. No Japanese
+text requiring replacement was found in that scope.
+
 ### Completed live cutover
 
 The retained selection is IDs **1–47**. IDs **48–49** are workflow-generated

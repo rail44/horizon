@@ -175,6 +175,12 @@ impl BoardPaneView {
                                 cx,
                             )),
                     )
+                    .children(self.session_labels(item, cx).into_iter().map(|text| {
+                        div()
+                            .text_size(px(11.0))
+                            .text_color(theme::text_muted())
+                            .child(text)
+                    }))
                     .child(
                         TextView::markdown(("board-body", item.id), item.body.clone())
                             .text_color(theme::text_primary()),

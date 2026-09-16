@@ -593,6 +593,8 @@ external notification path.
   Board review requests now retain the originating task so that findings
   delivered to the task session also route its subsequent final report back
   to the board (2026-09-17; see the design's review continuation routing).
+  The list now indicates running task/reviewer sessions; the detail displays
+  their individual states in English, updated from existing session entities.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,
