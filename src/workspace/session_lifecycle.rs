@@ -68,8 +68,8 @@ pub(super) enum ExistingAgentEntity {
     /// Reattach an existing-but-runtime-unreachable entity to a fresh wire;
     /// a healthy entity is left alone. A kind conflict is an error.
     Reattach,
-    /// Leave any existing entity alone; the adoption is a logged no-op for
-    /// it (and for a kind conflict).
+    /// Leave any existing entity alone; the adoption is a silent no-op for
+    /// it, and a kind conflict comes back as an `Err` the caller can log.
     Skip,
 }
 
@@ -782,16 +782,21 @@ impl WorkspaceShell {
                         return;
                     }
                     for summary in summaries {
-                        // `Skip` cannot error: an entity the sweep already
-                        // has, or an id a terminal already took, is a logged
-                        // no-op -- expected when running against the
-                        // daemon's full inventory.
-                        let _ = shell.adopt_daemon_agent_session(
+                        let session_id = SessionId::from_uuid(summary.session_id.as_uuid());
+                        // The sweep runs against the daemon's full inventory,
+                        // so two no-ops are expected: an entity the sweep
+                        // already has (`Ok(None)`), and an id a terminal
+                        // already took -- an `Err` from the shared path,
+                        // which stays silent by policy, so the diagnostic
+                        // lives here.
+                        if let Err(error) = shell.adopt_daemon_agent_session(
                             DaemonAgentAdoption::from(&summary),
                             ExistingAgentEntity::Skip,
                             || adopted.attach_session(summary.session_id),
                             cx,
-                        );
+                        ) {
+                            eprintln!("ignoring agent session {}: {error}", session_id.as_uuid());
+                        }
                     }
                     shell.reconcile(window, cx);
                     shell.focus_active(window, cx);
