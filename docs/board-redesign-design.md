@@ -270,15 +270,32 @@ the work. Limiting what the owner reads must not suppress those working records.
 The skill guides the content and depth of answers for the owner.
 
 **Session state display, 2026-09-17:** the owner requested a simple list
-indicator and English state text in the detail. A list row shows a spinner
-while either its task session or its latest reviewer is running or executing
-a tool. The detail shows each associated session's state separately. A normal
-`WaitingForUser` state is labelled `Idle`; it does not establish that the owner
-needs to act. The view observes the existing session entities, so changes
+indicator and English state text in the detail. A list row combines its task
+session and latest reviewer, prioritizing `Error`, `Waiting for approval`,
+running/tool execution, then `Waiting for input`. These use a warning icon,
+pause icon, spinner, and hollow circle respectively; a tooltip names the state.
+The detail shows each associated session's state separately. `Waiting for input`
+includes normal answer completion; it does not establish that the owner needs
+to act. Unread markers remain independent. The view observes the existing
+session entities, so changes
 appear without a board write or an open agent pane. These are derived display
 values, independent of the task's free-form status, completion, and unread
 messages. Board views do not keep sessions alive after termination. A missing
 or unreachable session is shown as `Unavailable` rather than as still running.
+
+The shared `AgentFrame::status()` query combines the execution phase with the
+current turn's stop result. A failed turn normally returns to `WaitingForUser`
+so that the session can accept another input; displaying that phase alone hid
+the failure. The fold now retains the stop result through idle, startup, and
+history replay, clearing it when execution actually resumes. A queued message
+does not clear an error. Cancellations and guard pauses are distinct outcomes;
+an individual tool error is not a failed turn if execution recovers. This is
+an in-memory projection of existing events, with no wire or log-schema change.
+Provider initialization now signals input readiness without a synthetic
+`Running` transition: restoring history does not start an execution or dismiss
+its previous error.
+The historical `last_turn_end_reason()` query keeps its audit semantics after
+work resumes; consumers of current status use `status()` instead.
 
 **Response routing, 2026-09-16:** the owner accepted having the triggering event
 specify the final answer's destination and the harness deliver that answer

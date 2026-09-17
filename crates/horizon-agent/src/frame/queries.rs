@@ -10,6 +10,7 @@ impl AgentFrame {
         Self {
             state: None,
             items: Vec::new(),
+            turn_end_reason: None,
         }
     }
 
@@ -75,18 +76,10 @@ impl AgentFrame {
         })
     }
 
-    /// The `TurnEndReason` of the most recent `AgentFrameItem::TurnEnded`
-    /// in this frame, if any. Mirrors [`Self::tool_call_request`]'s
-    /// `.rev()` walk so an emit site can recover the *current* guard halt
-    /// without re-scanning the frame from the top, and so a stale earlier
-    /// receipt that has since been superseded by a new turn's events (a
-    /// human message, more tool calls) does not leak into the next read.
-    ///
-    /// Backed by [`last_turn_end_reason_in`] so a caller holding only a
-    /// slice of `items` can reuse the same logic without cloning the whole
-    /// frame. Returns `None` for a frame that never halted; the emit site
-    /// for [`Event::ContinueTurnRequested`] carries that through directly
-    /// as `resumed_from: None` (the documented "no-op replay" shape).
+    /// The most recently recorded turn result, including historical results
+    /// after work resumes. Used for the ContinueTurnRequested audit record.
+    /// Returns None when no turn has ended. Use [`Self::status`] for the
+    /// session's current status rather than interpreting this history query.
     pub fn last_turn_end_reason(&self) -> Option<TurnEndReason> {
         last_turn_end_reason_in(&self.items)
     }
@@ -316,17 +309,8 @@ pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
     )
 }
 
-/// The reason of the most recent `AgentFrameItem::TurnEnded` in `items`, if
-/// any. Pure-core companion to [`AgentFrame::last_turn_end_reason`] for
-/// callers that only hold a slice. Walks `.rev()` (the same scoping the
-/// `tool_call_request`/`approval_kind` accessors use) so a stale earlier
-/// halt that has since been superseded by new turn activity does not leak
-/// into the read; for a session whose last item is *not* a `TurnEnded` (no
-/// turn has ended, or a later tool-call or message has arrived), returns
-/// `None` and the emit site carries that through as `resumed_from: None`.
-/// The reason is returned **regardless** of whether it's a halt or a normal
-/// completion: a non-halt reason is itself useful audit context (it marks
-/// a `ContinueTurn` sent to a non-halted session as a no-op replay).
+/// Historical counterpart of AgentFrame::status: find the last recorded
+/// receipt even if later work has superseded it. Used for audit context.
 pub(crate) fn last_turn_end_reason_in(items: &[AgentFrameItem]) -> Option<TurnEndReason> {
     items.iter().rev().find_map(|item| match item {
         AgentFrameItem::TurnEnded { reason, .. } => Some(*reason),

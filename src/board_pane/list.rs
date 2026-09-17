@@ -229,19 +229,10 @@ impl ListDelegate for BoardListDelegate {
                             .min_w_0()
                             .child(format!("#{} {}", item.id, item.title)),
                     )
-                    .when(
-                        task_has_running_session(item, &self.session_states),
-                        |row| {
-                            row.child(
-                                div()
-                                    .id(("board-session-activity", item.id))
-                                    .flex_none()
-                                    .child(
-                                        gpui_component::spinner::Spinner::new()
-                                            .with_size(px(12.0))
-                                            .color(theme::accent()),
-                                    ),
-                            )
+                    .when_some(
+                        task_session_state(item, &self.session_states),
+                        |row, state| {
+                            row.child(state.indicator(item.id, self.selected == Some(index)))
                         },
                     )
                     .child(

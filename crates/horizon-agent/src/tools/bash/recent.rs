@@ -313,7 +313,10 @@ mod tests {
     }
 
     fn frame(items: Vec<AgentFrameItem>) -> AgentFrame {
-        AgentFrame { state: None, items }
+        AgentFrame {
+            items,
+            ..AgentFrame::empty()
+        }
     }
 
     fn temp_spill(name: &str) -> PathBuf {

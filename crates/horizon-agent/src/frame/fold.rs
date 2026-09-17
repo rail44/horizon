@@ -73,7 +73,18 @@ pub(crate) fn apply_agent_event_to_frame(
     turn: &mut TurnClock,
 ) {
     match event {
-        Event::StateChanged(state) => frame.state = Some(*state),
+        Event::StateChanged(state) => {
+            frame.state = Some(*state);
+            frame.turn_end_reason = match state {
+                SessionState::Running
+                | SessionState::ToolRunning
+                | SessionState::WaitingForApproval => None,
+                SessionState::Failed => Some(TurnEndReason::Failed),
+                SessionState::Cancelled => Some(TurnEndReason::Cancelled),
+                SessionState::Completed => Some(TurnEndReason::Completed),
+                _ => frame.turn_end_reason,
+            };
+        }
         Event::ReasoningDelta(delta) => {
             if let Some(AgentFrameItem::ReasoningDelta(existing)) =
                 last_current_turn_item_mut(frame, is_turn_boundary_item, |item| {
@@ -258,6 +269,7 @@ pub(crate) fn apply_agent_event_to_frame(
         // contract, but this keeps the reducer defensive) reports a
         // near-zero elapsed rather than reusing a stale start.
         Event::TurnEnded(reason) => {
+            frame.turn_end_reason = Some(*reason);
             let elapsed = turn
                 .started_at
                 .map(|started_at| started_at.elapsed())

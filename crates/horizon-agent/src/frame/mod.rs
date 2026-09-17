@@ -9,6 +9,7 @@
 
 mod fold;
 mod queries;
+mod status;
 mod types;
 
 #[cfg(test)]
@@ -16,6 +17,7 @@ mod test_support;
 
 // --- Re-exports (original `frame.rs` public surface) ---
 
+pub use status::SessionStatus;
 pub use types::{AgentFrame, AgentFrameItem};
 
 pub use fold::agent_frame_from_events;

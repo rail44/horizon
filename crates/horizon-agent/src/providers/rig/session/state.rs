@@ -304,12 +304,9 @@ impl SessionLoopState {
                 | Command::EnvironmentActivationFailed { .. } => {}
 
                 crate::contract::Command::Initialize(_) => {
-                    let _ = self.events_tx.send(
-                        crate::contract::Event::StateChanged(
-                            crate::contract::SessionState::Running,
-                        )
-                        .into(),
-                    );
+                    // Initialization accepts input without starting a turn.
+                    // A synthetic Running event would erase the previous
+                    // failed/paused result when a session is restored.
                     let _ = self.events_tx.send(
                         crate::contract::Event::StateChanged(
                             crate::contract::SessionState::WaitingForUser,

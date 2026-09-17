@@ -626,6 +626,7 @@ mod tests {
     fn prior_user_messages_from_frame_reads_only_user_messages_oldest_first() {
         let frame = AgentFrame {
             state: None,
+            turn_end_reason: None,
             items: vec![
                 AgentFrameItem::Message(Message {
                     role: MessageRole::User,

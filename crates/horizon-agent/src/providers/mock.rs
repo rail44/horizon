@@ -60,7 +60,6 @@ impl Provider for MockProvider {
             while let Ok(command) = commands_rx.recv() {
                 match command {
                     Command::Initialize(_) => {
-                        let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
                         let _ = events_tx
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }

@@ -6,6 +6,9 @@ use crate::contract::*;
 pub struct AgentFrame {
     pub state: Option<SessionState>,
     pub items: Vec<AgentFrameItem>,
+    /// The current stop result, retained through idle/startup events and
+    /// cleared when execution actually resumes. Rebuilt by event replay.
+    pub(crate) turn_end_reason: Option<TurnEndReason>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

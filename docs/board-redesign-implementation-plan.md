@@ -393,14 +393,28 @@ durable receipt, project matching, and unchanged ordinary session replies.
 ### Session state display validation (2026-09-17)
 
 An isolated native Xvfb run with a local deterministic provider verified the
-list spinner for the task session and for the reviewer alone, and English
-detail labels updating from `Running` to `Idle` without navigation or board
-writes. Terminating the task session changed its label to `Unavailable` while
-the reviewer remained `Idle`. Provider failure returned to the runtime's
-`WaitingForUser` state and therefore displayed `Idle`; the view reports the
-runtime state, not a separate inference from error history. A regression test
-covers either bound session's activity, retired bindings, and independence
-from task completion.
+list spinner for the task session and for the reviewer alone, input-wait
+circles, failure warnings, approval-wait icons, and separate English detail
+labels. The display updates without navigation or board writes. Terminating
+the task session was separately checked to yield `Unavailable` while leaving
+the reviewer's state intact.
+
+Failure testing exposed that the execution phase returns to `WaitingForUser`
+after a failed turn. The shared `AgentFrame::status()` projection now retains
+that outcome until actual execution resumes. A second native check exposed a
+synthetic `Running` event during provider initialization, which erased the
+outcome on runtime reload. Initialization now emits input readiness without
+claiming to execute a turn. The corrected GUI run verified that an error
+survives runtime reload, clears on retry start, and becomes `Waiting for input`
+after a successful retry. It also verified `Waiting for approval` and
+`Cancelled`, with no board-log changes during any state transition.
+
+Regression tests cover incremental folding versus cold replay, initialization
+through both built-in providers, queued input before execution, recovered
+errors, cancellation, guard pauses, list priority across both session roles,
+retired bindings, and independence from task completion. The workspace build,
+formatting, Clippy, wire-schema check, and all 1,835 sandbox-profile tests passed
+(75 boundary tests skipped by that profile).
 
 The board UI, tool messages, packaged organizer/task/reviewer skills, and
 Horizon's board-integration skill were audited for Japanese text. No Japanese

@@ -593,8 +593,10 @@ external notification path.
   Board review requests now retain the originating task so that findings
   delivered to the task session also route its subsequent final report back
   to the board (2026-09-17; see the design's review continuation routing).
-  The list now indicates running task/reviewer sessions; the detail displays
-  their individual states in English, updated from existing session entities.
+  The list distinguishes errors, approval waits, running sessions, and input
+  waits; the detail displays task and reviewer states individually in English.
+  The shared session-status query retains a failed turn through idle/replay
+  until execution resumes, without changing input acceptance or board data.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

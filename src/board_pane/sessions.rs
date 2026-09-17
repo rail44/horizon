@@ -2,7 +2,9 @@
 
 use super::*;
 use crate::agent::AgentSession;
-use horizon_agent::contract::SessionState;
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{Icon, IconName};
+use horizon_agent::frame::SessionStatus;
 use horizon_workspace::SessionId;
 use std::collections::HashMap;
 
@@ -10,7 +12,7 @@ use std::collections::HashMap;
 pub(super) enum BoardSessionState {
     Loading,
     Unavailable,
-    Known(SessionState),
+    Known(SessionStatus),
 }
 
 impl BoardSessionState {
@@ -20,7 +22,7 @@ impl BoardSessionState {
         } else {
             session
                 .frame
-                .state
+                .status()
                 .map(Self::Known)
                 .unwrap_or(Self::Loading)
         }
@@ -29,7 +31,7 @@ impl BoardSessionState {
     fn is_running(self) -> bool {
         matches!(
             self,
-            Self::Known(SessionState::Running | SessionState::ToolRunning)
+            Self::Known(SessionStatus::Running | SessionStatus::ToolRunning)
         )
     }
 
@@ -38,19 +40,99 @@ impl BoardSessionState {
             Self::Loading => "Loading",
             Self::Unavailable => "Unavailable",
             Self::Known(state) => match state {
-                SessionState::Created => "Starting",
-                SessionState::Running => "Running",
-                SessionState::ToolRunning => "Tool running",
+                SessionStatus::Starting => "Starting",
+                SessionStatus::Running => "Running",
+                SessionStatus::ToolRunning => "Tool running",
                 // A normal completed answer also enters WaitingForUser.
                 // This state alone does not request an owner decision.
-                SessionState::WaitingForUser => "Idle",
-                SessionState::WaitingForApproval => "Waiting for approval",
-                SessionState::Cancelled => "Cancelled",
-                SessionState::Completed => "Completed",
-                SessionState::Failed => "Failed",
-                SessionState::Terminated => "Terminated",
+                SessionStatus::WaitingForInput => "Waiting for input",
+                SessionStatus::WaitingForApproval => "Waiting for approval",
+                SessionStatus::Cancelled => "Cancelled",
+                SessionStatus::Completed => "Completed",
+                SessionStatus::Failed => "Error",
+                SessionStatus::Paused => "Paused",
+                SessionStatus::Terminated => "Terminated",
             },
         }
+    }
+
+    fn priority(self) -> u8 {
+        match self {
+            Self::Known(SessionStatus::Failed) => 100,
+            Self::Known(SessionStatus::WaitingForApproval) => 90,
+            Self::Known(SessionStatus::Running | SessionStatus::ToolRunning) => 80,
+            Self::Known(SessionStatus::Paused) => 70,
+            Self::Known(SessionStatus::WaitingForInput) => 60,
+            Self::Unavailable => 50,
+            Self::Known(SessionStatus::Cancelled) => 40,
+            Self::Loading | Self::Known(SessionStatus::Starting) => 30,
+            Self::Known(SessionStatus::Completed | SessionStatus::Terminated) => 20,
+        }
+    }
+
+    pub(super) fn color(self) -> Hsla {
+        match self {
+            Self::Known(SessionStatus::Failed) => theme::danger(),
+            Self::Known(
+                SessionStatus::Running
+                | SessionStatus::ToolRunning
+                | SessionStatus::WaitingForApproval,
+            ) => theme::accent(),
+            _ => theme::text_muted(),
+        }
+    }
+
+    pub(super) fn indicator(self, item: u64, selected: bool) -> impl IntoElement {
+        let color = if selected {
+            theme::readable_on(self.color(), theme::surface_selected())
+        } else {
+            self.color()
+        };
+        let symbol = if self.is_running() {
+            gpui_component::spinner::Spinner::new()
+                .with_size(px(12.0))
+                .color(color)
+                .into_any_element()
+        } else {
+            match self {
+                Self::Known(SessionStatus::Failed) => Icon::new(IconName::TriangleAlert)
+                    .with_size(px(12.0))
+                    .text_color(color)
+                    .into_any_element(),
+                Self::Known(SessionStatus::WaitingForApproval | SessionStatus::Paused) => {
+                    Icon::new(IconName::Pause)
+                        .with_size(px(12.0))
+                        .text_color(color)
+                        .into_any_element()
+                }
+                Self::Unavailable
+                | Self::Known(SessionStatus::Cancelled | SessionStatus::Terminated) => {
+                    Icon::new(IconName::CircleX)
+                        .with_size(px(12.0))
+                        .text_color(color)
+                        .into_any_element()
+                }
+                Self::Known(SessionStatus::Completed) => Icon::new(IconName::CircleCheck)
+                    .with_size(px(12.0))
+                    .text_color(color)
+                    .into_any_element(),
+                _ => div()
+                    .size(px(7.0))
+                    .rounded_full()
+                    .border_1()
+                    .border_color(color)
+                    .into_any_element(),
+            }
+        };
+        div()
+            .id(("board-session-activity", item))
+            .flex_none()
+            .size(px(12.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .child(symbol)
+            .tooltip(move |window, cx| Tooltip::new(self.label()).build(window, cx))
     }
 }
 
@@ -67,17 +149,18 @@ fn session_state(id: &str, states: &HashMap<SessionId, BoardSessionState>) -> Bo
         .unwrap_or(BoardSessionState::Loading)
 }
 
-pub(super) fn task_has_running_session(
+pub(super) fn task_session_state(
     item: &Item,
     states: &HashMap<SessionId, BoardSessionState>,
-) -> bool {
+) -> Option<BoardSessionState> {
     [
         item.session_id.as_deref(),
         item.review_session_id.as_deref(),
     ]
     .into_iter()
     .flatten()
-    .any(|id| session_state(id, states).is_running())
+    .map(|id| session_state(id, states))
+    .max_by_key(|state| state.priority())
 }
 
 impl BoardPaneView {
@@ -151,7 +234,7 @@ impl BoardPaneView {
         cx.notify();
     }
 
-    pub(super) fn session_labels(&self, item: &Item, cx: &App) -> Vec<String> {
+    pub(super) fn session_labels(&self, item: &Item, cx: &App) -> Vec<(String, BoardSessionState)> {
         let states = &self.list.read(cx).delegate().session_states;
         [
             ("Task session", &item.session_id),
@@ -159,8 +242,10 @@ impl BoardPaneView {
         ]
         .into_iter()
         .filter_map(|(role, id)| {
-            id.as_deref()
-                .map(|id| format!("{role}: {}", session_state(id, states).label()))
+            id.as_deref().map(|id| {
+                let state = session_state(id, states);
+                (format!("{role}: {}", state.label()), state)
+            })
         })
         .collect()
     }
@@ -168,14 +253,14 @@ impl BoardPaneView {
 
 #[cfg(test)]
 mod tests {
-    use super::{task_has_running_session, BoardSessionState};
-    use horizon_agent::contract::SessionState;
+    use super::{task_session_state, BoardSessionState};
+    use horizon_agent::frame::SessionStatus;
     use horizon_board::Item;
     use horizon_workspace::SessionId;
     use std::collections::HashMap;
 
     #[test]
-    fn activity_follows_either_bound_session_without_becoming_task_completion() {
+    fn list_prioritizes_failure_approval_running_then_waiting_across_both_sessions() {
         let task = SessionId::new();
         let review = SessionId::new();
         let mut item = Item {
@@ -183,20 +268,49 @@ mod tests {
             review_session_id: Some(review.as_uuid().to_string()),
             ..Default::default()
         };
-        let mut states = HashMap::from([
-            (task, BoardSessionState::Known(SessionState::WaitingForUser)),
-            (review, BoardSessionState::Known(SessionState::ToolRunning)),
-        ]);
-        assert!(task_has_running_session(&item, &states));
-        states.insert(review, BoardSessionState::Known(SessionState::Completed));
-        assert!(!task_has_running_session(&item, &states));
-        assert!(!item.completed);
-        states.insert(task, BoardSessionState::Known(SessionState::Running));
-        assert!(task_has_running_session(&item, &states));
-        states.insert(task, BoardSessionState::Unavailable);
-        assert!(!task_has_running_session(&item, &states));
-        states.insert(review, BoardSessionState::Known(SessionState::Running));
+        let mut states = HashMap::new();
+        for (task_state, review_state, expected) in [
+            (
+                SessionStatus::WaitingForInput,
+                SessionStatus::ToolRunning,
+                SessionStatus::ToolRunning,
+            ),
+            (
+                SessionStatus::Failed,
+                SessionStatus::Running,
+                SessionStatus::Failed,
+            ),
+            (
+                SessionStatus::Running,
+                SessionStatus::Failed,
+                SessionStatus::Failed,
+            ),
+            (
+                SessionStatus::WaitingForApproval,
+                SessionStatus::Running,
+                SessionStatus::WaitingForApproval,
+            ),
+            (
+                SessionStatus::WaitingForInput,
+                SessionStatus::Completed,
+                SessionStatus::WaitingForInput,
+            ),
+        ] {
+            states.insert(task, BoardSessionState::Known(task_state));
+            states.insert(review, BoardSessionState::Known(review_state));
+            assert_eq!(
+                task_session_state(&item, &states),
+                Some(BoardSessionState::Known(expected))
+            );
+            assert!(!item.completed);
+        }
+        states.insert(review, BoardSessionState::Known(SessionStatus::Failed));
         item.review_session_id = None;
-        assert!(!task_has_running_session(&item, &states));
+        assert_eq!(
+            task_session_state(&item, &states),
+            Some(BoardSessionState::Known(SessionStatus::WaitingForInput))
+        );
+        item.session_id = None;
+        assert_eq!(task_session_state(&item, &states), None);
     }
 }

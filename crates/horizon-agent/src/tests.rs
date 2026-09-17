@@ -32,6 +32,61 @@ fn mock_agent_emits_initial_session_events() {
 }
 
 #[test]
+fn provider_initialization_preserves_a_replayed_failed_turn() {
+    let providers: Vec<Box<dyn registry::Provider>> = vec![
+        Box::new(crate::providers::mock::MockProvider::new()),
+        Box::new(crate::providers::rig::Provider::new(
+            crate::config::RigAgentConfig {
+                openai_enabled: false,
+                ..Default::default()
+            },
+            crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
+        )),
+    ];
+    for provider in providers {
+        let session_id = SessionId::new();
+        let provider_id = provider.provider_id();
+        let mut events = vec![
+            agent::Event::StateChanged(agent::SessionState::Running),
+            agent::Event::TurnEnded(agent::TurnEndReason::Failed),
+            agent::Event::StateChanged(agent::SessionState::WaitingForUser),
+        ];
+        let handle = provider.start_session(agent::StartSession {
+            session_id,
+            provider_id: provider_id.clone(),
+            role_id: None,
+            workspace_root: None,
+            history: events.clone(),
+            trusted_project: true,
+        });
+        let rx = handle.events();
+        // Created, initialization message, then input readiness.
+        for _ in 0..3 {
+            events.push(recv_event(&rx).event);
+        }
+        handle
+            .sender()
+            .send(agent::Command::Initialize(agent::Initialization {
+                session_id,
+                provider_id,
+                role_id: None,
+            }))
+            .unwrap();
+        let initialized = recv_event(&rx).event;
+        assert_eq!(
+            initialized,
+            agent::Event::StateChanged(agent::SessionState::WaitingForUser)
+        );
+        events.push(initialized);
+        assert_eq!(
+            agent_frame_from_events(&events).status(),
+            Some(SessionStatus::Failed)
+        );
+        handle.sender().send(agent::Command::Shutdown).unwrap();
+    }
+}
+
+#[test]
 fn transcript_renderer_keeps_provider_neutral_messages() {
     let transcript = render_agent_transcript(&[agent::Event::MessageCommitted(agent::Message {
         role: agent::MessageRole::Assistant,
