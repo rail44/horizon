@@ -23,12 +23,6 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
-- **Board closure (#50, 2026-09-18):** use independent `is_closed` for both
-  finished and withdrawn work, with status and closure policy in skills. Hide
-  closed tasks by default and provide Show closed / Hide closed; keep all
-  history and relationships accessible. See [closure policy](board-redesign-design.md).
-  Implementation and live-data triage are being validated before activation.
-
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to
@@ -592,6 +586,16 @@ external notification path.
 
 ## Shipped (index — details in the named docs and git history)
 
+- **Interrupted-turn recovery (2026-09-18):** preserve the original turn ID
+  when cancelling interrupted work or terminating orphaned exploration on
+  restart; settle pending inputs without re-ending a finished turn. Real
+  daemon coverage checks both event-log identity and DuckDB turn records.
+  See [runtime recovery](agent-runtime-split-design.md).
+- **Board closure (#50, 2026-09-18):** `ddc5a15` is integrated and active.
+  Independent `is_closed` covers finished and withdrawn work; skills govern
+  closure and status. Closed tasks are hidden by default with Show closed /
+  Hide closed. Existing archived tasks were migrated with history and
+  relationships preserved. See [closure policy](board-redesign-design.md).
 - **Board redesign (2026-09-16):** implemented at `8e057dd`; approved live cutover at `eb6c99c` preserved 47 tasks, 185 messages, ordinary session IDs, layout, and the running terminal daemon. Full host gate (1,952 tests), native GUI, isolated flow, migration rehearsal and independent live recovery verification passed. See [design](board-redesign-design.md) and [implementation and validation](board-redesign-implementation-plan.md).
   `Open Board Organizer` now creates or resumes the project's organizer from
   a board cursor and opens its ordinary agent view, reusing an existing pane.

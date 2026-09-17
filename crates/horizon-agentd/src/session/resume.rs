@@ -4,14 +4,16 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(test)]
+use horizon_agent::contract::ProviderId;
 use horizon_agent::contract::{
-    Error as AgentError, Event, ProviderEvent, ProviderId, SessionId, SessionState, ToolCallId,
-    TurnEndReason,
+    Error as AgentError, Event, ProviderEvent, SessionId, SessionState, ToolCallId, TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
-use horizon_agent::persistence::event_log::{
-    Appender, PersistedSessionContext, Record, WriterHandle,
-};
+use horizon_agent::persistence::event_log::{Appender, Record};
+#[cfg(test)]
+use horizon_agent::persistence::event_log::{PersistedSessionContext, WriterHandle};
+#[cfg(test)]
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::cancelled_tool_call_result;
 
@@ -143,10 +145,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
                 // an explicit context for the following restart.
                 None => (None, None, None),
             };
-        let mut events: Vec<Event> = session_records
-            .into_iter()
-            .map(|record| record.event)
-            .collect();
+        let mut events = recorded_events;
 
         let frame = agent_frame_from_events(&events);
         if session_is_dead(&frame) {
@@ -154,18 +153,22 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             continue;
         }
 
+        let mut appender = Appender::new(
+            writer.clone(),
+            session_id,
+            Some(provider_id.clone()),
+            role_id.clone(),
+        )
+        .with_turn_history(&session_records);
+        if let Some(context) = persisted_context.clone() {
+            appender = appender.with_session_context(context);
+        }
+
         if role_id
             .as_ref()
             .is_some_and(horizon_agent::roles::is_exploration)
         {
-            terminate_orphaned_exploration(
-                &writer,
-                session_id,
-                &provider_id,
-                role_id.as_ref(),
-                persisted_context.as_ref(),
-                &frame,
-            );
+            terminate_orphaned_exploration(&mut appender, session_id, &frame);
             terminated_explorations += 1;
             continue;
         }
@@ -182,18 +185,10 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
                 .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
                 .collect();
             closing.extend(interrupted_input_outcomes(&events));
-            closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
-            closing.push(Event::StateChanged(SessionState::WaitingForUser));
-
-            let mut appender = Appender::new(
-                writer.clone(),
-                session_id,
-                Some(provider_id.clone()),
-                role_id.clone(),
-            );
-            if let Some(context) = persisted_context.clone() {
-                appender = appender.with_session_context(context);
+            if frame.is_turn_in_flight() && appender.has_open_turn() {
+                closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
             }
+            closing.push(Event::StateChanged(SessionState::WaitingForUser));
             match appender
                 .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
             {
@@ -257,11 +252,8 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
 /// [`session_is_dead`] reads, so a *later* restart skips this session
 /// entirely instead of doing this again.
 fn terminate_orphaned_exploration(
-    writer: &WriterHandle,
+    appender: &mut Appender,
     session_id: SessionId,
-    provider_id: &ProviderId,
-    role_id: Option<&RoleId>,
-    persisted_context: Option<&PersistedSessionContext>,
     frame: &AgentFrame,
 ) {
     let mut closing: Vec<Event> = outstanding_tool_call_ids(frame)
@@ -273,20 +265,11 @@ fn terminate_orphaned_exploration(
                   waiting on it did not survive."
             .to_string(),
     }));
-    if frame.is_turn_in_flight() {
+    if frame.is_turn_in_flight() && appender.has_open_turn() {
         closing.push(Event::TurnEnded(TurnEndReason::Failed));
     }
     closing.push(Event::StateChanged(SessionState::Terminated));
 
-    let mut appender = Appender::new(
-        writer.clone(),
-        session_id,
-        Some(provider_id.clone()),
-        role_id.cloned(),
-    );
-    if let Some(context) = persisted_context.cloned() {
-        appender = appender.with_session_context(context);
-    }
     if let Err(error) =
         appender.append_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
     {
@@ -793,8 +776,29 @@ mod tests {
         let records = horizon_agent::persistence::event_log::read(&path)
             .expect("read seeded event log")
             .records;
+        let original_turns: HashMap<_, _> = records
+            .iter()
+            .filter_map(|record| {
+                record
+                    .turn_id
+                    .clone()
+                    .map(|turn_id| (record.session_id, turn_id))
+            })
+            .collect();
         resume_persisted_sessions(&state, records);
         writer.flush().expect("flush resume fixups");
+
+        for record in horizon_agent::persistence::event_log::read(&path)
+            .unwrap()
+            .records
+        {
+            if matches!(record.event, Event::TurnEnded(_)) {
+                assert_eq!(
+                    record.turn_id.as_ref(),
+                    original_turns.get(&record.session_id)
+                );
+            }
+        }
 
         let live: Vec<SessionId> = state.sessions.lock().unwrap().keys().copied().collect();
         assert!(
@@ -900,5 +904,59 @@ mod tests {
         ];
         let frame = agent_frame_from_events(&events);
         assert!(!session_is_dead(&frame));
+    }
+
+    #[test]
+    fn resume_settles_pending_input_without_inventing_a_turn_end() {
+        for finished_turn in [false, true] {
+            let (_dir, path, writer) = open_test_event_log("pending-input");
+            let state = judge_test_state();
+            state.set_writer(Some(writer.clone()));
+            let session_id = SessionId::new();
+            let mut appender = Appender::new(
+                writer.clone(),
+                session_id,
+                Some(ProviderId("builtin.agent.mock".into())),
+                None,
+            );
+            let mut events = vec![Event::InputStarted(vec!["pending".into()])];
+            if finished_turn {
+                events.extend([
+                    Event::MessageCommitted(horizon_agent::contract::Message {
+                        role: horizon_agent::contract::MessageRole::User,
+                        text: "hello".into(),
+                    }),
+                    Event::TurnEnded(TurnEndReason::Completed),
+                    Event::StateChanged(SessionState::WaitingForUser),
+                ]);
+            } else {
+                // The process died before the provider committed its first
+                // user message, so no persisted turn identity exists yet.
+                events.push(Event::StateChanged(SessionState::Running));
+            }
+            appender
+                .append_provider_events(events.into_iter().map(ProviderEvent::from).collect())
+                .unwrap();
+            writer.flush().unwrap();
+            let records = horizon_agent::persistence::event_log::read(&path)
+                .unwrap()
+                .records;
+            resume_persisted_sessions(&state, records);
+            writer.flush().unwrap();
+            let events = persisted_events(&path, session_id);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::TurnEnded(_)))
+                    .count(),
+                usize::from(finished_turn)
+            );
+            assert!(interrupted_input_outcomes(&events).is_empty());
+            assert!(events.iter().any(|event| matches!(event,
+                Event::InputOutcome(outcome) if outcome.input_ids == ["pending"]
+            )));
+            assert!(!agent_frame_from_events(&events).is_turn_in_flight());
+            state.send_command(session_id, horizon_agent::contract::Command::Shutdown);
+        }
     }
 }

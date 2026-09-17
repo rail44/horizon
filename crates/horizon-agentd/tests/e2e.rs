@@ -1008,11 +1008,22 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
     })
     .await;
 
+    let interrupted_turn_id = horizon_agent::persistence::event_log::read(&event_log_path)
+        .unwrap()
+        .records
+        .into_iter()
+        .find(|record| {
+            record.session_id == session_id && matches!(record.event, Event::ApprovalRequested(_))
+        })
+        .unwrap()
+        .turn_id
+        .expect("approval belongs to the original turn");
+
     drop(attachment);
     drop(client);
     agentd.kill_and_wait();
 
-    let respawned = spawn_agentd_at(socket_path, event_log_path);
+    let mut respawned = spawn_agentd_at(socket_path, event_log_path);
     let client = connect_hub(&respawned.socket_path).await;
 
     assert_eq!(
@@ -1080,6 +1091,50 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
         Event::MessageCommitted(message)
             if message.role == MessageRole::User && message.text == "hello again"
     )));
+
+    wait_for_persisted_event(&respawned.event_log_path, session_id, |event| {
+        matches!(event, Event::MessageCommitted(message)
+            if message.role == MessageRole::Assistant && message.text == "Mock response: hello again")
+    })
+    .await;
+    client.drain().await;
+    assert!(wait_for_exit(&mut respawned.child).await.success());
+
+    let records = horizon_agent::persistence::event_log::read(&respawned.event_log_path)
+        .unwrap()
+        .records;
+    let cancelled = records
+        .iter()
+        .find(|record| {
+            record.session_id == session_id
+                && matches!(record.event, Event::TurnEnded(TurnEndReason::Cancelled))
+        })
+        .unwrap();
+    assert_eq!(cancelled.turn_id.as_ref(), Some(&interrupted_turn_id));
+    let next_turn = records
+        .iter()
+        .find(|record| {
+            record.session_id == session_id
+                && matches!(&record.event, Event::MessageCommitted(message)
+                    if message.role == MessageRole::User && message.text == "hello again")
+        })
+        .unwrap();
+    assert!(next_turn.turn_id.is_some());
+    assert_ne!(next_turn.turn_id, cancelled.turn_id);
+    let conn = duckdb::Connection::open(&respawned.state_db_path).unwrap();
+    let projected: (String, String) = conn.query_row(
+        "SELECT turn_id, ended_event_id FROM agent_turns WHERE session_id = ? AND end_reason = 'cancelled'",
+        [session_id.as_uuid().to_string()], |row| Ok((row.get(0)?, row.get(1)?)),
+    ).expect("the recovered turn must reach the real DuckDB projection");
+    assert_eq!(projected, (interrupted_turn_id, cancelled.event_id.clone()));
+    let next_projected: String = conn
+        .query_row(
+            "SELECT turn_id FROM agent_events WHERE event_id = ?",
+            [&next_turn.event_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(Some(next_projected), next_turn.turn_id);
 }
 
 /// A crash-and-respawn must restore a session's role, not just its

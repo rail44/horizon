@@ -596,14 +596,18 @@ reversal, not the original plan.
   4. Spawns the session's thread exactly as `Control::SessionNew` would
      (`spawn_session_thread`, now shared by both call sites), seeded with
      the full (possibly just-extended) event history.
-  - **Turn-id continuity is not preserved for the synthesized cancellation.**
-    The fixup's `Appender` starts a fresh `TurnTracker`, so the closing
-    events land with `turn_id: None` rather than the interrupted turn's own
-    id. Acceptable: `turn_id` is a persistence-forensics grouping aid (used
-    by the `agent-inspect` skill), not load-bearing for the frame fold or
-    for `is_turn_in_flight`, which don't look at it at all. Worth
-    revisiting only if turn-id-keyed forensics across a crash boundary
-    becomes a real need.
+  - **Recovery preserves the interrupted turn's recorded identity.** The
+    fixup's `Appender` restores its `TurnTracker` from persisted records
+    before writing cancellation events. This also applies when terminating
+    orphaned exploration sessions. DuckDB's `agent_turns.turn_id` is required:
+    a missing ID drops the end record from the projection, even though the
+    frame can still fold the event. A finished turn with an unsettled input
+    gets an input outcome only, without a second `TurnEnded`. If startup
+    reached `Running` before a turn-opening message was persisted, recovery
+    settles the input and state without inventing a turn ID or an end record.
+    This replaces
+    the earlier assumption that recovery could safely omit turn IDs
+    (2026-09-18).
   - **Every persisted session is resumed eagerly at startup, not lazily on
     first `session_load`.** This is what makes "sessions are live again
     (`WaitingForUser`), listed by `session_list`" literally true before any

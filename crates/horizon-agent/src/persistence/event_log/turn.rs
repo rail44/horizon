@@ -12,6 +12,18 @@ impl TurnTracker {
         Self::default()
     }
 
+    pub(super) fn has_open_turn(&self) -> bool {
+        self.current_turn_id.is_some()
+    }
+
+    pub(super) fn restore(&mut self, event: &Event, turn_id: Option<&str>) {
+        if ends_turn(event) {
+            self.current_turn_id = None;
+        } else if let Some(turn_id) = turn_id {
+            self.current_turn_id = Some(turn_id.to_string());
+        }
+    }
+
     pub(super) fn turn_id_for_event(&mut self, event: &Event) -> Option<String> {
         if matches!(
             event,
@@ -47,22 +59,25 @@ impl TurnTracker {
         // post-turn idle state and is therefore also a boundary marker, but
         // `WaitingForApproval` is mid-turn: the user is still inside the same
         // turn while deciding on a tool call.
-        if matches!(event, Event::TurnEnded(_))
-            || matches!(
-                event,
-                Event::StateChanged(
-                    SessionState::WaitingForUser
-                        | SessionState::Cancelled
-                        | SessionState::Failed
-                        | SessionState::Terminated
-                )
-            )
-        {
+        if ends_turn(event) {
             self.current_turn_id = None;
         }
 
         turn_id
     }
+}
+
+fn ends_turn(event: &Event) -> bool {
+    matches!(event, Event::TurnEnded(_))
+        || matches!(
+            event,
+            Event::StateChanged(
+                SessionState::WaitingForUser
+                    | SessionState::Cancelled
+                    | SessionState::Failed
+                    | SessionState::Terminated
+            )
+        )
 }
 
 #[cfg(test)]
@@ -109,5 +124,52 @@ mod tests {
             Some(auto_turn),
             "the auto-started turn's own events belong to it"
         );
+    }
+
+    #[test]
+    fn recovery_preserves_the_original_turn_and_starts_a_new_identity_after_it() {
+        let mut original = TurnTracker::new();
+        let id = original
+            .turn_id_for_event(&committed(MessageRole::User))
+            .unwrap();
+        let mut restored = TurnTracker::new();
+        restored.restore(&committed(MessageRole::User), Some(&id));
+        restored.restore(
+            &Event::StateChanged(SessionState::WaitingForApproval),
+            Some(&id),
+        );
+        restored.restore(&Event::DeliveryAcknowledged("other-input".into()), None);
+        assert_eq!(
+            restored.turn_id_for_event(&Event::TurnEnded(TurnEndReason::Cancelled)),
+            Some(id.clone())
+        );
+        assert_eq!(
+            restored.turn_id_for_event(&Event::StateChanged(SessionState::WaitingForUser)),
+            None
+        );
+        let next = restored
+            .turn_id_for_event(&committed(MessageRole::User))
+            .unwrap();
+        assert_ne!(next, id);
+    }
+
+    #[test]
+    fn recovery_does_not_reopen_a_turn_past_any_persisted_boundary() {
+        for boundary in [
+            Event::TurnEnded(TurnEndReason::Completed),
+            Event::StateChanged(SessionState::WaitingForUser),
+            Event::StateChanged(SessionState::Cancelled),
+            Event::StateChanged(SessionState::Failed),
+            Event::StateChanged(SessionState::Terminated),
+        ] {
+            let mut restored = TurnTracker::new();
+            restored.restore(&committed(MessageRole::User), Some("old-turn"));
+            restored.restore(&boundary, Some("old-turn"));
+            restored.restore(&Event::DeliveryAcknowledged("input".into()), None);
+            assert_eq!(
+                restored.turn_id_for_event(&Event::StateChanged(SessionState::Created)),
+                None
+            );
+        }
     }
 }

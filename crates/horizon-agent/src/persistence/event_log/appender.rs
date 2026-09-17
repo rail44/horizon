@@ -66,6 +66,27 @@ impl Appender {
         self
     }
 
+    /// Restore this session's open turn from records in chronological order.
+    /// Recovery events must retain the persisted identity rather than open a
+    /// new turn. Ended turns stay closed, even when later records lack an ID.
+    pub fn with_turn_history(mut self, records: &[Record]) -> Self {
+        self.turn_tracker = TurnTracker::new();
+        for record in records
+            .iter()
+            .filter(|record| record.session_id == self.session_id)
+        {
+            self.turn_tracker
+                .restore(&record.event, record.turn_id.as_deref());
+        }
+        self
+    }
+
+    /// A provider can enter Running before its turn-opening message is
+    /// persisted. Recovery must not invent an end record for that gap.
+    pub fn has_open_turn(&self) -> bool {
+        self.turn_tracker.has_open_turn()
+    }
+
     /// Updates the filesystem authority stamped onto every *later* record.
     /// A grant approved mid-session widens what the session can reach from
     /// that point on, so the records written after it must say so -- the

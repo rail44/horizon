@@ -18,6 +18,8 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
+# Verify the real daemon's persisted turn projection after restart.
+duckdb = "1"
 # No terminal crate here, not even as a dev-dependency
 # (docs/runtime-crate-alignment-design.md phase 2 acceptance): the union
 # wire-schema artifact that used to force one is now two artifacts, each
