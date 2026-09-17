@@ -21,8 +21,11 @@ Nothing runs this converter automatically.
 The pure legacy fold understands whole-task workflow batches and subsequent
 ordinary edits/comments. It keeps the greatest ID even from unknown legacy
 events. Selected tasks retain sibling rank strings and recorded progress text;
-only recorded `done` maps to recognizable completion. Workflow verification and
-integration flags do not become completion. Old free-form links become body
+The historical converter emits the v2 `completed` field: only recorded `done`
+maps to that old completion flag. Current readers accept it as `is_closed`,
+without inferring closure from status text. Review retained archived/withdrawn
+tasks and explicitly close them after importing. Workflow verification and
+integration flags do not become closure. Old free-form links become body
 references. Historical session references appear in the inventory, never as
 new runnable session bindings.
 

@@ -17,7 +17,10 @@ pub struct Item {
     pub title: String,
     pub body: String,
     pub status: String,
-    pub completed: bool,
+    /// Excluded from active work, whether finished or withdrawn. Skills decide
+    /// when to change this flag; the status text has no machine-defined meaning.
+    #[serde(alias = "completed")]
+    pub is_closed: bool,
     pub rank: String,
     pub parent: Option<u64>,
     pub depends_on: Vec<u64>,

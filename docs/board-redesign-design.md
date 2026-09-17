@@ -18,8 +18,9 @@ Current implementation entry points are `crates/horizon-board` and
 view. See the [implementation map](board-redesign-implementation-plan.md) for
 package status and verification obligations.
 
-Current choices: completion is a separate `completed` fact alongside free-form
-`status`; read state is the furthest displayed message in each task, including
+Current choices: closure is a separate `is_closed` flag alongside free-form
+`status`; finished and withdrawn tasks are both closed. Skills control this flag
+explicitly without a status registry or string-to-flag mapping; read state is the furthest displayed message in each task, including
 all earlier posts. The task keeps its `session_id`; every review
 request creates a fresh ordinary session/worktree pinned to its exact tip, and
 `review_session_id` points only to the latest reviewer. Explicit source sends
@@ -91,7 +92,8 @@ It is also adopted into the ordinary session inventory for Manage Sessions.
 The palette preserves the board cursor when focus belongs to another pane.
 If the owner navigates away during startup, the session remains available in
 Manage Sessions without moving focus. This adds an explicit entry point;
-task registration and completion keep their existing organizer triggers.
+task registration retains its organizer trigger; the former completion trigger
+now records closure as described below.
 
 **Task model clarification, 2026-09-16:** the owner uses “milestone” to mean
 an ordinary board task at a larger granularity. It is not a separate entity,
@@ -172,13 +174,37 @@ conditions may vary by task, including whether a usable implementation result
 is sufficient or review and integration are required. Availability of a
 prerequisite's result to dependent work is part of that assessment.
 
-**Progress state policy, 2026-09-16:** the owner accepted keeping completion
-recognizable by the shared mechanism while leaving intermediate state names
-and their use to project-specific skills. The board stores and displays those
-states. Projects can decide whether consultation, implementation, or review
-warrants a distinct state; the product does not impose those stages. Unread
-message state remains independent. The concrete representation of completion
-alongside project-defined states is now the separate `completed` boolean.
+**Progress and closure policy, 2026-09-18:** project skills define status names
+and when work should close or reopen. The independent `is_closed` flag means
+excluded from active work, including both finished and withdrawn tasks. A status
+string never determines this flag. No status registry, fixed state sequence, or
+project initialization is required. The former `completed` boolean has been
+renamed and broadened; historical v2 records remain readable through a read alias,
+while new writes use only `is_closed`. Log-wire v6 requires matching shell, CLI,
+agentd, and logd binaries at activation; the terminal protocol is unchanged.
+
+`board.update action=close` takes `is_closed` and optional `status`, updating both
+in one transaction. CLI equivalents are `board close/reopen ID [--status TEXT]`.
+The detail view offers Close task / Reopen; it preserves the current status text.
+Closed state uses neutral styling because it does not establish success.
+
+The main list hides closed tasks by default. Show closed / Hide closed is a
+pane-local toggle through the command model, also available in the palette and
+as `toggle-board-closed-visibility`. It combines with the existing top-level and
+search filters; opening a new pane restores the default. All records remain
+available for details, relationships, session state, and unread tracking. Open
+children of hidden parents remain visible in the full tree, as roots in the
+visible set; the top-level filter still means actual `parent == null`. A detail
+already open remains open after closure. Drag insertion compares actual sibling
+ranks including hidden tasks, so hiding a row does not create false no-ops.
+
+A false-to-true closure notifies open dependents and the organizer that the task
+was closed, explicitly allowing withdrawal. Skills reread its outcome and
+prerequisites before treating any result as available. This does not automatically
+satisfy dependencies or end the associated session. New messages do not reopen a
+task automatically. Skills honor owner closure decisions, refresh status and
+current task descriptions at meaningful stages, and explicitly reopen only when
+the current direction calls for more work.
 
 **Execution and review, current basis, 2026-09-16:** the owner chose to have
 the task's consultation session continue into implementation, with a different
@@ -230,12 +256,10 @@ instructions. The shared board/session mechanism provides the operations and
 records their outcomes; it does not impose one integration policy on every
 project.
 
-**Dependency-wait resumption, 2026-09-16:** the owner accepted notifying an
-existing waiting task session when a prerequisite task completes. For example,
-if B has settled direction and is waiting for A, A's completion is delivered
-to B's session. The skill-guided agent then checks the current direction,
-remaining prerequisites, and availability of the required results before
-proceeding. The mechanism delivers the completion event; the decision to begin
+**Dependency-wait resumption, updated 2026-09-18:** closing a prerequisite
+notifies its existing open dependent task sessions. The skill-guided agent reads
+the outcome (finished or withdrawn), current direction, remaining prerequisites,
+and availability of required results before proceeding. The decision to begin
 implementation remains with the agent's skill policy.
 
 **Parallel work, 2026-09-16:** the owner accepted supporting parallel task
@@ -279,7 +303,7 @@ includes normal answer completion; it does not establish that the owner needs
 to act. Unread markers remain independent. The view observes the existing
 session entities, so changes
 appear without a board write or an open agent pane. These are derived display
-values, independent of the task's free-form status, completion, and unread
+values, independent of the task's free-form status, closure, and unread
 messages. Board views do not keep sessions alive after termination. A missing
 or unreachable session is shown as `Unavailable` rather than as still running.
 
@@ -343,7 +367,7 @@ the running command. The agent then uses the message and skill policy to
 continue, revise its approach, or return to consultation.
 The owner accepted separating reading new input from taking on its reply:
 additions to the ongoing board consultation are incorporated and answered
-together; review results and prerequisite-completion notifications inform the
+together; review results and prerequisite-closure notifications inform the
 next decision without changing the current final-answer destination. A request
 requiring a reply to another destination is shared as input, but its reply is
 handled in a subsequent turn. A new input must not silently overwrite the
@@ -399,10 +423,10 @@ implementation, with a separate reviewer. Role and tool details remain open.
 | Deliver inputs with their origin and optional final-answer destination; automatically forward the final answer there. Provide explicit sends using the same session delivery machinery. The initial version has no mandatory reply-tool check. | Address the specified recipient in the final answer, communicate with other recipients explicitly during work, and recognize when implementation requires further consultation. |
 | Distinguish owner decisions, agent proposals, and agent judgments in records. | Read the actual conversation and record its outcome without inventing agreement. |
 | Retain the task/session association as the session proceeds from consultation into implementation. | Assess whether direction and prerequisites permit work; handle implementation details and return to consultation when agreed premises need to change. |
-| Notify waiting task sessions when their prerequisite tasks complete. | Recheck current direction and required results on notification, then decide whether to proceed. |
+| Notify open task sessions when their prerequisite tasks close. | Recheck the recorded outcome, current direction, and required results; closure can mean withdrawal. |
 | Support concurrent execution of task sessions. | Choose which ready tasks to run together using their relationships, priorities, and the project's concurrency policy. |
 | Associate a separate review session and its findings with the task and implementation being reviewed. | Review actual changes against the task's requirements and agreed direction; handle code corrections between agents and surface design questions to the owner. |
-| Preserve completion conditions in the task description, store and display progress states, and recognize recorded completion. | Define intermediate state names and their use for the project; check the task's conditions and the availability of its result to dependent work before recording completion. |
+| Preserve completion conditions, store and display project states, and record explicit closure. | Define intermediate state names and their use for the project; check the task's conditions and the availability of its result to dependent work before closing finished work; retain withdrawal reasons when closing abandoned work. |
 | Provide operations for applying the reviewed changes to the specified destination and recording the result. | Follow the project's integration instructions, including direct integration, PR submission, or required human confirmation. |
 
 Priority is an ordering preference. Dependencies describe required preceding
@@ -430,7 +454,7 @@ selected-record importer described in the implementation plan.
 | `rank` | Sortable order key representing priority among tasks with the same parent. Top-level tasks form their own ordered group. |
 | `depends_on` | Task ids identifying required preceding work; references may cross parent groups. |
 | `status` | Free-form progress text defined by project-specific skills. |
-| `completed` | Recognizable completion fact, explicitly set after the task conditions are checked. |
+| `is_closed` | Excluded from active work, explicitly controlled by skills or owner operations; includes finished and withdrawn tasks. |
 | `session_id` | Task session used for both consultation and implementation, or null before creation. |
 | `review_session_id` | Latest reviewer session id, or null before review. Each request creates a fresh ordinary session with a worktree pinned to the requested tip. |
 
@@ -674,8 +698,8 @@ request/reply exchanges.
 | Register a task | Board registration reaches the organizer. | The organizer reads the task and arranges priorities and prerequisites in board data. A written acknowledgment is not inherently needed. |
 | Start investigation or consultation | The organizer starts the task session with the task reference and work to pursue; an owner post can also start it. | The task session investigates and opens useful consultation. |
 | Consult with the owner | Board posts reach the task session with the task's board conversation as the final-answer destination. The harness posts the final answer there; tools support explicit posts during work. | The owner and agent clarify direction, including returning to consultation when a premise fails during implementation. |
-| Discover work spanning tasks | A task session sends prerequisite needs or constraints and their reasons to the organizer. | The organizer checks and updates board data, or seeks clarification. An extra acknowledgment is only useful if it adds information beyond the shared state. Explicit session sends and prerequisite completion notifications provide the implemented delivery paths. |
-| A prerequisite completes | The board's recorded completion notifies existing waiting task sessions. | Each session rereads the current conditions and results, then decides whether to proceed. No conversational reply is needed merely to acknowledge the event. |
+| Discover work spanning tasks | A task session sends prerequisite needs or constraints and their reasons to the organizer. | The organizer checks and updates board data, or seeks clarification. An extra acknowledgment is only useful if it adds information beyond the shared state. Explicit session sends and prerequisite closure notifications provide the implemented delivery paths. |
+| A prerequisite closes | The board's recorded closure notifies existing open task sessions. | Each session rereads the current conditions and results, then decides whether to proceed. No conversational reply is needed merely to acknowledge the event. |
 | Review an implementation | The task session requests review with the task, base, target tip, and checks, specifying itself as the final-answer destination. The harness delivers the reviewer's final findings to it. | Findings guide corrections or completion assessment; necessary re-review refers to the new tip. This is a substantive result, not just a receipt. |
 
 **Accepted routing principle:** the triggering event supplies the final answer's
@@ -689,7 +713,7 @@ and detail for that audience. The destination need not be the event's sender.
 | The organizer asks a task session to begin consultation with the owner. | That task's board conversation. |
 | A task session requests review. | The requesting task session. |
 | A board review result reaches the requesting task session. | The originating task's board conversation, retained by the review request. |
-| A prerequisite completion or ordinary session result notification arrives. | No automatic return destination; the skill guides subsequent work. |
+| A prerequisite closure or ordinary session result notification arrives. | No automatic return destination; the skill guides subsequent work. |
 
 The harness forwards only the final answer. Investigation records, intermediate
 output, and implementation details remain in the session's working history.
@@ -727,7 +751,7 @@ reply are separate operations.
 | Incoming input | Handling |
 | --- | --- |
 | An addition to the ongoing board consultation. | Read it before the next work decision, incorporate it into the consultation, and answer together. |
-| Review findings or a prerequisite-completion notification. | Use it in the next decision while retaining the current final-answer destination. |
+| Review findings or a prerequisite-closure notification. | Use it in the next decision while retaining the current final-answer destination. |
 | A request requiring a reply to another destination. | Share its content with the session, but handle that request's reply in a subsequent turn. |
 
 For example, review findings received while preparing an answer for the owner
@@ -910,7 +934,7 @@ are implementation work under the established responsibilities.
 > action. Use their content and the agreed direction to decide whether to
 > continue, revise the approach, or return to consultation.
 > Incorporate additions to the ongoing consultation into its answer. Use review
-> findings and completion notifications as decision inputs while retaining the
+> findings and closure notifications as decision inputs while retaining the
 > current final-answer destination. A request with another return destination
 > can inform the current work, but its reply belongs to a subsequent turn.
 > When a requested operation ends through failure or interruption, assess the
@@ -937,7 +961,7 @@ are implementation work under the established responsibilities.
 > At implementation start, check that the chosen starting revision includes the
 > prerequisite results needed for the work. Request the task worktree from that
 > specific commit and retain the recorded base.
-> When notified that a prerequisite completed, reread the current task direction
+> When notified that a prerequisite closed, reread its outcome and the current task direction
 > and dependency results. Proceed when the required conditions are satisfied;
 > otherwise retain the remaining reason for waiting or return to consultation.
 > Follow the project's policy for parallel work. Consider the task's priority

@@ -277,10 +277,10 @@ async fn board_store_client_round_trip_through_real_logd() {
     assert_eq!(shown.comments[0].text, "a note");
 
     store
-        .set_completed(1, true)
+        .set_closed(1, true, None)
         .await
-        .expect("complete through logd");
-    assert!(store.show(1).unwrap().unwrap().completed);
+        .expect("close through logd");
+    assert!(store.show(1).unwrap().unwrap().is_closed);
 
     drop(logd);
     std::env::remove_var("HORIZON_LOGD_BINARY");

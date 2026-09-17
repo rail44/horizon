@@ -302,7 +302,7 @@ mod tests {
                 task_session_state(&item, &states),
                 Some(BoardSessionState::Known(expected))
             );
-            assert!(!item.completed);
+            assert!(!item.is_closed);
         }
         states.insert(review, BoardSessionState::Known(SessionStatus::Failed));
         item.review_session_id = None;

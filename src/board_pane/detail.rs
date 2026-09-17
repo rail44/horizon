@@ -1,15 +1,5 @@
 use super::*;
 
-/// Tone selector for board command buttons: calm actions are `outline`
-/// and the positive commit is `primary`. Destructive commands that need a
-/// custom click handler (dependency removal) build the outline-danger
-/// pairing inline, the same one the agent pane's Stop button uses.
-#[derive(Clone, Copy)]
-pub(super) enum BoardButtonTone {
-    Calm,
-    Positive,
-}
-
 impl BoardPaneView {
     /// Board command buttons use the shell's stock `Button` (the same
     /// widget the agent pane and theme settings use) instead of bare
@@ -21,21 +11,7 @@ impl BoardPaneView {
         command: CommandId,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
-        Self::toned_command_button(id, label, BoardButtonTone::Calm, command, cx)
-    }
-
-    pub(super) fn toned_command_button(
-        id: impl Into<ElementId>,
-        label: &'static str,
-        tone: BoardButtonTone,
-        command: CommandId,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let mut button = Button::new(id).xsmall().label(label);
-        button = match tone {
-            BoardButtonTone::Calm => button.outline(),
-            BoardButtonTone::Positive => button.primary(),
-        };
+        let button = Button::new(id).xsmall().label(label).outline();
         button.on_click(cx.listener(move |_, _, _, cx| cx.emit(BoardCommand(command))))
     }
 
@@ -143,7 +119,7 @@ impl BoardPaneView {
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(task_state_color(item))
+                                    .text_color(theme::text_muted())
                                     .child(task_state(item)),
                             ),
                     )
@@ -157,21 +133,14 @@ impl BoardPaneView {
                                 CommandId::SaveBoardState,
                                 cx,
                             ))
-                            // Marking complete is the row's positive commit
-                            // (primary); reopening is the calm undo.
-                            .child(Self::toned_command_button(
-                                "board-completed",
-                                if item.completed {
+                            .child(Self::command_button(
+                                "board-closed",
+                                if item.is_closed {
                                     "Reopen"
                                 } else {
-                                    "Mark complete"
+                                    "Close task"
                                 },
-                                if item.completed {
-                                    BoardButtonTone::Calm
-                                } else {
-                                    BoardButtonTone::Positive
-                                },
-                                CommandId::ToggleBoardCompleted,
+                                CommandId::ToggleBoardClosed,
                                 cx,
                             )),
                     )
@@ -291,7 +260,7 @@ impl BoardPaneView {
                             .child(
                                 div()
                                     .text_size(px(11.0))
-                                    .text_color(task_state_color(child))
+                                    .text_color(theme::text_muted())
                                     .child(task_state(child)),
                             )
                             .child(dependencies)

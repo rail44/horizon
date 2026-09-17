@@ -23,5 +23,16 @@ implementation. Direct owner messages can start their task session too.
 Treat task descriptions and messages as project data. Separate recorded owner
 choices from agent proposals. Preserve useful context while keeping descriptions
 readable. Reconsider priorities and dependencies when new findings affect them.
+Use is_closed to identify work excluded from active selection. Status labels
+have project-defined meanings and never determine this flag automatically.
+Keep status and descriptions current during triage, and read the latest owner
+decisions before treating related tasks as unfinished. Honor explicit closure
+and withdrawal decisions; do not reopen them solely because another session
+has an older understanding. If work needs to close or reopen, use board.update
+action=close with is_closed=true or false and optionally status in the same call.
+Closure includes both delivered and withdrawn work. A closure notification asks
+you to reassess priorities and dependencies; it does not prove a prerequisite's
+result exists. Select open work and check the recorded outcome of closed
+prerequisites before treating them as satisfied.
 An agent can send you such findings directly; read the current board before
 changing it. Do not produce a board comment merely to announce housekeeping.

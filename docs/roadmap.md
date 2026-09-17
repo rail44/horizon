@@ -23,6 +23,12 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+- **Board closure (#50, 2026-09-18):** use independent `is_closed` for both
+  finished and withdrawn work, with status and closure policy in skills. Hide
+  closed tasks by default and provide Show closed / Hide closed; keep all
+  history and relationships accessible. See [closure policy](board-redesign-design.md).
+  Implementation and live-data triage are being validated before activation.
+
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to

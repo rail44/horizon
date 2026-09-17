@@ -211,7 +211,7 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
                 | IngestRequest::SetStatus { id, .. }
                 | IngestRequest::MoveItem { id, .. }
                 | IngestRequest::Edit { id, .. }
-                | IngestRequest::SetCompleted { id, .. }
+                | IngestRequest::SetClosed { id, .. }
                 | IngestRequest::SetDependencies { id, .. }
                 | IngestRequest::BindSession { id, .. }
                 | IngestRequest::PostMessage { id, .. }
@@ -299,8 +299,13 @@ pub fn perform(path: &Path, request: IngestRequest) -> Result<(IngestReply, Vec<
                     item.status = status;
                     None
                 }
-                IngestRequest::SetCompleted { completed, .. } => {
-                    item.completed = completed;
+                IngestRequest::SetClosed {
+                    is_closed, status, ..
+                } => {
+                    item.is_closed = is_closed;
+                    if let Some(status) = status {
+                        item.status = status;
+                    }
                     None
                 }
                 IngestRequest::SetDependencies { depends_on, .. } => {

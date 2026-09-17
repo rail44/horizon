@@ -192,26 +192,32 @@
         {
           "additionalProperties": false,
           "properties": {
-            "SetCompleted": {
+            "SetClosed": {
               "properties": {
-                "completed": {
-                  "type": "boolean"
-                },
                 "id": {
                   "format": "uint64",
                   "minimum": 0,
                   "type": "integer"
+                },
+                "is_closed": {
+                  "type": "boolean"
+                },
+                "status": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               },
               "required": [
                 "id",
-                "completed"
+                "is_closed"
               ],
               "type": "object"
             }
           },
           "required": [
-            "SetCompleted"
+            "SetClosed"
           ],
           "type": "object"
         },
@@ -528,9 +534,6 @@
           },
           "type": "array"
         },
-        "completed": {
-          "type": "boolean"
-        },
         "depends_on": {
           "items": {
             "format": "uint64",
@@ -543,6 +546,10 @@
           "format": "uint64",
           "minimum": 0,
           "type": "integer"
+        },
+        "is_closed": {
+          "description": "Excluded from active work, whether finished or withdrawn. Skills decide\nwhen to change this flag; the status text has no machine-defined meaning.",
+          "type": "boolean"
         },
         "parent": {
           "format": "uint64",
@@ -579,7 +586,7 @@
         "title",
         "body",
         "status",
-        "completed",
+        "is_closed",
         "rank",
         "depends_on",
         "comments"
@@ -819,5 +826,5 @@
     }
   },
   "title": "horizon-log-wire",
-  "x-session-protocol-version": 5
+  "x-session-protocol-version": 6
 }

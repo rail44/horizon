@@ -67,14 +67,15 @@ impl AgentdBoardHost {
             }
             "move" => self.store.move_item(id, position(input)?).await.map(|_| ()),
             "status" => self.store.set_status(id, string(input, "status")?).await,
-            "complete" => {
+            "close" => {
                 self.store
-                    .set_completed(
+                    .set_closed(
                         id,
                         input
-                            .get("completed")
+                            .get("is_closed")
                             .and_then(Value::as_bool)
-                            .ok_or("Missing completed boolean")?,
+                            .ok_or("Missing is_closed boolean")?,
+                        optional_string(input, "status")?.as_deref(),
                     )
                     .await
             }

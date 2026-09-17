@@ -674,7 +674,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
         Definition {
             id: "board.update".into(),
             title: "Update Board Task".into(),
-            description: "Create or edit ordinary tasks, set parent/dependencies, reorder among siblings, or record project-defined state and completion. For move, provide position and relative_to for before/after. Completion is separate from the state label.".into(),
+            description: "Create or edit ordinary tasks, set parent/dependencies, reorder among siblings, or record project-defined status and closure. For move, provide position and relative_to for before/after. Use close with is_closed=true for finished or withdrawn work, or false to reopen; optional status is updated atomically. Status text alone never changes is_closed.".into(),
             input_schema: super::board::update_schema(),
             permission: ToolPermission::AutoAllowRead,
         },

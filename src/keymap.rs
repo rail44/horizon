@@ -143,6 +143,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "manage-sessions" => Some(CommandId::OpenSessionManager),
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
+        "toggle-board-closed-visibility" => Some(CommandId::ToggleBoardClosedVisibility),
         "open-board-organizer" => Some(CommandId::OpenBoardOrganizer),
         "open-board-task-session" => Some(CommandId::OpenBoardTaskSession),
         "open-board-related-item" => Some(CommandId::OpenBoardRelatedItem),
@@ -153,7 +154,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "move-board-task-down" => Some(CommandId::MoveBoardTaskDown),
         "reorder-board-task" => Some(CommandId::ReorderBoardTask),
         "save-board-state" => Some(CommandId::SaveBoardState),
-        "toggle-board-completed" => Some(CommandId::ToggleBoardCompleted),
+        "toggle-board-closed" => Some(CommandId::ToggleBoardClosed),
         "add-board-dependency" => Some(CommandId::AddBoardDependency),
         "remove-board-dependency" => Some(CommandId::RemoveBoardDependency),
 

@@ -325,6 +325,16 @@ impl BoardPaneView {
         });
     }
 
+    pub(crate) fn toggle_closed_visibility(&mut self, cx: &mut Context<Self>) {
+        self.list.update(cx, |list, cx| {
+            let delegate = list.delegate_mut();
+            delegate.show_closed = !delegate.show_closed;
+            delegate.rederive();
+            cx.notify();
+        });
+        cx.notify();
+    }
+
     fn post_comment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let BoardPaneMode::Detail {
             item,
@@ -376,7 +386,7 @@ impl BoardPaneView {
             let delegate = self.list.read(cx).delegate();
             let indicator = delegate.drop_indicator;
             indicator.and_then(|(target_id, half)| {
-                drop_position_from_half(dragged_id, &delegate.filtered, target_id, half)
+                drop_position_from_half(dragged_id, &delegate.all, target_id, half)
             })
         };
         self.clear_drop_indicator(cx);
@@ -474,6 +484,16 @@ impl Render for BoardPaneView {
                                     "board-filter",
                                     "Toggle top-level",
                                     CommandId::ToggleBoardExpansion,
+                                    cx,
+                                ))
+                                .child(Self::command_button(
+                                    "board-show-closed",
+                                    if self.list.read(cx).delegate().show_closed {
+                                        "Hide closed"
+                                    } else {
+                                        "Show closed"
+                                    },
+                                    CommandId::ToggleBoardClosedVisibility,
                                     cx,
                                 )),
                         )

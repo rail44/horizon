@@ -404,7 +404,7 @@ async fn handle_event(
             ))
         }
         BoardEvent::ItemStored { id, item }
-            if item.completed && previous.is_some_and(|item| !item.completed) =>
+            if item.is_closed && previous.is_some_and(|item| !item.is_closed) =>
         {
             let mut done = true;
             let all = project
@@ -414,7 +414,7 @@ async fn handle_event(
                 .items;
             for dependent in all
                 .iter()
-                .filter(|item| !item.completed && item.depends_on.contains(id))
+                .filter(|item| !item.is_closed && item.depends_on.contains(id))
             {
                 if let Some(session) = dependent.session_id.as_deref() {
                     let target = operations::parse_session(session)?;
@@ -422,13 +422,13 @@ async fn handle_event(
                     // them and the task skill rereads the current prerequisites.
                     if state.session_exists(target) {
                         done &= receipt(state,index,target,SessionInput{id:format!("{event_id}:dependent:{}",dependent.id),origin:"board".into(),
-                            text:format!("Prerequisite #{id} completed. Reread task #{} and all prerequisites before deciding what to do.",dependent.id),reply_to:None,resume_work:false});
+                            text:format!("Prerequisite #{id} was closed. It may have been completed or withdrawn. Reread task #{} and all prerequisites before deciding what to do.",dependent.id),reply_to:None,resume_work:false});
                     }
                 }
             }
             let organizer = operations::organizer_session(state, &project.root)?;
             done &= receipt(state,index,organizer,SessionInput{id:format!("{event_id}:organizer"),origin:"board".into(),
-                text:format!("Task #{id} completed. Reassess the current priorities, prerequisites, and useful parallel work."),reply_to:None,resume_work:false});
+                text:format!("Task #{id} was closed. It may have been completed or withdrawn. Reassess the current priorities, prerequisites, and useful parallel work."),reply_to:None,resume_work:false});
             Ok(done)
         }
         _ => Ok(true),

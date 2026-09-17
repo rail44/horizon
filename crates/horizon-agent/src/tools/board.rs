@@ -13,14 +13,14 @@ use crate::tools::Execution;
 pub(crate) fn update_schema() -> Value {
     json!({"type":"object", "additionalProperties":false, "required":["action"],
     "properties": {
-        "action":{"type":"string","enum":["add","edit","parent","dependencies","move","status","complete"]},
+        "action":{"type":"string","enum":["add","edit","parent","dependencies","move","status","close"],"description":"close sets is_closed explicitly (true to close, false to reopen); an optional status is updated in the same transaction. status alone never changes is_closed."},
         "id":{"type":"integer","minimum":1},
         "title":{"type":"string"},"body":{"type":"string"},
         "parent":{"type":["integer","null"]},
         "depends_on":{"type":"array","items":{"type":"integer","minimum":1}},
         "position":{"type":"string","enum":["first","last","before","after"]},
         "relative_to":{"type":"integer","minimum":1},
-        "status":{"type":"string"},"completed":{"type":"boolean"}
+        "status":{"type":"string"},"is_closed":{"type":"boolean"}
     }})
 }
 

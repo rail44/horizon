@@ -401,7 +401,7 @@ impl WorkspaceShell {
             | CommandId::MoveBoardTaskDown
             | CommandId::ReorderBoardTask
             | CommandId::SaveBoardState
-            | CommandId::ToggleBoardCompleted
+            | CommandId::ToggleBoardClosed
             | CommandId::AddBoardDependency
             | CommandId::RemoveBoardDependency => {
                 if let Some(view) = self.active_board_pane() {
@@ -413,6 +413,11 @@ impl WorkspaceShell {
             CommandId::ToggleBoardExpansion => {
                 if let Some(view) = self.active_board_pane() {
                     view.update(cx, |view, cx| view.toggle_expansion(cx));
+                }
+            }
+            CommandId::ToggleBoardClosedVisibility => {
+                if let Some(view) = self.active_board_pane() {
+                    view.update(cx, |view, cx| view.toggle_closed_visibility(cx));
                 }
             }
             // The font-size commands mutate the shell crate's live font

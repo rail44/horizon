@@ -90,16 +90,16 @@ impl BoardPaneView {
                     self.spawn_set_status(id, self.state_input.read(cx).value().to_string(), cx);
                 }
             }
-            CommandId::ToggleBoardCompleted
+            CommandId::ToggleBoardClosed
             | CommandId::AddBoardDependency
             | CommandId::RemoveBoardDependency => {
                 let BoardPaneMode::Detail { item, .. } = &self.mode else {
                     return;
                 };
                 let id = item.id;
-                let completed = !item.completed;
+                let is_closed = !item.is_closed;
                 let mut dependencies = item.depends_on.clone();
-                if command != CommandId::ToggleBoardCompleted {
+                if command != CommandId::ToggleBoardClosed {
                     let Some(dependency) = self.pending_dependency.take() else {
                         return;
                     };
@@ -111,8 +111,8 @@ impl BoardPaneView {
                 }
                 self.mutate(cx, move |store| {
                     Box::pin(async move {
-                        if command == CommandId::ToggleBoardCompleted {
-                            store.set_completed(id, completed).await
+                        if command == CommandId::ToggleBoardClosed {
+                            store.set_closed(id, is_closed, None).await
                         } else {
                             store.set_dependencies(id, dependencies).await
                         }

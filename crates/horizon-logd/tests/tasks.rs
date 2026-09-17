@@ -53,6 +53,102 @@ impl Drop for Board {
 }
 
 #[test]
+fn closing_and_reopening_update_status_atomically_without_interpreting_it() {
+    let b = Board::new();
+    let id = b.add(None);
+    b.write(Request::SetStatus {
+        id,
+        status: "archived".into(),
+    })
+    .unwrap();
+    assert!(!b.item(id).is_closed);
+    assert_eq!(
+        Store::at(b.0.clone())
+            .list(None, false)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    let (_, sequences) = b
+        .write(Request::SetClosed {
+            id,
+            is_closed: true,
+            status: Some("withdrawn by owner".into()),
+        })
+        .unwrap();
+    assert_eq!(sequences.len(), 1);
+    assert!(b.item(id).is_closed);
+    assert_eq!(b.item(id).status, "withdrawn by owner");
+    assert!(Store::at(b.0.clone())
+        .list(None, false)
+        .unwrap()
+        .items
+        .is_empty());
+    assert_eq!(
+        Store::at(b.0.clone()).list(None, true).unwrap().items.len(),
+        1
+    );
+
+    // Explicit status searches can still retrieve closed history.
+    assert_eq!(
+        Store::at(b.0.clone())
+            .list(Some("withdrawn by owner"), false)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+    let (_, sequences) = b
+        .write(Request::SetClosed {
+            id,
+            is_closed: false,
+            status: Some("awaiting evidence".into()),
+        })
+        .unwrap();
+    assert_eq!(sequences.len(), 1);
+    assert!(!b.item(id).is_closed);
+    assert_eq!(b.item(id).status, "awaiting evidence");
+    assert_eq!(
+        Store::at(b.0.clone())
+            .list(None, false)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn old_completion_records_remain_readable_and_new_writes_use_is_closed() {
+    let b = Board::new();
+    let id = b.add(None);
+    b.write(Request::SetClosed {
+        id,
+        is_closed: true,
+        status: None,
+    })
+    .unwrap();
+    let current = std::fs::read_to_string(&b.0).unwrap();
+    assert!(current.contains("\"is_closed\""));
+    assert!(!current.contains("\"completed\""));
+    std::fs::write(&b.0, current.replace("\"is_closed\"", "\"completed\"")).unwrap();
+    assert!(b.item(id).is_closed);
+    b.write(Request::SetClosed {
+        id,
+        is_closed: false,
+        status: Some("custom state".into()),
+    })
+    .unwrap();
+    assert!(!b.item(id).is_closed);
+    assert_eq!(b.item(id).status, "custom state");
+    let report = horizon_board::read_events(&b.0).unwrap();
+    assert!(report.skipped_summary().is_none());
+    assert_eq!(report.envelopes.len(), 3);
+}
+
+#[test]
 fn rank_changes_only_sibling_order_and_preserves_dependencies() {
     let b = Board::new();
     let parent = b.add(None);
@@ -123,7 +219,7 @@ fn relationships_reject_missing_references_and_cycles() {
         .is_err());
 }
 #[test]
-fn completion_is_independent_of_project_status_and_session_binding_is_atomic() {
+fn closure_is_independent_of_project_status_and_session_binding_is_atomic() {
     let b = Board::new();
     let id = b.add(None);
     b.write(Request::SetStatus {
@@ -131,9 +227,10 @@ fn completion_is_independent_of_project_status_and_session_binding_is_atomic() {
         status: "waiting for artifact".into(),
     })
     .unwrap();
-    b.write(Request::SetCompleted {
+    b.write(Request::SetClosed {
         id,
-        completed: true,
+        is_closed: true,
+        status: None,
     })
     .unwrap();
     b.write(Request::BindSession {

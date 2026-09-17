@@ -42,6 +42,8 @@ pub enum CommandId {
     /// no default keybinding (see `keymap::command_for`'s
     /// `"toggle-board-expansion"` entry for an optional user binding).
     ToggleBoardExpansion,
+    /// Includes or hides closed tasks in the board list.
+    ToggleBoardClosedVisibility,
     /// Moves the live terminal font size up one step (the shell crate's
     /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
     /// and the agent transcript's base text size without a restart.
@@ -66,7 +68,7 @@ pub enum CommandId {
     MoveBoardTaskDown,
     ReorderBoardTask,
     SaveBoardState,
-    ToggleBoardCompleted,
+    ToggleBoardClosed,
     AddBoardDependency,
     RemoveBoardDependency,
 }
@@ -290,6 +292,11 @@ pub fn core_commands() -> Vec<CommandSpec> {
     commands.extend(
         [
             (
+                CommandId::ToggleBoardClosedVisibility,
+                "Show or Hide Closed Tasks",
+                "Include or hide closed tasks in the board list.",
+            ),
+            (
                 CommandId::OpenBoardTaskSession,
                 "Open Task Working History",
                 "Open the ordinary agent session associated with this task.",
@@ -335,9 +342,9 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Save the project-defined state entered for this task.",
             ),
             (
-                CommandId::ToggleBoardCompleted,
-                "Toggle Task Completion",
-                "Change completion independently of the project-defined state.",
+                CommandId::ToggleBoardClosed,
+                "Close or Reopen Task",
+                "Close or reopen the task independently of its project-defined state.",
             ),
             (
                 CommandId::AddBoardDependency,
@@ -383,6 +390,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::ReloadConfig
         | CommandId::OpenBoard
         | CommandId::ToggleBoardExpansion
+        | CommandId::ToggleBoardClosedVisibility
         | CommandId::IncreaseFontSize
         | CommandId::DecreaseFontSize
         | CommandId::ResetFontSize
@@ -395,7 +403,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::MoveBoardTaskDown
         | CommandId::ReorderBoardTask
         | CommandId::SaveBoardState
-        | CommandId::ToggleBoardCompleted
+        | CommandId::ToggleBoardClosed
         | CommandId::AddBoardDependency
         | CommandId::RemoveBoardDependency => true,
         CommandId::OpenBoardOrganizer => state.has_cursor_board,
@@ -456,7 +464,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 35);
+        assert_eq!(commands.len(), 36);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

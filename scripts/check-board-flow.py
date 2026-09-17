@@ -207,10 +207,10 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if tool:
                 return tool, None
             if task == 2:
-                if "Prerequisite #1 completed." not in text:
+                if "Prerequisite #1 was closed." not in text:
                     return None, "FIXTURE_WAITING: prerequisite 1 is incomplete."
                 command = "test \"$(cat alpha.txt)\" = final"
-                tool = once("bash", {"command": command}) or once("board.update", {"action": "complete", "id": 2, "completed": True})
+                tool = once("bash", {"command": command}) or once("board.update", {"action": "close", "id": 2, "is_closed": True})
                 return tool, None if tool else DEPENDENCY_SEEN
             assert task == 1
             if OWNER not in text:
@@ -238,7 +238,7 @@ class Provider(http.server.BaseHTTPRequestHandler):
             if REVIEW_OK not in text:
                 return None, WAITING_REREVIEW
             command = f"git -C {shlex.quote(str(self.repository))} merge --ff-only {corrected_tip}"
-            tool = once("bash", {"command": command}) or once("board.update", {"action": "complete", "id": 1, "completed": True})
+            tool = once("bash", {"command": command}) or once("board.update", {"action": "close", "id": 1, "is_closed": True})
             return tool, None if tool else COMPLETE
         raise AssertionError("Unknown role or unexpected ordinary session")
 
@@ -374,7 +374,7 @@ def main():
         agentd.wait(timeout=15)
         agentd = start("horizon-agentd", "agentd.sock")
         cli("comment", "1", "--author", "owner", OWNER, json_output=False)
-        wait_for("reviewed implementation and dependency notification", lambda: item(1)["completed"] and item(2)["completed"])
+        wait_for("reviewed implementation and dependency notification", lambda: item(1)["is_closed"] and item(2)["is_closed"])
         wait_for("task's post-review final answer on the board", lambda: has_message(1, COMPLETE))
         messages = [message["text"] for message in item(1)["comments"]]
         assert messages.count(WAITING_REREVIEW) == 1, "Correction report must return to the board"
@@ -421,7 +421,7 @@ def main():
         # Its uncommitted bytes must never have entered either pinned snapshot.
         assert (Path(environment_record["path"]) / "alpha.txt").read_text() == "uncommitted-poison\n"
         dependency_inputs = [r for r in events if r["session_id"] == item(2)["session_id"] and "InputAccepted" in r["event"]
-                             and "Prerequisite #1 completed." in json.dumps(r["event"])]
+                             and "Prerequisite #1 was closed." in json.dumps(r["event"])]
         assert len(dependency_inputs) == 1, "Completion must deliver one durable notification"
         ids = [m["id"] for m in item(1)["comments"]]
         assert len(ids) == len(set(ids)), "Stable message delivery must not duplicate IDs"

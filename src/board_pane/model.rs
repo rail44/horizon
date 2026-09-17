@@ -61,8 +61,13 @@ pub(super) fn drop_position_from_half(
     if dragged.parent != target.parent {
         return None;
     }
-    let di = items.iter().position(|i| i.id == dragged_id)?;
-    let ti = items.iter().position(|i| i.id == target_id)?;
+    let mut siblings: Vec<_> = items
+        .iter()
+        .filter(|item| item.parent == dragged.parent)
+        .collect();
+    siblings.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
+    let di = siblings.iter().position(|i| i.id == dragged_id)?;
+    let ti = siblings.iter().position(|i| i.id == target_id)?;
     match half {
         DropHalf::Above => {
             // `Before(target)`: a no-op when the dragged item is the target
@@ -243,23 +248,10 @@ pub(super) fn bound_sessions(items: &[Item]) -> Vec<horizon_workspace::SessionId
 }
 
 pub(super) fn task_state(item: &Item) -> String {
-    match (item.completed, item.status.is_empty()) {
-        (true, true) => "Completed".into(),
-        (true, false) => format!("{} · Completed", item.status),
+    match (item.is_closed, item.status.is_empty()) {
+        (true, true) => "Closed".into(),
+        (true, false) => format!("{} · Closed", item.status),
         (false, _) => item.status.clone(),
-    }
-}
-
-/// The tone for a task's displayed state: `completed` is the one state fact
-/// the product itself vouches for (the separate completion flag), so it
-/// earns the success tone. The free-form `status` text is project-defined,
-/// so it stays muted rather than inventing semantics for project-specific
-/// words.
-pub(super) fn task_state_color(item: &Item) -> Hsla {
-    if item.completed {
-        theme::success()
-    } else {
-        theme::text_muted()
     }
 }
 
@@ -441,5 +433,63 @@ mod tests {
         list.top_level_only = true;
         list.rederive();
         assert!(list.filtered.is_empty());
+    }
+
+    #[test]
+    fn closure_filter_preserves_open_children_search_and_unread_history() {
+        let mut parent = task(1, None, "a");
+        parent.title = "Parent".into();
+        parent.is_closed = true;
+        let mut child = task(2, Some(1), "a");
+        child.title = "Child".into();
+        let mut other = task(3, None, "b");
+        other.title = "Other".into();
+        // Status text never controls visibility.
+        other.status = "archived".into();
+        let mut list = super::super::list::BoardListDelegate::new();
+        list.unread.insert(1);
+        list.set_loaded(vec![parent, child, other]);
+        assert_eq!(
+            list.filtered.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![2, 3]
+        );
+        assert_eq!(list.depths, vec![0, 0]);
+        assert_eq!(list.all.len(), 3);
+        assert!(list.unread.contains(&1));
+        list.show_closed = true;
+        list.rederive();
+        assert_eq!(
+            list.filtered.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(list.depths, vec![0, 1, 0]);
+        list.last_query = "Parent".into();
+        list.rederive();
+        assert_eq!(list.filtered[0].id, 1);
+        list.show_closed = false;
+        list.rederive();
+        assert!(list.filtered.is_empty());
+        list.last_query.clear();
+        list.top_level_only = true;
+        list.rederive();
+        assert_eq!(
+            list.filtered.iter().map(|i| i.id).collect::<Vec<_>>(),
+            vec![3]
+        );
+    }
+
+    #[test]
+    fn drag_uses_real_sibling_order_including_hidden_tasks() {
+        let a = task(1, None, "a");
+        let mut hidden = task(2, None, "b");
+        hidden.is_closed = true;
+        let b = task(3, None, "c");
+        let child = task(4, Some(1), "a");
+        let items = vec![b, child, hidden, a];
+        assert_eq!(
+            drop_position_from_half(1, &items, 3, DropHalf::Above),
+            Some(Position::Before(3))
+        );
+        assert_eq!(drop_position_from_half(3, &items, 2, DropHalf::Below), None);
     }
 }

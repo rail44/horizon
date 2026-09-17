@@ -28,7 +28,7 @@ const BOARD_USAGE: &str = "Usage: horizon board <command> [options]
   show <id> [--json]
   comment <id> --author <author> <text>
   set-status <id> <free-form-state>
-  complete <id> | reopen <id>
+  close <id> [--status <text>] | reopen <id> [--status <text>]
   dependencies <id> [prerequisite-id ...]
   parent <id> <parent-id | none>
   edit <id> [--title <text>] [--body <text>]
@@ -310,11 +310,11 @@ async fn dispatch(
             let _ = writeln!(stdout, "Item {id} -> status: {s}");
             Ok(())
         }
-        "complete" | "reopen" => {
+        "close" | "reopen" => {
             let id = parse_id(positionals.first().ok_or("task id required")?)
                 .map_err(|e| e.to_string())?;
             store
-                .set_completed(id, command == "complete")
+                .set_closed(id, command == "close", status.as_deref())
                 .await
                 .map_err(|e| e.to_string())?;
             Ok(())
@@ -462,7 +462,7 @@ fn print_item_full(stdout: &mut impl Write, item: &Item) {
         }
     );
     let _ = writeln!(stdout, "  rank:     {}", item.rank);
-    let _ = writeln!(stdout, "  completed: {}", item.completed);
+    let _ = writeln!(stdout, "  is_closed: {}", item.is_closed);
     if let Some(p) = item.parent {
         let _ = writeln!(stdout, "  parent:   #{p}");
     }

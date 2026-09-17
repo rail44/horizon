@@ -162,7 +162,7 @@ impl Store {
     }
 
     /// Lists items by rank, optionally filtered by project-defined state.
-    /// Without an explicit state filter, completed tasks are hidden unless
+    /// Without an explicit state filter, closed tasks are hidden unless
     /// `include_closed` is true. Returns the full observed state vocabulary.
     pub fn list(
         &self,
@@ -193,7 +193,7 @@ impl Store {
                 .collect(),
             None => sorted
                 .into_iter()
-                .filter(|i| include_closed || !i.completed)
+                .filter(|i| include_closed || !i.is_closed)
                 .cloned()
                 .collect(),
         };
@@ -258,7 +258,7 @@ impl Store {
         }
     }
 
-    /// Sets project-defined progress text independently of completion.
+    /// Sets project-defined progress text independently of closure.
     pub async fn set_status(&self, id: u64, status: &str) -> Result<(), StoreError> {
         let reply = self
             .ingest(IngestRequest::SetStatus {
@@ -368,9 +368,20 @@ impl Store {
         })
         .await
     }
-    pub async fn set_completed(&self, id: u64, completed: bool) -> Result<(), StoreError> {
-        self.done(IngestRequest::SetCompleted { id, completed })
-            .await
+    /// Closes or reopens a task, optionally updating its progress text in the
+    /// same transaction. Neither operation infers the flag from status text.
+    pub async fn set_closed(
+        &self,
+        id: u64,
+        is_closed: bool,
+        status: Option<&str>,
+    ) -> Result<(), StoreError> {
+        self.done(IngestRequest::SetClosed {
+            id,
+            is_closed,
+            status: status.map(str::to_owned),
+        })
+        .await
     }
     pub async fn set_dependencies(&self, id: u64, depends_on: Vec<u64>) -> Result<(), StoreError> {
         self.done(IngestRequest::SetDependencies { id, depends_on })

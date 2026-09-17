@@ -12,6 +12,7 @@ pub(super) struct BoardListDelegate {
     /// Whether to show only top-level items (the "roadmap view") or the full
     /// parent→child tree. Toggled by `BoardPaneView::toggle_expansion`.
     pub(super) top_level_only: bool,
+    pub(super) show_closed: bool,
     /// The last search query passed to `perform_search`, saved so `rederive`
     /// can re-filter when the toggle changes without needing access to the
     /// `ListState`'s internal query state.
@@ -41,6 +42,7 @@ impl BoardListDelegate {
             filtered: Vec::new(),
             depths: Vec::new(),
             top_level_only: false,
+            show_closed: false,
             last_query: String::new(),
             selected: None,
             loading: true,
@@ -50,10 +52,16 @@ impl BoardListDelegate {
     }
 
     /// Re-derives `filtered` and `depths` from `all` using the current
-    /// `last_query` and `top_level_only`. The single place that rebuilds the
+    /// search, hierarchy, and closure filters. The single place that rebuilds the
     /// display list — called after every load, search, and toggle.
     pub(super) fn rederive(&mut self) {
-        let (items, depths) = flatten_with_depth(&self.all, self.top_level_only);
+        let visible: Vec<_> = self
+            .all
+            .iter()
+            .filter(|item| self.show_closed || !item.is_closed)
+            .cloned()
+            .collect();
+        let (items, depths) = flatten_with_depth(&visible, self.top_level_only);
         let (filtered, depths): (Vec<_>, Vec<_>) = items
             .into_iter()
             .zip(depths)
@@ -67,6 +75,7 @@ impl BoardListDelegate {
             .unzip();
         self.filtered = filtered;
         self.depths = depths;
+        self.drop_indicator = None;
     }
 
     /// Replaces the loaded items (after the off-thread read returns) and
@@ -110,9 +119,8 @@ impl ListDelegate for BoardListDelegate {
         let item = self.filtered.get(index.row)?;
         let depth = self.depths.get(index.row).copied().unwrap_or(0);
         let mut title_color = theme::text_primary();
-        // Completed tasks take the success tone (see `task_state_color`);
-        // everything else stays muted.
-        let mut status_color = task_state_color(item);
+        // Status text and closure do not imply successful completion.
+        let mut status_color = theme::text_muted();
         if self.selected == Some(index) {
             let surface = theme::surface_selected();
             title_color = theme::readable_on(title_color, surface);
@@ -180,7 +188,7 @@ impl ListDelegate for BoardListDelegate {
                                     // onto a no-op position.
                                     let new_indicator = if drop_position_from_half(
                                         dragged_id,
-                                        &delegate.filtered,
+                                        &delegate.all,
                                         target_id,
                                         half,
                                     )
@@ -268,8 +276,12 @@ impl ListDelegate for BoardListDelegate {
     ) -> impl IntoElement {
         let msg = if self.loading {
             "Loading board…"
+        } else if !self.last_query.trim().is_empty() {
+            "No matching tasks"
+        } else if !self.show_closed && !self.all.is_empty() {
+            "No open tasks"
         } else {
-            "No board items"
+            "No board tasks"
         };
         h_flex()
             .size_full()
