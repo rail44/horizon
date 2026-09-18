@@ -22,15 +22,16 @@ use gpui::*;
 use gpui_component::list::List;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::TitleBar;
+use gpui_component::{Icon, IconName};
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis};
 
 use super::{
-    ClosePane, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight, ModeMoveUp,
-    NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab, RunCommand,
-    SplitPane, TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell, MODE_CONTEXT,
-    SESSION_MANAGER_CONTEXT,
+    ClosePane, CloseTab, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight,
+    ModeMoveUp, NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab,
+    RunCommand, SplitPane, TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell,
+    MODE_CONTEXT, SESSION_MANAGER_CONTEXT,
 };
 use crate::theme;
 use crate::view_chooser::Placement;
@@ -369,6 +370,51 @@ fn cycle_tab_index(active: usize, count: usize, delta: isize) -> usize {
     (active as isize + delta).rem_euclid(count as isize) as usize
 }
 
+/// The per-tab close affordance: a small circled-× suffix rendered after
+/// the tab's label, dispatching [`CloseTab`] with the render-time index.
+///
+/// Always laid out, never hover-revealed: under `EQUAL_WIDTH_TABS` a
+/// reveal would reflow the label mid-hover, so visibility is expressed as
+/// color instead -- the active tab's button paints the full foreground,
+/// background tabs the muted reading color, and hovering the button lifts
+/// either onto a subtle border-colored chip. `CircleX` rather than the
+/// bare `X`: `gpui_kit_assets::Assets` (the app's asset source,
+/// `main.rs`) embeds only `default-icons.txt`'s icons, and `x.svg` is not
+/// among them -- `IconName::X` would render nothing at runtime.
+///
+/// The click must not also activate the tab: the vendored `Tab`/`TabBar`
+/// pair forwards one bar-level `on_click` to every tab (gpui-component
+/// `tab_bar.rs` overwrites each child's own), so both interactivities
+/// would otherwise fire for one press. Stopping propagation on the
+/// mouse-down keeps the tab's click-state machine from ever recording the
+/// press, and the click handler stops again as belt-and-suspenders; the
+/// close itself travels as an action (the agent stop button's `RunCommand`
+/// shape) so the pointer path still lands in the command model.
+fn render_tab_close_button(index: usize, active: bool, title: &str) -> AnyElement {
+    let resting_color = if active {
+        theme::text_primary()
+    } else {
+        theme::text_muted()
+    };
+    div()
+        .id(ElementId::from(format!("tab-close-{index}")))
+        .aria_label(format!("Close tab {title}"))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size_3p5()
+        .rounded(px(3.0))
+        .text_color(resting_color)
+        .hover(|this| this.text_color(theme::text_primary()).bg(theme::border()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(CloseTab { index }), cx);
+        })
+        .child(Icon::new(IconName::CircleX).size_3())
+        .into_any_element()
+}
+
 impl WorkspaceShell {
     /// Whether any control-surface modal (palette, view chooser, session
     /// manager) currently has the shell's attention -- the same predicate
@@ -549,14 +595,22 @@ impl WorkspaceShell {
                 // strip, and the number crowded the title it prefixed.
                 // `aria_label` keeps the accessible name `label()` used
                 // to provide, now that the visible text is our child.
-                let label = Tab::new().aria_label(tab.title.clone()).child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(tab.title),
-                );
+                // The close affordance is a `Tab::suffix`, so the vendored
+                // `Tab` lays it out to the right of the label at full size;
+                // it is the label wrapper's `min_w_0` above that absorbs
+                // the row's width pressure, not the suffix.
+                let close_button = render_tab_close_button(tab.index, tab.active, &tab.title);
+                let label = Tab::new()
+                    .aria_label(tab.title.clone())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(tab.title),
+                    )
+                    .suffix(close_button);
                 if EQUAL_WIDTH_TABS {
                     // `Tab`'s own `Styled` impl mutates the same `div`
                     // its `RenderOnce::render` finishes building, so a
@@ -1113,6 +1167,9 @@ impl Render for WorkspaceShell {
             }))
             .on_action(cx.listener(|shell, _: &ClosePane, window, cx| {
                 shell.execute(CommandId::CloseActivePane, window, cx);
+            }))
+            .on_action(cx.listener(|shell, action: &CloseTab, window, cx| {
+                shell.close_tab(action.index, window, cx);
             }))
             .on_action(cx.listener(|shell, _: &NextTab, window, cx| {
                 shell.next_tab(window, cx);

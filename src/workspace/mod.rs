@@ -123,6 +123,19 @@ pub(crate) struct RunCommand {
     pub(crate) id: CommandId,
 }
 
+/// The tab strip's per-tab close button (`render_tab_close_button`):
+/// closes the tab the user clicked, by its render-time index. Carries the
+/// index the way [`RunCommand`] carries its `CommandId` -- gpui actions
+/// built from a `KeyBinding` never carry per-invocation data, so no config
+/// chord can target a specific tab; `CommandId::CloseActiveTab` stays the
+/// keyboard path and this action the pointer path. `no_json`: same
+/// reasoning as [`RunCommand`].
+#[derive(Clone, PartialEq, Action)]
+#[action(namespace = workspace, no_json)]
+pub(crate) struct CloseTab {
+    pub(crate) index: usize,
+}
+
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
 fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bool) {

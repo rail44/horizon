@@ -604,6 +604,36 @@ impl WorkspaceShell {
         self.focus_active(window, cx);
     }
 
+    /// The tab strip's close button: close the tab at `index` -- the tab
+    /// the user clicked, not the cursor's. Same postlude as the
+    /// `CommandId::CloseActiveTab` arm (which stays the keyboard path):
+    /// `close_tab_index` detaches the tab's sessions rather than
+    /// terminating them (`docs/ux-principles.md`'s "Close, Detach, And
+    /// Terminate" -- closing a surface never ends what it showed), and
+    /// `reconcile` both drops the closed tab's pane views and persists the
+    /// model. `exit_workspace_mode` before the close mirrors that arm: a
+    /// mode cursor left pointing into a removed tab has no meaning, and a
+    /// background-tab close is rare enough that "mode turned off" reads as
+    /// the same simplification `CloseActiveTab` already makes.
+    pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restoring_workspace {
+            return;
+        }
+        // The index is render-time state and the dispatch is synchronous,
+        // but this guard keeps a stale index a silent no-op instead of
+        // relying on `close_tab_index`'s own out-of-range early return --
+        // an empty detached-session return would otherwise read as success
+        // for a pane-less tab, and an in-range-but-stale index could close
+        // the wrong tab entirely.
+        if index >= self.workspace.tab_count() {
+            return;
+        }
+        self.workspace.exit_workspace_mode();
+        self.workspace.close_tab_index(index);
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
+    }
+
     pub(crate) fn session_summaries(&self) -> Vec<horizon_workspace::types::SessionSummary> {
         self.workspace.session_summaries()
     }
