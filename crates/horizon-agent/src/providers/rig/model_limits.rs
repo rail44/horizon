@@ -33,7 +33,7 @@ use std::time::Duration;
 const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Rig's own default when `RigAgentConfig::base_url` is `None` (see
-/// `providers::rig::completion::openai_completions_client`). Named here so
+/// `providers::rig::completion::completion_client`). Named here so
 /// the cache key and the request URL agree on what "no base URL" resolves
 /// to.
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";

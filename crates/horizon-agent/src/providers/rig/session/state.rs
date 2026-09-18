@@ -299,14 +299,7 @@ impl SessionLoopState {
                 // `AgentWireEvent::SessionModel`); the loop only fails a
                 // switch it cannot resolve, as an ordinary error event.
                 Command::SetSessionModel { provider, model } => {
-                    if let Err(message) =
-                        apply_set_session_model(&mut self.config, &self.table, &provider, &model)
-                    {
-                        let _ = self.events_tx.send(
-                            crate::contract::Event::Error(crate::contract::Error { message })
-                                .into(),
-                        );
-                    }
+                    self.handle_set_session_model(&provider, &model);
                 }
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
@@ -550,6 +543,25 @@ impl SessionLoopState {
     }
 }
 
+impl SessionLoopState {
+    /// `Command::SetSessionModel`'s whole loop-side effect: swap what the
+    /// next turn builds with, or report a switch the loop cannot resolve as
+    /// an ordinary error event. Announcing the resolved model is NOT here —
+    /// the RPC handler owns `AgentWireEvent::SessionModel`. Named and
+    /// unit-tested separately because the command pump's arm is otherwise
+    /// the one untested join between the daemon-side forward and the next
+    /// turn's config.
+    fn handle_set_session_model(&mut self, provider: &str, model: &str) {
+        if let Err(message) =
+            apply_set_session_model(&mut self.config, &self.table, provider, model)
+        {
+            let _ = self
+                .events_tx
+                .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+        }
+    }
+}
+
 /// Swaps a session's per-turn config to a resolved `[[providers]]` entry —
 /// `Command::SetSessionModel`'s whole effect, factored out pure so the
 /// switch's precedence rules are unit-testable without a session loop.
@@ -673,6 +685,41 @@ mod tests {
                 std::env::var("OPENAI_BASE_URL").ok(),
                 Some("https://openai.example.invalid".to_string()),
             )
+        );
+    }
+
+    /// The loop-side pump arm, driven directly through a real
+    /// `SessionLoopState`: the command mutates the state the next turn
+    /// reads (`run_turn` → `complete_rig_turn`), and an unresolvable
+    /// switch surfaces as an error event on the provider channel. This is
+    /// the join between the daemon-side forward (connection test) and the
+    /// next turn's config — the one piece a live provider-call round-trip
+    /// cannot observe hermetically, since a keyed turn's client
+    /// construction reads the environment per turn by design (mutating env
+    /// in a test would race the parallel suite).
+    #[tokio::test]
+    async fn the_session_loop_applies_a_switch_to_its_own_next_turn_config() {
+        let (events_tx, events_rx) = crossbeam_channel::unbounded();
+        let mut state = SessionLoopState {
+            events_tx,
+            table: table(),
+            ..Default::default()
+        };
+        state.config.model = "role-model".to_string();
+
+        state.handle_set_session_model("claude", "opus");
+        assert_eq!(state.config.model, "m-opus");
+        assert_eq!(state.config.kind, ProviderKind::Anthropic);
+        assert!(events_rx.try_recv().is_err(), "no error event on success");
+
+        // An unresolvable switch leaves the config untouched and reports
+        // the failure on the provider channel instead.
+        state.handle_set_session_model("typo", "m");
+        assert_eq!(state.config.model, "m-opus");
+        let received = events_rx.try_recv().unwrap();
+        assert!(
+            matches!(received.event, crate::contract::Event::Error(_)),
+            "{received:?}"
         );
     }
 

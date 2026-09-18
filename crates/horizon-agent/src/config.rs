@@ -970,8 +970,8 @@ mod tests {
         );
         assert_eq!(config.rig.allowed_tool_ids, None);
         // The legacy path still resolves to exactly one implicit default
-        // entry (see `from_env_and_provider_is_the_single_implicit_default_
-        // entry` for the full shape).
+        // entry (see the implicit-default-entry test below for the full
+        // shape).
         assert_eq!(config.providers.entries.len(), 1);
     }
 
