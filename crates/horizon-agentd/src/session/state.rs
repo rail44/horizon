@@ -194,10 +194,13 @@ impl AgentdState {
     /// at spawn and is unaffected.
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
-        let new_agent_config = AgentConfig::from_env_and_provider(
-            raw.provider.model.clone(),
-            raw.provider.base_url.clone(),
-        );
+        // The same seam `main` uses at startup (`crate::providers`), so a
+        // reload resolves the surface exactly like a fresh process would —
+        // `[[providers]]` when set, the legacy `[provider]` fold-in
+        // otherwise.
+        let (provider_entries, provider_default) = crate::providers::named_provider_configs(&raw);
+        let new_agent_config =
+            AgentConfig::from_env_and_providers(provider_entries, provider_default);
         let new_providers = ProviderRegistry::builtin_with_config(
             new_agent_config.clone(),
             self.duckdb_cell.clone(),

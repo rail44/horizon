@@ -62,9 +62,9 @@ pub(super) fn drain_events(
 /// env vars -- a developer's own `OPENAI_API_KEY` must never leak into
 /// this test's expectations). Tests observing sends subscribe the
 /// session id under test via [`Connection::subscribe_agent`].
-pub(crate) fn state_with_rig_config(openai_enabled: bool, model: &str) -> Arc<AgentdState> {
+pub(crate) fn state_with_rig_config(api_key_present: bool, model: &str) -> Arc<AgentdState> {
     let mut agent_config = AgentConfig::from_env_and_provider(None, None);
-    agent_config.rig.openai_enabled = openai_enabled;
+    agent_config.rig.api_key_present = api_key_present;
     agent_config.rig.model = model.to_string();
     Arc::new(AgentdState::new(
         ProviderRegistry::builtin_with_config(

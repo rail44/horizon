@@ -491,3 +491,197 @@ fn text_contrast_wrong_type_falls_back_to_none_without_failing_the_whole_file() 
         Some("#ff00ff")
     );
 }
+
+// --- [[providers]] + legacy [provider] resolution ----------------------------
+//
+// All pure: driven through `parse` + `resolved_providers` /
+// `provider_config_warnings`, never through `load`/`reload` (which are
+// test-gated to built-in defaults and never resolve the developer's real
+// file).
+
+#[test]
+fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
+    let config = parse(
+        "[[providers]]\n\
+         name = \"synthetic\"\n\
+         models = { \"strong\" = \"gpt-5.2\" }\n\
+         [[providers]]\n\
+         name = \"claude\"\n\
+         kind = \"anthropic\"\n\
+         api_key_env = \"CLAUDE_KEY\"\n\
+         models = { \"opus\" = \"claude-opus-4-6\" }\n",
+    )
+    .unwrap();
+    let resolution = config.resolved_providers();
+    assert_eq!(
+        resolution
+            .providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["synthetic", "claude"]
+    );
+    // Defaults: kind -> openai-compatible, api_key_env -> the kind's own
+    // variable name, overridden api_key_env kept as-is.
+    assert_eq!(
+        resolution.providers[0].kind,
+        RawProviderKind::OpenAiCompatible
+    );
+    assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
+    assert_eq!(resolution.providers[1].kind, RawProviderKind::Anthropic);
+    assert_eq!(resolution.providers[1].api_key_env, "CLAUDE_KEY");
+    // default_provider absent -> the first entry's name.
+    assert_eq!(resolution.default_name, "synthetic");
+}
+
+#[test]
+fn models_map_keeps_the_file_listing_order() {
+    // The picker's order is TOML 記載順 (owner-agreed): a map whose keys
+    // would sort alphabetically under a BTreeMap-backed table must resolve
+    // in the order the file lists it — the whole point of the
+    // `preserve_order` toml feature.
+    let config = parse(
+        "[[providers]]\n\
+         name = \"synthetic\"\n\
+         models = { \"zeta\" = \"m-zeta\", \"alpha\" = \"m-alpha\", \"mid\" = \"m-mid\" }\n",
+    )
+    .unwrap();
+    let models = &config.resolved_providers().providers[0].models;
+    assert_eq!(
+        models
+            .iter()
+            .map(|(alias, _)| alias.as_str())
+            .collect::<Vec<_>>(),
+        vec!["zeta", "alpha", "mid"]
+    );
+}
+
+#[test]
+fn default_provider_selects_a_named_entry_and_a_stale_name_falls_back() {
+    // `default_provider` is a top-level key: written after an
+    // `[[providers]]` header it would belong to that entry (and be silently
+    // dropped by serde) — this test catches exactly that mistake too.
+    let config = parse(
+        "default_provider = \"claude\"\n\
+         [[providers]]\nname = \"synthetic\"\n\
+         [[providers]]\nname = \"claude\"\nkind = \"anthropic\"\n",
+    )
+    .unwrap();
+    assert_eq!(config.resolved_providers().default_name, "claude");
+
+    let stale = parse(
+        "default_provider = \"renamed-away\"\n\
+         [[providers]]\nname = \"synthetic\"\n",
+    )
+    .unwrap();
+    // The typo must not break startup: first entry, plus the probable-typo
+    // warning naming the stale value.
+    assert_eq!(stale.resolved_providers().default_name, "synthetic");
+    assert!(provider_config_warnings(&stale)
+        .iter()
+        .any(|warning| warning.contains("renamed-away")));
+}
+
+#[test]
+fn legacy_provider_table_folds_in_as_one_implicit_default_entry() {
+    let config =
+        parse("[provider]\nmodel = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n")
+            .unwrap();
+    let resolution = config.resolved_providers();
+    assert_eq!(resolution.providers.len(), 1);
+    assert_eq!(resolution.providers[0].name, LEGACY_PROVIDER_NAME);
+    assert_eq!(
+        resolution.providers[0].kind,
+        RawProviderKind::OpenAiCompatible
+    );
+    assert_eq!(
+        resolution.providers[0].base_url.as_deref(),
+        Some("https://example.invalid")
+    );
+    // The single legacy model is its own (model -> model) alias pair, so the
+    // picker shows exactly what a `[provider]`-only file ever offered.
+    assert_eq!(
+        resolution.providers[0].models,
+        vec![("gpt-test".to_string(), "gpt-test".to_string())]
+    );
+    assert_eq!(resolution.default_name, LEGACY_PROVIDER_NAME);
+    assert!(provider_config_warnings(&config).is_empty());
+}
+
+#[test]
+fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
+    // The zero-config case keeps pre-`[[providers]]` behavior byte-for-byte:
+    // one openai-compatible entry, no model, no base URL (env precedence in
+    // horizon-agent decides the rest).
+    let config = RawConfig::default();
+    let resolution = config.resolved_providers();
+    assert_eq!(resolution.providers.len(), 1);
+    assert_eq!(resolution.providers[0].name, LEGACY_PROVIDER_NAME);
+    assert!(resolution.providers[0].models.is_empty());
+    assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
+    assert!(provider_config_warnings(&config).is_empty());
+}
+
+#[test]
+fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
+    let config = parse(
+        "[provider]\nmodel = \"gpt-legacy\"\nbase_url = \"https://legacy.invalid\"\n\
+         [[providers]]\nname = \"synthetic\"\nmodels = { \"strong\" = \"gpt-5.2\" }\n",
+    )
+    .unwrap();
+    let resolution = config.resolved_providers();
+    // [[providers]] wins; the legacy table is folded nowhere.
+    assert_eq!(resolution.providers.len(), 1);
+    assert_eq!(resolution.providers[0].name, "synthetic");
+    assert!(resolution.providers[0]
+        .models
+        .iter()
+        .all(|(_, id)| id != "gpt-legacy"));
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("[provider]: ignored because [[providers]] is set")));
+}
+
+#[test]
+fn nameless_entries_are_dropped_and_warned() {
+    let config = parse(
+        "[[providers]]\nname = \"synthetic\"\n\
+         [[providers]]\nmodels = { \"orphan\" = \"m\" }\n",
+    )
+    .unwrap();
+    let resolution = config.resolved_providers();
+    assert_eq!(
+        resolution
+            .providers
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["synthetic"]
+    );
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("entry 1 has no name")));
+}
+
+#[test]
+fn duplicate_entry_names_warn_about_the_shadowed_later_entry() {
+    let config = parse(
+        "[[providers]]\nname = \"synthetic\"\n\
+         [[providers]]\nname = \"synthetic\"\nkind = \"anthropic\"\n",
+    )
+    .unwrap();
+    assert!(provider_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("duplicate name")));
+    // Resolution itself keeps both (file order); only selection of the
+    // shadowed entry is ambiguous, which the warning names.
+    assert_eq!(config.resolved_providers().providers.len(), 2);
+}
+
+#[test]
+fn bad_provider_kind_is_a_parse_error_of_the_whole_file() {
+    // A typo'd kind is not per-key skippable (parity with [provider]'s own
+    // fields): the whole file fails parse and falls back to defaults with
+    // the ordinary never-fail-startup warning.
+    assert!(parse("[[providers]]\nname = \"x\"\nkind = \"anthromorphic\"\n").is_err());
+}

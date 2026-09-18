@@ -32,7 +32,7 @@ pub struct JudgeHandle {
 impl JudgeHandle {
     /// Builds the judge handle for a session, or `None` if the judge can't
     /// actually run: no `OPENAI_API_KEY` (mirrors `RigAgentConfig::
-    /// openai_enabled` -- the judge is a second model on the *same*
+    /// api_key_present` -- the judge is a second model on the *same*
     /// provider, never a separate endpoint/credential), or no event-log
     /// writer configured (a verdict nobody could ever record is pointless
     /// to compute). `base_url` is the session's already-resolved provider

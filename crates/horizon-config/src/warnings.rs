@@ -49,6 +49,11 @@ const SECTIONS: &[Section] = &[
 /// can't see inside an array of tables.
 const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
 
+/// Keys a single `[[providers]]` entry recognizes — checked the same way
+/// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
+/// tables.
+const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "models"];
+
 /// Pure collection of warning strings for `contents` -- factored out from
 /// [`warn`] so tests can assert on the returned strings instead of
 /// capturing stderr, mirroring `theme::warnings`' own
@@ -74,7 +79,32 @@ fn collect_warnings(contents: &str) -> Vec<String> {
         }
     }
     warnings.extend(project_grant_warnings(&root));
+    warnings.extend(provider_entry_warnings(&root));
     warnings.sort();
+    warnings
+}
+
+/// Probable-typo warnings for keys inside each `[[providers]]` entry — same
+/// rationale as [`project_grant_warnings`]: serde's `#[serde(default)]`
+/// would otherwise turn a misspelled `api_key_env = ...` into a silently
+/// defaulted variable name.
+fn provider_entry_warnings(root: &toml::Table) -> Vec<String> {
+    let Some(toml::Value::Array(entries)) = root.get("providers") else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let toml::Value::Table(table) = entry else {
+            continue;
+        };
+        for key in table.keys() {
+            if !PROVIDER_ENTRY_KEYS.contains(&key.as_str()) {
+                warnings.push(format!(
+                    "[[providers]]: entry {index} unrecognized key {key:?}, ignoring (see config.example.toml for the recognized names)"
+                ));
+            }
+        }
+    }
     warnings
 }
 
@@ -124,6 +154,16 @@ mod tests {
             "[provider]\nmodel = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    }
+
+    #[test]
+    fn providers_entry_unrecognized_key_warns_as_a_probable_typo() {
+        // Same probable-typo treatment inside [[providers]] entries as
+        // everywhere else: serde would silently default a misspelled key.
+        let warnings = collect_warnings("[[providers]]\nname = \"x\"\napi_key = \"leak\"\n");
+        assert!(warnings
+            .iter()
+            .any(|warning| warning.contains("unrecognized key \"api_key\"")));
     }
 
     #[test]

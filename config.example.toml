@@ -18,7 +18,16 @@
 #
 # The surface below (2026-07-18 config-narrowing wave) is exactly:
 # [provider] model/base_url, [terminal] font_size, [ui] font_family,
-# [keybindings], and [theme]'s seed plus [theme.ansi]'s six hues. Everything
+# [keybindings], and [theme]'s seed plus [theme.ansi]'s six hues.
+#
+# Deliberately re-extended (owner-agreed multi-provider wave, 2026-10): the
+# provider surface grows by the [[providers]] array and default_provider (the
+# [[providers]] section below) — this is an intentional re-extension of the
+# narrowing declaration, not a reopening of any other retired knob. The
+# legacy [provider] table keeps working unchanged and is what a
+# single-provider file still uses.
+#
+# Everything
 # this file used to also cover -- the whole former [agent] section (bash/fs
 # tool caps, turn-loop guard thresholds, event/state DB paths, stream-flush
 # cadence, history/instructions budgets), [provider] temperature/max_tokens,
@@ -38,6 +47,8 @@
 #
 # Secrets never go here. OPENAI_API_KEY and the web-search adapter's
 # EXA_API_KEY are environment-only; there is no field for either in this file.
+# The same rule covers [[providers]]: its api_key_env records the environment
+# variable's *name* only (per provider), never a value.
 #
 # Setting a key this file used to support (a "retired" key) gets the same
 # "probable typo" treatment as any other unrecognized key in a known
@@ -53,10 +64,52 @@
 # base_url, to rig's own default endpoint) when unset here. `HORIZON_RIG_MODEL`
 # and `OPENAI_BASE_URL` env vars, if set, win over whatever is set here.
 # Never put an API key in this file — see the header above.
+#
+# This table is now the legacy single-provider shape: a file that sets
+# [[providers]] (below) wins and this table is ignored (warned about). A
+# [provider]-only file keeps today's behavior byte-for-byte — it resolves as
+# one implicit provider named "default".
 # ---------------------------------------------------------------------------
 [provider]
 # model = "gpt-4o-mini"
 # base_url = "https://api.openai.com/v1"
+
+# ---------------------------------------------------------------------------
+# [[providers]] — named rig-backed provider entries (the multi-provider
+# re-extension; see the header's re-extension note).
+#
+# - Entries run in the order listed; the picker shows them (and each entry's
+#   models) in that same file order, and an entry's FIRST model is its own
+#   default. Commented out below: both fall back per the rules noted.
+# - kind: "openai-compatible" (default — any endpoint speaking OpenAI's
+#   chat-completions wire) or "anthropic". rig-core bundles both; no feature
+#   gates.
+# - api_key_env: the environment variable's *name* the entry's API key is
+#   read from — never a value (see the header's secrets rule). Unset means
+#   the kind's own variable name: OPENAI_API_KEY for openai-compatible,
+#   ANTHROPIC_API_KEY for anthropic. An entry whose variable is not set is
+#   registered but unavailable (grayed out, not hidden); sessions on it run
+#   the ordinary deterministic fallback instead of calling the provider.
+# - base_url: unset means rig's own default endpoint for the kind
+#   (https://api.openai.com/v1 / https://api.anthropic.com); env
+#   OPENAI_BASE_URL / ANTHROPIC_BASE_URL win when set.
+# - default_provider: which entry runs when nothing else selected it; unset
+#   means the first entry. A name matching no entry falls back to the first
+#   entry (warned).
+# - An entry that lists no models has nothing to select on it (it can still
+#   be a default_provider target only if its kind has a built-in default:
+#   openai-compatible's stays gpt-4o-mini for the legacy implicit entry).
+#
+# [[providers]]
+# name = "synthetic"
+# models = { "strong" = "gpt-5.2", "fast" = "gpt-4o-mini" }
+# default_provider = "synthetic"
+#
+# [[providers]]
+# name = "claude"
+# kind = "anthropic"
+# api_key_env = "ANTHROPIC_API_KEY"
+# models = { "opus" = "claude-opus-4-6" }
 
 # ---------------------------------------------------------------------------
 # [terminal] — cell rendering metrics for the spawned shell.

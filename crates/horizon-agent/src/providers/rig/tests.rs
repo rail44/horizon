@@ -2,8 +2,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use super::completion::{
-    await_provider_phase, openai_turn_additional_params, output_cap_truncated,
-    partial_assistant_message, provider_request_usage_event_from_stream_final, retry_backoff,
+    await_provider_phase, output_cap_truncated, partial_assistant_message,
+    provider_additional_params, provider_request_usage_event_from_stream_final, retry_backoff,
     retryable_rejection, rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry,
     Attempt, ProviderRequestSpan, ProviderWait, Retried, TurnCompletion,
     MULTI_TOOL_TEST_BATCH_SIZE, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
@@ -507,10 +507,16 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
 }
 
 #[test]
-fn openai_turns_explicitly_enable_parallel_tool_calls() {
+fn openai_compatible_turns_explicitly_enable_parallel_tool_calls() {
     assert_eq!(
-        openai_turn_additional_params()["parallel_tool_calls"],
+        provider_additional_params(crate::config::ProviderKind::OpenAiCompatible)
+            ["parallel_tool_calls"],
         serde_json::Value::Bool(true)
+    );
+    // The anthropic kind carries nothing openai-specific.
+    assert_eq!(
+        provider_additional_params(crate::config::ProviderKind::Anthropic),
+        serde_json::Value::Object(serde_json::Map::new())
     );
 }
 
@@ -529,7 +535,7 @@ fn openai_turn_completion_request_carries_the_explicit_max_tokens() {
     use rig_core::completion::CompletionModel;
 
     let config = RigAgentConfig {
-        openai_enabled: true,
+        api_key_present: true,
         model: "test-model".to_string(),
         ..Default::default()
     };
@@ -2003,7 +2009,7 @@ fn start_fallback_rig_session() -> (
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
     start_fallback_rig_session_with_config(RigAgentConfig {
-        openai_enabled: false,
+        api_key_present: false,
         model: "unused-in-fallback-mode".to_string(),
         ..Default::default()
     })
@@ -2044,8 +2050,13 @@ fn start_fallback_rig_session_as(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
-    let provider = Provider::new(
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
         config,
+        crate::config::ProvidersTable {
+            entries: Vec::new(),
+            default_name: String::new(),
+        },
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
     let handle = AgentProvider::start_session(
@@ -2203,7 +2214,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
 fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     let (tx, rx) = start_fallback_rig_session_with_role(
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             model: "unused-in-fallback-mode".to_string(),
             ..Default::default()
         },
@@ -2794,7 +2805,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     // pairs batch after batch, which would otherwise trip doom-loop
     // detection first and mask what this test is actually checking.
     let (tx, rx) = start_fallback_rig_session_with_config(RigAgentConfig {
-        openai_enabled: false,
+        api_key_present: false,
         model: "unused-in-fallback-mode".to_string(),
         iteration_cap: 2,
         doom_loop_window: 1000,
@@ -2987,10 +2998,15 @@ fn web_search_is_advertised_when_exa_api_key_is_set() {
 
 #[test]
 fn config_role_start_session_advertises_only_its_three_allowed_tools() {
-    let provider = Provider::new(
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             ..Default::default()
+        },
+        crate::config::ProvidersTable {
+            entries: Vec::new(),
+            default_name: String::new(),
         },
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
@@ -3077,11 +3093,16 @@ fn role_adjusted_config_is_unchanged_for_a_role_less_session() {
 
 #[test]
 fn resolved_model_reports_the_base_model_for_a_role_less_session() {
-    let provider = Provider::new(
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
         RigAgentConfig {
-            openai_enabled: true,
+            api_key_present: true,
             model: "test-model".to_string(),
             ..Default::default()
+        },
+        crate::config::ProvidersTable {
+            entries: Vec::new(),
+            default_name: String::new(),
         },
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
@@ -3098,11 +3119,16 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
     // default_model` in `roles.rs`'s own tests) -- resolving a role that
     // doesn't override the model must fall back to the base config, not
     // report no model at all.
-    let provider = Provider::new(
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
         RigAgentConfig {
-            openai_enabled: true,
+            api_key_present: true,
             model: "test-model".to_string(),
             ..Default::default()
+        },
+        crate::config::ProvidersTable {
+            entries: Vec::new(),
+            default_name: String::new(),
         },
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
@@ -3115,15 +3141,20 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
 
 #[test]
 fn resolved_model_is_none_in_deterministic_fallback_mode() {
-    // No `OPENAI_API_KEY` (`openai_enabled: false`): every turn runs the
+    // No `OPENAI_API_KEY` (`api_key_present: false`): every turn runs the
     // deterministic fallback responder and never emits
     // `Event::ProviderRequestSent` at all (`completion::complete_rig_turn`),
     // so reporting a model here would claim one is in play when none is.
-    let provider = Provider::new(
+    let provider = Provider::for_entry(
+        ProviderId("builtin.agent.rig".to_string()),
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             model: "test-model".to_string(),
             ..Default::default()
+        },
+        crate::config::ProvidersTable {
+            entries: Vec::new(),
+            default_name: String::new(),
         },
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
@@ -3545,7 +3576,7 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
     let session_id = SessionId::new();
     let (tx, rx) = start_fallback_rig_session_as(
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             model: "unused-in-fallback-mode".to_string(),
             ..Default::default()
         },
@@ -3639,7 +3670,7 @@ fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
     let session_id = SessionId::new();
     let (tx, rx) = start_fallback_rig_session_as(
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             model: "unused-in-fallback-mode".to_string(),
             ..Default::default()
         },
@@ -3723,7 +3754,7 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
     let session_id = SessionId::new();
     let (tx, rx) = start_fallback_rig_session_as(
         RigAgentConfig {
-            openai_enabled: false,
+            api_key_present: false,
             model: "unused-in-fallback-mode".to_string(),
             ..Default::default()
         },

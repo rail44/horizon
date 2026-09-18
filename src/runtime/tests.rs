@@ -309,6 +309,21 @@ impl TerminalHub for FakeTerminalHub {
 }
 
 impl SessionHub for FakeSessionHub {
+    async fn list_providers(&self) -> Result<Vec<horizon_agent::wire::ProviderSummary>, HubError> {
+        // The fake never drives the provider picker; an empty surface is
+        // the honest shape for it.
+        Ok(Vec::new())
+    }
+
+    async fn set_session_model(
+        &self,
+        _session_id: SessionId,
+        _provider: String,
+        _model: String,
+    ) -> Result<(), HubError> {
+        Ok(())
+    }
+
     async fn ensure_board_organizer(
         &self,
         _root: std::path::PathBuf,

@@ -659,7 +659,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
 #[tokio::test]
 async fn a_session_over_the_threshold_runs_one_pass_and_keeps_turning() {
     let config = RigAgentConfig {
-        openai_enabled: false,
+        api_key_present: false,
         ..Default::default()
     };
     let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);

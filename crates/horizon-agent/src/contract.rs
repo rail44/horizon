@@ -227,6 +227,21 @@ pub enum Command {
     /// log -- replay must never auto-resume a halted turn, so nothing in
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
+    /// Mid-session provider/model switch, latest turn wins (owner-agreed
+    /// multi-provider design): `provider` names a resolved `[[providers]]`
+    /// entry and `model` is the picker's alias (or a raw model id — the
+    /// same pass-through `role.model` accepts). Delivered on the
+    /// attachment's commands channel by `horizon-agentd`'s
+    /// `set_session_model` RPC handler, which owns validating the pair and
+    /// re-announcing the resolved model (`AgentWireEvent::SessionModel`);
+    /// the session loop only swaps what the *next turn* builds with.
+    /// Not persisted: the override lives in the daemon's session state, the
+    /// same "running session keeps its spawn-time config" philosophy
+    /// `reload_provider_config` follows.
+    SetSessionModel {
+        provider: String,
+        model: String,
+    },
     Shutdown,
 }
 

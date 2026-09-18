@@ -303,6 +303,9 @@ impl Provider for MockProvider {
                     }
                     Command::EnvironmentPrepared { .. }
                     | Command::EnvironmentActivationFailed { .. }
+                    // The mock has no provider to switch; a switch is a
+                    // no-op here (tests assert the *rig* path's effect).
+                    | Command::SetSessionModel { .. }
                     | Command::AcknowledgeDelivery { .. }
                     | Command::SendSessionInput { .. } => {}
                     Command::ContinueTurn => {

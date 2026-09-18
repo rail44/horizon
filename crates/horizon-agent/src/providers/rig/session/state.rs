@@ -91,6 +91,9 @@ pub(crate) struct SessionLoopState {
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
+    /// The whole surface at spawn time — what a mid-session switch
+    /// (`Command::SetSessionModel`) resolves its target against.
+    pub(crate) table: crate::config::ProvidersTable,
     pub(crate) environment: SessionEnvironment,
     pub(crate) extra_sections: Vec<String>,
     pub(crate) role: Option<&'static RoleDefinition>,
@@ -120,6 +123,10 @@ impl Default for SessionLoopState {
             memory_reminded: false,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
+            table: crate::config::ProvidersTable {
+                entries: Vec::new(),
+                default_name: String::new(),
+            },
             environment: SessionEnvironment::for_workspace_root(None),
             extra_sections: Vec::new(),
             role: None,
@@ -138,6 +145,7 @@ impl SessionLoopState {
         commands_rx: crossbeam_channel::Receiver<Command>,
         events_tx: Sender<ProviderEvent>,
         config: RigAgentConfig,
+        table: crate::config::ProvidersTable,
         environment: SessionEnvironment,
         extra_sections: Vec<String>,
         role: Option<&'static RoleDefinition>,
@@ -173,6 +181,7 @@ impl SessionLoopState {
             memory_satisfied: false,
             memory_reminded: false,
             config,
+            table,
             environment,
             extra_sections,
             role,
@@ -284,6 +293,21 @@ impl SessionLoopState {
             };
 
             match command {
+                // Mid-session provider/model switch, latest turn wins: swap
+                // what the *next turn* builds with. Announcing the resolved
+                // model is `horizon-agentd`'s job (the RPC handler owns
+                // `AgentWireEvent::SessionModel`); the loop only fails a
+                // switch it cannot resolve, as an ordinary error event.
+                Command::SetSessionModel { provider, model } => {
+                    if let Err(message) =
+                        apply_set_session_model(&mut self.config, &self.table, &provider, &model)
+                    {
+                        let _ = self.events_tx.send(
+                            crate::contract::Event::Error(crate::contract::Error { message })
+                                .into(),
+                        );
+                    }
+                }
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
                     self.inputs
@@ -523,5 +547,144 @@ impl SessionLoopState {
         }
 
         crate::tools::unregister_wake(self.session_id);
+    }
+}
+
+/// Swaps a session's per-turn config to a resolved `[[providers]]` entry —
+/// `Command::SetSessionModel`'s whole effect, factored out pure so the
+/// switch's precedence rules are unit-testable without a session loop.
+///
+/// `model` resolves against the target entry's alias map FIRST (the picker
+/// only offers aliases) and passes through as a raw model id otherwise —
+/// the same rule `role.model` follows, so a power user can name a model
+/// the entry doesn't alias. The owner-agreed priority is explicit
+/// selection > `role.model` > config default: an explicit switch replaces
+/// the provider bits wholesale (kind, key variable, base URL, model),
+/// while the role's other overrides (tool restrictions, iteration cap)
+/// stay, because they are not model-level knobs. Presence of the target
+/// entry's key variable is re-read at switch time (a key appearing or
+/// disappearing in the environment is honored here, mirroring how the
+/// entry's presence was resolved once at build); a target without its key
+/// runs the ordinary deterministic fallback, the same behavior a
+/// `[provider]`-only config with no key has always had.
+///
+/// Announcing the resolved model is NOT this fn's job: the RPC handler
+/// owns `AgentWireEvent::SessionModel`.
+pub(super) fn apply_set_session_model(
+    config: &mut RigAgentConfig,
+    table: &crate::config::ProvidersTable,
+    provider: &str,
+    model: &str,
+) -> Result<(), String> {
+    let Some(entry) = table.entry(provider) else {
+        return Err(format!("Unknown provider `{provider}`."));
+    };
+    if model.is_empty() {
+        return Err("A model id is required.".to_string());
+    }
+    let resolved_model = entry
+        .models
+        .iter()
+        .find(|(alias, _)| alias == model)
+        .map(|(_, id)| id.clone())
+        .unwrap_or_else(|| model.to_string());
+    config.kind = entry.kind;
+    config.api_key_env = entry.api_key_env.clone();
+    // Same env precedence the entry was built with: the kind's own
+    // base-URL variable wins over the file value.
+    config.base_url = crate::config::resolve_base_url(
+        std::env::var(entry.kind.base_url_env()).ok(),
+        entry.base_url.clone(),
+    );
+    config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
+    config.model = resolved_model;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
+
+    fn table() -> ProvidersTable {
+        ProvidersTable {
+            entries: vec![
+                NamedProviderConfig {
+                    name: "openai".to_string(),
+                    kind: ProviderKind::OpenAiCompatible,
+                    base_url: Some("https://openai.example.invalid".to_string()),
+                    api_key_env: "OPENAI_API_KEY".to_string(),
+                    api_key_present: true,
+                    models: vec![("fast".to_string(), "m-fast".to_string())],
+                },
+                NamedProviderConfig {
+                    name: "claude".to_string(),
+                    kind: ProviderKind::Anthropic,
+                    base_url: None,
+                    api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                    api_key_present: false,
+                    models: vec![("opus".to_string(), "m-opus".to_string())],
+                },
+            ],
+            default_name: "openai".to_string(),
+        }
+    }
+
+    #[test]
+    fn switch_resolves_the_alias_and_swaps_the_provider_bits() {
+        // `role.model` (or the config default) is what the session was
+        // resolved with at spawn; the explicit switch wins over it —
+        // the owner-agreed priority: explicit selection > role.model >
+        // config default.
+        let mut config = RigAgentConfig {
+            model: "role-model".to_string(),
+            ..Default::default()
+        };
+
+        apply_set_session_model(&mut config, &table(), "claude", "opus").unwrap();
+        assert_eq!(config.kind, ProviderKind::Anthropic);
+        assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
+        assert_eq!(config.model, "m-opus");
+        // Base URL keeps the entry's env precedence (the kind's own
+        // variable wins over the file value); compared against the same
+        // resolution so the assertion holds whatever the environment
+        // carries.
+        assert_eq!(
+            config.base_url,
+            crate::config::resolve_base_url(std::env::var("ANTHROPIC_BASE_URL").ok(), None)
+        );
+        // Presence re-read at switch time — compared against the same env
+        // read, and never the source entry's build-time value.
+        assert_eq!(
+            config.api_key_present,
+            std::env::var_os("ANTHROPIC_API_KEY").is_some()
+        );
+    }
+
+    #[test]
+    fn switch_passes_a_raw_model_id_through_like_role_model_does() {
+        let mut config = RigAgentConfig::default();
+        apply_set_session_model(&mut config, &table(), "openai", "raw-model-id").unwrap();
+        assert_eq!(config.model, "raw-model-id");
+        assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(
+            config.base_url,
+            crate::config::resolve_base_url(
+                std::env::var("OPENAI_BASE_URL").ok(),
+                Some("https://openai.example.invalid".to_string()),
+            )
+        );
+    }
+
+    #[test]
+    fn switch_rejects_an_unknown_provider_and_an_empty_model() {
+        let mut config = RigAgentConfig::default();
+        let error = apply_set_session_model(&mut config, &table(), "typo", "m").unwrap_err();
+        assert!(error.contains("Unknown provider `typo`"));
+        let error = apply_set_session_model(&mut config, &table(), "openai", "").unwrap_err();
+        assert!(error.contains("A model id is required"));
+        // A failed switch leaves the previous config untouched — the turn
+        // in progress and the next one keep the old selection.
+        assert_eq!(config.model, crate::config::RigAgentConfig::default().model);
     }
 }

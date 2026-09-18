@@ -8,13 +8,13 @@ use rig_core::{
         message::{Text, ToolCall},
         AssistantContent, CompletionError, CompletionModel, Message, ToolDefinition,
     },
-    providers::openai,
+    providers::{anthropic, openai},
     streaming::{StreamedAssistantContent, ToolCallDeltaContent},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    config::RigAgentConfig,
+    config::{ProviderKind, RigAgentConfig},
     contract::{
         Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
         ProviderRateLimited, ProviderRequestSent, ProviderRequestUsage, ToolCallId, ToolCallResult,
@@ -356,7 +356,7 @@ pub(super) async fn sleep_unless_cancelled(delay: Duration, token: &Cancellation
 ///
 /// Generic over the attempt so the loop itself is testable without a
 /// provider: the real caller passes a closure that runs one
-/// `rig_openai_turn_streaming`.
+/// `rig_provider_turn_with_retry`.
 pub(super) async fn with_pre_generation_retry<T, F, Fut>(
     token: &CancellationToken,
     mut attempt: F,
@@ -544,8 +544,8 @@ pub(super) async fn complete_rig_turn(
     if let Some(cleared) = clearing.run_pass(rig_history) {
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
-    if config.openai_enabled {
-        match rig_openai_turn_with_retry(
+    if config.api_key_present {
+        match rig_provider_turn_with_retry(
             config,
             environment,
             extra_sections,
@@ -619,7 +619,7 @@ pub(super) async fn complete_rig_turn(
 /// turn with several provider rounds already looks like in the log. Nothing
 /// is retried once a chunk has been decoded, so no attempt can have emitted
 /// transcript content before the next one starts.
-async fn rig_openai_turn_with_retry(
+async fn rig_provider_turn_with_retry(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
     extra_sections: &[String],
@@ -632,17 +632,27 @@ async fn rig_openai_turn_with_retry(
         token,
         || async {
             let mut durable_output_emitted = false;
-            let result = rig_openai_turn_streaming(
-                config,
-                environment,
-                extra_sections,
-                prompt.clone(),
-                history.clone(),
-                events_tx.clone(),
-                token,
-                &mut durable_output_emitted,
-            )
-            .await;
+            // One client per attempt, exactly like the single-kind
+            // predecessor: the request is new even when rig's HTTP client
+            // could be reused, and the entry's API-key variable is re-read
+            // per attempt (never stored).
+            let result = match completion_client(config) {
+                Ok(client) => {
+                    rig_provider_turn_streaming(
+                        config,
+                        client,
+                        environment,
+                        extra_sections,
+                        prompt.clone(),
+                        history.clone(),
+                        events_tx.clone(),
+                        token,
+                        &mut durable_output_emitted,
+                    )
+                    .await
+                }
+                Err(error) => Err(error),
+            };
             Attempt {
                 result,
                 durable_output_emitted,
@@ -677,8 +687,9 @@ async fn rig_openai_turn_with_retry(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn rig_openai_turn_streaming(
+async fn rig_provider_turn_streaming(
     config: &RigAgentConfig,
+    client: RigCompletionClient,
     environment: &SessionEnvironment,
     extra_sections: &[String],
     prompt: Message,
@@ -687,7 +698,64 @@ async fn rig_openai_turn_streaming(
     token: &CancellationToken,
     durable_output_emitted: &mut bool,
 ) -> anyhow::Result<(Message, TurnCompletion)> {
-    let client = openai_completions_client(config)?;
+    match client {
+        RigCompletionClient::OpenAi(client) => {
+            run_provider_stream(
+                config,
+                client,
+                environment,
+                extra_sections,
+                prompt,
+                history,
+                events_tx,
+                token,
+                durable_output_emitted,
+            )
+            .await
+        }
+        RigCompletionClient::Anthropic(client) => {
+            run_provider_stream(
+                config,
+                client,
+                environment,
+                extra_sections,
+                prompt,
+                history,
+                events_tx,
+                token,
+                durable_output_emitted,
+            )
+            .await
+        }
+    }
+}
+
+/// One streamed provider turn, generic over whichever bundled rig client
+/// the turn's kind built — every type below the client construction
+/// (`CompletionModel`, the request builder, `StreamingCompletionResponse`,
+/// `StreamedAssistantContent`) is rig-common, so both kinds share this
+/// body unchanged.
+#[allow(clippy::too_many_arguments)]
+// `Clone` is the `completion_request` builder's own bound; both bundled
+// clients' models (`openai`/`anthropic` `GenericCompletionModel`) satisfy it.
+async fn run_provider_stream<C>(
+    config: &RigAgentConfig,
+    client: C,
+    environment: &SessionEnvironment,
+    extra_sections: &[String],
+    prompt: Message,
+    history: Vec<Message>,
+    events_tx: Sender<ProviderEvent>,
+    token: &CancellationToken,
+    durable_output_emitted: &mut bool,
+) -> anyhow::Result<(Message, TurnCompletion)>
+where
+    C: CompletionClient,
+    // `Clone` is the `completion_request` builder's own bound; both bundled
+    // clients' models (`openai`/`anthropic` `GenericCompletionModel`)
+    // satisfy it.
+    C::CompletionModel: Clone,
+{
     let model = client.completion_model(&config.model);
     // Marks the request leaving Horizon for the provider, before the
     // (possibly slow) network call below — see `Event::ProviderRequestSent`'s
@@ -714,7 +782,7 @@ async fn rig_openai_turn_streaming(
         ))
         .preamble(system_prompt(environment, extra_sections))
         .max_tokens(config.max_output_tokens)
-        .additional_params(openai_turn_additional_params())
+        .additional_params(provider_additional_params(config.kind))
         .stream();
     let mut stream = match await_provider_phase(
         stream_request,
@@ -999,33 +1067,67 @@ pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancell
 /// intended contract stable across those backends: one assistant response
 /// may request several independent tools, while `session::fold_batched_tool_result`
 /// still waits for every result before the next completion.
-pub(super) fn openai_turn_additional_params() -> serde_json::Value {
-    serde_json::json!({ "parallel_tool_calls": true })
+pub(super) fn provider_additional_params(kind: ProviderKind) -> serde_json::Value {
+    match kind {
+        // OpenAI-compatible: one assistant response may request several
+        // independent tools, while `session::fold_batched_tool_result` still
+        // waits for every result before the next completion. Sending the
+        // flag explicitly makes the intended contract stable across
+        // configurable backends.
+        ProviderKind::OpenAiCompatible => serde_json::json!({ "parallel_tool_calls": true }),
+        // Anthropic: nothing openai-specific to send.
+        ProviderKind::Anthropic => serde_json::Value::Object(serde_json::Map::new()),
+    }
 }
 
-/// Builds the OpenAI Completions client for a turn.
+/// Either bundled rig client a turn's kind can build.
 ///
-/// The API key is always read straight from `OPENAI_API_KEY` — secrets
-/// never flow through the config file (`agent::config`'s module doc) — so
-/// this can't just call `openai::CompletionsClient::from_env()` the way it
-/// used to: that helper also reads `OPENAI_BASE_URL` itself, which would
-/// silently ignore Horizon's own precedence for the base URL. Instead the
-/// base URL comes from `config.base_url`, already resolved by
-/// `agent::config::RigAgentConfig::from_env_and_provider` with the right
-/// precedence (env `OPENAI_BASE_URL` > `[provider].base_url` in the config
-/// file); `None`
-/// leaves rig's own default (`https://api.openai.com/v1`) in place by
-/// simply not calling `.base_url(..)` on the builder, mirroring exactly
-/// what `from_env()` did before.
-fn openai_completions_client(config: &RigAgentConfig) -> anyhow::Result<openai::CompletionsClient> {
-    let api_key = std::env::var(crate::config::OPENAI_API_KEY_VAR)
-        .map_err(|_| anyhow::anyhow!("{} is not set", crate::config::OPENAI_API_KEY_VAR))?;
+/// rig-core 0.42 bundles both with no feature gates; the enum (rather than
+/// a trait object) is what lets `run_provider_stream` stay generic over the
+/// concrete `CompletionClient` impl without dyn-safe contortions.
+#[derive(Debug)]
+pub(super) enum RigCompletionClient {
+    OpenAi(openai::CompletionsClient),
+    Anthropic(anthropic::Client),
+}
 
-    let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
-    if let Some(base_url) = &config.base_url {
-        builder = builder.base_url(base_url);
+/// Builds the rig completion client for a turn — generalized from
+/// `openai_completions_client` (the single-kind predecessor) by `[[providers]]`:
+/// `kind` dispatches between rig's bundled clients, constructed the same
+/// way either kind.
+///
+/// The API key is always read straight from the environment variable
+/// **named** by `config.api_key_env` — secrets never flow through the
+/// config file (`agent::config`'s module doc) — so this can't just call
+/// `from_env()`: rig's own env helpers also read their base-URL variables,
+/// which would silently ignore Horizon's own precedence. The base URL
+/// comes from `config.base_url`, already resolved with the right
+/// precedence (the kind's base-URL env var > the entry's `base_url`);
+/// `None` leaves rig's own default (`https://api.openai.com/v1` /
+/// `https://api.anthropic.com`) in place by simply not calling
+/// `.base_url(..)` on the builder. The variable is re-read per turn —
+/// `config.api_key_env` is a name, and a key appearing (or disappearing)
+/// in the environment mid-session is honored at the next turn boundary.
+fn completion_client(config: &RigAgentConfig) -> anyhow::Result<RigCompletionClient> {
+    let api_key = std::env::var(&config.api_key_env)
+        .map_err(|_| anyhow::anyhow!("{} is not set", config.api_key_env))?;
+
+    match config.kind {
+        ProviderKind::OpenAiCompatible => {
+            let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
+            if let Some(base_url) = &config.base_url {
+                builder = builder.base_url(base_url);
+            }
+            Ok(RigCompletionClient::OpenAi(builder.build()?))
+        }
+        ProviderKind::Anthropic => {
+            let mut builder = anthropic::Client::builder().api_key(&api_key);
+            if let Some(base_url) = &config.base_url {
+                builder = builder.base_url(base_url);
+            }
+            Ok(RigCompletionClient::Anthropic(builder.build()?))
+        }
     }
-    builder.build().map_err(Into::into)
 }
 
 /// Decodes a double-encoded tool-call `arguments` value in place: a JSON
