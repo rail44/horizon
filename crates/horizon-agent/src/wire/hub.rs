@@ -36,7 +36,7 @@
 //!    `deserialize_any`.
 //! 2. **A non-final deserialization error is "skip this item," never "tear
 //!    down the channel."** This project carries no cross-build wire
-//!    compatibility (owner decision 2026-08-03): no wire enum has an
+//!    compatibility: no wire enum has an
 //!    `Unknown` catch-all left, so an unrecognized identifier and a
 //!    structurally broken payload both surface as the same per-item decode
 //!    error -- corruption to skip past, not a peer to tolerate.
@@ -106,8 +106,8 @@ use crate::contract::{Command, SessionId};
 ///   model/base-URL change to a running `horizon-agentd` without a
 ///   respawn.
 /// - **v19 — wire-only `Unknown` catch-alls removed; no decode compat**
-///   (owner decision 2026-08-03 — this is a personal project, so backward
-///   compatibility is not carried by default).
+///   (this is a personal project, so backward compatibility is not carried
+///   by default).
 /// - **v20 — board session routing and environment activation**: durable
 ///   session inputs/outcomes, in-session worktree handoff, and `watch_board`.
 /// - **v21 — the multi-provider surface**: `list_providers` and

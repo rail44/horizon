@@ -3,8 +3,7 @@
 //! approval state, and change aggregation.
 //!
 //! Relocated here from the `horizon` binary crate's `src/agent/turns/`
-//! (owner decision 2026-07-18, shape c: "structure moves, presentation
-//! stays"). Before this move, `src/agent/turns/` was already GPUI-free,
+//! (shape c: "structure moves, presentation stays"). Before this move, `src/agent/turns/` was already GPUI-free,
 //! contract-only logic -- but it lived in the binary crate, so any future
 //! frontend (a second GUI shell, a TUI, a CLI transcript dump, ...) would
 //! have had to reimplement `group_into_turns`/`derive_approval_state`/
