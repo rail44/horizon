@@ -1,6 +1,8 @@
 //! Composer state derived from the pending-approval queue: the keyboard
-//! approval target, the placeholder text, and the read-only model chip.
-//! `latest_turn_model` (the model chip's other input) moved to
+//! approval target, the placeholder text, and the model chip (the
+//! provider→model picker's entry point as of the 2026-09-19 model-switcher
+//! addendum to `docs/agent-output-ui-amendment.md`). `latest_turn_model`
+//! (the model chip's other input) moved to
 //! `horizon_agent::transcript` -- it's plain model-id extraction, not
 //! wording -- and is re-exported from `super` under its original name
 //! (see `turns/mod.rs`'s doc comment).
@@ -87,7 +89,11 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
     }
 }
 
-/// The composer's read-only model chip (mock's `claude-sonnet-4` pill),
+/// The composer's model chip (mock's `claude-sonnet-4` pill) — read-only
+/// display until the 2026-09-19 model-switcher addendum
+/// (`docs/agent-output-ui-amendment.md`) made the composer's rendered chip
+/// the picker's clickable entry point; this function stays the pure
+/// label/precedence computation either way,
 /// combining the session's resolved model
 /// (`agent::session::AgentSession::model`, known from session start/attach
 /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip addendum,
@@ -95,23 +101,31 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
 /// [`super::latest_turn_model`]'s own doc comment used to describe) with
 /// the latest completed turn's own model ([`super::latest_turn_model`]).
 ///
-/// **Precedence**: `session_model` is the steady-state source of truth --
-/// resolved once, synchronously, before any turn ever runs. `turn_model`
-/// overrides it only when the two actively disagree, since that can only
-/// mean the session's *actual* provider has moved on from what was resolved
-/// at session start (there is no model switcher yet -- deferred, unbuilt
-/// future work -- so this can't happen today, but the precedence is decided
-/// now rather than left implicit for whenever one lands): the latest
-/// completed turn is always closer to "what would happen if you sent a
-/// message right now" than a possibly-stale session-start value. Falls back
-/// to whichever one is `Some` if the other is `None`; `None` (chip hidden)
-/// only when neither is known.
+/// **Precedence** (2026-09-19 owner decision, reversing the original rule):
+/// `session_model` wins on disagreement. It used to be the steady-state
+/// value resolved once at session start, with `turn_model` overriding on
+/// divergence because "the latest completed turn is always closer to what
+/// would happen if you sent a message right now" -- but that rationale
+/// explicitly assumed *there is no model switcher yet*. One exists now
+/// (parent task #1's Phase 2): every mid-session change flows through the
+/// explicit `set_session_model` RPC, and the daemon re-announces the
+/// resolved model (`AgentWireEvent::SessionModel`) on every switch, so the
+/// session value is no longer a possibly-stale startup snapshot -- it is
+/// the freshest intent signal there is, arriving ahead of any turn that
+/// could reflect it. The drift protection the old rule provided is now the
+/// echo mechanism's job. A turn that ran on the previous model is one
+/// switch behind by construction, so letting it mask the switch would show
+/// a stale model through the exact window the switcher exists for (the
+/// seconds-to-minutes before the next `TurnEnded` folds). Falls back to
+/// whichever one is `Some` if the other is `None`; `None` only when neither
+/// is known (the composer renders that as the `Model…` placeholder, which
+/// doubles as the picker's entry point).
 pub(crate) fn composer_model_chip<'a>(
     session_model: Option<&'a str>,
     turn_model: Option<&'a str>,
 ) -> Option<&'a str> {
     match (session_model, turn_model) {
-        (Some(session), Some(turn)) if session != turn => Some(turn),
+        (Some(session), Some(turn)) if session != turn => Some(session),
         (Some(session), _) => Some(session),
         (None, turn) => turn,
     }
@@ -149,13 +163,15 @@ mod tests {
     }
 
     #[test]
-    fn composer_model_chip_lets_a_diverging_turn_model_override_the_session_model() {
-        // A future model switcher (unbuilt) could change what a session
-        // actually runs mid-session -- the latest completed turn is closer
-        // to "what would happen if you sent a message right now" than the
-        // value resolved once at session start.
+    fn composer_model_chip_prefers_the_session_model_when_the_turn_diverges() {
+        // Owner decision 2026-09-19 (reversing the original turn-wins
+        // rule): with the model switcher live, every mid-session change is
+        // an explicit `set_session_model` echoed back as a `SessionModel`
+        // re-announcement, so the session value IS "what would happen if
+        // you sent a message right now" and the latest completed turn is
+        // one switch behind it by construction.
         assert_eq!(
-            composer_model_chip(Some("gpt-5"), Some("claude-sonnet-4")),
+            composer_model_chip(Some("claude-sonnet-4"), Some("gpt-5")),
             Some("claude-sonnet-4")
         );
     }
