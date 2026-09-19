@@ -1,6 +1,6 @@
 # terminald 分離 — ターミナルを reload の巻き添えから外す
 
-Status: implemented 2026-07-30（当時 wire v17、現在は v19 — 下記「実装記録」末尾の更新を参照）。
+Status: implemented 2026-07-30。当時の wire は v17（番号は以降 drift するため、現行値はコード — `TERMINAL_PROTOCOL_VERSION` — を参照）。
 
 ## 動機（実測）
 
@@ -43,7 +43,7 @@ Claude Code）が道連れになるのが現在最大の運用痛。
 ## 実装記録（2026-07-30、wire v17）
 
 The split landed as one change; what follows is what a reader of the code
-needs that the decisions above do not already say.
+needs that the design above does not already say.
 
 **Shape.** `horizon-terminald` is a new workspace crate
 (`crates/horizon-terminald`) with `TerminalHost` moved into it verbatim and
@@ -79,7 +79,7 @@ shared). Splitting the route tables removed a coupling the design doc did
 not name: the single `Routes` used to fan a connection failure out to *both*
 domains, so a dead agent daemon painted every terminal pane with an error.
 Terminald's connection additionally issues one `list_terminals` probe right
-after `hello` — decision 6's insurance — and refuses cleanly, naming the
+after `hello` — the clean-refuse insurance described above — and refuses cleanly, naming the
 peer's `binary_id` and `Reload Terminal Runtime`, when that probe fails on a
 still-live connection. Per-item decode failures on the live attachment
 channels stay tolerant (skipped, rate-limit logged): one poisoned frame must
