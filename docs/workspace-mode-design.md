@@ -23,7 +23,7 @@ model itself.
 ### A persistent workspace mode, one stolen key total
 
 Workspace operations live in a **persistent mode** (vim normal/insert
-style, per the owner's preference), entered from a terminal pane by a
+style), entered from a terminal pane by a
 single reserved chord. Inside the mode every key belongs to Horizon, so
 the vocabulary can grow indefinitely without new theft. The palette
 stops being a global chord and becomes a one-key resident of the mode.
@@ -77,7 +77,7 @@ The only irreducible theft is leaving passthrough by keyboard. First
 choice was **Super+Esc**: TUIs historically could not receive Super at
 all, so almost nothing in-pane binds it, and the competition for Super is
 the window manager rather than terminal apps. That rationale held up to
-reasoning but not to the owner's actual machine: on the owner's real
+reasoning but not to the actual machine: on a real
 GNOME session, gnome-shell intercepts Super+Esc before it ever reaches
 Horizon's window at all -- confirmed empirically, while Horizon's own
 key-handling path was separately shown to be healthy headless (no WM in

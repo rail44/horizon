@@ -255,8 +255,7 @@ pub trait SessionHub {
 
     /// Re-reads `[provider]` from the config file and rebuilds the
     /// provider registry in place -- the no-respawn counterpart to
-    /// `Reload Agent Runtime` for a config-only model/base-URL change
-    /// (see `docs/terminald-split-design.md`'s config-only reload). A
+    /// `Reload Agent Runtime` for a config-only model/base-URL change. A
     /// running session keeps its spawn-time config for its whole
     /// lifetime, so the new provider takes effect for the *next* session.
     async fn reload_provider_config(&self) -> Result<(), HubError>;

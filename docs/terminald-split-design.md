@@ -28,17 +28,22 @@ Claude Code）が道連れになるのが現在最大の運用痛。
 - zellij の教訓: 完全一致要求は「黙って消える」を生む。tolerant +
   疎 epoch へ転向した（Horizon の範囲交渉は最初からその形）
 
-## 形
+## 決定
 
-- `horizon-terminald` が TerminalHost と全 PTY を所有し、自分の socket を持つ
-  （on-demand spawn）。
-- `Reload Agent Runtime` は agent runtime のみ drain・respawn する。ターミナルは無傷。
-- `Reload Terminal Runtime` は terminald 用の明示的・破壊的な再起動
-  （close/terminate 分離の既存規律に一致）。
-- terminal 系 wire 型は append-only。reshape は terminald 再起動を要求する
-  重い変更として扱う。
-- binary 不一致が疑われる場合は silent 継続でなく clean refuse + 再起動案内。
-- backstop はスナップショット復元（workspace restore）。
+1. **`horizon-terminald` を分離する**: TerminalHost と全 PTY を所有し、
+   自分の socket を持つ（on-demand spawn）。
+2. **`Reload Agent Runtime` は agent runtime のみ drain・respawn**
+   する。ターミナルは無傷。
+3. **`Reload Terminal Runtime` を別コマンドとして新設**（明示的・
+   破壊的 — close/terminate 分離の既存規律に一致）。
+4. **UI 側の再 adopt を reload 経路に配線**: `prepare_workspace_for_
+   runtime_reload` はターミナルを terminate せず、`spawn_terminal_resume`
+   を `spawn_agent_resume` と並走させる。
+5. **terminal 向き wire 型は append-only**。reshape は terminald 再起動を
+   要求する重い変更として扱う。
+6. **binary 不一致は clean refuse + 再起動案内**（hello の `binary_id` を
+   使い、silent 継続にしない）。
+7. **backstop はスナップショット復元**（workspace restore）。
 
 ## 実装記録（2026-07-30、wire v17）
 
