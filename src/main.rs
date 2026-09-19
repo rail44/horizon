@@ -13,6 +13,7 @@ mod control_plane;
 mod desktop_notify;
 mod input_trace;
 mod keymap;
+mod model_picker;
 mod palette;
 mod runtime;
 mod session_manager;

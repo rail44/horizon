@@ -135,6 +135,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "approve-tool-call" => Some(CommandId::ApproveToolCall),
         "deny-tool-call" => Some(CommandId::DenyToolCall),
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
+        "switch-model" => Some(CommandId::SwitchModel),
         // `reload-session-runtime` is the pre-rename alias, kept so existing
         // user config.toml bindings keep working silently.
         "reload-agent-runtime" | "reload-session-runtime" => Some(CommandId::ReloadAgentRuntime),
@@ -308,6 +309,11 @@ mod tests {
             command_for("manage-sessions"),
             Some(CommandId::OpenSessionManager)
         );
+        assert_eq!(
+            command_for("cancel-agent-turn"),
+            Some(CommandId::CancelAgentTurn)
+        );
+        assert_eq!(command_for("switch-model"), Some(CommandId::SwitchModel));
         assert_eq!(
             command_for("increase-font-size"),
             Some(CommandId::IncreaseFontSize)

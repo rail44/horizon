@@ -43,6 +43,7 @@ use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_
 
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
+use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
 use crate::runtime::{AgentdHandle, TerminaldHandle, TerminaldSlot};
 use crate::session_manager::SessionManagerDelegate;
@@ -355,6 +356,13 @@ pub(crate) struct WorkspaceShell {
     _view_chooser_subscription: Option<Subscription>,
     // The placement the open view chooser will apply on confirm.
     pending_placement: Option<Placement>,
+    model_picker: Option<Entity<ListState<ModelPickerDelegate>>>,
+    _model_picker_subscription: Option<Subscription>,
+    // The agent session the open model picker will switch, captured at open
+    // (parent task #1's Phase 2) -- the confirm path resolves the
+    // daemon-side session id from it. Cleared on close/cancel so a stale
+    // confirm can never apply to a session the picker wasn't opened for.
+    model_picker_target: Option<Entity<AgentSession>>,
     // Live state for an in-progress split-handle drag (`render_node`'s
     // `LayoutNode::Split` arm) -- set on a handle's `on_mouse_down`,
     // updated on the split container's `on_mouse_move` (live reflow),
@@ -430,6 +438,9 @@ impl WorkspaceShell {
             view_chooser: None,
             _view_chooser_subscription: None,
             pending_placement: None,
+            model_picker: None,
+            _model_picker_subscription: None,
+            model_picker_target: None,
             active_split_drag: None,
             last_focused_terminal: None,
             terminal_exit_tx,

@@ -11,6 +11,8 @@ use horizon_agent::frame::state_indicates_turn_in_flight;
 use super::super::{session::AgentSession, turns};
 use super::AgentTranscript;
 use crate::theme;
+use crate::workspace::RunCommand;
+use horizon_workspace::commands::CommandId;
 
 const COMPOSER_MAX_ROWS: usize = 8;
 
@@ -231,9 +233,16 @@ impl Render for AgentComposer {
                     .flex_1()
                     .child(Textarea::new(&self.input).appearance(false)),
             );
-        if let Some(model) = self.model.clone() {
-            row = row.child(div().pb(px(4.0)).child(render_model_chip(model)));
-        }
+        // The model chip is always present on an agent pane: it doubles as
+        // the provider→model picker's entry point (parent task #1's Phase
+        // 2), so a session whose model is not (yet) resolved -- a provider
+        // whose key is missing, running deterministic fallback -- still gets
+        // a switch affordance instead of a silently absent control.
+        row = row.child(
+            div()
+                .pb(px(4.0))
+                .child(render_model_chip(self.model.clone())),
+        );
         row = row.child(
             div()
                 .pb(px(2.0))
@@ -247,8 +256,29 @@ fn composer_border() -> Hsla {
     theme::text_subtle().alpha(0.4)
 }
 
-fn render_model_chip(model: String) -> AnyElement {
+/// The chip's label: the current model id, or the `Model…` placeholder while
+/// no model is resolved yet. Free-standing so the fallback is unit-testable
+/// without a GPUI window.
+fn model_chip_label(model: Option<&str>) -> String {
+    model
+        .map(str::to_string)
+        .unwrap_or_else(|| "Model…".to_string())
+}
+
+/// The model chip: shows the session's current model (or the `Model…`
+/// placeholder while none is resolved) and opens the provider→model picker
+/// on click. The click dispatches `CommandId::SwitchModel` through the same
+/// [`RunCommand`] gpui action the stop/continue buttons use
+/// (`src/agent/view/transcript.rs`) -- AGENTS.md's "operations go through
+/// the command model" convention -- so palette, `[keybindings]`, and this
+/// pointer path all funnel through `WorkspaceShell::execute`, which resolves
+/// the active agent session the same way for all of them. Stateful
+/// (`.id("composer-model-chip")`) because gpui only attaches click handlers
+/// to interactive elements; the id is static for the same reason the send
+/// button's is (`composer-send`).
+fn render_model_chip(model: Option<String>) -> AnyElement {
     div()
+        .id("composer-model-chip")
         .flex()
         .flex_row()
         .items_center()
@@ -259,6 +289,27 @@ fn render_model_chip(model: String) -> AnyElement {
         .py(px(3.0))
         .text_size(px(11.0))
         .text_color(theme::text_muted())
-        .child(model)
+        .cursor_pointer()
+        .hover(|style| style.border_color(theme::text_subtle().alpha(0.6)))
+        .on_click(|_, window, cx| {
+            window.dispatch_action(
+                Box::new(RunCommand {
+                    id: CommandId::SwitchModel,
+                }),
+                cx,
+            );
+        })
+        .child(model_chip_label(model.as_deref()))
         .into_any_element()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::model_chip_label;
+
+    #[test]
+    fn the_chip_label_falls_back_to_a_placeholder_when_no_model_is_resolved() {
+        assert_eq!(model_chip_label(Some("m-opus")), "m-opus");
+        assert_eq!(model_chip_label(None), "Model…");
+    }
 }

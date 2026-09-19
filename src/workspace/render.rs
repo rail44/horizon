@@ -417,10 +417,14 @@ fn render_tab_close_button(index: usize, active: bool, title: &str) -> AnyElemen
 
 impl WorkspaceShell {
     /// Whether any control-surface modal (palette, view chooser, session
-    /// manager) currently has the shell's attention -- the same predicate
-    /// used to suppress workspace-mode key dispatch while a modal is open.
+    /// manager, model picker) currently has the shell's attention -- the same
+    /// predicate used to suppress workspace-mode key dispatch while a modal
+    /// is open.
     fn any_modal_open(&self) -> bool {
-        self.palette.is_some() || self.view_chooser.is_some() || self.session_manager.is_some()
+        self.palette.is_some()
+            || self.view_chooser.is_some()
+            || self.session_manager.is_some()
+            || self.model_picker.is_some()
     }
 
     fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1332,6 +1336,48 @@ impl Render for WorkspaceShell {
                                             cx.stop_propagation()
                                         })
                                         .child(List::new(&manager)),
+                                ),
+                        )
+                    })
+                    .when_some(self.model_picker.clone(), |this, picker| {
+                        this.child(
+                            div()
+                                .id("model-picker-backdrop")
+                                .absolute()
+                                .top_0()
+                                .left_0()
+                                .size_full()
+                                .flex()
+                                .justify_center()
+                                .items_start()
+                                .pt(px(64.0))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(|shell, _, window, cx| {
+                                        shell.model_picker_target = None;
+                                        shell.cancel_model_picker(window, cx);
+                                    }),
+                                )
+                                .child(
+                                    div()
+                                        .w(px(420.0))
+                                        .h(px(300.0))
+                                        .bg(rgb(theme::background()))
+                                        .border_1()
+                                        .border_color(theme::border())
+                                        .shadow(theme::overlay_shadow())
+                                        .rounded_md()
+                                        .overflow_hidden()
+                                        // Stop the panel's mouse-down from
+                                        // bubbling to the backdrop's
+                                        // click-outside handler so a row
+                                        // click confirms (as Enter does)
+                                        // rather than cancelling. See board
+                                        // item #11.
+                                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                                            cx.stop_propagation()
+                                        })
+                                        .child(List::new(&picker)),
                                 ),
                         )
                     }),

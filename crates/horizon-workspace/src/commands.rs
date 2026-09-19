@@ -12,6 +12,11 @@ pub enum CommandId {
     DenyToolCall,
     CancelAgentTurn,
     ContinueAgentTurn,
+    /// Opens the provider→model picker for the active agent session
+    /// (parent task #1's Phase 2). Palette-only -- no default keybinding
+    /// (see `keymap::command_for`'s `"switch-model"` entry for an optional
+    /// user binding).
+    SwitchModel,
     ReloadAgentRuntime,
     /// Restarts `horizon-terminald` (`docs/terminald-split-design.md`
     /// decision 3). Deliberately separate from
@@ -212,6 +217,13 @@ pub fn core_commands() -> Vec<CommandSpec> {
             title: "Continue Agent Turn",
             category: CommandCategory::Agent,
             description: "Resume a turn the turn-loop guard paused, without a new message.",
+            destructive: false,
+        },
+        CommandSpec {
+            id: CommandId::SwitchModel,
+            title: "Switch Model…",
+            category: CommandCategory::Agent,
+            description: "Switch the active agent session's provider and model.",
             destructive: false,
         },
         CommandSpec {
@@ -421,6 +433,7 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         CommandId::ApproveToolCall | CommandId::DenyToolCall => state.has_pending_approval,
         CommandId::CancelAgentTurn => state.has_turn_in_flight,
         CommandId::ContinueAgentTurn => state.has_paused_turn,
+        CommandId::SwitchModel => state.has_active_session,
         CommandId::OpenTerminalInSessionDirectory => state.has_active_session_workspace_root,
     }
 }
@@ -464,7 +477,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 36);
+        assert_eq!(commands.len(), 37);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);
@@ -479,24 +492,26 @@ mod tests {
         assert_eq!(commands[10].title, "Cancel Agent Turn");
         assert_eq!(commands[11].id, CommandId::ContinueAgentTurn);
         assert_eq!(commands[11].title, "Continue Agent Turn");
-        assert_eq!(commands[13].id, CommandId::ReloadTerminalRuntime);
-        assert_eq!(commands[13].title, "Reload Terminal Runtime");
-        assert_eq!(commands[14].id, CommandId::OpenSessionManager);
-        assert_eq!(commands[14].title, "Manage Sessions");
-        assert_eq!(commands[15].id, CommandId::ReloadConfig);
-        assert_eq!(commands[15].title, "Reload Config");
-        assert_eq!(commands[16].id, CommandId::OpenTerminalInSessionDirectory);
-        assert_eq!(commands[16].title, "Open Terminal in Session Directory");
-        assert_eq!(commands[17].id, CommandId::OpenBoard);
-        assert_eq!(commands[17].title, "Open Board");
-        assert_eq!(commands[18].id, CommandId::ToggleBoardExpansion);
-        assert_eq!(commands[18].title, "Toggle Board Expansion");
-        assert_eq!(commands[19].id, CommandId::IncreaseFontSize);
-        assert_eq!(commands[19].title, "Increase Font Size");
-        assert_eq!(commands[20].id, CommandId::DecreaseFontSize);
-        assert_eq!(commands[20].title, "Decrease Font Size");
-        assert_eq!(commands[21].id, CommandId::ResetFontSize);
-        assert_eq!(commands[21].title, "Reset Font Size");
+        assert_eq!(commands[12].id, CommandId::SwitchModel);
+        assert_eq!(commands[12].title, "Switch Model…");
+        assert_eq!(commands[14].id, CommandId::ReloadTerminalRuntime);
+        assert_eq!(commands[14].title, "Reload Terminal Runtime");
+        assert_eq!(commands[15].id, CommandId::OpenSessionManager);
+        assert_eq!(commands[15].title, "Manage Sessions");
+        assert_eq!(commands[16].id, CommandId::ReloadConfig);
+        assert_eq!(commands[16].title, "Reload Config");
+        assert_eq!(commands[17].id, CommandId::OpenTerminalInSessionDirectory);
+        assert_eq!(commands[17].title, "Open Terminal in Session Directory");
+        assert_eq!(commands[18].id, CommandId::OpenBoard);
+        assert_eq!(commands[18].title, "Open Board");
+        assert_eq!(commands[19].id, CommandId::ToggleBoardExpansion);
+        assert_eq!(commands[19].title, "Toggle Board Expansion");
+        assert_eq!(commands[20].id, CommandId::IncreaseFontSize);
+        assert_eq!(commands[20].title, "Increase Font Size");
+        assert_eq!(commands[21].id, CommandId::DecreaseFontSize);
+        assert_eq!(commands[21].title, "Decrease Font Size");
+        assert_eq!(commands[22].id, CommandId::ResetFontSize);
+        assert_eq!(commands[22].title, "Reset Font Size");
     }
 
     #[test]

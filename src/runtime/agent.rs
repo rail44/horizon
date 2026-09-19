@@ -52,6 +52,15 @@ pub(super) enum Op {
     SessionList {
         reply: crossbeam_channel::Sender<Result<Vec<wire::SessionSummary>, String>>,
     },
+    ListProviders {
+        reply: crossbeam_channel::Sender<Result<Vec<wire::ProviderSummary>, String>>,
+    },
+    SetSessionModel {
+        session_id: contract::SessionId,
+        provider: String,
+        model: String,
+        reply: crossbeam_channel::Sender<Result<(), String>>,
+    },
     WatchBoard {
         root: PathBuf,
         reply: crossbeam_channel::Sender<Result<(), String>>,
@@ -521,6 +530,30 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             tokio::spawn(async move {
                 let result = with_deadline(OP_TIMEOUT, "agent list", hub.list_agents()).await;
+                let _ = reply.send(result);
+            });
+        }
+        Op::ListProviders { reply } => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let result = with_deadline(OP_TIMEOUT, "provider list", hub.list_providers()).await;
+                let _ = reply.send(result);
+            });
+        }
+        Op::SetSessionModel {
+            session_id,
+            provider,
+            model,
+            reply,
+        } => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let result = with_deadline(
+                    OP_TIMEOUT,
+                    "set session model",
+                    hub.set_session_model(session_id, provider, model),
+                )
+                .await;
                 let _ = reply.send(result);
             });
         }

@@ -146,6 +146,13 @@ impl AgentSessionHandle {
     pub(crate) fn events(&self) -> Receiver<ProviderEvent> {
         self.inner.events()
     }
+
+    /// The daemon-side session id, for hub-level RPCs that address the
+    /// session by id (`SessionHub::set_session_model` -- the model picker's
+    /// confirm path).
+    pub(crate) fn session_id(&self) -> contract::SessionId {
+        self.session_id
+    }
 }
 
 impl Drop for AgentSessionHandle {
@@ -364,6 +371,65 @@ impl AgentdHandle {
                 }
                 crossbeam_channel::RecvTimeoutError::Disconnected => {
                     "session runtime stopped before the agent list completed".to_string()
+                }
+            })?
+    }
+
+    /// Call from a background task: the model picker fetches it on open
+    /// (parent task #1's Phase 2). Same shape as [`Self::session_list`].
+    pub(crate) fn list_providers(&self) -> Result<Vec<wire::ProviderSummary>, String> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .ops
+            .send(agent::Op::ListProviders { reply: reply_tx })
+            .is_err()
+        {
+            return Err("session runtime stopped before the provider list was sent".to_string());
+        }
+        reply_rx
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the provider list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the provider list completed".to_string()
+                }
+            })?
+    }
+
+    /// Call from a background task: the model picker's confirm path. The
+    /// reply carries the daemon's synchronous validation error (unknown
+    /// provider, unknown session, empty model id) when the switch was
+    /// rejected; on success the `SessionModel` re-announcement on the
+    /// attachment's event channel is the UI's confirmation.
+    pub(crate) fn set_session_model(
+        &self,
+        session_id: contract::SessionId,
+        provider: String,
+        model: String,
+    ) -> Result<(), String> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .ops
+            .send(agent::Op::SetSessionModel {
+                session_id,
+                provider,
+                model,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err("session runtime stopped before the model switch was sent".to_string());
+        }
+        reply_rx
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the model switch did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the model switch completed".to_string()
                 }
             })?
     }
