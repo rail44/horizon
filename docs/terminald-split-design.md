@@ -37,10 +37,11 @@ Claude Code）が道連れになるのが現在最大の運用痛。
 3. **`Reload Terminal Runtime` を別コマンドとして新設**（明示的・
    破壊的 — close/terminate 分離の既存規律に一致）。
 4. **UI 側の reload 経路を 2 ランタイム化**: agent reload はターミナルを
-   触らず（terminate しない）、着地後は `spawn_workspace_restore` が両
-   handle を検証して再 adopt する。terminal の terminate は destructive な
-   `Reload Terminal Runtime` の経路
-   （`prepare_workspace_for_terminal_runtime_reload`）のみ。
+   触らず（terminate しない）。その再 adopt は agent 側の
+   `spawn_agent_resume` のみ（ターミナルは切断されていないので再 adopt
+   不要）。両 handle を検証する `spawn_workspace_restore` は UI 起動時の
+   restore 経路。terminal の terminate は destructive な `Reload Terminal
+   Runtime` の経路（`prepare_workspace_for_terminal_runtime_reload`）のみ。
 5. **terminal 向き wire 型は append-only**。reshape は terminald 再起動を
    要求する重い変更として扱う。
 6. **binary 不一致は clean refuse + 再起動案内**（hello の `binary_id` を
