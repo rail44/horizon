@@ -1071,3 +1071,65 @@ deviation rather than asking for a mock update):
   and ended case; the carve-out is pinned by
   `thinking_shows_an_indicator_row_only_while_it_is_the_open_tail`
   (`src/agent/view/transcript.rs`).
+
+- **Model switcher live: the chip is the picker's entry point, and the
+  chip's precedence is reversed (2026-09-19, owner decision "bにしましょう").**
+  With multi-provider support and per-session model switching landed
+  on the backend side (`[[providers]]` config, `ProviderKind` dispatch,
+  `SessionHub::list_providers`/`set_session_model`, wire v21 — parent
+  task #1's Phase 1), the shell side completes the switcher this file's
+  2026-07-13 entries deferred as "unbuilt future work":
+
+  - **The chip is clickable and always present.** The composer renders the
+    model chip on every agent pane (no longer omitted while no model is
+    known — it shows a `Model…` placeholder instead) and a click dispatches
+    `CommandId::SwitchModel` through the same `RunCommand` gpui action the
+    stop/continue buttons use, opening the provider→model two-stage picker
+    (`src/model_picker.rs`: one searchable modal, Providers → Models, in
+    `list_providers` order — the `[[providers]]` file order, each entry's
+    first alias its default model). Key-unavailable providers stay listed
+    grayed with a reason composed from `api_key_env` (the daemon owns the
+    availability verdict), and confirming one is a no-op. Esc walks back a
+    stage before closing the modal. This supersedes the 2026-07-13
+    "omitted before any turn completes; no `▾` glyph since no switcher is
+    wired" bullet.
+  - **Precedence reversed: session model wins on divergence.** The
+    2026-07-13 rule ("the latest completed turn's model overrides the
+    session model when the two actively disagree") was decided under the
+    explicit assumption that no switcher exists; its job was guarding the
+    chip against a session provider that drifted away from the session-start
+    value. With the switcher live that protection is the echo mechanism's:
+    every mid-session change is an explicit `set_session_model` RPC the
+    daemon answers by re-announcing the resolved model
+    (`AgentWireEvent::SessionModel`), so the session value is no longer a
+    possibly-stale startup snapshot — it is the freshest intent signal,
+    arriving ahead of any turn that could reflect it, and the latest
+    completed turn is one switch behind it by construction. Letting the
+    turn mask the switch would show a stale model through exactly the
+    window the switcher exists for. `turns::composer_model_chip` now
+    prefers `session_model` when the two disagree; the `None` fallbacks are
+    unchanged. Known accepted consequence (recorded, not hidden): a switch
+    to a provider entry the *running session's* spawn-time table doesn't
+    know — i.e. one `Reload Config` added after the session started; a
+    running session keeps its spawn-time config and the daemon's reload
+    swap takes effect for the *next* session — still gets its echo but
+    fails to apply at the next turn boundary: the chip shows the echoed id
+    while the turn runs on the old one, and the daemon surfaces the failure
+    as an `Event::Error` in the transcript. An entry reshaped under the
+    same name passes both validations and applies the *spawn-time* shape
+    silently (no `Event::Error`), so the chip can show an id the next turn
+    doesn't run. The reverse direction is rejected synchronously at the hub
+    instead — the hub validates against the daemon's *current* config, so a
+    switch to an entry the reload removed is an unknown-provider `HubError`
+    with no echo, the chip stays on the last announced model, and the
+    picker's own staleness doc leans on exactly that guarantee. A future
+    distinction between switch-echoes and spawn-announcements could tighten
+    the added-entry case if it matters in practice.
+  - **Failure convention**: a rejected switch (unknown provider/session,
+    synchronous `HubError`, or a dead runtime) leaves the chip showing the
+    last announced model — the echo is authoritative for what will run.
+
+  Both halves are decided by the owner as part of board task #3's review;
+  the test pinning the reversal is
+  `composer_model_chip_prefers_the_session_model_when_the_turn_diverges`
+  (`src/agent/turns/composer.rs`).

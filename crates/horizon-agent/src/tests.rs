@@ -35,10 +35,15 @@ fn mock_agent_emits_initial_session_events() {
 fn provider_initialization_preserves_a_replayed_failed_turn() {
     let providers: Vec<Box<dyn registry::Provider>> = vec![
         Box::new(crate::providers::mock::MockProvider::new()),
-        Box::new(crate::providers::rig::Provider::new(
+        Box::new(crate::providers::rig::Provider::for_entry(
+            crate::contract::ProviderId("builtin.agent.rig".to_string()),
             crate::config::RigAgentConfig {
-                openai_enabled: false,
+                api_key_present: false,
                 ..Default::default()
+            },
+            crate::config::ProvidersTable {
+                entries: Vec::new(),
+                default_name: String::new(),
             },
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )),

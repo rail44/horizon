@@ -94,6 +94,47 @@ pub struct WorkspaceRootResolved {
     pub parent_session_id: Option<SessionId>,
 }
 
+/// One configured provider as `SessionHub::list_providers` reports it —
+/// the model picker's per-provider data (owner-agreed multi-provider
+/// design). Additive to the wire: new definitions and new hub methods ride
+/// the §4 additive-only rule, with the method additions' version bump
+/// recorded on the artifact.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ProviderSummary {
+    /// The `[[providers]]` `name` — what `set_session_model`'s `provider`
+    /// argument names. The legacy `[provider]` fold-in resolves as
+    /// `default`.
+    pub name: String,
+    /// The entry's file `base_url`, if any. The env-resolved value lives in
+    /// the registry's rig view; the picker needs only what the file named.
+    pub base_url: Option<String>,
+    /// The environment variable **name** the entry's API key is read from —
+    /// recorded so a picker can explain unavailability ("ANTHROPIC_API_KEY
+    /// is not set"). Never a value (the secrets-stay-out rule).
+    pub api_key_env: String,
+    /// alias -> model id, in file listing order; the first is the entry's
+    /// own default model — the same "first" the picker shows.
+    pub models: Vec<ModelAlias>,
+    /// Build-time resolved (the entry's key variable was set when the
+    /// provider surface was built). `false` = registered but unavailable
+    /// (grayed out, not hidden). A mid-session environment change is
+    /// honored by a switch, not by this listing.
+    pub available: bool,
+    /// Whether this is the surface's default entry (`default_provider`, or
+    /// the first entry when unset / the legacy fold-in).
+    pub default: bool,
+}
+
+/// One alias -> model id pair of [`ProviderSummary::models`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelAlias {
+    /// What the picker shows and `set_session_model`'s `model` argument
+    /// carries.
+    pub alias: String,
+    /// The model id the provider is actually asked for.
+    pub model: String,
+}
+
 /// One entry of a `SessionHub::list_agents` reply.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionSummary {

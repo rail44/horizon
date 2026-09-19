@@ -1,7 +1,7 @@
 //! The judge's wire-level client: a mockable [`ModelClient`] trait plus the
 //! real implementation over rig's OpenAI-completions client, reusing the
 //! same per-call `.model()` override pattern
-//! `providers::rig::completion::openai_completions_client` already uses for
+//! `providers::rig::completion::completion_client` already uses for
 //! the acting model.
 //!
 //! `logit_bias`/`logprobs` have no first-class builder methods in rig-core

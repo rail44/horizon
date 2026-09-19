@@ -392,6 +392,11 @@ impl WorkspaceShell {
                 self.reconcile(window, cx);
             }
             CommandId::OpenSessionManager => self.open_session_manager(window, cx),
+            CommandId::SwitchModel => {
+                if let Some(session) = self.active_agent_session() {
+                    self.open_model_picker(session, window, cx);
+                }
+            }
             CommandId::OpenBoard => self.open_board_pane(window, cx),
             CommandId::OpenBoardRelatedItem
             | CommandId::BackBoardList
@@ -515,6 +520,13 @@ impl WorkspaceShell {
                 }
                 self.pending_agent_spawns.clear();
                 self.agent_sessions.clear();
+                // The model picker's target session and its provider list
+                // both die with the runtime: drop the modal instead of
+                // leaving a surface whose confirm can only ever hit
+                // "Unknown session" and whose list can never load.
+                self.model_picker = None;
+                self._model_picker_subscription = None;
+                self.model_picker_target = None;
                 // Only the agent panes' views are dropped: a terminal
                 // pane's view holds live scrollback/selection state bound
                 // to a session that is still running, and rebuilding it

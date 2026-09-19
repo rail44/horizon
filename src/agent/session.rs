@@ -326,6 +326,14 @@ impl AgentSession {
     pub(crate) fn shutdown(&self) {
         self.link.dispatch(Command::Shutdown);
     }
+
+    /// The daemon-side session id, for hub-level RPCs that address the
+    /// session by id (`SessionHub::set_session_model` -- the model picker's
+    /// confirm path resolves it at confirm time). `None` only in the
+    /// mid-reload gap where the attachment handle is being replaced.
+    pub(crate) fn daemon_session_id(&self) -> Option<horizon_agent::contract::SessionId> {
+        self._wire.as_ref().map(|handle| handle.session_id())
+    }
 }
 
 /// The running-task row list's upsert/retire table, free-standing so tests

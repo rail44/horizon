@@ -65,8 +65,8 @@ use serde_json::{json, Value};
 
 use horizon_agent::contract::{Command, Event, SessionId};
 use horizon_agent::wire::{
-    AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse, HubHello, SessionNew,
-    SessionSummary, AGENT_PROTOCOL_VERSION,
+    AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse, HubHello, ProviderSummary,
+    SessionNew, SessionSummary, AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::schema_check::{sort_object_keys, PROTOCOL_VERSION_KEY};
 use horizon_wire::{ClientHello, HubError};
@@ -108,6 +108,27 @@ fn generate_wire_schema() -> Value {
         },
         "reload_provider_config": {
             "request": unit,
+            "reply": unit,
+        },
+        "list_providers": {
+            "request": unit,
+            "reply": generator.subschema_for::<Vec<ProviderSummary>>().to_value(),
+        },
+        // Three arguments: the rtc request variant's serde shape is those
+        // named fields (the pinned method-surface probe in `wire/hub.rs`
+        // asserts `missing field \`session_id\``), documented here minus
+        // the macro's own reply-channel field — the same convention the
+        // argument-typed one-arg methods above follow.
+        "set_session_model": {
+            "request": json!({
+                "type": "object",
+                "properties": {
+                    "session_id": generator.subschema_for::<SessionId>().to_value(),
+                    "provider": json!({"type": "string"}),
+                    "model": json!({"type": "string"}),
+                },
+                "required": ["session_id", "provider", "model"],
+            }),
             "reply": unit,
         },
     });

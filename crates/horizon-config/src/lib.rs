@@ -24,6 +24,16 @@
 //! [`warnings::warn`]'s ordinary "probable typo" treatment, the same as
 //! any other unrecognized key.
 //!
+//!
+//! **The surface below is deliberately re-extended, not frozen.** The
+//! 2026-07-18 narrowing's single-`[provider]` shape assumed one rig-backed
+//! provider; the owner-agreed multi-provider wave (2026-10, board task #1)
+//! re-extends the declared surface with the `[[providers]]` array and
+//! `default_provider` -- and keeps the legacy `[provider]` table as a
+//! backward-compatible alias for exactly that one implicit provider (see
+//! [`RawConfig::resolved_providers`]). Everything else the narrowing wave
+//! retired stays retired: the re-extension adds provider entries, it does
+//! not reopen any other knob.
 //! Design choices:
 //! - **One location, no layered merging.** Unlike tools that merge a
 //!   system/user/project config chain, Horizon reads exactly one file:
@@ -46,11 +56,54 @@
 //!   live. `[provider]` picks up on `Reload Agent Runtime` (a fresh
 //!   `horizon-agentd` process re-reads the file, no full UI restart
 //!   needed); `[terminal]`/`[ui]` need a full UI restart.
-//! - **Secrets stay out.** Nothing under `[provider]` accepts an API key —
-//!   `OPENAI_API_KEY` (and any future provider secret) is environment-only.
+//! - **Secrets stay out.** Nothing under `[provider]` or `[[providers]]`
+//!   accepts an API key — the config file records at most an environment
+//!   variable **name** (`[provider]`'s `OPENAI_API_KEY`, `[[providers]]`'s
+//!   `api_key_env`; any future provider secret likewise) and the key itself
+//!   is environment-only.
 
 pub mod grants;
 mod warnings;
+
+/// Deserializes a TOML table into its (key, value) pairs *in document
+/// order* — the mechanism [`RawNamedProviderConfig`]'s `models` field uses
+/// to keep the file's listing order (TOML 記載順, owner-agreed for the
+/// picker). serde's own `Vec<(K, V)>` impl expects a sequence and a plain
+/// table would sort keys; this visitor takes the map path instead, whose
+/// `next_entry` order is the parsed table's own — document order under the
+/// `preserve_order` toml feature.
+pub mod ordered_pairs {
+    use serde::de::{Deserializer, MapAccess, Visitor};
+    use std::fmt;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<(String, String)>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct OrderedPairsVisitor;
+
+        impl<'de> Visitor<'de> for OrderedPairsVisitor {
+            type Value = Vec<(String, String)>;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("a map of model alias -> model id")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut pairs = Vec::new();
+                while let Some(pair) = map.next_entry::<String, String>()? {
+                    pairs.push(pair);
+                }
+                Ok(pairs)
+            }
+        }
+
+        deserializer.deserialize_map(OrderedPairsVisitor)
+    }
+}
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -77,6 +130,17 @@ const HOME_VAR: &str = "HOME";
 #[serde(default)]
 pub struct RawConfig {
     pub provider: RawProviderConfig,
+    /// `[[providers]]`: named rig-backed provider entries — the
+    /// owner-agreed re-extension of the narrowing wave's single-`[provider]`
+    /// surface (see the module doc). Empty unless the file sets it; the
+    /// legacy `[provider]` table folds in through
+    /// [`RawConfig::resolved_providers`] rather than here.
+    pub providers: Vec<RawNamedProviderConfig>,
+    /// Which `[[providers]]` `name` runs when nothing else selected it.
+    /// `None` means the first effective entry's name
+    /// ([`RawConfig::resolved_providers`] owns that rule). A stale name that
+    /// matches no entry is warned about and falls back to the first entry.
+    pub default_provider: Option<String>,
     pub terminal: RawTerminalConfig,
     pub ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
@@ -115,6 +179,219 @@ pub struct RawConfig {
 pub struct RawProviderConfig {
     pub model: Option<String>,
     pub base_url: Option<String>,
+}
+
+/// Which rig-backed provider *client* an entry builds: the first-scope kinds
+/// (owner-agreed: `openai-compatible` + `anthropic`). `openai-compatible`
+/// (the default) is any endpoint speaking OpenAI's chat-completions wire
+/// (rig's `openai::CompletionsClient`); `anthropic` is rig's
+/// `anthropic::Client`. rig-core 0.42 bundles both with no feature gates.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RawProviderKind {
+    #[default]
+    OpenAiCompatible,
+    Anthropic,
+}
+
+impl RawProviderKind {
+    /// The environment variable *name* an entry's API key is read from when
+    /// the file doesn't override `api_key_env` — per kind, mirroring rig's
+    /// own `api_key_env` defaults. The config file never carries the key
+    /// itself: it only ever names the variable (the module doc's
+    /// secrets-stay-out rule, now one variable *name* per provider).
+    pub fn default_api_key_env(self) -> &'static str {
+        match self {
+            RawProviderKind::OpenAiCompatible => "OPENAI_API_KEY",
+            RawProviderKind::Anthropic => "ANTHROPIC_API_KEY",
+        }
+    }
+}
+
+/// One `[[providers]]` entry as the file writes it. `models` is a map of
+/// *alias* -> model id; it deserializes into pairs so the file's own listing
+/// order survives — the picker's order is TOML 記載順 (owner-agreed), which
+/// the `preserve_order` toml feature backs (the default table would silently
+/// sort keys). TOML itself refuses duplicate keys in one table, so an alias
+/// can't repeat.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawNamedProviderConfig {
+    pub name: String,
+    pub kind: Option<RawProviderKind>,
+    pub base_url: Option<String>,
+    /// The environment variable **name** (never a value) the entry's API key
+    /// is read from. `None` means the kind's own default
+    /// ([`RawProviderKind::default_api_key_env`]).
+    pub api_key_env: Option<String>,
+    /// Deserialized through [`ordered_pairs`] so the file's listing order
+    /// survives (serde's own `Vec<(K, V)>` impl expects a sequence, and a
+    /// plain table would sort keys — either would break the order contract
+    /// above).
+    #[serde(default, with = "ordered_pairs")]
+    pub models: Vec<(String, String)>,
+}
+
+/// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
+/// every `Option` collapsed, the legacy `[provider]` table folded in, and
+/// nameless entries dropped. This is the shape `horizon-agentd` hands to
+/// `horizon_agent::config`, which owns the env-var precedence on top
+/// (`HORIZON_RIG_MODEL`/`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`ANTHROPIC_API_KEY`
+/// /`ANTHROPIC_BASE_URL` keep winning over whatever is set here).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedProviderConfig {
+    pub name: String,
+    pub kind: RawProviderKind,
+    pub base_url: Option<String>,
+    pub api_key_env: String,
+    /// alias -> model id, in file listing order. The first entry is the
+    /// provider's own default model — the same document order the picker
+    /// shows, so "first" means the same thing to both.
+    pub models: Vec<(String, String)>,
+}
+
+/// [`RawConfig::resolved_providers`]'s whole output: the effective entry
+/// list (file order) and which name is the default.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProvidersResolution {
+    pub providers: Vec<ResolvedProviderConfig>,
+    pub default_name: String,
+}
+
+/// The name the legacy `[provider]` table folds in as, when the file has no
+/// named `[[providers]]` entries. Deliberately plain: for a single-provider
+/// config the picker showing one provider is not improved by renaming it
+/// from the file, and `[provider]`-only files must keep working
+/// byte-for-byte.
+pub const LEGACY_PROVIDER_NAME: &str = "default";
+
+impl RawConfig {
+    /// Folds the legacy `[provider]` table and the `[[providers]]` array
+    /// into one effective provider list plus a default name. Pure (the
+    /// value-level warnings live in [`provider_config_warnings`], run once
+    /// per parse beside the name-walking [`warnings::warn`]):
+    ///
+    /// - `[[providers]]` entries set → those entries, in file order
+    ///   (nameless ones dropped — warned). The legacy `[provider]` table is
+    ///   IGNORED in this case: a file that names providers has already left
+    ///   the single-provider surface, and merging an unnamed entry into a
+    ///   named list would make the effective list unreadable from the file.
+    /// - No named `[[providers]]` entries (the legacy case, including a file
+    ///   with no provider config at all) → one implicit entry named
+    ///   [`LEGACY_PROVIDER_NAME`] carrying `[provider]`'s `base_url` and,
+    ///   when `[provider].model` is set, that model as its single
+    ///   (model -> model) alias pair. This is what keeps
+    ///   pre-`[[providers]]` behavior intact: same entry count, same knobs,
+    ///   same env precedence (which `horizon_agent::config` resolves on
+    ///   top).
+    /// - Every entry's `kind`/`api_key_env` `Option`s collapse to their
+    ///   defaults ([`RawProviderKind::default`]/[`RawProviderKind::
+    ///   default_api_key_env`]).
+    /// - Default name: `default_provider` when it names one of the effective
+    ///   entries; a stale name falls back to the first entry's name (the
+    ///   fallback keeps a renamed or dropped provider from breaking startup —
+    ///   the same never-fail-on-a-typo policy the file's other sections
+    ///   follow), else the first entry's name.
+    pub fn resolved_providers(&self) -> ProvidersResolution {
+        let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
+        if self.providers.is_empty() {
+            let models = match &self.provider.model {
+                Some(model) => vec![(model.clone(), model.clone())],
+                None => Vec::new(),
+            };
+            providers.push(ResolvedProviderConfig {
+                name: LEGACY_PROVIDER_NAME.to_string(),
+                kind: RawProviderKind::OpenAiCompatible,
+                base_url: self.provider.base_url.clone(),
+                api_key_env: RawProviderKind::OpenAiCompatible
+                    .default_api_key_env()
+                    .to_string(),
+                models,
+            });
+        } else {
+            for entry in &self.providers {
+                if entry.name.is_empty() {
+                    continue;
+                }
+                let kind = entry.kind.unwrap_or_default();
+                providers.push(ResolvedProviderConfig {
+                    name: entry.name.clone(),
+                    kind,
+                    base_url: entry.base_url.clone(),
+                    api_key_env: entry
+                        .api_key_env
+                        .clone()
+                        .unwrap_or_else(|| kind.default_api_key_env().to_string()),
+                    models: entry.models.clone(),
+                });
+            }
+        }
+        let default_name = match &self.default_provider {
+            Some(name) if providers.iter().any(|p| &p.name == name) => name.clone(),
+            _ => providers
+                .first()
+                .map(|p| p.name.clone())
+                .unwrap_or_else(|| LEGACY_PROVIDER_NAME.to_string()),
+        };
+        ProvidersResolution {
+            providers,
+            default_name,
+        }
+    }
+}
+
+/// Value-level warnings for the provider sections, beside the name-walking
+/// [`warnings::warn`] (same warn-and-continue policy, never fail startup).
+/// Pure: collected here, printed by [`read_config`] once per successful
+/// parse. Covers what a name walk can't see:
+/// - a file that sets BOTH `[[providers]]` and the legacy `[provider]`
+///   table — `[[providers]]` wins and the legacy table is dead weight the
+///   reader should drop;
+/// - a `default_provider` naming no effective entry;
+/// - a `[[providers]]` entry with no `name` (it would resolve as an unnamed
+///   provider nothing can select);
+/// - a duplicate `[[providers]]` `name` (the later entry is shadowed for
+///   selection).
+pub fn provider_config_warnings(config: &RawConfig) -> Vec<String> {
+    let resolution = config.resolved_providers();
+    let mut warnings = Vec::new();
+    if !config.providers.is_empty()
+        && (config.provider.model.is_some() || config.provider.base_url.is_some())
+    {
+        warnings.push(
+            "[provider]: ignored because [[providers]] is set — [[providers]] wins; drop the legacy [provider] table"
+                .to_string(),
+        );
+    }
+    if let Some(name) = &config.default_provider {
+        if !resolution.providers.iter().any(|p| &p.name == name) {
+            warnings.push(format!(
+                "default_provider: {name:?} names no [[providers]] entry — falling back to the first entry"
+            ));
+        }
+    }
+    for (index, entry) in config.providers.iter().enumerate() {
+        if entry.name.is_empty() {
+            warnings.push(format!(
+                "[[providers]]: entry {index} has no name, dropping it (name it so default_provider can select it)"
+            ));
+        }
+    }
+    let mut seen: Vec<&str> = Vec::new();
+    for entry in &config.providers {
+        if entry.name.is_empty() {
+            continue;
+        }
+        if seen.contains(&entry.name.as_str()) {
+            warnings.push(format!(
+                "[[providers]]: duplicate name {} — the later entry is shadowed",
+                entry.name
+            ));
+        } else {
+            seen.push(entry.name.as_str());
+        }
+    }
+    warnings
 }
 
 /// `[terminal]`: cell rendering metrics for the spawned shell. See
@@ -387,6 +664,13 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
             // `~`) can't be done by name-walking the raw table, so it runs
             // beside it, off the same successful parse.
             for warning in grants::resolve(&config.grants.project, home_dir().as_deref()).1 {
+                eprintln!("horizon config: {warning}");
+            }
+            // The provider sections' *value* warnings (the
+            // `[provider]`/`[[providers]]` coexistence rule, a stale
+            // `default_provider`, nameless/duplicate entries) are likewise
+            // name-walk-invisible, off the same successful parse.
+            for warning in provider_config_warnings(&config) {
                 eprintln!("horizon config: {warning}");
             }
             ConfigRead::Parsed(Box::new(config))

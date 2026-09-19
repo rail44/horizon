@@ -54,7 +54,9 @@ use horizon_wire::{
     CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 
-use super::{AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary};
+use super::{
+    AgentWireEvent, HostToolRequest, HostToolResponse, ProviderSummary, SessionNew, SessionSummary,
+};
 use crate::contract::{Command, SessionId};
 
 /// The agent-daemon protocol version this build speaks.
@@ -108,6 +110,15 @@ use crate::contract::{Command, SessionId};
 ///   compatibility is not carried by default).
 /// - **v20 — board session routing and environment activation**: durable
 ///   session inputs/outcomes, in-session worktree handoff, and `watch_board`.
+/// - **v21 — the multi-provider surface**: `list_providers` and
+///   `set_session_model` appended to [`SessionHub`], plus
+///   `Command::SetSessionModel` on the attachment's commands channel (the
+///   owner-agreed multi-provider design's wire half). Method appends come
+///   with a bump (the v18/v20 precedent): these are client→daemon behavior
+///   the daemon must actually serve, so negotiated-version honesty wants
+///   the honest restart — unlike a daemon→client event addition, where a
+///   stale peer simply never sends it (the no-bump TaskProgress precedent
+///   below).
 ///
 /// Additive since v19, no bump (the v12 precedent): **live background-task
 /// progress** — `AgentWireEvent::TaskProgress` (`contract::TaskProgress`),
@@ -115,7 +126,7 @@ use crate::contract::{Command, SessionId};
 /// (current tool, reasoning vs tool-running) onto the requester's
 /// attachment channel. Ephemeral UI feedback: never persisted, dropped
 /// while no client is attached, not replayed on attach.
-pub const AGENT_PROTOCOL_VERSION: u32 = 20;
+pub const AGENT_PROTOCOL_VERSION: u32 = 21;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -125,7 +136,7 @@ pub const AGENT_PROTOCOL_VERSION: u32 = 20;
 /// interop, they need honest restart, so a mismatched `hello` is rejected
 /// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
 /// adoption-design.md` §3/§6) rather than bridged by gate constants.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 20;
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 21;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -255,6 +266,32 @@ pub trait SessionHub {
         &self,
         workspace_root: std::path::PathBuf,
     ) -> Result<SessionId, HubError>;
+
+    // -- provider surface (v21, the multi-provider design's wire half) --
+
+    /// Every configured provider with its model aliases and availability —
+    /// the model picker's data. Entries run in the config file's order
+    /// (aliases in their own listing order; the first is each entry's
+    /// default model). `available` is build-time resolved: an entry whose
+    /// API-key variable was unset registers but is unavailable — grayed
+    /// out, never hidden.
+    async fn list_providers(&self) -> Result<Vec<ProviderSummary>, HubError>;
+
+    /// Mid-session provider/model switch, latest turn wins: the *next*
+    /// turn runs on `provider`/`model`, whatever is in flight finishes on
+    /// its own selection. `provider` names a configured entry (see
+    /// [`Self::list_providers`]); `model` is the entry's alias — or a raw
+    /// model id, the same pass-through `role.model` accepts. Validates the
+    /// pair, resolves the model id, re-announces it through the existing
+    /// `AgentWireEvent::SessionModel` announcement, and records it on the
+    /// session so a (re)attach reports the switched model. Unknown
+    /// provider, unknown session, or an empty model is a [`HubError`].
+    async fn set_session_model(
+        &self,
+        session_id: SessionId,
+        provider: String,
+        model: String,
+    ) -> Result<(), HubError>;
 }
 
 #[cfg(test)]
@@ -273,7 +310,7 @@ mod tests {
     /// builds. The terminal protocol evolves independently.
     #[test]
     fn board_routing_requires_the_current_agent_protocol() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 20);
+        assert_eq!(AGENT_PROTOCOL_VERSION, 21);
         assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, AGENT_PROTOCOL_VERSION);
     }
 
@@ -295,7 +332,8 @@ mod tests {
         assert_eq!(
             variants,
             "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `WatchBoard`, `NewAgent`, \
-             `AttachAgent`, `Drain`, `ReloadProviderConfig`, `EnsureBoardOrganizer` at line 1 column 10",
+             `AttachAgent`, `Drain`, `ReloadProviderConfig`, `EnsureBoardOrganizer`, `ListProviders`, \
+             `SetSessionModel` at line 1 column 10",
         );
 
         // Argument names per method, from serde's missing-field errors.
@@ -333,6 +371,17 @@ mod tests {
             probe("AttachAgent").starts_with("missing field `session_id`"),
             "{}",
             probe("AttachAgent")
+        );
+        // v21's additions: list_providers takes no arguments, set_session_model
+        // carries the session id then the provider/model pair.
+        assert_eq!(
+            probe("ListProviders"),
+            "ListProviders: no further required fields"
+        );
+        assert!(
+            probe("SetSessionModel").starts_with("missing field `session_id`"),
+            "{}",
+            probe("SetSessionModel")
         );
     }
 }

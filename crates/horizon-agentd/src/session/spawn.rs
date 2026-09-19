@@ -210,7 +210,7 @@ mod tests {
     use crate::session::test_support::state_with_rig_config;
     use crate::session::Connection;
 
-    /// A resolvable model (rig provider, `openai_enabled: true`) is both
+    /// A resolvable model (rig provider, `api_key_present: true`) is both
     /// returned (for `SessionEntry::model`) and announced live as a
     /// session-scoped `Control::SessionModel`, matching how `role_id`
     /// already travels -- see `docs/agent-output-ui-amendment.md`'s dated
@@ -235,7 +235,7 @@ mod tests {
     }
 
     /// Deterministic fallback mode (no `OPENAI_API_KEY`, mirrored here via
-    /// `openai_enabled: false`) never calls a real provider, so there is no
+    /// `api_key_present: false`) never calls a real provider, so there is no
     /// honest model to report -- nothing must be sent, mirroring
     /// `Control::SkippedLines`'s "omitted entirely" convention.
     #[test]

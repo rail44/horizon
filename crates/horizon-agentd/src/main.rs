@@ -60,6 +60,7 @@
 
 mod board_flow;
 mod hub;
+mod providers;
 mod session;
 mod worktree;
 
@@ -104,15 +105,16 @@ async fn main() -> anyhow::Result<()> {
     // file directly (see `docs/agent-runtime-split-design.md`'s "the child
     // owns the event log and DuckDB projection", extended by the
     // 2026-07-18 config-narrowing wave's consolidation onto
-    // `horizon-config`): only `[provider]` `model`/`base_url` still vary
-    // per this crate's config -- everything else former `[agent]` knobs
-    // became fixed built-in constants in `horizon_agent::config` (see that
-    // module's doc).
+    // `horizon-config`, and re-extended (owner-agreed multi-provider wave)
+    // by the `[[providers]]` array / `default_provider` — the legacy
+    // `[provider]` table folds in via `horizon_config::RawConfig::
+    // resolved_providers`, so a `[provider]`-only file keeps today's
+    // behavior. Everything else former `[agent]` knobs became fixed
+    // built-in constants in `horizon_agent::config` (see that module's
+    // doc).
     let raw_config = horizon_config::load();
-    let agent_config = AgentConfig::from_env_and_provider(
-        raw_config.provider.model.clone(),
-        raw_config.provider.base_url.clone(),
-    );
+    let (provider_entries, provider_default) = providers::named_provider_configs(raw_config);
+    let agent_config = AgentConfig::from_env_and_providers(provider_entries, provider_default);
     // Resolved once at startup and handed to every session's
     // `ToolSessionState` (see `AgentdState::config_path`/`run_session`):
     // the `config.read`/`config.write` agent tools' one and only target.

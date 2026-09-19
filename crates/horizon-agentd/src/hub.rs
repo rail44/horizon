@@ -27,7 +27,7 @@ use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
     agent_version_range, AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse,
-    HubHello, SessionHub, SessionNew, SessionSummary,
+    HubHello, ProviderSummary, SessionHub, SessionNew, SessionSummary,
 };
 use horizon_wire::{
     receive_pump, ClientHello, HelloGate, HubError, WireCodec, CHANNEL_BUFFER,
@@ -246,6 +246,31 @@ impl SessionHub for Hub {
         }
         Ok(())
     }
+
+    /// Every configured provider with its model aliases and availability —
+    /// the model picker's data ([`Connection::list_providers`]). Reads the
+    /// agent config, the same table the registry was built from.
+    async fn list_providers(&self) -> Result<Vec<ProviderSummary>, HubError> {
+        self.hello.require()?;
+        Ok(self.connection.list_providers())
+    }
+
+    /// Mid-session provider/model switch, latest turn wins — see
+    /// [`Connection::set_session_model`]. Validation errors are caller
+    /// bugs or a stale picker's view, so they surface as [`HubError`]s
+    /// rather than silent no-ops.
+    async fn set_session_model(
+        &self,
+        session_id: SessionId,
+        provider: String,
+        model: String,
+    ) -> Result<(), HubError> {
+        self.hello.require()?;
+        self.connection
+            .set_session_model(session_id, provider, model)
+            .map_err(HubError::Call)?;
+        Ok(())
+    }
 }
 
 /// Blocks until every event-log record enqueued so far has actually been
@@ -362,7 +387,7 @@ mod tests {
     /// sees the new model. Proven on both halves of the swap: the registry's
     /// `resolved_model` (which reads the rig provider's rebuilt config) and
     /// `agent_config.rig.model` (the judge's base-URL source). `OPENAI_API_KEY`
-    /// is set only to flip `openai_enabled` on so `resolved_model` reports the
+    /// is set only to flip `api_key_present` on so `resolved_model` reports the
     /// model instead of `None` -- `resolved_model` makes no network call, and
     /// nextest's per-test process isolation means this `set_var` cannot race
     /// another test (the `config` module's own env-mutation warning is about

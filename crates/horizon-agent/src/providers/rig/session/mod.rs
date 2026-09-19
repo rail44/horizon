@@ -54,9 +54,16 @@ pub(super) use turn::{
     append_cancelled_tool_results_to_history, fold_batched_tool_result, BatchStep,
 };
 
+/// Spawns one rig session's dedicated thread. `table` is the whole surface
+/// at this session's spawn time: what a mid-session switch
+/// (`Command::SetSessionModel`) resolves targets against. A `Reload Agent
+/// Runtime` rebuilds the registry for *new* sessions; a running session
+/// keeps its spawn-time table, the same way it keeps its spawn-time entry
+/// config.
 pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
+    table: crate::config::ProvidersTable,
     role: Option<&'static RoleDefinition>,
     duckdb_cell: SharedDuckdbStore,
 ) -> SessionHandle {
@@ -174,6 +181,7 @@ pub(super) fn spawn_rig_session(
                     commands_rx,
                     events_tx,
                     config,
+                    table,
                     environment,
                     extra_sections,
                     role,
@@ -211,7 +219,7 @@ pub(super) fn spawn_rig_session(
 /// **once**, on stderr -- the design's `/models`-unavailable behavior, with
 /// no guessed fallback window (see `super::model_limits`' module doc).
 async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
-    if !config.openai_enabled {
+    if !config.api_key_present {
         return ClearingState::disabled();
     }
     let window = model_limits(config.base_url.as_deref(), &config.model)

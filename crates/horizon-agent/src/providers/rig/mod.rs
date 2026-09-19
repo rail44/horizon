@@ -18,7 +18,7 @@ use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 
 use crate::{
-    config::RigAgentConfig,
+    config::{ProviderKind, ProvidersTable, RigAgentConfig},
     contract::{ProviderId, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
     registry::{Provider as AgentProvider, SessionHandle},
@@ -26,7 +26,22 @@ use crate::{
 };
 
 pub(crate) struct Provider {
+    /// This entry's registry id (`builtin.agent.rig.<name>`; the default
+    /// entry is ALSO registered under the standing shell-facing id — see
+    /// `registry::ProviderRegistry::builtin_with_config`).
+    id: ProviderId,
+    /// This entry's resolved config — what a session started on this entry
+    /// runs with. For the default entry this is `AgentConfig::rig` itself
+    /// (see `registry::builtin_with_config` for why the state's own view is
+    /// authoritative), for any other entry its `NamedProviderConfig::
+    /// resolved`.
     config: RigAgentConfig,
+    /// The whole surface at build time, so a mid-session switch
+    /// (`Command::SetSessionModel`) can resolve any other entry against
+    /// this provider's spawn-time copy — a running session keeps its
+    /// spawn-time surface the same way it keeps its spawn-time entry
+    /// config.
+    table: ProvidersTable,
     /// Shared, multi-reader-blocking handle onto the live DuckDB projection
     /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
     /// session's own dedicated rig thread (`start_session`/
@@ -37,9 +52,20 @@ pub(crate) struct Provider {
 }
 
 impl Provider {
-    pub(crate) fn new(config: RigAgentConfig, duckdb_cell: SharedDuckdbStore) -> Self {
+    /// Builds one entry's provider. `registry::builtin_with_config` owns
+    /// which id(s) the entry registers under and whether it passes the
+    /// state's own `rig` view (the default entry) or this entry's own
+    /// resolution.
+    pub(crate) fn for_entry(
+        id: ProviderId,
+        config: RigAgentConfig,
+        table: ProvidersTable,
+        duckdb_cell: SharedDuckdbStore,
+    ) -> Self {
         Self {
+            id,
             config,
+            table,
             duckdb_cell,
         }
     }
@@ -47,7 +73,7 @@ impl Provider {
 
 impl AgentProvider for Provider {
     fn provider_id(&self) -> ProviderId {
-        ProviderId("builtin.agent.rig".to_string())
+        self.id.clone()
     }
 
     /// Resolves `request.role_id` (defensively -- an unresolvable role here
@@ -60,23 +86,38 @@ impl AgentProvider for Provider {
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);
-        spawn_rig_session(request, config, role, self.duckdb_cell.clone())
+        spawn_rig_session(
+            request,
+            config,
+            self.table.clone(),
+            role,
+            self.duckdb_cell.clone(),
+        )
     }
 
     /// The same role-adjusted `config.model` [`Self::start_session`] would
     /// run with, without spawning anything -- reuses [`role_adjusted_config`]
     /// so the two never drift. `None` in deterministic fallback mode
-    /// (`!self.config.openai_enabled`, i.e. no `OPENAI_API_KEY`): a fallback
+    /// (`!self.config.api_key_present`, i.e. no `OPENAI_API_KEY`): a fallback
     /// turn never calls a provider at all (`completion::complete_rig_turn`
     /// skips `Event::ProviderRequestSent` entirely in that branch), so
     /// reporting a model here would claim a model is in play when none
     /// actually is.
     fn resolved_model(&self, role_id: Option<&RoleId>) -> Option<String> {
-        if !self.config.openai_enabled {
+        // No key, or a kind with no Horizon-side default model at all
+        // (an anthropic entry that lists nothing — see
+        // `NamedProviderConfig::default_model`): a fallback turn never
+        // calls a provider, so reporting a model would claim one is in
+        // play when none is.
+        if !self.config.api_key_present || self.config.model.is_empty() {
             return None;
         }
         let role = role_id.and_then(crate::roles::resolve);
-        Some(role_adjusted_config(&self.config, role).model)
+        let model = role_adjusted_config(&self.config, role).model;
+        if model.is_empty() {
+            return None;
+        }
+        Some(model)
     }
 }
 
@@ -115,9 +156,13 @@ pub(super) fn rig_initialization_message(
     } else {
         format!(" Loaded {loaded_history_messages} persisted Rig history message(s).")
     };
-    if config.openai_enabled {
+    let kind = match config.kind {
+        ProviderKind::OpenAiCompatible => "openai-compatible",
+        ProviderKind::Anthropic => "anthropic",
+    };
+    if config.api_key_present {
         format!(
-            "Rig provider `{}` initialized with OpenAI model `{}`.{}",
+            "Rig provider `{}` initialized with {kind} model `{}`.{}",
             provider_id.0, config.model, memory
         )
     } else {

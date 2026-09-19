@@ -7,7 +7,8 @@ use std::time::Duration;
 use horizon_agent::contract::{Command, Event, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
-    AgentWireEvent, HostToolRequest, HostToolResponse, SessionNew, SessionSummary,
+    AgentWireEvent, HostToolRequest, HostToolResponse, ModelAlias, ProviderSummary, SessionNew,
+    SessionSummary,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -58,6 +59,92 @@ impl Connection {
         let root =
             crate::worktree::project_root(&root).ok_or("Board root is not a Git repository")?;
         self.state.register_board(root);
+        Ok(())
+    }
+
+    /// Every configured provider with its model aliases and availability —
+    /// the model picker's data. Reads the agent config (the same table the
+    /// registry was built from), so it reflects the loaded `[[providers]]`
+    /// surface, or the legacy `[provider]` fold-in when the file has none;
+    /// entries run in the config file's order, aliases in their own listing
+    /// order. `available` is the build-time-resolved key presence — the
+    /// same rule the registry itself follows; a mid-session environment
+    /// change is honored by a *switch*, not by this listing.
+    pub(crate) fn list_providers(&self) -> Vec<ProviderSummary> {
+        let config = lock_unpoisoned(&self.state.agent_config);
+        let table = &config.providers;
+        table
+            .entries
+            .iter()
+            .map(|entry| ProviderSummary {
+                name: entry.name.clone(),
+                base_url: entry.base_url.clone(),
+                api_key_env: entry.api_key_env.clone(),
+                models: entry
+                    .models
+                    .iter()
+                    .map(|(alias, model)| ModelAlias {
+                        alias: alias.clone(),
+                        model: model.clone(),
+                    })
+                    .collect(),
+                available: entry.api_key_present,
+                default: entry.name == table.default_name,
+            })
+            .collect()
+    }
+
+    /// Applies a mid-session provider/model switch (latest turn wins):
+    /// validates the pair against the current surface, resolves the model
+    /// id (alias first — the picker only offers aliases — else the raw id,
+    /// the same pass-through `role.model` accepts), records the resolved id
+    /// on the session (so a (re)attach re-announces the switched model),
+    /// forwards `Command::SetSessionModel` to the session thread (its next
+    /// turn builds with the target entry), and re-announces
+    /// [`AgentWireEvent::SessionModel`] — the owner-agreed design's
+    /// "resolution results ride the existing announcement".
+    ///
+    /// The command is forwarded before the announcement so a turn that
+    /// starts on the switch reports the switched model in its own
+    /// `ProviderRequestSent`, not the previous one.
+    pub(crate) fn set_session_model(
+        &self,
+        session_id: SessionId,
+        provider: String,
+        model: String,
+    ) -> Result<(), String> {
+        let resolved = {
+            let config = lock_unpoisoned(&self.state.agent_config);
+            let Some(entry) = config.providers.entry(&provider) else {
+                return Err(format!("Unknown provider `{provider}`."));
+            };
+            if model.is_empty() {
+                return Err("A model id is required.".to_string());
+            }
+            entry
+                .models
+                .iter()
+                .find(|(alias, _)| alias == &model)
+                .map(|(_, id)| id.clone())
+                .unwrap_or_else(|| model.clone())
+        };
+        let inbound = {
+            let mut sessions = self.state.sessions.lock().unwrap();
+            let Some(entry) = sessions.get_mut(&session_id) else {
+                return Err(format!("Unknown session {session_id:?}."));
+            };
+            entry.model = Some(resolved.clone());
+            entry.inbound.clone()
+        };
+        let _ = inbound.send(Command::SetSessionModel {
+            provider,
+            model: model.clone(),
+        });
+        send_session_event(
+            &self.state,
+            session_id,
+            AgentWireEvent::SessionModel(resolved),
+        );
         Ok(())
     }
 
@@ -277,8 +364,12 @@ mod tests {
     use crate::session::state::SessionEntry;
     use crate::session::test_support::{judge_test_state, state_with_rig_config};
     use crossbeam_channel::{unbounded, Sender};
+    use horizon_agent::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
     use horizon_agent::contract::ProviderId;
+    use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+    use horizon_agent::registry::ProviderRegistry;
     use horizon_agent::roles::RoleId;
+    use std::sync::Arc;
 
     /// Decision 3, "invisible to the UI": a live exploration session is
     /// hosted exactly like any other, but is withheld from the client's
@@ -402,5 +493,159 @@ mod tests {
                 "/tmp/repo/.horizon/worktrees/abcd1234"
             ))
         );
+    }
+    /// A hermetic two-provider surface (never `from_env_and_provider`'s
+    /// real env reads): one openai-compatible entry with its key present,
+    /// one anthropic entry with its key unset — the two-provider
+    /// completion condition's state-level shape.
+    fn two_provider_state() -> (Arc<AgentdState>, Vec<NamedProviderConfig>) {
+        let entries = vec![
+            NamedProviderConfig {
+                name: "openai".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: None,
+                api_key_env: "OPENAI_API_KEY".to_string(),
+                api_key_present: true,
+                models: vec![("fast".to_string(), "m-fast".to_string())],
+            },
+            NamedProviderConfig {
+                name: "claude".to_string(),
+                kind: ProviderKind::Anthropic,
+                base_url: None,
+                api_key_env: "ANTHROPIC_API_KEY".to_string(),
+                api_key_present: false,
+                models: vec![("opus".to_string(), "m-opus".to_string())],
+            },
+        ];
+        let agent_config = horizon_agent::config::AgentConfig {
+            rig: horizon_agent::config::RigAgentConfig {
+                api_key_present: true,
+                model: "test-model".to_string(),
+                ..Default::default()
+            },
+            providers: ProvidersTable {
+                entries: entries.clone(),
+                default_name: "openai".to_string(),
+            },
+            persistence: horizon_agent::config::AgentPersistenceConfig {
+                event_log_path: std::path::PathBuf::from(
+                    "/tmp/horizon-connection-test-events.jsonl",
+                ),
+                duckdb_path: None,
+            },
+            tools: horizon_agent::config::AgentToolsConfig::default(),
+        };
+        let state = Arc::new(AgentdState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        ));
+        (state, entries)
+    }
+
+    /// `list_providers` reports every configured provider — both of them,
+    /// with the key-less one registered but unavailable (`available:
+    /// false`, never dropped) — in file order, with the default flagged.
+    #[test]
+    fn list_providers_reports_both_entries_and_marks_the_unavailable_one() {
+        let (state, _entries) = two_provider_state();
+        let connection = Connection { state };
+        let summaries = connection.list_providers();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].name, "openai");
+        assert!(summaries[0].available);
+        assert!(summaries[0].default);
+        assert_eq!(
+            summaries[0].models,
+            vec![horizon_agent::wire::ModelAlias {
+                alias: "fast".to_string(),
+                model: "m-fast".to_string(),
+            }]
+        );
+        assert_eq!(summaries[1].name, "claude");
+        assert!(!summaries[1].available);
+        assert!(!summaries[1].default);
+        // The key variable's NAME is reported (never a value), so a picker
+        // can explain unavailability.
+        assert_eq!(summaries[1].api_key_env, "ANTHROPIC_API_KEY");
+    }
+
+    /// `set_session_model` resolves the alias, records the resolved model
+    /// on the session, forwards `Command::SetSessionModel` to the session
+    /// thread (the next turn builds with it), and re-announces
+    /// `SessionModel` — the owner-agreed "resolution rides the existing
+    /// announcement".
+    #[test]
+    fn set_session_model_resolves_announces_and_forwards_the_switch() {
+        let (state, _entries) = two_provider_state();
+        let session_id = SessionId::new();
+        let (inbound_tx, inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: Some("test-model".to_string()),
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: None,
+                worktree: None,
+            },
+        );
+        let connection = Connection { state };
+        let mut events = connection.subscribe_agent(session_id);
+        connection
+            .set_session_model(session_id, "claude".to_string(), "opus".to_string())
+            .unwrap();
+
+        // The resolved model (the alias -> id) landed on the session — a
+        // re-attach would re-announce the switched model, not the old one.
+        assert_eq!(
+            connection.session_model(session_id).as_deref(),
+            Some("m-opus")
+        );
+        // The switch command reached the session thread's inbound queue.
+        let command = inbound_rx.recv().unwrap();
+        assert!(
+            matches!(
+                &command,
+                Command::SetSessionModel { provider, model }
+                    if provider == "claude" && model == "opus"
+            ),
+            "{command:?}"
+        );
+        // And the resolution announcement rode the existing SessionModel
+        // event.
+        let sent = events.try_recv().unwrap();
+        assert!(
+            matches!(&sent, horizon_agent::wire::AgentWireEvent::SessionModel(model) if model == "m-opus"),
+            "{sent:?}"
+        );
+    }
+
+    #[test]
+    fn set_session_model_rejects_an_unknown_provider_and_an_unknown_session() {
+        let (state, _entries) = two_provider_state();
+        let connection = Connection { state };
+        let error = connection
+            .set_session_model(SessionId::new(), "typo".to_string(), "m".to_string())
+            .unwrap_err();
+        assert!(error.contains("Unknown provider `typo`"), "{error}");
+
+        // A known provider against an unknown session is the caller's bug
+        // too — an error, not a silent no-op.
+        let error = connection
+            .set_session_model(SessionId::new(), "openai".to_string(), "fast".to_string())
+            .unwrap_err();
+        assert!(error.contains("Unknown session"), "{error}");
     }
 }
