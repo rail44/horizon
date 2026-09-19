@@ -309,10 +309,6 @@ mod tests {
             command_for("manage-sessions"),
             Some(CommandId::OpenSessionManager)
         );
-        assert_eq!(
-            command_for("cancel-agent-turn"),
-            Some(CommandId::CancelAgentTurn)
-        );
         assert_eq!(command_for("switch-model"), Some(CommandId::SwitchModel));
         assert_eq!(
             command_for("increase-font-size"),

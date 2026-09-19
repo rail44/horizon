@@ -216,9 +216,14 @@ impl WorkspaceShell {
     /// on the UI thread), delivered into the open modal. Guarded like the
     /// other async continuations: a modal closed before the reply lands, or
     /// a `Reload Agent Runtime` that swapped the daemon out from under it,
-    /// drops the result instead of reviving a dead surface. An errored fetch
-    /// delivers an empty list ("no providers configured") -- a retry is one
-    /// close+reopen away, and the chip is still there.
+    /// drops the result instead of reviving a dead surface. The per-open
+    /// fetch bounds staleness to the fetch window: entries edited *before*
+    /// the fetch are never shown stale, but a reload that lands *after* it
+    /// can still stale the open surface -- the daemon validates the confirm
+    /// and rejects unknown entries there, so a stale pick fails at the
+    /// daemon, never here. An errored fetch delivers an empty list ("no
+    /// providers configured") -- a retry is one close+reopen away, and the
+    /// chip is still there.
     fn fetch_providers(&mut self, cx: &mut Context<Self>) {
         let Some(handle) = self.agentd.clone() else {
             return;
@@ -278,6 +283,7 @@ impl WorkspaceShell {
             return;
         };
         let Some(session_id) = session.read(cx).daemon_session_id() else {
+            eprintln!("model switch skipped: the session has no live attachment (mid-reload?)");
             return;
         };
         cx.spawn(async move |_this, cx| {
