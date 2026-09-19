@@ -2,7 +2,7 @@
 //! recognized-key (probable-typo) checks and hex-parsability checks. Called
 //! once per resolution pass from [`super::scheme::scheme_from`]'s own
 //! single call site. This project carries no retired-key compatibility
-//! warnings (owner decision 2026-08-03): a key retired by the 2026-07-16
+//! warnings: a key retired by the 2026-07-16
 //! "config narrowed to the seed" decision (`docs/theme-design.md`) is just
 //! another unrecognized key now, the same probable-typo treatment as any
 //! misspelling.

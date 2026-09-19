@@ -354,10 +354,9 @@ impl AgentTranscript {
                 ("agent-delta", index),
                 delta.text.clone(),
             )),
-            // Thinking content is hidden in full (owner decision
-            // 2026-09-10, superseding 2026-07-13's tail-capped "thinking…"
-            // view) — but same-day owner feedback kept one affordance,
-            // owner-reviewed in form: while a reasoning delta is the open
+            // Thinking content is hidden in full (superseding 2026-07-13's
+            // tail-capped "thinking…" view) — but one affordance is kept
+            // while a reasoning delta is the open
             // turn's current tail, its row renders in the running card's
             // own visual language — a breathing `theme::accent()` dot
             // beside a semibold accent "thinking…" label (the owner
@@ -848,7 +847,7 @@ impl AgentTranscript {
     }
 
     /// The in-progress *burst*'s card (decision 2; mock 2a/3b/7a's "live
-    /// card"; round 5 owner decision 2026-07-13 scopes this to one
+    /// card"; round 5 scopes this to one
     /// `turns::Burst`'s own item range rather than the whole turn's --
     /// see [`build_transcript_rows`]): a thin accent-tinted border
     /// around the whole card (the mock's border is a muted echo of the
@@ -1340,7 +1339,7 @@ mod tests {
         assert_eq!(escape_markdown("path\\*glob"), "path\\\\\\*glob");
     }
 
-    /// Owner decision 2026-09-10: thinking is hidden in full. A reasoning
+    /// Thinking is hidden in full. A reasoning
     /// delta produces no row while its turn runs and none after it ends —
     /// streaming or replayed — without disturbing neighboring rows or the
     /// latest-user anchor. (The same-day thinking-indicator carve-out is
