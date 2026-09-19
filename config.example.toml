@@ -175,9 +175,7 @@ font_size = 13.0
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the
 # chord that enters workspace mode (`ctrl+'` by default -- see
-# `docs/workspace-mode-design.md`). An agent pane's message box also
-# accepts a bare `Esc` as a second entry path regardless of this setting,
-# since (unlike a terminal) it has no protocol-level claim on that key.
+# `docs/workspace-mode-design.md`).
 #
 # An unparsable chord or an unrecognized command id is warned about on
 # stderr and skipped — never a startup failure.

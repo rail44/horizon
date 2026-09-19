@@ -97,10 +97,6 @@ preference is a config edit, not a redesign.
 
 - Terminal pane: only the escape chord leaves passthrough (in-pane apps
   need raw `Esc`).
-- Agent pane: `Esc` may return to workspace mode directly (a message
-  box has no claim on raw `Esc`), except during IME composition. The
-  approval banner's key capture (`AgentPaneFocus`) already works as a
-  small-scale precedent of mode-as-focus.
 
 ## Second-round decisions (settled 2026-07-06)
 
