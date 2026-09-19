@@ -569,8 +569,8 @@ impl WorkspaceShell {
         // `[theme]` scheme (see `src/theme.rs`) -- so the label text and
         // the selected tab's pill already resolve to `tab_foreground`/
         // `tab_active_foreground`/`background` without any per-tab
-        // override here. `Segmented` (replacing `Underline`, 2026-07-14
-        // owner GO) is one of gpui-component's variants with an animated
+        // override here. `Segmented` (replacing `Underline`, 2026-07-14) is
+        // one of gpui-component's variants with an animated
         // sliding selection indicator; its track color is
         // `tab_bar_segmented`, which Horizon's projection leaves unset --
         // falling back to gpui-component's own `secondary` token, i.e.

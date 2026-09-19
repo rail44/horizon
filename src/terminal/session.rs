@@ -1178,7 +1178,7 @@ impl TerminalSession {
     }
 
     /// Hand a selection gesture to the daemon-owned live viewport (review fix
-    /// ③, owner-approved). Windowed paint deliberately omits cursor / selection
+    /// ③). Windowed paint deliberately omits cursor / selection
     /// / IME (history-only), and — decisively — the daemon maps a viewport
     /// selection point against its *live* `display_offset`, which stays at the
     /// tail while the client scrolls locally, so a selection started in the

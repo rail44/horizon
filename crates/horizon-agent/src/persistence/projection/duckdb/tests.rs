@@ -981,8 +981,8 @@ fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
     }
 }
 
-/// This project carries no compatibility for a turn_id-less `TurnEnded`
-/// (owner decision 2026-08-03): `agent_turns.turn_id` is `NOT NULL`, so a
+/// This project carries no compatibility for a turn_id-less `TurnEnded`:
+/// `agent_turns.turn_id` is `NOT NULL`, so a
 /// `TurnEnded` with no `turn_id` now surfaces as a genuine insert error
 /// instead of a silently skipped projection.
 #[test]
