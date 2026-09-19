@@ -284,6 +284,10 @@ impl Workspace {
         false
     }
 
+    /// `pub` for the shell's tab-strip close button, which closes the tab
+    /// the user clicked (by render-time index) rather than the active one
+    /// the keyboard path reaches through [`Self::close_active_tab`].
+    ///
     /// Closing the workspace's last tab is allowed -- it leaves a valid,
     /// persistable, zero-tab workspace (2026-07-18 owner clarification: an
     /// empty workspace is a first-class state, not something to guard
@@ -291,7 +295,7 @@ impl Workspace {
     /// removed tab) in that case, the same pattern `detach_pane` already
     /// uses when a tab-closing operation leaves nothing to activate --
     /// `active_tab()` resolves a dangling id to `None` safely.
-    pub(crate) fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
+    pub fn close_tab_index(&mut self, index: usize) -> Vec<SessionId> {
         let Some(tab) = self.tabs.get(index).cloned() else {
             return Vec::new();
         };

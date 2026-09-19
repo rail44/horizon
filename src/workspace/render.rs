@@ -22,15 +22,16 @@ use gpui::*;
 use gpui_component::list::List;
 use gpui_component::tab::{Tab, TabBar};
 use gpui_component::TitleBar;
+use gpui_component::{Icon, IconName};
 use horizon_workspace::commands::CommandId;
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis};
 
 use super::{
-    ClosePane, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight, ModeMoveUp,
-    NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab, RunCommand,
-    SplitPane, TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell, MODE_CONTEXT,
-    SESSION_MANAGER_CONTEXT,
+    ClosePane, CloseTab, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight,
+    ModeMoveUp, NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab,
+    RunCommand, SplitPane, TerminateSessionSubtree, ToggleWorkspaceMode, WorkspaceShell,
+    MODE_CONTEXT, SESSION_MANAGER_CONTEXT,
 };
 use crate::theme;
 use crate::view_chooser::Placement;
@@ -297,14 +298,17 @@ fn pairwise_resize_weights(
 const EQUAL_WIDTH_TABS: bool = true;
 
 /// Fixed allowance for the segmented track's own non-tab chrome:
-/// `TabBar`'s outer `px_2()` padding (8px each side) plus the `Segmented`
-/// variant's inner `padding_x` for `XSmall` (2px each side -- see the
-/// vendored `tab_bar.rs`'s `Segmented` branch of `RenderOnce::render`).
-/// That's 20px; rounded up to 24px for slack. Deliberately a slight
+/// `TabBar`'s outer padding -- `pl_2()` (8px) left, `pr_6()` (24px) right;
+/// the right side is deliberately the wider one (2026-09-18 owner feedback
+/// that the strip crowded the window's right edge) -- plus the `Segmented`
+/// variant's inner `padding_x` (2-4px by size -- see the vendored
+/// `tab_bar.rs`'s `Segmented` branch of `RenderOnce::render`; the inner
+/// negative-margin/padding pairs cancel at rest, so they add no inset).
+/// That's 32px; rounded up to 36px for slack. Deliberately a slight
 /// overestimate of the real chrome, so computed tab widths lean a few
 /// pixels narrow rather than push the track past `tabs-inner`'s
 /// `overflow_x_scroll()` edge.
-const EQUAL_WIDTH_CHROME_ALLOWANCE_PX: f32 = 24.0;
+const EQUAL_WIDTH_CHROME_ALLOWANCE_PX: f32 = 36.0;
 
 /// The `Segmented` variant's own inter-tab `gap` (2px at `XSmall`/`Small`),
 /// counted once per boundary between tabs.
@@ -367,6 +371,67 @@ fn mode_key_context_active(is_workspace_mode_active: bool, modal_open: bool) -> 
 /// it's unit-testable without a window.
 fn cycle_tab_index(active: usize, count: usize, delta: isize) -> usize {
     (active as isize + delta).rem_euclid(count as isize) as usize
+}
+
+/// The per-tab close affordance: a small circled-× suffix rendered after
+/// the tab's label, dispatching [`CloseTab`] with the render-time index.
+///
+/// Revealed by hover, but always laid out: under `EQUAL_WIDTH_TABS` each
+/// tab has a fixed pixel width, so *showing* the button by layout would
+/// reflow the label mid-hover -- opacity instead freezes the geometry and
+/// toggles only the paint. The reveal keys off a hover on the button's own
+/// tab ([`TAB_HOVER_GROUP`], registered on the `Tab` itself), not on the
+/// strip or the button alone. While visible it colors by state -- the
+/// active tab's button paints the full foreground, background tabs the
+/// muted reading color, and hovering the button itself lifts either onto a
+/// subtle border-colored chip. `CircleX` rather than the bare `X`:
+/// `gpui_kit_assets::Assets` (the app's asset source, `main.rs`) embeds
+/// only `default-icons.txt`'s icons, and `x.svg` is not among them --
+/// `IconName::X` would render nothing at runtime.
+///
+/// The click must not also activate the tab: the vendored `Tab`/`TabBar`
+/// pair forwards one bar-level `on_click` to every tab (gpui-component
+/// `tab_bar.rs` overwrites each child's own), so both interactivities
+/// would otherwise fire for one press. Stopping propagation on the
+/// mouse-down keeps the tab's click-state machine from ever recording the
+/// press, and the click handler stops again as belt-and-suspenders; the
+/// close itself travels as an action (the agent stop button's `RunCommand`
+/// shape) so the pointer path still lands in the command model.
+/// `Interactivity::group`/`group_hover` name shared by every tab in the
+/// strip (same Tailwind-style scheme as [`SPLIT_HANDLE_GROUP`]): each
+/// `Tab` registers the name on its own box, and a descendant's
+/// `group_hover` resolves to the *nearest* ancestor carrying it -- so a
+/// hover on one tab never reveals another tab's close button.
+const TAB_HOVER_GROUP: &str = "workspace-tab";
+
+fn render_tab_close_button(index: usize, active: bool, title: &str) -> AnyElement {
+    let resting_color = if active {
+        theme::text_primary()
+    } else {
+        theme::text_muted()
+    };
+    div()
+        .id(ElementId::from(format!("tab-close-{index}")))
+        .aria_label(format!("Close tab {title}"))
+        .flex()
+        .items_center()
+        .justify_center()
+        .size_3p5()
+        .rounded(px(3.0))
+        .text_color(resting_color)
+        // Hidden until its tab is hovered; laid out regardless, so the
+        // equal-width tab's label never reflows on hover (see the doc
+        // comment above).
+        .opacity(0.0)
+        .group_hover(TAB_HOVER_GROUP, |this| this.opacity(1.0))
+        .hover(|this| this.text_color(theme::text_primary()).bg(theme::border()))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .on_click(move |_, window, cx| {
+            cx.stop_propagation();
+            window.dispatch_action(Box::new(CloseTab { index }), cx);
+        })
+        .child(Icon::new(IconName::CircleX).size_3())
+        .into_any_element()
 }
 
 impl WorkspaceShell {
@@ -518,7 +583,15 @@ impl WorkspaceShell {
         TabBar::new("workspace-tabs")
             .segmented()
             .w_full()
-            .px_2()
+            // Wider on the right than on the left (2026-09-18 owner
+            // feedback: the strip crowded the window's right edge). These
+            // refine the vendored `Segmented` `paddings`, which are applied
+            // *before* `refine_style(&self.style)` in `tab_bar.rs`'s
+            // render, so the explicit sides here win. Keep
+            // [`EQUAL_WIDTH_CHROME_ALLOWANCE_PX`] in lockstep with the
+            // 8px + 24px total.
+            .pl_2()
+            .pr_6()
             .selected_index(selected_index)
             .on_click(cx.listener(|shell, index: &usize, window, cx| {
                 shell.activate_tab(*index, window, cx);
@@ -549,14 +622,26 @@ impl WorkspaceShell {
                 // strip, and the number crowded the title it prefixed.
                 // `aria_label` keeps the accessible name `label()` used
                 // to provide, now that the visible text is our child.
-                let label = Tab::new().aria_label(tab.title.clone()).child(
-                    div()
-                        .min_w_0()
-                        .overflow_hidden()
-                        .whitespace_nowrap()
-                        .text_ellipsis()
-                        .child(tab.title),
-                );
+                // The close affordance is a `Tab::suffix`, so the vendored
+                // `Tab` lays it out to the right of the label at full size;
+                // it is the label wrapper's `min_w_0` above that absorbs
+                // the row's width pressure, not the suffix. The
+                // `.group(TAB_HOVER_GROUP)` is that suffix's reveal trigger:
+                // the group hitbox is this tab's own box, so the button
+                // appears only while *this* tab is hovered.
+                let close_button = render_tab_close_button(tab.index, tab.active, &tab.title);
+                let label = Tab::new()
+                    .group(TAB_HOVER_GROUP)
+                    .aria_label(tab.title.clone())
+                    .child(
+                        div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .whitespace_nowrap()
+                            .text_ellipsis()
+                            .child(tab.title),
+                    )
+                    .suffix(close_button);
                 if EQUAL_WIDTH_TABS {
                     // `Tab`'s own `Styled` impl mutates the same `div`
                     // its `RenderOnce::render` finishes building, so a
@@ -1114,6 +1199,9 @@ impl Render for WorkspaceShell {
             .on_action(cx.listener(|shell, _: &ClosePane, window, cx| {
                 shell.execute(CommandId::CloseActivePane, window, cx);
             }))
+            .on_action(cx.listener(|shell, action: &CloseTab, window, cx| {
+                shell.close_tab(action.index, window, cx);
+            }))
             .on_action(cx.listener(|shell, _: &NextTab, window, cx| {
                 shell.next_tab(window, cx);
             }))
@@ -1295,9 +1383,9 @@ mod tests {
 
     #[test]
     fn equal_tab_width_divides_the_strip_evenly_after_chrome_and_gaps() {
-        // 824px strip, 4 tabs: 24px chrome allowance + 3 gaps * 2px = 30px
-        // reserved, leaving 794px split four ways.
-        assert_eq!(equal_tab_width(px(824.0), 4), px(198.5));
+        // 824px strip, 4 tabs: 36px chrome allowance + 3 gaps * 2px = 42px
+        // reserved, leaving 782px split four ways.
+        assert_eq!(equal_tab_width(px(824.0), 4), px(195.5));
     }
 
     #[test]
@@ -1317,11 +1405,11 @@ mod tests {
     #[test]
     fn equal_tab_width_splits_the_whole_strip_even_with_few_tabs() {
         // A wide window with two tabs: the even split is handed through
-        // un-capped -- (1000 - 24 - 1 gap * 2) / 2 = 487px each. A long
+        // un-capped -- (1000 - 36 - 1 gap * 2) / 2 = 481px each. A long
         // title truncates inside its tab instead of the tab width being
         // capped; the 2026-09-10 240px cap did the latter and was removed
         // because it froze sparse strips at fixed-width tabs.
-        assert_eq!(equal_tab_width(px(1000.0), 2), px(487.0));
+        assert_eq!(equal_tab_width(px(1000.0), 2), px(481.0));
     }
 
     #[test]
