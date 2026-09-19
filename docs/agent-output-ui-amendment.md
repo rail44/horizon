@@ -1110,19 +1110,21 @@ deviation rather than asking for a mock update):
     prefers `session_model` when the two disagree; the `None` fallbacks are
     unchanged. Known accepted consequence (recorded, not hidden): a switch
     to a provider entry the *running session's* spawn-time table doesn't
-    know — i.e. one `Reload Config` added (or reshaped under the same name)
-    after the session started; a running session keeps its spawn-time
-    config and the daemon's reload swap takes effect for the *next* session
-    — still gets its echo but fails to apply at the next turn boundary: the
-    chip shows the echoed id while the turn runs on the old one, and the
-    daemon surfaces the failure as an `Event::Error` in the transcript. The
-    reverse direction is rejected synchronously at the hub instead — the
-    hub validates against the daemon's *current* config, so a switch to an
-    entry the reload removed is an unknown-provider `HubError` with no
-    echo, the chip stays on the last announced model, and the picker's own
-    staleness doc leans on exactly that guarantee. A future distinction
-    between switch-echoes and spawn-announcements could tighten the
-    added-entry case if it matters in practice.
+    know — i.e. one `Reload Config` added after the session started; a
+    running session keeps its spawn-time config and the daemon's reload
+    swap takes effect for the *next* session — still gets its echo but
+    fails to apply at the next turn boundary: the chip shows the echoed id
+    while the turn runs on the old one, and the daemon surfaces the failure
+    as an `Event::Error` in the transcript. An entry reshaped under the
+    same name passes both validations and applies the *spawn-time* shape
+    silently (no `Event::Error`), so the chip can show an id the next turn
+    doesn't run. The reverse direction is rejected synchronously at the hub
+    instead — the hub validates against the daemon's *current* config, so a
+    switch to an entry the reload removed is an unknown-provider `HubError`
+    with no echo, the chip stays on the last announced model, and the
+    picker's own staleness doc leans on exactly that guarantee. A future
+    distinction between switch-echoes and spawn-announcements could tighten
+    the added-entry case if it matters in practice.
   - **Failure convention**: a rejected switch (unknown provider/session,
     synchronous `HubError`, or a dead runtime) leaves the chip showing the
     last announced model — the echo is authoritative for what will run.
