@@ -6,8 +6,7 @@ palette chord retired, click-dives). The former pending check
 (Super+Esc) is resolved — see "Pending verification". Amended
 2026-07-19: an empty workspace is now an implicit command surface, no
 `ctrl+'` needed — see "Empty workspace is an implicit command surface"
-below. This document records the design conversation between the owner
-and the planning session.
+below.
 
 ## Problem
 
@@ -37,8 +36,7 @@ visualization instead (see open questions).
 
 ### Two selection concepts: focus and cursor
 
-The owner's articulation, adopted verbatim as the design's spine —
-there are two different "selected pane" concepts:
+The design's spine — there are two different "selected pane" concepts:
 
 - **focus** — where input flows (the existing concept). A focused
   terminal pane receives everything, kitty-faithfully.
@@ -121,7 +119,7 @@ preference is a config edit, not a redesign.
    analogue outright. The v1 keyset is deliberately minimal: `hjkl`
    movement, `Enter` (commit focus to cursor), `Esc` (cancel), `:`
    (palette). Everything else goes through the palette until
-   dogfooding proves a key promotion. Structural principle (owner):
+   dogfooding proves a key promotion. Structural principle:
    keep the in-mode key handling shaped for future vim vocabulary —
    interpret key sequences rather than a flat one-key-one-action
    table, so counts/motions can arrive without a rewrite.
@@ -135,7 +133,7 @@ preference is a config edit, not a redesign.
 
 ## Pending verification
 
-Resolved 2026-07-06: Super+Esc was checked on the owner's real GNOME
+Resolved 2026-07-06: Super+Esc was checked on a real GNOME
 session and found to be intercepted by gnome-shell before reaching
 Horizon's window (Horizon's own key-handling path was independently
 verified healthy headless), so the shipped default was changed to
@@ -161,8 +159,8 @@ issue 003 separately flagged as invisible (no pane exists to carry any
 of the mode's visual signals, so the owner had to press `:` blind to
 find out whether the entry chord had taken effect).
 
-The owner's follow-up clarification cuts deeper than "make the entry
-step visible": workspace mode exists to separate "keys go to the
+The follow-up clarification cuts deeper than "make the entry step
+visible": workspace mode exists to separate "keys go to the
 focused pane" from "keys command the workspace" (see "Problem" above).
 With zero panes there is simply no pane input left to protect, so
 requiring the entry chord in that state protects nothing — it's not an

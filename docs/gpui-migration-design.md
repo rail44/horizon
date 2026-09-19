@@ -1,7 +1,7 @@
 # GPUI Migration Design
 
-Status: **decided with the owner 2026-07-10** (including the
-layout-tree question below); **since completed** — `shell-gpui/` has been
+Status: **completed** (migration decided 2026-07-10, including the
+layout-tree question below) — `shell-gpui/` has been
 folded into `src/`, and this document is the historical record (its
 `shell-gpui/` references are left in the present tense of the migration).
 Follows the GO decision in
@@ -134,7 +134,7 @@ overview, session manager), DockArea can be reconsidered for that
 chrome alone. The S4 spike stays valid as the `Panel`/component
 feasibility proof; its DockArea usage is not the production shape.
 
-## Reuse over port (owner direction, 2026-07-10)
+## Reuse over port
 
 Where the adopted stack already provides a capability, Horizon's own
 Floem-era implementation is dropped and the stack is reused — porting
@@ -178,7 +178,7 @@ Concrete mappings:
   the hand-rolled `render_tab_strip` div strip; the tab model, click
   dispatch, and display numbers are unchanged. Landed 2026-07-13
   (Underline variant); switched to Segmented with a full-width
-  (`.w_full()`) track 2026-07-14 (owner GO), alongside an equal-width
+  (`.w_full()`) track 2026-07-14, alongside an equal-width
   tab-distribution experiment (`EQUAL_WIDTH_TABS` in
   `render_tab_strip`, defaulted on) sizing each tab from the strip's
   measured viewport width rather than gpui-component's own flex
@@ -237,7 +237,7 @@ Concrete mappings:
   transcript `697a475`, `[keybindings]` `d56b5d0`, agent CLI verbs +
   roles `12a28fd`, `check-gpui-terminal.sh` `56b7b17`, Reload Agent
   Runtime `aa85509` — every M4-deferred item is now wired). **Retirement
-  executed 2026-07-11** with the owner's go: parity gaps closed (CLI
+  executed 2026-07-11**: parity gaps closed (CLI
   dispatch, [ui] window size, cwd inheritance, focus reporting,
   follow-scroll, macOS app menu, view chooser, session-manager
   terminate), the Floem shell tagged `floem-shell-final` and deleted,
