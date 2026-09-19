@@ -43,7 +43,7 @@ pub fn execute_supervised_helper(
         crate::caps::build_with_grants(&helper_policy.sandbox, &helper_policy.filesystem_grants)?;
     // Resolve excluded subpaths from the grants into absolute paths, keyed by
     // the grant's canonical path so the supervisor can attach them to the
-    // matching InitialCapability (owner decision 2026-08-17, board #38).
+    // matching InitialCapability (board #38).
     let excluded_by_path: Vec<(PathBuf, Vec<PathBuf>)> = helper_policy
         .filesystem_grants
         .iter()

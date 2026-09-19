@@ -11,8 +11,7 @@
 //! ```
 //!
 //! `network` entries are dispatched by shape, not by a separate key
-//! (owner decision 2026-08-02, unifying two previously asymmetric surfaces
-//! -- see below): one that parses as a `SocketAddr` (an `ip:port` string,
+//! (unifying two previously asymmetric surfaces -- see below): one that parses as a `SocketAddr` (an `ip:port` string,
 //! e.g. `127.0.0.1:4226`) is validated as a direct-connect endpoint the
 //! seccomp-notify enforcement layer lets the sandboxed session reach
 //! alongside its own domain proxy (`crates/horizon-sandbox-runtime/src/

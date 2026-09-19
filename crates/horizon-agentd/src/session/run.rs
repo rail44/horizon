@@ -96,7 +96,7 @@ pub(super) fn run_session(
         (workspace_root, false)
     };
 
-    // Repository-trust gate (owner decision 2026-08-05): resolved from the
+    // Repository-trust gate: resolved from the
     // same post-isolation `workspace_root` as `[grants]` (so an isolated
     // worktree session inherits its parent project's trust), using the same
     // `worktree::project_root` resolution. Threaded into the provider so
@@ -414,8 +414,8 @@ fn prepare_environment(
     // `bash`, exactly the pre-leg-4a behavior.
     //
     // Pre-seeded with the project's `[grants]` `network` domain entries
-    // (owner decision 2026-08-02, unifying what used to be a
-    // domain-only-at-runtime approval flow with the endpoint-only
+    // (unifying what used to be a domain-only-at-runtime approval flow
+    // with the endpoint-only
     // `loopback_connect` config key into one `network` key): a domain the
     // project already trusts never needs a judge/approval round trip
     // through the proxy below. The runtime grant flow (`tools::approval`'s
