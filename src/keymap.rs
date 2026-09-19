@@ -132,9 +132,11 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "close-active-pane" => Some(CommandId::CloseActivePane),
         "close-active-tab" => Some(CommandId::CloseActiveTab),
         "terminate-active-session" => Some(CommandId::TerminateActiveSession),
+        "terminate-all-detached-sessions" => Some(CommandId::TerminateAllDetachedSessions),
         "approve-tool-call" => Some(CommandId::ApproveToolCall),
         "deny-tool-call" => Some(CommandId::DenyToolCall),
         "cancel-agent-turn" => Some(CommandId::CancelAgentTurn),
+        "continue-agent-turn" => Some(CommandId::ContinueAgentTurn),
         "switch-model" => Some(CommandId::SwitchModel),
         // `reload-session-runtime` is the pre-rename alias, kept so existing
         // user config.toml bindings keep working silently.
@@ -142,6 +144,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "reload-terminal-runtime" => Some(CommandId::ReloadTerminalRuntime),
         "reload-config" => Some(CommandId::ReloadConfig),
         "manage-sessions" => Some(CommandId::OpenSessionManager),
+        "open-terminal-in-session-directory" => Some(CommandId::OpenTerminalInSessionDirectory),
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
         "toggle-board-closed-visibility" => Some(CommandId::ToggleBoardClosedVisibility),
@@ -310,6 +313,18 @@ mod tests {
             Some(CommandId::OpenSessionManager)
         );
         assert_eq!(command_for("switch-model"), Some(CommandId::SwitchModel));
+        assert_eq!(
+            command_for("terminate-all-detached-sessions"),
+            Some(CommandId::TerminateAllDetachedSessions)
+        );
+        assert_eq!(
+            command_for("continue-agent-turn"),
+            Some(CommandId::ContinueAgentTurn)
+        );
+        assert_eq!(
+            command_for("open-terminal-in-session-directory"),
+            Some(CommandId::OpenTerminalInSessionDirectory)
+        );
         assert_eq!(
             command_for("increase-font-size"),
             Some(CommandId::IncreaseFontSize)
