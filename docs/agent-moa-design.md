@@ -2,8 +2,7 @@
 
 Status: designed 2026-09-19..20 (owner consultation; every numbered
 decision below is the owner's, quoted where a quote exists). **Not
-implemented.** One judgment point is still open for owner review — see
-"Open for review".
+implemented.** No decision is pending.
 
 This document is the self-contained record. An implementation brief should
 point here rather than restate it.
@@ -181,20 +180,21 @@ arXiv:2602.18998 reports a verification gap when whole-task samples are
    Several `[[moa]]` entries may coexist. `Reload Config` applies like
    `[[providers]]` does: new sessions see the change.
 
-   Carried as the designer's reading, not yet confirmed by the owner: in
-   model selection, `moa` sits beside the provider entries and its items
-   are the `[[moa]]` names. Which models to use, how many, and who
-   aggregates are the owner's config values, not design decisions.
+   In model selection, `moa` sits beside the provider entries and its
+   items are the `[[moa]]` names (put to the owner as the designer's
+   reading and confirmed 2026-09-20: 「この2点は問題ないです」, covering this
+   and decision 10). Which models to use, how many, and who aggregates are
+   the owner's config values, not design decisions.
 
-## Open for review
-
-- **Cancelling the aggregator's turn.** `task` children survive
-  `cancel-turn` by owner decision (`docs/agent-async-task-design.md`
-  decision 4: interrupting the requester must not vaporize in-flight
-  investigation). MoA proposers are internal to the turn — their output
-  has no consumer once the turn is cancelled — so the proposal here is
-  that cancelling stops them. This runs against the standing decision's
-  direction and needs the owner's confirmation before implementation.
+10. **Cancelling the aggregator's turn stops the proposers.** This is
+    deliberately the opposite of `task`, whose children survive
+    `cancel-turn` by owner decision (`docs/agent-async-task-design.md`
+    decision 4: interrupting the requester must not vaporize in-flight
+    investigation). A `task` child carries work the requester delegated
+    and can still use; a MoA proposer is internal to the turn, and its
+    output has no consumer once that turn is cancelled. Confirmed by the
+    owner 2026-09-20 (same reply as above). `task` children a MoA
+    session's aggregator launches itself keep the `task` rule.
 
 ## Implementation shape (held by the implementing session)
 

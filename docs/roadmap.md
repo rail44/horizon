@@ -571,8 +571,7 @@ inspect the proposers' records through `recall`. Configured as `[[moa]]`
 with `{provider, model}` members (model IDs written directly, providers
 mixable). `docs/agent-moa-design.md` is the self-contained record
 (owner decisions with quotes, the evidence and its limits, why no
-external proxy fits, implementation constraints, one point still open
-for owner review: cancel semantics).
+external proxy fits, implementation constraints; no decision pending).
 
 ### Deferred: session-attention surface and non-interrupting sends
 
