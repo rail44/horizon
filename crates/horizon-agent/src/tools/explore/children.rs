@@ -84,7 +84,7 @@ fn lock() -> std::sync::MutexGuard<'static, Registry> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-pub(super) fn register(
+pub(in crate::tools) fn register(
     requester: SessionId,
     child: SessionId,
     description: String,
@@ -122,7 +122,7 @@ pub(super) fn register_hostless(requester: SessionId, child: SessionId, descript
 }
 
 /// Releases `child`'s host handle for termination, at most once.
-pub(super) fn take_host(child: SessionId) -> Option<Arc<dyn ExplorationHost>> {
+pub(in crate::tools) fn take_host(child: SessionId) -> Option<Arc<dyn ExplorationHost>> {
     lock()
         .children
         .get_mut(&child)
@@ -153,6 +153,21 @@ pub(super) fn complete(child: SessionId, output: Value) -> Option<SessionId> {
         .or_default()
         .push(completion);
     Some(requester)
+}
+
+/// Records `child`'s final result without queueing a notification — what a
+/// Mixture-of-Agents proposer uses. A queued notification would be injected
+/// into the aggregator's `rig_history`; a proposal reaches it as the pass's
+/// own provider-view block instead. The registration stays so `task_output`
+/// can still re-read the proposer's full report.
+pub(in crate::tools) fn complete_without_notification(child: SessionId, output: Value) {
+    let mut registry = lock();
+    let Some(entry) = registry.children.get_mut(&child) else {
+        return;
+    };
+    if entry.outcome.is_none() {
+        entry.outcome = Some(output);
+    }
 }
 
 /// Drains every completion queued for `requester`. The queue is the

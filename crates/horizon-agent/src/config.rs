@@ -295,6 +295,10 @@ pub struct AgentConfig {
     /// default entry's resolved view is what `rig` carries, so everything
     /// that reads `rig` keeps reading the default provider unchanged.
     pub providers: ProvidersTable,
+    /// Every configured Mixture-of-Agents entry ([`MoaTable`],
+    /// `docs/agent-moa-design.md`). Empty for a config file with no
+    /// `[[moa]]` section, which is every pre-MoA config.
+    pub moa: MoaTable,
     pub persistence: AgentPersistenceConfig,
     pub tools: AgentToolsConfig,
 }
@@ -320,7 +324,7 @@ impl AgentConfig {
                 None => Vec::new(),
             },
         };
-        Self::from_env_and_providers(vec![entry], LEGACY_PROVIDER_NAME.to_string())
+        Self::from_env_and_providers(vec![entry], LEGACY_PROVIDER_NAME.to_string(), Vec::new())
     }
 
     /// Builds the whole config from the environment plus the resolved
@@ -333,7 +337,11 @@ impl AgentConfig {
     /// judge included). An empty entry list yields the no-config shape —
     /// [`RigAgentConfig::default`] and a surface with nothing to select —
     /// never a failure: the file's own never-fail-on-a-typo policy holds.
-    pub fn from_env_and_providers(entries: Vec<NamedProviderConfig>, default_name: String) -> Self {
+    pub fn from_env_and_providers(
+        entries: Vec<NamedProviderConfig>,
+        default_name: String,
+        moa: Vec<MoaEntry>,
+    ) -> Self {
         // Availability resolves once, here — the one env-read point for the
         // whole surface (callers construct entries from file values only;
         // a mid-session switch re-reads its own target, which is the "a key
@@ -353,13 +361,113 @@ impl AgentConfig {
             .default_entry()
             .map(NamedProviderConfig::resolved)
             .unwrap_or_default();
+        // Every MoA member resolves against the same entries, so a member's
+        // availability is that entry's availability and is decided here too
+        // rather than re-read per pass.
+        let resolve_member = |mut member: MoaMember| {
+            if let Some(entry) = providers.entry(&member.provider) {
+                member.api_key_present = entry.api_key_present;
+                member.api_key_env = entry.api_key_env.clone();
+            }
+            member
+        };
+        let moa = moa
+            .into_iter()
+            .map(|entry| MoaEntry {
+                name: entry.name,
+                aggregator: resolve_member(entry.aggregator),
+                proposers: entry.proposers.into_iter().map(resolve_member).collect(),
+            })
+            .collect();
         Self {
             rig,
             providers,
+            moa: MoaTable { entries: moa },
             persistence: AgentPersistenceConfig::from_env(),
             tools: AgentToolsConfig::default(),
         }
     }
+}
+
+/// One `[[moa]]` member: which `[[providers]]` entry runs it, and the model
+/// id to run, written out (an entry's `models` alias is not resolved here).
+///
+/// The two resolved fields come from that entry, filled in once by
+/// [`AgentConfig::from_env_and_providers`] — the surface's one env-read
+/// point. A member is a plain `{provider, model}` pair as the file writes
+/// it; callers that construct one directly (tests) state the availability
+/// they mean.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MoaMember {
+    pub provider: String,
+    pub model: String,
+    /// Whether the named entry's API-key variable was set when the surface
+    /// was built. `false` means a session started on it would answer from
+    /// the deterministic fallback responder instead of the model, so the
+    /// pass skips the member rather than treating that text as an answer.
+    pub api_key_present: bool,
+    /// The environment variable **name** that entry's key is read from
+    /// (never a value), for the message a skipped member is reported with.
+    pub api_key_env: String,
+}
+
+impl MoaMember {
+    /// The file-level pair, before [`AgentConfig::from_env_and_providers`]
+    /// resolves the entry behind it.
+    pub fn new(provider: String, model: String) -> Self {
+        Self {
+            provider,
+            model,
+            api_key_present: false,
+            api_key_env: String::new(),
+        }
+    }
+}
+
+/// One resolved `[[moa]]` entry: the aggregator that writes the answer, plus
+/// the proposers the harness launches as read-only `task`-shaped sessions
+/// (`docs/agent-moa-design.md`).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MoaEntry {
+    pub name: String,
+    pub aggregator: MoaMember,
+    pub proposers: Vec<MoaMember>,
+}
+
+/// Every configured MoA entry, in file order — the counterpart of
+/// [`ProvidersTable`] for the `moa` selection group. Mirrors
+/// `horizon_config`'s own resolution shape without depending on that crate.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct MoaTable {
+    pub entries: Vec<MoaEntry>,
+}
+
+impl MoaTable {
+    /// Finds an entry by name — what a selection (`Command::SetSessionModel`
+    /// with `provider = "moa"`) resolves against.
+    pub fn entry(&self, name: &str) -> Option<&MoaEntry> {
+        self.entries.iter().find(|entry| entry.name == name)
+    }
+}
+
+/// The reserved selection-group name MoA entries are offered (and selected)
+/// under — `list_providers` reports one [`crate::wire::ProviderSummary`]
+/// with this name whose "models" are the `[[moa]]` entry names, and
+/// `set_session_model` resolves this `provider` against [`MoaTable`] rather
+/// than [`ProvidersTable`]. Mirrors `horizon_config::MOA_PROVIDER_NAME`
+/// (this crate has no dependency on `horizon-config` — the two literals must
+/// agree); a `[[providers]]` entry that claims the name is warned about
+/// there and cannot be selected.
+pub const MOA_PROVIDER_NAME: &str = "moa";
+
+/// What a MoA-selected session carries on its [`RigAgentConfig`]: which
+/// entry is selected and the proposers to launch for each owner message.
+/// The aggregator's own `{provider, model}` is not repeated here — it is
+/// already the session's resolved provider bits and `model`.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MoaPass {
+    pub name: String,
+    pub proposers: Vec<MoaMember>,
 }
 
 /// Which rig-backed provider *client* a turn builds — the owner-agreed
@@ -449,6 +557,7 @@ impl NamedProviderConfig {
             ),
             allowed_tool_ids: None,
             trusted_project: false,
+            moa: None,
         }
     }
 
@@ -608,6 +717,12 @@ pub struct RigAgentConfig {
     /// (fail-closed), matching `StartSession::trusted_project`'s own
     /// `#[serde(default)]`.
     pub trusted_project: bool,
+    /// `Some` when this session runs as a Mixture-of-Agents aggregator
+    /// (`docs/agent-moa-design.md`): the provider bits and `model` above are
+    /// the aggregator's, and every owner message opens a MoA pass that first
+    /// launches these proposers. `None` — the value every non-MoA selection
+    /// produces — is ordinary single-model behavior, unchanged.
+    pub moa: Option<MoaPass>,
 }
 
 impl Default for RigAgentConfig {
@@ -627,8 +742,67 @@ impl Default for RigAgentConfig {
             clearing_threshold_pct: DEFAULT_CLEARING_TRIGGER_PCT,
             allowed_tool_ids: None,
             trusted_project: false,
+            moa: None,
         }
     }
+}
+
+/// The per-turn rig view a session selected onto `moa_entry` runs with: the
+/// aggregator's `[[providers]]` entry resolved as usual, its model pinned to
+/// the aggregator's written-out model id, and the pass itself carried on
+/// [`RigAgentConfig::moa`]. `None` when the aggregator names no entry of
+/// `table` — the one thing that makes a MoA entry unselectable.
+///
+/// The registry's build-time construction and a mid-session switch both go
+/// through here, so the two cannot resolve an entry differently.
+pub(crate) fn moa_session_config(
+    table: &ProvidersTable,
+    moa_entry: &MoaEntry,
+) -> Option<RigAgentConfig> {
+    let entry = table.entry(&moa_entry.aggregator.provider)?;
+    let mut config = entry.resolved();
+    apply_moa_selection(&mut config, table, moa_entry);
+    Some(config)
+}
+
+/// Swaps `config`'s provider bits, model, and pass to `moa_entry` in place —
+/// the mid-session-switch half of [`moa_session_config`], which keeps the
+/// role's non-model overrides (tool restrictions, iteration cap) exactly as
+/// an ordinary provider switch does.
+pub(crate) fn apply_moa_selection(
+    config: &mut RigAgentConfig,
+    table: &ProvidersTable,
+    moa_entry: &MoaEntry,
+) -> bool {
+    let Some(entry) = table.entry(&moa_entry.aggregator.provider) else {
+        return false;
+    };
+    apply_provider_entry(config, entry, &moa_entry.aggregator.model);
+    config.moa = Some(MoaPass {
+        name: moa_entry.name.clone(),
+        proposers: moa_entry.proposers.clone(),
+    });
+    true
+}
+
+/// Points `config` at one `[[providers]]` entry running `model`: the
+/// provider bits (kind, key variable, base URL, key presence) plus the model
+/// id. Shared by the plain provider switch and the MoA selection above so
+/// the two resolve an entry identically. Presence and base URL are re-read
+/// from the environment here, the same rule a switch has always followed.
+pub(crate) fn apply_provider_entry(
+    config: &mut RigAgentConfig,
+    entry: &NamedProviderConfig,
+    model: &str,
+) {
+    config.kind = entry.kind;
+    config.api_key_env = entry.api_key_env.clone();
+    config.base_url = resolve_base_url(
+        std::env::var(entry.kind.base_url_env()).ok(),
+        entry.base_url.clone(),
+    );
+    config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
+    config.model = model.to_string();
 }
 
 /// Pure resolution for the Tier 1 clearing trigger percentage: a parseable
@@ -987,6 +1161,55 @@ mod tests {
             config.rig.base_url,
             Some("https://provider.invalid".to_string())
         );
+    }
+
+    /// Every MoA member resolves its availability and key-variable name
+    /// from the `[[providers]]` entry it names, at the one point the whole
+    /// surface reads the environment.
+    #[test]
+    fn moa_members_resolve_availability_from_the_entry_they_name() {
+        let entries = vec![
+            NamedProviderConfig {
+                name: "present".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: None,
+                // Always set: this process's own argv[0] path variable is
+                // not something a test may mutate, so the fixture uses a
+                // variable that is certain to exist instead.
+                api_key_env: "PATH".to_string(),
+                api_key_present: false,
+                models: Vec::new(),
+            },
+            NamedProviderConfig {
+                name: "absent".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: None,
+                api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
+                api_key_present: false,
+                models: Vec::new(),
+            },
+        ];
+        let moa = vec![MoaEntry {
+            name: "mix".to_string(),
+            aggregator: MoaMember::new("present".to_string(), "m-a".to_string()),
+            proposers: vec![
+                MoaMember::new("present".to_string(), "m-b".to_string()),
+                MoaMember::new("absent".to_string(), "m-c".to_string()),
+                MoaMember::new("not-an-entry".to_string(), "m-d".to_string()),
+            ],
+        }];
+
+        let config = AgentConfig::from_env_and_providers(entries, "present".to_string(), moa);
+        let entry = config.moa.entry("mix").expect("the entry resolves");
+        assert!(entry.aggregator.api_key_present);
+        assert_eq!(entry.aggregator.api_key_env, "PATH");
+        assert!(entry.proposers[0].api_key_present);
+        assert!(!entry.proposers[1].api_key_present);
+        assert_eq!(entry.proposers[1].api_key_env, "HORIZON_TEST_KEY_NEVER_SET");
+        // A member naming no entry has nothing to resolve against and stays
+        // unavailable, so the pass skips it too.
+        assert!(!entry.proposers[2].api_key_present);
+        assert!(entry.proposers[2].api_key_env.is_empty());
     }
 
     #[test]

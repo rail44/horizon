@@ -2057,6 +2057,7 @@ fn start_fallback_rig_session_as(
             entries: Vec::new(),
             default_name: String::new(),
         },
+        crate::config::MoaTable::default(),
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
     let handle = AgentProvider::start_session(
@@ -3008,6 +3009,7 @@ fn config_role_start_session_advertises_only_its_three_allowed_tools() {
             entries: Vec::new(),
             default_name: String::new(),
         },
+        crate::config::MoaTable::default(),
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
@@ -3104,6 +3106,7 @@ fn resolved_model_reports_the_base_model_for_a_role_less_session() {
             entries: Vec::new(),
             default_name: String::new(),
         },
+        crate::config::MoaTable::default(),
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
@@ -3130,6 +3133,7 @@ fn resolved_model_reports_the_base_model_for_the_config_role_since_it_has_no_ove
             entries: Vec::new(),
             default_name: String::new(),
         },
+        crate::config::MoaTable::default(),
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 
@@ -3156,6 +3160,7 @@ fn resolved_model_is_none_in_deterministic_fallback_mode() {
             entries: Vec::new(),
             default_name: String::new(),
         },
+        crate::config::MoaTable::default(),
         crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
     );
 

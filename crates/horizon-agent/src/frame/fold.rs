@@ -245,7 +245,8 @@ pub(crate) fn apply_agent_event_to_frame(
         | Event::InputAccepted(_)
         | Event::InputOutcome(_)
         | Event::DeliveryAcknowledged(_)
-        | Event::MemorySeeded => {}
+        | Event::MemorySeeded
+        | Event::MoaPassStarted(_) => {}
         Event::Error(error) => frame.items.push(AgentFrameItem::Error(error.clone())),
         Event::Exited(exit) => {
             frame.state = Some(SessionState::Terminated);

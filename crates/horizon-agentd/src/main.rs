@@ -114,7 +114,11 @@ async fn main() -> anyhow::Result<()> {
     // doc).
     let raw_config = horizon_config::load();
     let (provider_entries, provider_default) = providers::named_provider_configs(raw_config);
-    let agent_config = AgentConfig::from_env_and_providers(provider_entries, provider_default);
+    let agent_config = AgentConfig::from_env_and_providers(
+        provider_entries,
+        provider_default,
+        providers::moa_configs(raw_config),
+    );
     // Resolved once at startup and handed to every session's
     // `ToolSessionState` (see `AgentdState::config_path`/`run_session`):
     // the `config.read`/`config.write` agent tools' one and only target.

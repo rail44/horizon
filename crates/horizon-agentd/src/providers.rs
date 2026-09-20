@@ -4,7 +4,29 @@
 //! reload_provider_config` (reload) both call through here so the two
 //! callers cannot drift — and so Horizon's env precedence stays where
 //! `horizon_agent::config` owns it (this module never reads env itself).
-use horizon_agent::config::{NamedProviderConfig, ProviderKind};
+use horizon_agent::config::{MoaEntry, MoaMember, NamedProviderConfig, ProviderKind};
+
+/// Translates the resolved `[[moa]]` surface out of the same config file
+/// load (`docs/agent-moa-design.md`). Entries `horizon-config` already
+/// refused (no name, an aggregator naming no `[[providers]]` entry) are gone
+/// by here, having warned on stderr.
+pub(crate) fn moa_configs(config: &horizon_config::RawConfig) -> Vec<MoaEntry> {
+    // Availability and the key variable's name are filled in centrally by
+    // `from_env_and_providers`, from the `[[providers]]` entry each member
+    // names.
+    let member = |member: &horizon_config::ResolvedMoaMember| {
+        MoaMember::new(member.provider.clone(), member.model.clone())
+    };
+    config
+        .resolved_moa()
+        .iter()
+        .map(|entry| MoaEntry {
+            name: entry.name.clone(),
+            aggregator: member(&entry.aggregator),
+            proposers: entry.proposers.iter().map(member).collect(),
+        })
+        .collect()
+}
 
 /// Translates the resolved provider surface out of a config file load.
 /// Returns the entries in file order (aliases included, document order

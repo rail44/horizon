@@ -1039,6 +1039,19 @@
           "const": "MemorySeeded",
           "description": "A standing-agent session was seeded from a prior keeper session's\nfolded `MemoryDigest` sequence at startup (the wake-action v2\nseed-spawn path, board #39/#41). Emitted once, right after the init\n`StateChanged(WaitingForUser)`, so the event log proves the seed was\napplied — the startup events are otherwise identical to a fresh\nspawn (`Created` + `Assistant`-role init + `WaitingForUser`).\nAudit/observability-only: no frame item, no projection beyond the\nevent log row.",
           "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The proposer sessions a Mixture-of-Agents pass launched for the owner\nmessage that opened this turn (`docs/agent-moa-design.md`). A\nharness-launched proposer has no `ToolCallRequested`/`ToolCallFinished`\npair naming it, so this is the only record tying a turn to the\nsessions that answered for it; each proposer's own cost and trajectory\nare then ordinary rows under its `session_id`. Emitted once per pass,\nat launch, so a cancelled pass still leaves the relation behind.\nCarries no frame item and no projection table row.",
+          "properties": {
+            "MoaPassStarted": {
+              "$ref": "#/$defs/MoaPassStarted"
+            }
+          },
+          "required": [
+            "MoaPassStarted"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1499,6 +1512,48 @@
           "type": "string"
         }
       ]
+    },
+    "MoaPassStarted": {
+      "description": "Payload for [`Event::MoaPassStarted`].",
+      "properties": {
+        "entry": {
+          "description": "The `[[moa]]` entry name the session is running.",
+          "type": "string"
+        },
+        "proposers": {
+          "description": "One record per proposer session that started, in configured order.\nA member that could not be started at all is absent.",
+          "items": {
+            "$ref": "#/$defs/MoaProposer"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "entry",
+        "proposers"
+      ],
+      "type": "object"
+    },
+    "MoaProposer": {
+      "description": "One proposer session of a [`Event::MoaPassStarted`] record.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "description": "The `[[providers]]` entry name this proposer ran on.",
+          "type": "string"
+        },
+        "session_id": {
+          "$ref": "#/$defs/SessionId"
+        }
+      },
+      "required": [
+        "session_id",
+        "provider",
+        "model"
+      ],
+      "type": "object"
     },
     "ModelAlias": {
       "description": "One alias -> model id pair of [`ProviderSummary::models`].",

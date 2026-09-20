@@ -161,6 +161,26 @@ impl ClearingState {
         self.latest_input_tokens = input_tokens;
     }
 
+    /// Points this state at a different model's window, after the session
+    /// switched models. Only the window changes: the frozen cleared set and
+    /// the last measured input size both describe the session's own history,
+    /// which the switch does not touch, so resetting either would either
+    /// un-freeze a pass the event log already records or throw away the one
+    /// measured number the trigger is allowed to use.
+    pub(super) fn adopt_window(&mut self, effective_window_tokens: Option<u64>) {
+        self.effective_window_tokens = effective_window_tokens;
+    }
+
+    #[cfg(test)]
+    pub(super) fn effective_window_tokens(&self) -> Option<u64> {
+        self.effective_window_tokens
+    }
+
+    #[cfg(test)]
+    pub(super) fn latest_input_tokens(&self) -> u64 {
+        self.latest_input_tokens
+    }
+
     pub(super) fn cleared(&self) -> &ClearedResults {
         &self.cleared
     }
@@ -266,16 +286,27 @@ pub(super) fn plan_clearing_pass(
 /// the first `cleared_occurrences(call_id)` of them: a result appended after
 /// the pass froze is a later occurrence of a reused id, never one the pass
 /// could have decided about, so it is left verbatim (module doc).
+/// `moa` is one turn's proposal block plus the index to insert it at — the
+/// length `history` had before the turn's opening message was pushed. It
+/// lands immediately ahead of that message, so the whole prefix before it is
+/// byte-identical to the previous turn's requests and every round of this
+/// turn puts it in the same place. It is never written back into `history`.
 pub(super) fn history_for_provider_request(
     history: &[Message],
     cleared: &ClearedResults,
     memory: Option<&MemoryDocument>,
+    moa: Option<&(usize, Message)>,
 ) -> Vec<Message> {
     let mut projected = if cleared.is_empty() {
         history.to_vec()
     } else {
         project_cleared(history, cleared)
     };
+
+    if let Some((index, message)) = moa {
+        let index = (*index).min(projected.len());
+        projected.insert(index, message.clone());
+    }
 
     // Standing-role memory projection (`docs/standing-agent-memory-design.md`
     // decision 1): replace everything before the current turn's opening
@@ -369,7 +400,7 @@ pub(super) fn cleared_call_ids_from_events(events: &[Event]) -> Vec<ToolCallId> 
             // Standing-agent memory events carry no cleared call-id set.
             | Event::MemoryDigest(_)
             | Event::MemoryCheckpointMissed
-            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded => None,
+            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::MoaPassStarted(_) => None,
         })
         .flatten()
         .collect()

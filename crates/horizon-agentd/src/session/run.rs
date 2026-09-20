@@ -16,8 +16,8 @@ use horizon_agent::persistence::event_log::PersistedSessionContext;
 use horizon_agent::roles::RoleId;
 use horizon_agent::skills::SkillRegistry;
 use horizon_agent::tools::{
-    process_agent_provider_event, register_session_runtime, HostTools, RecallContext,
-    SessionDomainPolicy, ToolCompletion, ToolSessionState,
+    process_agent_provider_event, register_exploration_host, register_session_runtime, HostTools,
+    RecallContext, SessionDomainPolicy, ToolCompletion, ToolSessionState,
 };
 use horizon_agent::wire::AgentWireEvent;
 
@@ -185,6 +185,10 @@ pub(super) fn run_session(
         live_state.clone(),
         async_results_tx.clone(),
     );
+    // The session-runtime registry is thread-local to this thread; the rig
+    // session loop runs on its own and reaches the spawn capability through
+    // this process-global one instead.
+    register_exploration_host(session_id, tool_state.exploration_host());
 
     let host = AgentdHostTools {
         state: state.clone(),
@@ -574,6 +578,7 @@ fn activate_environment(
                 live_state.clone(),
                 results.clone(),
             );
+            register_exploration_host(session_id, replacement.exploration_host());
             *tool_state = replacement;
             if let Some(entry) = lock_unpoisoned(&state.sessions).get_mut(&session_id) {
                 entry.workspace_root = Some(worktree.path.clone());

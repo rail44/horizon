@@ -4,8 +4,9 @@
 //! summarizing it away (see `docs/research/letta.md` §1, §10, and the
 //! "(a) compaction"/"(b) DuckDB KB" sections). Both are `AutoAllowRead`:
 //! read-only access to this session's (or, with `scope: "all"`, every
-//! session's) own already-persisted history -- no different in trust terms
-//! from `fs.read`.
+//! session's, or with an explicit `session_id`, one named session's)
+//! already-persisted history -- no different in trust terms from
+//! `fs.read`.
 //!
 //! Both tools query through the *shared* `Arc<Mutex<Store>>` handle in
 //! `ToolSessionState::recall_context`'s `RecallContext::store` (locking
@@ -71,10 +72,18 @@ const VALID_TURN_OUTCOMES: &[&str] = &["completed", "cancelled", "failed", "halt
 
 fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     let query = input.get("query").and_then(Value::as_str);
-    let scope_arg = input
-        .get("scope")
-        .and_then(Value::as_str)
-        .unwrap_or("session");
+    let scope_arg = input.get("scope").and_then(Value::as_str);
+    // An explicit `session_id` names *which* session to search, the way
+    // `recall.read` already does; `scope` may then only agree with it
+    // ("session") or be omitted. Parsed up front, with the same error
+    // shape `recall.read` gives an unparseable id.
+    let named_session_id = match input.get("session_id").and_then(Value::as_str) {
+        Some(raw) => match parse_session_id(raw) {
+            Ok(session_id) => Some(session_id),
+            Err(_) => return error_output(format!("recall.search: invalid session_id `{raw}`")),
+        },
+        None => None,
+    };
     let limit = clamp_limit(
         input.get("limit").and_then(Value::as_u64),
         DEFAULT_SEARCH_LIMIT,
@@ -106,17 +115,25 @@ fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     };
 
     let scope = match scope_arg {
-        "all" => None,
-        "session" => match recall.session_id {
+        Some("all") => {
+            if named_session_id.is_some() {
+                return error_output(
+                    "recall.search: session_id cannot be combined with scope \"all\" -- drop one \
+                     (session_id searches that one session, scope \"all\" searches every session)",
+                );
+            }
+            None
+        }
+        None | Some("session") => match named_session_id.or(recall.session_id) {
             Some(session_id) => Some(session_id),
             None => {
                 return error_output(
                     "recall.search scope \"session\" requires a session id, but this session \
-                     has none configured -- pass scope: \"all\" instead",
+                     has none configured -- pass a session_id, or scope: \"all\" instead",
                 )
             }
         },
-        other => {
+        Some(other) => {
             return error_output(format!(
                 "recall.search: unknown scope `{other}` (expected \"session\" or \"all\")"
             ))

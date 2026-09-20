@@ -529,6 +529,7 @@ pub(super) async fn complete_rig_turn(
     events_tx: &Sender<ProviderEvent>,
     clearing: &mut ClearingState,
     memory: Option<&crate::tools::MemoryDocument>,
+    moa: Option<&(usize, Message)>,
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
@@ -550,7 +551,7 @@ pub(super) async fn complete_rig_turn(
             environment,
             extra_sections,
             &prompt,
-            history_for_provider_request(rig_history, clearing.cleared(), memory),
+            history_for_provider_request(rig_history, clearing.cleared(), memory, moa),
             events_tx,
             token,
         )

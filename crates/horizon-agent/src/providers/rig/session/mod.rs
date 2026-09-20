@@ -41,6 +41,7 @@ use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
 mod environment;
 mod input;
+pub(crate) mod moa;
 mod state;
 mod turn;
 
@@ -64,6 +65,7 @@ pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
     table: crate::config::ProvidersTable,
+    moa_table: crate::config::MoaTable,
     role: Option<&'static RoleDefinition>,
     duckdb_cell: SharedDuckdbStore,
 ) -> SessionHandle {
@@ -118,6 +120,7 @@ pub(super) fn spawn_rig_session(
             let rig_history = persisted.messages;
             let cleared_call_ids = persisted.cleared_call_ids;
             let memory_document = persisted.memory_document;
+            let moa_conversation = persisted.moa_conversation;
             let seed_from_fallback = persisted.seed_from_fallback;
             // Issue 012: when the DuckDB projection store is unavailable and
             // the JSONL event log also yielded no reconstructable history for
@@ -182,12 +185,14 @@ pub(super) fn spawn_rig_session(
                     events_tx,
                     config,
                     table,
+                    moa_table,
                     environment,
                     extra_sections,
                     role,
                     rig_history,
                     cleared_call_ids,
                     memory_document,
+                    moa_conversation,
                 )
                 .await;
                 state.inputs = restored_inputs;
@@ -215,14 +220,28 @@ pub(super) fn spawn_rig_session(
 /// all, so it gets a disabled state without asking anyone. Otherwise the
 /// effective window is `context_length − max_output_tokens`
 /// (`docs/agent-compaction-design.md`); when the provider declares no
-/// limits, clearing stays off for the session's whole life and says so
-/// **once**, on stderr -- the design's `/models`-unavailable behavior, with
-/// no guessed fallback window (see `super::model_limits`' module doc).
+/// limits, clearing stays off and says so on stderr -- the design's
+/// `/models`-unavailable behavior, with no guessed fallback window (see
+/// `super::model_limits`' module doc).
 async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
+    ClearingState::new(
+        discover_effective_window(config).await,
+        config.clearing_threshold_pct,
+    )
+}
+
+/// The effective window for `config`'s current `(kind, base_url,
+/// api_key_env, model)`. Shared by session start and
+/// [`state::SessionLoopState::rediscover_clearing_window`], which runs after
+/// a model change: the window belongs to the model, so a session that
+/// switches models keeps clearing against the model it is now talking to.
+/// `model_limits` caches per key, so a re-discovery of an already-seen
+/// combination costs no request.
+async fn discover_effective_window(config: &RigAgentConfig) -> Option<u64> {
     if !config.api_key_present {
-        return ClearingState::disabled();
+        return None;
     }
-    let window = model_limits(config.base_url.as_deref(), &config.model)
+    let window = model_limits(config)
         .await
         .and_then(|limits| limits.effective_window_tokens(config.max_output_tokens));
     if window.is_none() {
@@ -232,7 +251,7 @@ async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
             config.model
         );
     }
-    ClearingState::new(window, config.clearing_threshold_pct)
+    window
 }
 
 /// Forwards commands from the crossbeam channel (the provider's public,

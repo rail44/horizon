@@ -175,7 +175,8 @@ existing env vars keep winning. Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are
 environment-only and never read from the file.
 
 As of the 2026-07-18 config-narrowing wave (owner decision), the surface is
-exactly: `[provider]` `model`/`base_url`; `[terminal]` `font_size`; `[ui]`
+exactly: `[provider]` `model`/`base_url`; `[[providers]]` plus
+`default_provider`; `[[moa]]`; `[terminal]` `font_size`; `[ui]`
 `font_family`; `[keybindings]`; `[theme]`'s seed plus `[theme.ansi]`'s six
 hues. Everything the file used to also cover (the whole former `[agent]`
 section — bash/fs tool caps, turn-loop guard thresholds, event/state DB
@@ -196,6 +197,15 @@ all; `HORIZON_AGENT_JUDGE_MODEL` (the enforcing judge's model id) and
 percentage, clamped 1..=100 — a measurement switch, see
 `docs/agent-compaction-design.md`) are environment-only in the same way.
 
+`[[moa]]` names Mixture-of-Agents entries over the `[[providers]]` entries
+(`docs/agent-moa-design.md`): each has one `aggregator` and a list of
+`proposers`, every member a `{provider, model}` pair with the model id
+written out. In model selection they appear as a `moa` group whose items
+are the entry names; a session on one runs each message as a two-layer
+pass — read-only proposer sessions answer, the aggregator writes the answer
+the pane shows. The name `moa` is reserved for that group, so a
+`[[providers]]` entry called `moa` cannot be selected (warned on stderr).
+
 Config is applied at startup only, with these exceptions: `Reload Config`
 (palette / `reload-config` keybinding id / CLI `horizon reload-config`)
 re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
@@ -203,7 +213,8 @@ derived terminal colors), `[keybindings]` (built-in defaults plus every
 chord/command override, unbinding whatever the previous apply's chords
 were first — see `workspace::apply_bindings`), and `[provider]` all live;
 `[provider]` is pushed to the running `horizon-agentd` over the session
-hub's `reload_provider_config` rtc call (no respawn), so a model/base-URL
+hub's `reload_provider_config` rtc call (no respawn; `[[providers]]` and
+`[[moa]]` reload with it), so a model/base-URL
 change takes effect for the next session — a running session keeps its
 spawn-time provider for its whole lifetime. `Reload Agent Runtime` is
 now scoped to agent-code reloads (a fresh `horizon-agentd` process

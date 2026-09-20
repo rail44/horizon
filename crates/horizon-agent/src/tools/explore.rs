@@ -70,7 +70,7 @@
 //! [`Outcome::into_output`] surfaces that as an ordinary (`is_error:
 //! false`) result carrying a `capped: true` marker, not a failure.
 
-mod children;
+pub(super) mod children;
 mod notify;
 
 use std::panic::AssertUnwindSafe;
@@ -122,6 +122,31 @@ pub struct StartedExploration {
     pub events: Receiver<Event>,
 }
 
+/// What one `task`-shaped session is started with. A `task` call names only
+/// a prompt and the requester's own provider answers it; a Mixture-of-Agents
+/// proposer (`docs/agent-moa-design.md`) names the other two, because each
+/// member runs on its own `{provider, model}`.
+pub struct ExplorationRequest {
+    pub prompt: String,
+    /// The `[[providers]]` entry name to run this session on. `None` — every
+    /// `task` call — means the requesting session's own provider.
+    pub provider: Option<String>,
+    /// The model id to pin, written out (never an alias). `None` means the
+    /// entry's own default model.
+    pub model: Option<String>,
+}
+
+impl ExplorationRequest {
+    /// A prompt answered by the requesting session's own provider.
+    pub fn for_prompt(prompt: String) -> Self {
+        Self {
+            prompt,
+            provider: None,
+            model: None,
+        }
+    }
+}
+
 /// The daemon capability `task` is built on: spawn a peer session,
 /// subscribe to its events, terminate it. Implemented by `horizon-agentd`
 /// (`session::AgentdExplorationHost`) and installed on the requester's
@@ -136,11 +161,11 @@ pub struct StartedExploration {
 /// parent/child vocabulary this module uses for *lifetime* ("children are
 /// session-scoped") is deliberately not a claim about code genealogy.
 pub trait ExplorationHost: Send + Sync {
-    /// Spawns a read-only task session and sends `prompt` as its first user
-    /// message -- the session's entire history; there is no other seeding.
-    /// `Err` carries a message suitable for the model to read as the tool's
-    /// error result.
-    fn start(&self, prompt: String) -> Result<StartedExploration, String>;
+    /// Spawns a read-only task session and sends the request's prompt as its
+    /// first user message -- the session's entire history; there is no other
+    /// seeding. `Err` carries a message suitable for the model to read as
+    /// the tool's error result.
+    fn start(&self, request: ExplorationRequest) -> Result<StartedExploration, String>;
 
     /// Terminates a session started by [`Self::start`] and releases its
     /// event subscription. Called exactly once per successful start -- when
@@ -181,7 +206,7 @@ pub(crate) fn start(
         );
     };
 
-    let started = match host.start(input.prompt) {
+    let started = match host.start(ExplorationRequest::for_prompt(input.prompt)) {
         Ok(started) => started,
         Err(message) => {
             return synchronous(
@@ -453,7 +478,7 @@ const ORPHAN_REASONING_CLOSE_TAGS: [&str; 3] = ["</mm:think>", "</thinking>", "<
 /// This is an *emptiness test only* -- the stored report keeps whatever the
 /// child actually emitted, because defensively rewriting bodies Horizon does
 /// not understand is a separate, open decision.
-fn report_body_is_empty(report: &str) -> bool {
+pub(super) fn report_body_is_empty(report: &str) -> bool {
     let mut rest = report.trim();
     loop {
         let Some(stripped) = ORPHAN_REASONING_CLOSE_TAGS
@@ -468,7 +493,7 @@ fn report_body_is_empty(report: &str) -> bool {
 
 /// How a child's event stream ended.
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum Terminal {
+pub(super) enum Terminal {
     /// The child's turn ended normally -- the report is final.
     Completed,
     /// The turn ended some other way (failed, cancelled, or halted by a
@@ -498,21 +523,21 @@ enum Terminal {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Outcome {
-    terminal: Terminal,
+pub(super) struct Outcome {
+    pub(super) terminal: Terminal,
     /// The last assistant message committed after the child's own user
     /// message -- "the session's final assistant text". Messages committed
     /// before that (the provider's own initialization notice) and mid-turn
     /// narration superseded by a later message are deliberately not part of
     /// it.
-    report: Option<String>,
+    pub(super) report: Option<String>,
     /// The most recent `Event::Error` message, used only to explain a
     /// failure the terminal reason alone doesn't.
-    error: Option<String>,
+    pub(super) error: Option<String>,
 }
 
 impl Outcome {
-    fn into_output(self, session_id: SessionId, description: &str) -> Value {
+    pub(super) fn into_output(self, session_id: SessionId, description: &str) -> Value {
         let mut output = json!({
             "session_id": session_id.as_uuid().to_string(),
             "description": description,
@@ -545,7 +570,7 @@ impl Outcome {
     /// nothing but a stray reasoning-close artifact does not count as one,
     /// so a child that shipped only that is reported as the failure it was
     /// (see [`report_body_is_empty`]).
-    fn has_usable_report(&self) -> bool {
+    pub(super) fn has_usable_report(&self) -> bool {
         self.report
             .as_deref()
             .is_some_and(|report| !report_body_is_empty(report))
@@ -601,7 +626,7 @@ impl Outcome {
 /// tool-running), the observation is handed to `on_activity` as the child's
 /// current activity (`None` = reasoning). Terminal emission is the caller's
 /// — the fold only reports running observations.
-fn fold_until_terminal(
+pub(super) fn fold_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
     on_activity: &mut dyn FnMut(Option<String>),
@@ -720,7 +745,7 @@ fn fold_until_terminal(
                     // task child (a standing role never spawns task children).
                     | Event::MemoryDigest(_)
                     | Event::MemoryCheckpointMissed
-                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded => {}
+                    | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::MoaPassStarted(_) => {}
                 }
                 if emitted.as_ref() != Some(&activity) {
                     on_activity(activity.clone());
@@ -737,7 +762,7 @@ fn fold_until_terminal(
     }
 }
 
-fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+pub(super) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|message| (*message).to_string())
@@ -748,7 +773,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 /// Wall-clock now, epoch milliseconds — the launch timestamp every live
 /// progress event carries, so a client can show elapsed time that survives
 /// re-attach. `0` if the clock is before the epoch (never, in practice).
-fn unix_epoch_ms() -> u64 {
+pub(super) fn unix_epoch_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_millis() as u64)

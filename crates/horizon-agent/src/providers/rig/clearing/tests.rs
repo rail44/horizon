@@ -117,6 +117,36 @@ fn input_at_the_threshold_share_fires() {
     assert!(!cleared.cleared_call_ids.is_empty());
 }
 
+/// A model change re-points the trigger at the new model's window without
+/// disturbing the two things that describe the session's own history: the
+/// frozen cleared set (which `Event::HistoryCleared` already records, and
+/// which resume replays) and the provider's last reported input size.
+#[test]
+fn adopting_a_window_keeps_the_frozen_set_and_the_last_measurement() {
+    let mut state = ClearingState::new(Some(500_000), 60);
+    state.seed_cleared(vec![call_id("call-0")]);
+    state.record_input_tokens(100_000);
+
+    // A smaller model: 100k of input is under 60% of 500k but over 60% of
+    // 131k, so the same history now crosses the trigger.
+    let history = read_rounds(40, chars_for_tokens(4_000));
+    assert!(state.run_pass(&history).is_none());
+    state.adopt_window(Some(131_072));
+
+    assert_eq!(state.effective_window_tokens(), Some(131_072));
+    assert_eq!(state.latest_input_tokens(), 100_000);
+    assert!(state.cleared().contains(&call_id("call-0")));
+    assert!(
+        state.run_pass(&history).is_some(),
+        "the trigger now measures against the model actually in use"
+    );
+
+    // An unknown window disables clearing again, and still keeps the set.
+    state.adopt_window(None);
+    assert!(state.run_pass(&history).is_none());
+    assert!(state.cleared().contains(&call_id("call-0")));
+}
+
 #[test]
 fn a_pass_below_the_recovery_floor_does_not_fire_even_over_the_threshold() {
     // Over the trigger, but the only clearable text is far under the 16k
@@ -237,7 +267,7 @@ fn non_tool_messages_are_structurally_out_of_scope() {
     let cleared = ClearedResults::from_occurrences(
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
-    let projected = history_for_provider_request(&history, &cleared, None);
+    let projected = history_for_provider_request(&history, &cleared, None, None);
 
     assert_eq!(projected[0], history[0]);
     assert_eq!(projected[1], history[1]);
@@ -252,7 +282,7 @@ fn clearing_preserves_every_tool_call_result_pair() {
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
     assert!(!cleared.is_empty());
-    let projected = history_for_provider_request(&history, &cleared, None);
+    let projected = history_for_provider_request(&history, &cleared, None, None);
 
     assert_eq!(projected.len(), history.len(), "no message is ever dropped");
     for (index, (before, after)) in history.iter().zip(&projected).enumerate() {
@@ -296,8 +326,8 @@ fn two_consecutive_request_builds_are_byte_identical() {
         plan_clearing_pass(&history, &ClearedResults::default()).cleared_call_ids,
     );
 
-    let first = history_for_provider_request(&history, &cleared, None);
-    let second = history_for_provider_request(&history, &cleared, None);
+    let first = history_for_provider_request(&history, &cleared, None, None);
+    let second = history_for_provider_request(&history, &cleared, None, None);
     assert_eq!(
         serde_json::to_string(&first).unwrap(),
         serde_json::to_string(&second).unwrap()
@@ -362,12 +392,14 @@ fn resume_replays_the_frozen_set_into_an_identical_projection() {
         serde_json::to_string(&history_for_provider_request(
             &history,
             resumed.cleared(),
+            None,
             None
         ))
         .unwrap(),
         serde_json::to_string(&history_for_provider_request(
             &history,
             live.cleared(),
+            None,
             None
         ))
         .unwrap()
@@ -406,7 +438,7 @@ fn the_placeholder_names_the_tool_the_key_argument_and_the_recovery_route() {
         )]),
         tool_result_message("call-0", 12_345),
     ];
-    let projected = history_for_provider_request(&history, &cleared_set(&["call-0"]), None);
+    let projected = history_for_provider_request(&history, &cleared_set(&["call-0"]), None, None);
     let text = tool_result_text(&projected[2]).expect("still a tool result");
 
     assert_eq!(
@@ -430,7 +462,7 @@ fn the_placeholder_falls_back_to_the_tool_id_and_then_to_nothing() {
         tool_result_message("orphan", 99),
     ];
     let projected =
-        history_for_provider_request(&history, &cleared_set(&["call-0", "orphan"]), None);
+        history_for_provider_request(&history, &cleared_set(&["call-0", "orphan"]), None, None);
 
     assert!(tool_result_text(&projected[1])
         .unwrap()
@@ -454,7 +486,7 @@ fn a_long_key_argument_is_truncated_in_the_placeholder() {
         tool_result_message("call-0", 5_000),
     ];
     let text = tool_result_text(
-        &history_for_provider_request(&history, &cleared_set(&["call-0"]), None)[1],
+        &history_for_provider_request(&history, &cleared_set(&["call-0"]), None, None)[1],
     )
     .unwrap();
 
@@ -466,11 +498,11 @@ fn a_long_key_argument_is_truncated_in_the_placeholder() {
 fn an_uncleared_result_is_left_exactly_as_it_was() {
     let history = read_rounds(3, 100);
     assert_eq!(
-        history_for_provider_request(&history, &ClearedResults::default(), None),
+        history_for_provider_request(&history, &ClearedResults::default(), None, None),
         history
     );
     assert_eq!(
-        history_for_provider_request(&history, &cleared_set(&["not-in-this-history"]), None),
+        history_for_provider_request(&history, &cleared_set(&["not-in-this-history"]), None, None),
         history
     );
 }
@@ -508,7 +540,7 @@ fn a_result_reusing_a_cleared_call_id_after_the_freeze_is_never_replaced() {
         "the fresh body the model just asked for",
     ));
 
-    let projected = history_for_provider_request(&history, &cleared, None);
+    let projected = history_for_provider_request(&history, &cleared, None, None);
     assert!(
         tool_result_text(&projected[2])
             .unwrap()
@@ -544,7 +576,7 @@ fn a_pass_that_clears_two_occurrences_of_one_id_leaves_a_later_third_verbatim() 
     )]));
     history.push(Message::tool_result("dup", "tool", "fresh"));
 
-    let projected = history_for_provider_request(&history, &cleared, None);
+    let projected = history_for_provider_request(&history, &cleared, None, None);
     for index in [2, 4] {
         assert!(tool_result_text(&projected[index])
             .unwrap()
@@ -587,7 +619,7 @@ fn resume_replay_preserves_the_reuse_guard() {
         resumed.cleared(),
         &ClearedResults::from_occurrences([call_id("dup"), call_id("dup")])
     );
-    let projected = history_for_provider_request(&history, resumed.cleared(), None);
+    let projected = history_for_provider_request(&history, resumed.cleared(), None, None);
     assert_eq!(
         tool_result_text(&projected[6]).unwrap(),
         "fresh",
@@ -622,7 +654,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
         )]),
         tool_result_message("task-1", report.chars().count()),
     ];
-    let projected = history_for_provider_request(&history, &cleared_set(&["task-1"]), None);
+    let projected = history_for_provider_request(&history, &cleared_set(&["task-1"]), None, None);
     assert!(tool_result_text(&projected[2])
         .unwrap()
         .starts_with("[cleared old tool result: task ("));
@@ -682,6 +714,7 @@ async fn a_session_over_the_threshold_runs_one_pass_and_keeps_turning() {
             Message::user(format!("round {round}")),
             &events_tx,
             &mut clearing,
+            None,
             None,
             || Message::assistant("ok"),
             &token,
@@ -746,7 +779,7 @@ fn memory_projection_none_returns_full_history() {
         Message::assistant("reply 2"),
     ];
     let cleared = ClearedResults::default();
-    let projected = history_for_provider_request(&history, &cleared, None);
+    let projected = history_for_provider_request(&history, &cleared, None, None);
     assert_eq!(projected.len(), history.len());
 }
 
@@ -761,7 +794,7 @@ fn memory_projection_empty_document_skips_prepend() {
     ];
     let cleared = ClearedResults::default();
     let doc = MemoryDocument::default();
-    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc), None);
     assert_eq!(projected.len(), history.len());
 }
 
@@ -778,7 +811,7 @@ fn memory_projection_prepends_document_and_keeps_tail() {
     ];
     let cleared = ClearedResults::default();
     let doc = memory_doc();
-    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc), None);
     // [memory document] + ["turn 2", "reply 2"]
     assert_eq!(projected.len(), 3);
     // First message is the rendered memory document.
@@ -803,7 +836,7 @@ fn memory_projection_composes_with_clearing() {
     ];
     let cleared = cleared_set(&["call_1"]);
     let doc = memory_doc();
-    let projected = history_for_provider_request(&history, &cleared, Some(&doc));
+    let projected = history_for_provider_request(&history, &cleared, Some(&doc), None);
     // [memory document] + ["turn 2"] — the old turn (including the cleared
     // tool result) was dropped.
     assert_eq!(projected.len(), 2);

@@ -678,6 +678,81 @@ fn duplicate_entry_names_warn_about_the_shadowed_later_entry() {
     assert_eq!(config.resolved_providers().providers.len(), 2);
 }
 
+// --- `[[moa]]` (docs/agent-moa-design.md decision 9) ----------------------
+
+#[test]
+fn a_moa_entry_resolves_its_aggregator_and_proposers_in_file_order() {
+    let config = parse(
+        "[[providers]]\nname = \"synthetic\"\n\
+         base_url = \"https://api.synthetic.new/openai/v1\"\n\
+         [[moa]]\nname = \"mix\"\n\
+         aggregator = { provider = \"synthetic\", model = \"hf:a/A\" }\n\
+         proposers = [{ provider = \"synthetic\", model = \"hf:a/A\" }, \
+         { provider = \"synthetic\", model = \"hf:b/B\" }]\n",
+    )
+    .unwrap();
+    let resolved = config.resolved_moa();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].name, "mix");
+    assert_eq!(resolved[0].aggregator.provider, "synthetic");
+    assert_eq!(resolved[0].aggregator.model, "hf:a/A");
+    assert_eq!(
+        resolved[0]
+            .proposers
+            .iter()
+            .map(|member| member.model.as_str())
+            .collect::<Vec<_>>(),
+        vec!["hf:a/A", "hf:b/B"],
+        "listing the same member twice is the paper's single-proposer setting"
+    );
+    assert!(moa_config_warnings(&config).is_empty());
+}
+
+#[test]
+fn a_moa_member_naming_no_provider_entry_is_dropped_and_warned_about() {
+    let config = parse(
+        "[[providers]]\nname = \"synthetic\"\n\
+         [[moa]]\nname = \"mix\"\n\
+         aggregator = { provider = \"synthetic\", model = \"m\" }\n\
+         proposers = [{ provider = \"typo\", model = \"m\" }, \
+         { provider = \"synthetic\", model = \"m\" }]\n",
+    )
+    .unwrap();
+    let resolved = config.resolved_moa();
+    assert_eq!(resolved.len(), 1, "one bad member must not cost the entry");
+    assert_eq!(resolved[0].proposers.len(), 1);
+    assert!(moa_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("proposer 0") && warning.contains("typo")));
+}
+
+#[test]
+fn a_moa_entry_whose_aggregator_is_unresolvable_is_dropped_whole() {
+    let config = parse(
+        "[[providers]]\nname = \"synthetic\"\n\
+         [[moa]]\nname = \"mix\"\n\
+         aggregator = { provider = \"typo\", model = \"m\" }\n",
+    )
+    .unwrap();
+    assert!(config.resolved_moa().is_empty());
+    assert!(moa_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("aggregator") && warning.contains("dropping the whole")));
+}
+
+#[test]
+fn a_provider_entry_named_moa_is_warned_about_as_reserved() {
+    let config = parse(
+        "[[providers]]\nname = \"moa\"\n\
+         [[moa]]\nname = \"mix\"\n\
+         aggregator = { provider = \"moa\", model = \"m\" }\n",
+    )
+    .unwrap();
+    assert!(moa_config_warnings(&config)
+        .iter()
+        .any(|warning| warning.contains("reserved for the [[moa]] group")));
+}
+
 #[test]
 fn bad_provider_kind_is_a_parse_error_of_the_whole_file() {
     // A typo'd kind is not per-key skippable (parity with [provider]'s own

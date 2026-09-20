@@ -94,6 +94,16 @@ pub(crate) struct SessionLoopState {
     /// The whole surface at spawn time — what a mid-session switch
     /// (`Command::SetSessionModel`) resolves its target against.
     pub(crate) table: crate::config::ProvidersTable,
+    /// The `[[moa]]` surface at spawn time, resolved the same way.
+    pub(crate) moa_table: crate::config::MoaTable,
+    /// The owner messages and answers a Mixture-of-Agents pass hands its
+    /// proposers. Maintained for every session (it costs one push per
+    /// message) so switching into a `[[moa]]` entry mid-session starts with
+    /// the conversation that already happened.
+    pub(crate) moa_conversation: super::moa::MoaConversation,
+    /// The proposals the current turn's provider rounds carry, `None`
+    /// outside a MoA turn.
+    pub(crate) moa_turn: Option<super::moa::MoaTurn>,
     pub(crate) environment: SessionEnvironment,
     pub(crate) extra_sections: Vec<String>,
     pub(crate) role: Option<&'static RoleDefinition>,
@@ -127,6 +137,9 @@ impl Default for SessionLoopState {
                 entries: Vec::new(),
                 default_name: String::new(),
             },
+            moa_table: crate::config::MoaTable::default(),
+            moa_conversation: super::moa::MoaConversation::default(),
+            moa_turn: None,
             environment: SessionEnvironment::for_workspace_root(None),
             extra_sections: Vec::new(),
             role: None,
@@ -146,12 +159,14 @@ impl SessionLoopState {
         events_tx: Sender<ProviderEvent>,
         config: RigAgentConfig,
         table: crate::config::ProvidersTable,
+        moa_table: crate::config::MoaTable,
         environment: SessionEnvironment,
         extra_sections: Vec<String>,
         role: Option<&'static RoleDefinition>,
         rig_history: Vec<Message>,
         cleared_call_ids: Vec<ToolCallId>,
         memory_document: Option<MemoryDocument>,
+        moa_conversation: super::moa::MoaConversation,
     ) -> Self {
         let mut clearing = super::discover_clearing_state(&config).await;
         clearing.seed_cleared(cleared_call_ids);
@@ -182,6 +197,9 @@ impl SessionLoopState {
             memory_reminded: false,
             config,
             table,
+            moa_table,
+            moa_conversation,
+            moa_turn: None,
             environment,
             extra_sections,
             role,
@@ -299,7 +317,7 @@ impl SessionLoopState {
                 // `AgentWireEvent::SessionModel`); the loop only fails a
                 // switch it cannot resolve, as an ordinary error event.
                 Command::SetSessionModel { provider, model } => {
-                    self.handle_set_session_model(&provider, &model);
+                    self.handle_set_session_model(&provider, &model).await;
                 }
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
@@ -373,6 +391,16 @@ impl SessionLoopState {
                         })
                         .into(),
                     );
+                    // An owner message opens a Mixture-of-Agents pass; the
+                    // aggregator's turn runs once every proposer has
+                    // answered. The message joins the conversation only
+                    // after the pass, which carries it separately from the
+                    // conversation so far.
+                    let pass = self.run_moa_pass(&text).await;
+                    self.moa_conversation.record_owner(text.clone());
+                    if let super::moa::PassOutcome::Cancelled = pass {
+                        continue;
+                    }
                     let (prompt, injected) =
                         self.inject_task_notification(Message::user(text.clone()));
                     let fallback_text = injected.unwrap_or(text);
@@ -551,14 +579,32 @@ impl SessionLoopState {
     /// unit-tested separately because the command pump's arm is otherwise
     /// the one untested join between the daemon-side forward and the next
     /// turn's config.
-    fn handle_set_session_model(&mut self, provider: &str, model: &str) {
-        if let Err(message) =
-            apply_set_session_model(&mut self.config, &self.table, provider, model)
-        {
-            let _ = self
-                .events_tx
-                .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+    async fn handle_set_session_model(&mut self, provider: &str, model: &str) {
+        match apply_set_session_model(
+            &mut self.config,
+            &self.table,
+            &self.moa_table,
+            provider,
+            model,
+        ) {
+            Ok(()) => self.rediscover_clearing_window().await,
+            Err(message) => {
+                let _ = self
+                    .events_tx
+                    .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+            }
         }
+    }
+
+    /// Re-reads the effective context window for the model this session now
+    /// runs, keeping the rest of the clearing state
+    /// ([`ClearingState::adopt_window`]). Without this a switch would keep
+    /// clearing against the previous model's window — with a smaller model
+    /// that puts the trigger above its whole window, so the session runs to
+    /// its context ceiling instead of clearing.
+    pub(crate) async fn rediscover_clearing_window(&mut self) {
+        let window = super::discover_effective_window(&self.config).await;
+        self.clearing.adopt_window(window);
     }
 }
 
@@ -582,34 +628,54 @@ impl SessionLoopState {
 ///
 /// Announcing the resolved model is NOT this fn's job: the RPC handler
 /// owns `AgentWireEvent::SessionModel`.
+/// `provider` names either a `[[providers]]` entry or the reserved
+/// [`crate::config::MOA_PROVIDER_NAME`] group, in which case `model` is a
+/// `[[moa]]` entry name: the session then runs that entry's aggregator and
+/// its owner messages open a pass. Switching to any other provider clears
+/// the pass.
 pub(super) fn apply_set_session_model(
     config: &mut RigAgentConfig,
     table: &crate::config::ProvidersTable,
+    moa_table: &crate::config::MoaTable,
     provider: &str,
     model: &str,
 ) -> Result<(), String> {
-    let Some(entry) = table.entry(provider) else {
-        return Err(format!("Unknown provider `{provider}`."));
-    };
     if model.is_empty() {
         return Err("A model id is required.".to_string());
     }
+    if provider == crate::config::MOA_PROVIDER_NAME {
+        let Some(entry) = moa_table.entry(model) else {
+            return Err(format!("Unknown moa entry `{model}`."));
+        };
+        // An unavailable aggregator would answer from the deterministic
+        // fallback responder, which reads in the pane as the model's own
+        // answer. Refused instead, the way a key-less `[[providers]]` entry
+        // is not offered for selection.
+        if !entry.aggregator.api_key_present {
+            return Err(format!(
+                "moa entry `{model}` is unavailable: {}.",
+                crate::tools::moa::unavailable_reason(&entry.aggregator)
+            ));
+        }
+        if !crate::config::apply_moa_selection(config, table, entry) {
+            return Err(format!(
+                "moa entry `{model}` names no provider `{}`.",
+                entry.aggregator.provider
+            ));
+        }
+        return Ok(());
+    }
+    let Some(entry) = table.entry(provider) else {
+        return Err(format!("Unknown provider `{provider}`."));
+    };
     let resolved_model = entry
         .models
         .iter()
         .find(|(alias, _)| alias == model)
         .map(|(_, id)| id.clone())
         .unwrap_or_else(|| model.to_string());
-    config.kind = entry.kind;
-    config.api_key_env = entry.api_key_env.clone();
-    // Same env precedence the entry was built with: the kind's own
-    // base-URL variable wins over the file value.
-    config.base_url = crate::config::resolve_base_url(
-        std::env::var(entry.kind.base_url_env()).ok(),
-        entry.base_url.clone(),
-    );
-    config.api_key_present = std::env::var_os(&entry.api_key_env).is_some();
-    config.model = resolved_model;
+    crate::config::apply_provider_entry(config, entry, &resolved_model);
+    config.moa = None;
     Ok(())
 }
 
@@ -642,6 +708,90 @@ mod tests {
         }
     }
 
+    /// A member on `provider`, available or not. `openai` in [`table`] has
+    /// its key, `claude` does not.
+    fn moa_member(provider: &str, model: &str, api_key_present: bool) -> crate::config::MoaMember {
+        crate::config::MoaMember {
+            api_key_present,
+            api_key_env: format!("{}_API_KEY", provider.to_uppercase()),
+            ..crate::config::MoaMember::new(provider.to_string(), model.to_string())
+        }
+    }
+
+    /// `mix` aggregates on the available entry; `stranded` aggregates on the
+    /// key-less one.
+    fn moa_table() -> crate::config::MoaTable {
+        crate::config::MoaTable {
+            entries: vec![
+                crate::config::MoaEntry {
+                    name: "mix".to_string(),
+                    aggregator: moa_member("openai", "m-aggregate", true),
+                    proposers: vec![
+                        moa_member("openai", "m-fast", true),
+                        moa_member("claude", "m-opus", false),
+                    ],
+                },
+                crate::config::MoaEntry {
+                    name: "stranded".to_string(),
+                    aggregator: moa_member("claude", "m-opus", false),
+                    proposers: vec![moa_member("openai", "m-fast", true)],
+                },
+            ],
+        }
+    }
+
+    /// A MoA entry whose aggregator's key variable is unset is refused
+    /// rather than installed: a session on it would answer from the
+    /// deterministic fallback responder.
+    #[test]
+    fn selecting_a_moa_entry_with_an_unavailable_aggregator_is_refused() {
+        let mut config = RigAgentConfig::default();
+        let before = config.model.clone();
+        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "stranded")
+            .unwrap_err();
+        assert!(error.contains("unavailable"), "{error}");
+        assert!(error.contains("CLAUDE_API_KEY"), "{error}");
+        assert_eq!(config.model, before);
+        assert!(config.moa.is_none());
+    }
+
+    /// Selecting the `moa` group points the session at the entry's
+    /// aggregator and installs the pass; selecting an ordinary provider
+    /// afterwards clears it.
+    #[test]
+    fn selecting_a_moa_entry_installs_the_pass_and_switching_away_clears_it() {
+        let mut config = RigAgentConfig::default();
+
+        apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "mix").unwrap();
+        assert_eq!(config.model, "m-aggregate");
+        assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
+        assert_eq!(config.api_key_env, "OPENAI_API_KEY");
+        let pass = config.moa.clone().expect("the pass is installed");
+        assert_eq!(pass.name, "mix");
+        assert_eq!(
+            pass.proposers
+                .iter()
+                .map(|member| member.model.as_str())
+                .collect::<Vec<_>>(),
+            vec!["m-fast", "m-opus"]
+        );
+
+        apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "fast").unwrap();
+        assert_eq!(config.model, "m-fast");
+        assert!(config.moa.is_none());
+    }
+
+    #[test]
+    fn selecting_an_unknown_moa_entry_is_an_error_that_changes_nothing() {
+        let mut config = RigAgentConfig::default();
+        let before = config.model.clone();
+        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "typo")
+            .unwrap_err();
+        assert!(error.contains("Unknown moa entry `typo`"), "{error}");
+        assert_eq!(config.model, before);
+        assert!(config.moa.is_none());
+    }
+
     #[test]
     fn switch_resolves_the_alias_and_swaps_the_provider_bits() {
         // `role.model` (or the config default) is what the session was
@@ -653,7 +803,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_set_session_model(&mut config, &table(), "claude", "opus").unwrap();
+        apply_set_session_model(&mut config, &table(), &moa_table(), "claude", "opus").unwrap();
         assert_eq!(config.kind, ProviderKind::Anthropic);
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert_eq!(config.model, "m-opus");
@@ -676,7 +826,14 @@ mod tests {
     #[test]
     fn switch_passes_a_raw_model_id_through_like_role_model_does() {
         let mut config = RigAgentConfig::default();
-        apply_set_session_model(&mut config, &table(), "openai", "raw-model-id").unwrap();
+        apply_set_session_model(
+            &mut config,
+            &table(),
+            &moa_table(),
+            "openai",
+            "raw-model-id",
+        )
+        .unwrap();
         assert_eq!(config.model, "raw-model-id");
         assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(
@@ -707,14 +864,14 @@ mod tests {
         };
         state.config.model = "role-model".to_string();
 
-        state.handle_set_session_model("claude", "opus");
+        state.handle_set_session_model("claude", "opus").await;
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
         assert!(events_rx.try_recv().is_err(), "no error event on success");
 
         // An unresolvable switch leaves the config untouched and reports
         // the failure on the provider channel instead.
-        state.handle_set_session_model("typo", "m");
+        state.handle_set_session_model("typo", "m").await;
         assert_eq!(state.config.model, "m-opus");
         let received = events_rx.try_recv().unwrap();
         assert!(
@@ -723,12 +880,50 @@ mod tests {
         );
     }
 
+    /// A switch re-reads the window for the model the session now runs.
+    /// The `claude` entry is anthropic, which declares no window without
+    /// issuing a request, so the switch ends with clearing disabled — and
+    /// the frozen cleared set and the last measured input size, both of
+    /// which describe history the switch did not touch, survive it.
+    #[tokio::test]
+    async fn a_switch_rediscovers_the_window_and_keeps_the_frozen_clearing_state() {
+        let (events_tx, _events_rx) = crossbeam_channel::unbounded();
+        let mut state = SessionLoopState {
+            events_tx,
+            table: table(),
+            clearing: ClearingState::new(Some(500_000), 60),
+            ..Default::default()
+        };
+        state
+            .clearing
+            .seed_cleared(vec![crate::contract::ToolCallId("call-0".to_string())]);
+        state.clearing.record_input_tokens(400_000);
+
+        state.handle_set_session_model("claude", "opus").await;
+
+        assert_eq!(
+            state.clearing.effective_window_tokens(),
+            None,
+            "the previous model's window must not outlive the switch"
+        );
+        assert_eq!(state.clearing.latest_input_tokens(), 400_000);
+        assert!(
+            state
+                .clearing
+                .cleared()
+                .contains(&crate::contract::ToolCallId("call-0".to_string())),
+            "a frozen pass stays frozen across a switch"
+        );
+    }
+
     #[test]
     fn switch_rejects_an_unknown_provider_and_an_empty_model() {
         let mut config = RigAgentConfig::default();
-        let error = apply_set_session_model(&mut config, &table(), "typo", "m").unwrap_err();
+        let error =
+            apply_set_session_model(&mut config, &table(), &moa_table(), "typo", "m").unwrap_err();
         assert!(error.contains("Unknown provider `typo`"));
-        let error = apply_set_session_model(&mut config, &table(), "openai", "").unwrap_err();
+        let error =
+            apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "").unwrap_err();
         assert!(error.contains("A model id is required"));
         // A failed switch leaves the previous config untouched — the turn
         // in progress and the next one keep the old selection.

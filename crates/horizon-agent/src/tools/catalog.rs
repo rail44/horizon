@@ -382,7 +382,8 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 persisted history (including turns no longer in your context window). \
                 Case-insensitive substring match. Streaming deltas/reasoning are not included, \
                 only what was actually committed. Default scope is this session; pass \
-                scope: \"all\" to search every persisted session. Use recall.read to pull full \
+                scope: \"all\" to search every persisted session, or session_id to search one \
+                other session (the two cannot be combined). Use recall.read to pull full \
                 context around a hit. Hits carry outcome labels: a tool_result hit has \
                 is_error, and every hit has turn_outcome (how the turn it belongs to ended, if \
                 it has). Use turn_outcome to find how past work ended -- e.g. search with \
@@ -406,8 +407,15 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     "scope": {
                         "type": "string",
                         "enum": ["session", "all"],
-                        "description": "\"session\" (default) searches only this session's \
-                            history; \"all\" searches every persisted session.",
+                        "description": "\"session\" (default) searches only one session's \
+                            history -- this session, or the one named by session_id; \"all\" \
+                            searches every persisted session.",
+                    },
+                    "session_id": {
+                        "type": "string",
+                        "description": "Search this session id's history instead of your own \
+                            (e.g. a session you delegated work to). Cannot be combined with \
+                            scope: \"all\".",
                     },
                     "limit": {
                         "type": "integer",
