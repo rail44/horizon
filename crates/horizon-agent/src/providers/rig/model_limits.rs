@@ -17,13 +17,33 @@
 //! window means Tier 1 clearing **never fires**. There is no fallback
 //! window: an unknown window never clears history.
 //!
-//! One lookup per process per `(base_url, model)`, negative results cached
-//! too -- a provider that doesn't publish limits must not be re-asked once
-//! per session for the life of the daemon.
+//! The bearer token is read from the environment variable **named** by
+//! [`RigAgentConfig::api_key_env`], the same variable
+//! `providers::rig::completion` reads when it builds the turn's client.
+//! The config carries that name, never a value; an unset variable resolves
+//! to `None` like any other failure.
+//!
+//! Only [`ProviderKind::OpenAiCompatible`] entries are looked up: the
+//! `{base_url}/models` path, the bearer header, and the
+//! `context_length`/`max_output_length` fields are the openai-compatible
+//! listing's. [`ProviderKind::Anthropic`] returns `None` without a request
+//! -- rig's anthropic client authenticates with `x-api-key` plus
+//! `anthropic-version`, and an anthropic entry with no `base_url` resolves
+//! to [`DEFAULT_OPENAI_BASE_URL`] below, so a request here would carry that
+//! entry's key to another vendor's endpoint.
+//!
+//! One lookup per process per `(base_url, api_key_env, model)`, negative
+//! results cached too -- a provider that doesn't publish limits must not be
+//! re-asked once per session for the life of the daemon. The key variable's
+//! name is part of the cache key because two entries can share a base URL
+//! and a model while authenticating differently: one entry's `401` is not
+//! the other's answer.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
+
+use crate::config::{ProviderKind, RigAgentConfig};
 
 /// Bounds the whole `/models` lookup. Session start waits on this once per
 /// process, so it is short: an unresponsive endpoint costs a session a few
@@ -63,22 +83,37 @@ impl ModelLimits {
     }
 }
 
-/// Keyed by `(base_url, model)`; the value is the *answer*, so a `None`
-/// (this provider declares no limits) is cached exactly like a hit.
-type LimitsCache = Mutex<HashMap<(String, String), Option<ModelLimits>>>;
+/// Keyed by `(base_url, api_key_env, model)`; the value is the *answer*, so
+/// a `None` (this provider declares no limits) is cached exactly like a hit.
+type LimitsCache = Mutex<HashMap<(String, String, String), Option<ModelLimits>>>;
 
-/// Resolves this process's cached limits for `(base_url, model)`, fetching
-/// them on the first call and reusing the answer -- including a negative one
-/// -- for every later session.
-pub(super) async fn model_limits(base_url: Option<&str>, model: &str) -> Option<ModelLimits> {
-    let base = base_url.unwrap_or(DEFAULT_OPENAI_BASE_URL).to_string();
-    let key = (base.clone(), model.to_string());
+/// Resolves this process's cached limits for this session's provider entry,
+/// fetching them on the first call and reusing the answer -- including a
+/// negative one -- for every later session on the same
+/// `(base_url, api_key_env, model)`.
+pub(super) async fn model_limits(config: &RigAgentConfig) -> Option<ModelLimits> {
+    match config.kind {
+        ProviderKind::OpenAiCompatible => {}
+        // No OpenAI-shaped lookup for another wire's entry -- module doc.
+        ProviderKind::Anthropic => return None,
+    }
+
+    let base = config
+        .base_url
+        .as_deref()
+        .unwrap_or(DEFAULT_OPENAI_BASE_URL)
+        .to_string();
+    let key = (
+        base.clone(),
+        config.api_key_env.clone(),
+        config.model.clone(),
+    );
 
     if let Some(cached) = cache().lock().ok().and_then(|map| map.get(&key).copied()) {
         return cached;
     }
 
-    let fetched = fetch_model_limits(&base, model).await;
+    let fetched = fetch_model_limits(&base, &config.api_key_env, &config.model).await;
     if let Ok(mut map) = cache().lock() {
         map.insert(key, fetched);
     }
@@ -90,11 +125,11 @@ fn cache() -> &'static LimitsCache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// One plain authenticated GET. Every error path returns `None` -- see the
-/// module doc: a failed lookup disables clearing, it never degrades into a
-/// guessed window.
-async fn fetch_model_limits(base_url: &str, model: &str) -> Option<ModelLimits> {
-    let api_key = std::env::var(crate::config::OPENAI_API_KEY_VAR).ok()?;
+/// One plain authenticated GET, the bearer token read from the variable
+/// `api_key_env` names. Every error path returns `None`, an unset key
+/// variable included.
+async fn fetch_model_limits(base_url: &str, api_key_env: &str, model: &str) -> Option<ModelLimits> {
+    let api_key = std::env::var(api_key_env).ok()?;
     let client = reqwest::Client::builder()
         .timeout(MODELS_REQUEST_TIMEOUT)
         .build()
@@ -139,7 +174,228 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
     use super::*;
+
+    /// One recorded request: its first line and the `authorization` header
+    /// value, which is what the lookup's auth source is visible as.
+    type Recorded = (String, Option<String>);
+
+    /// A loopback `/models` endpoint. It answers [`synthetic_listing`] to a
+    /// request bearing `expected_key` and `401` to anything else -- the
+    /// shape a provider takes when handed another entry's key -- and records
+    /// every request it accepts.
+    struct ModelsMock {
+        base_url: String,
+        requests: Arc<Mutex<Vec<Recorded>>>,
+    }
+
+    impl ModelsMock {
+        async fn start(expected_key: &'static str) -> Self {
+            // The lookup builds its own client, so a proxy configured in the
+            // environment would intercept the loopback request and make the
+            // test depend on the machine it runs on.
+            for var in ["HTTP_PROXY", "http_proxy", "ALL_PROXY", "all_proxy"] {
+                std::env::remove_var(var);
+            }
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            let requests = Arc::new(Mutex::new(Vec::new()));
+            let recorder = Arc::clone(&requests);
+            tokio::spawn(async move {
+                while let Ok((mut socket, _)) = listener.accept().await {
+                    let head = read_request_head(&mut socket).await;
+                    // `lines` leaves CRLF's `\r` on every line.
+                    let mut lines = head.lines().map(str::trim_end);
+                    let request_line = lines.next().unwrap_or_default().to_string();
+                    let authorization = lines
+                        .find_map(|line| line.strip_prefix("authorization: "))
+                        .map(str::to_string);
+                    // The head is read lowercased, so is the expectation.
+                    let authorized =
+                        authorization.as_deref() == Some(&format!("bearer {expected_key}"));
+                    recorder.lock().unwrap().push((request_line, authorization));
+                    let body = if authorized {
+                        serde_json::to_vec(&synthetic_listing()).unwrap()
+                    } else {
+                        br#"{"error":"unauthorized"}"#.to_vec()
+                    };
+                    let status = if authorized {
+                        "200 OK"
+                    } else {
+                        "401 Unauthorized"
+                    };
+                    let response_head = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: \
+                         {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = socket.write_all(response_head.as_bytes()).await;
+                    let _ = socket.write_all(&body).await;
+                }
+            });
+            Self { base_url, requests }
+        }
+
+        fn recorded(&self) -> Vec<Recorded> {
+            self.requests.lock().unwrap().clone()
+        }
+    }
+
+    /// Reads a request up to the blank line, lowercased so header lookups
+    /// don't depend on the client's casing.
+    async fn read_request_head(socket: &mut tokio::net::TcpStream) -> String {
+        let mut buffer = Vec::new();
+        let mut chunk = [0u8; 1024];
+        while !buffer.windows(4).any(|window| window == b"\r\n\r\n") {
+            match socket.read(&mut chunk).await {
+                Ok(0) | Err(_) => break,
+                Ok(read) => buffer.extend_from_slice(&chunk[..read]),
+            }
+        }
+        String::from_utf8_lossy(&buffer).to_ascii_lowercase()
+    }
+
+    /// A session config on `base_url`, listing [`synthetic_listing`]'s
+    /// second model, whose key lives in `api_key_env`.
+    fn config_on(base_url: &str, api_key_env: &str) -> RigAgentConfig {
+        RigAgentConfig {
+            api_key_present: true,
+            api_key_env: api_key_env.to_string(),
+            model: "hf:moonshotai/Kimi-K2.7-Code".to_string(),
+            base_url: Some(base_url.to_string()),
+            ..RigAgentConfig::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_entrys_own_key_variable_authenticates_the_lookup() {
+        // OPENAI_API_KEY holds a key the mock rejects, so a lookup reading
+        // it instead of the entry's own variable comes back `None`.
+        std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "not-this-entrys-key");
+        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key");
+        let mock = ModelsMock::start("entry-key").await;
+
+        let limits = model_limits(&config_on(
+            &mock.base_url,
+            "HORIZON_TEST_MODEL_LIMITS_KEY_A",
+        ))
+        .await
+        .expect("the entry's own key authenticates the listing");
+
+        assert_eq!(limits.context_length, 262_144);
+        assert_eq!(
+            mock.recorded(),
+            vec![(
+                "get /models http/1.1".to_string(),
+                Some("bearer entry-key".to_string())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn entries_differing_only_by_key_variable_do_not_share_an_answer() {
+        // Same base URL and model, different key variables: the rejected
+        // entry's `None` must not become the other entry's cached answer.
+        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "stale-key");
+        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
+        let mock = ModelsMock::start("live-key").await;
+
+        assert_eq!(
+            model_limits(&config_on(
+                &mock.base_url,
+                "HORIZON_TEST_MODEL_LIMITS_KEY_A"
+            ))
+            .await,
+            None,
+            "the rejected key declares no limits"
+        );
+        let limits = model_limits(&config_on(
+            &mock.base_url,
+            "HORIZON_TEST_MODEL_LIMITS_KEY_B",
+        ))
+        .await
+        .expect("the second entry is asked with its own key, not served the first's None");
+
+        assert_eq!(limits.context_length, 262_144);
+        assert_eq!(
+            mock.recorded().len(),
+            2,
+            "both entries reached the provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_cached_answer_is_reused_for_the_same_entry() {
+        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key");
+        let mock = ModelsMock::start("entry-key").await;
+        let config = config_on(&mock.base_url, "HORIZON_TEST_MODEL_LIMITS_KEY_A");
+
+        let first = model_limits(&config)
+            .await
+            .expect("the entry's key authenticates the first lookup");
+        assert_eq!(model_limits(&config).await, Some(first));
+        assert_eq!(
+            mock.recorded().len(),
+            1,
+            "one lookup per process per (base_url, api_key_env, model)"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_default_single_provider_setup_still_reads_openai_api_key() {
+        assert_eq!(
+            RigAgentConfig::default().api_key_env,
+            crate::config::OPENAI_API_KEY_VAR
+        );
+        std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "default-key");
+        let mock = ModelsMock::start("default-key").await;
+
+        let limits = model_limits(&config_on(
+            &mock.base_url,
+            crate::config::OPENAI_API_KEY_VAR,
+        ))
+        .await
+        .expect("the default entry is discovered exactly as before");
+
+        assert_eq!(limits.context_length, 262_144);
+        assert_eq!(
+            mock.recorded(),
+            vec![(
+                "get /models http/1.1".to_string(),
+                Some("bearer default-key".to_string())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_anthropic_entry_is_never_asked_for_an_openai_listing() {
+        // The entry's key must not reach an OpenAI-shaped endpoint.
+        std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
+        let mock = ModelsMock::start("live-key").await;
+        let anthropic = RigAgentConfig {
+            kind: ProviderKind::Anthropic,
+            ..config_on(&mock.base_url, "HORIZON_TEST_MODEL_LIMITS_KEY_B")
+        };
+
+        assert_eq!(model_limits(&anthropic).await, None);
+        // An openai-compatible entry on the same endpoint proves the mock
+        // was reachable all along, and counts the requests it really got.
+        assert!(model_limits(&config_on(
+            &mock.base_url,
+            "HORIZON_TEST_MODEL_LIMITS_KEY_B"
+        ))
+        .await
+        .is_some());
+        assert_eq!(
+            mock.recorded().len(),
+            1,
+            "only the openai-compatible entry issued a request"
+        );
+    }
 
     fn synthetic_listing() -> serde_json::Value {
         serde_json::json!({

@@ -227,7 +227,7 @@ async fn discover_clearing_state(config: &RigAgentConfig) -> ClearingState {
     if !config.api_key_present {
         return ClearingState::disabled();
     }
-    let window = model_limits(config.base_url.as_deref(), &config.model)
+    let window = model_limits(config)
         .await
         .and_then(|limits| limits.effective_window_tokens(config.max_output_tokens));
     if window.is_none() {
