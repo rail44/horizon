@@ -121,7 +121,11 @@ preview pane is restored empty; an empty preview pane under the cursor
 takes the next `horizon preview`.
 
 The pane owns a `Surface`, a `PluginHost`, a status line (loading, loaded,
-or the load error), and a `notify` watcher on the artifact. Change events
+or the load error), and a `notify` watcher on the artifact's directory.
+Only events that can change the artifact's content count (create, remove,
+data or name modification): inotify also reports opens and closes of a
+file that is merely read, and a load reads the artifact, so reacting to
+access events would make every load schedule the next one. Change events
 are debounced by 300 ms because cargo unlinks and re-links the artifact.
 A reload drops the old host and loads the new one; a load that fails
 shows its error and keeps watching. The plugin gets no WASI grants beyond
@@ -195,6 +199,15 @@ style. It does not carry IME composition, clipboard, modifier-key state,
 file drops, or native prompts. Latin text entry works; CJK composition
 does not reach a guest. Upstream lists IME as open work in its `TODO.md`;
 the others are not mentioned there.
+
+A font crosses the boundary as family, weight, and italic only; a
+fallback chain does not. The host resolves an unknown family by trying
+`.SystemUIFont` and `Helvetica` and then falls back to font id 0, the
+first font the host text system resolved. A preview that sets no family
+lands there; when checked on a virtual display that was the shell's UI
+font, so the sample matched the chrome, but nothing guarantees the order.
+Glyphs missing from the primary font are left to the host text system's
+own fallback, not to the configured chain.
 
 `PluginInstance::new` in the fork starts its epoch-ticker thread before it
 compiles the component, and the thread is not stopped when compilation

@@ -13,6 +13,7 @@ use std::time::Duration;
 use futures::channel::mpsc::{self, UnboundedReceiver};
 use futures::{FutureExt as _, StreamExt as _};
 use gpui::{AsyncApp, Task};
+use notify::event::{EventKind, ModifyKind};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 
 /// How long the artifact must sit still before a reload starts.
@@ -29,6 +30,19 @@ pub(crate) fn watch_root(artifact: &Path) -> Option<&Path> {
 /// directory, and a cargo build touches many files in it.
 pub(crate) fn event_touches(event_paths: &[PathBuf], artifact: &Path) -> bool {
     event_paths.iter().any(|path| path == artifact)
+}
+
+/// Whether an event kind means the artifact's content may have changed.
+/// inotify also reports opens and closes of a file that is only read, and
+/// loading a plugin reads the artifact, so reacting to access events makes
+/// every load schedule the next one.
+pub(crate) fn event_changes_content(kind: &EventKind) -> bool {
+    match kind {
+        EventKind::Create(_) | EventKind::Remove(_) => true,
+        EventKind::Modify(ModifyKind::Metadata(_)) => false,
+        EventKind::Modify(_) => true,
+        EventKind::Access(_) | EventKind::Any | EventKind::Other => false,
+    }
 }
 
 /// A live watch. Dropping it stops the watcher and the debounce task.
@@ -53,7 +67,7 @@ pub(crate) fn watch(
         let Ok(event) = event else {
             return;
         };
-        if event_touches(&event.paths, &watched) {
+        if event_changes_content(&event.kind) && event_touches(&event.paths, &watched) {
             let _ = sender.unbounded_send(());
         }
     })

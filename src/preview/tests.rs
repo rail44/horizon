@@ -9,7 +9,7 @@ use horizon_workspace::PaneId;
 use crate::preview::host::theme_input_json;
 use crate::preview::pane::{preview_pane_for_path, status_line, PreviewTarget, Status};
 use crate::preview::registry;
-use crate::preview::watch::{event_touches, watch_root, RELOAD_DEBOUNCE};
+use crate::preview::watch::{event_changes_content, event_touches, watch_root, RELOAD_DEBOUNCE};
 
 // --- the watcher's pure decisions ---------------------------------------
 
@@ -37,6 +37,36 @@ fn only_events_naming_the_artifact_count() {
     ));
     assert!(!event_touches(&[sibling], &artifact));
     assert!(!event_touches(&[], &artifact));
+}
+
+#[test]
+fn reading_the_artifact_does_not_count_as_a_change() {
+    use notify::event::{
+        AccessKind, AccessMode, CreateKind, DataChange, EventKind, MetadataKind, ModifyKind,
+        RemoveKind, RenameMode,
+    };
+    // Loading a plugin opens and reads the artifact. If those access events
+    // scheduled a reload, every load would start the next one.
+    for kind in [
+        EventKind::Access(AccessKind::Open(AccessMode::Any)),
+        EventKind::Access(AccessKind::Close(AccessMode::Read)),
+        EventKind::Access(AccessKind::Close(AccessMode::Write)),
+        EventKind::Modify(ModifyKind::Metadata(MetadataKind::Any)),
+        EventKind::Any,
+        EventKind::Other,
+    ] {
+        assert!(!event_changes_content(&kind), "{kind:?}");
+    }
+    // What a cargo rebuild produces: the old file unlinked, the new one
+    // linked or written in its place.
+    for kind in [
+        EventKind::Remove(RemoveKind::File),
+        EventKind::Create(CreateKind::File),
+        EventKind::Modify(ModifyKind::Data(DataChange::Any)),
+        EventKind::Modify(ModifyKind::Name(RenameMode::To)),
+    ] {
+        assert!(event_changes_content(&kind), "{kind:?}");
+    }
 }
 
 #[test]
