@@ -14,8 +14,8 @@ use std::time::Duration;
 use embedded_gpui::surface::{KeyEvent, ViewApiCaller as _};
 use embedded_gpui::{PluginHost, PluginHostHandle as _, PluginOptions, Surface};
 use gpui::{
-    div, px, rgb, App, AppContext as _, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    Global, InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, ParentElement as _,
+    div, px, rgb, App, AppContext as _, Context, Entity, FocusHandle, Focusable, Global,
+    InteractiveElement as _, IntoElement, KeyDownEvent, KeyUpEvent, ParentElement as _,
     PlatformInput, PlatformTextSystem, Render, Styled as _, Task, Window,
 };
 use gpui_component::v_flex;
@@ -151,7 +151,10 @@ impl PreviewPane {
     }
 
     fn set_target(&mut self, path: PathBuf, cx: &mut Context<Self>) {
-        if self.path.as_deref() != Some(path.as_path()) {
+        // Also re-placed when there is no watch: the first attempt fails if
+        // the artifact's directory does not exist yet, and pointing the pane
+        // at the path again after a build is the retry.
+        if self._watch.is_none() || self.path.as_deref() != Some(path.as_path()) {
             let watcher = cx.entity().downgrade();
             self._watch = watch::watch(path.clone(), cx, move |cx| {
                 watcher.update(cx, |pane, cx| pane.reload(cx)).ok();
@@ -259,10 +262,6 @@ impl PreviewPane {
         }
     }
 }
-
-/// The pane emits nothing today; the impl exists so the shell can subscribe
-/// the same way it does to the other panes if a preview ever needs to.
-impl EventEmitter<()> for PreviewPane {}
 
 impl Focusable for PreviewPane {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {

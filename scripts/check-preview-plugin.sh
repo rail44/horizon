@@ -31,13 +31,17 @@ fi
 # gpui-component, embedded_gpui -- resolve to exactly the versions the shell
 # is built against. cargo extends a seeded lockfile in place; only
 # `cargo generate-lockfile` would discard it.
+locked="--locked"
 if [ ! -f "$plugin_dir/Cargo.lock" ]; then
   echo "preview-plugin: seeding Cargo.lock from the root lockfile"
   cp "$repo_root/Cargo.lock" "$plugin_dir/Cargo.lock"
+  # The seed is the root's resolution, not this crate's: cargo has to
+  # extend it on this first build.
+  locked=""
 fi
 
 echo "preview-plugin: cargo build --profile $profile --target $target"
-( cd "$plugin_dir" && nice -n 19 cargo build -j 4 --profile "$profile" --target "$target" )
+( cd "$plugin_dir" && nice -n 19 cargo build -j 4 $locked --profile "$profile" --target "$target" )
 
 if [ ! -f "$artifact" ]; then
   echo "preview-plugin: expected the component at $artifact" >&2
@@ -46,7 +50,7 @@ fi
 echo "preview-plugin: built $(stat -c %s "$artifact") bytes"
 
 echo "preview-plugin: running the end-to-end check"
-HORIZON_PREVIEW_WASM="$artifact" nice -n 19 cargo nextest run -j 4 \
+HORIZON_PREVIEW_WASM="$artifact" nice -n 19 cargo nextest run -j 4 --locked \
   -p horizon --lib --run-ignored ignored-only -E 'test(preview_plugin_)'
 
 echo "preview-plugin: ok"

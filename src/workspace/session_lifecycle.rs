@@ -1574,7 +1574,8 @@ impl WorkspaceShell {
     /// `horizon preview <path>`: show a preview plugin in a pane. A path
     /// that already has a pane reloads that pane rather than opening a
     /// second one, so re-running the command after a rebuild is the loop
-    /// an agent drives.
+    /// an agent drives; failing that, an empty preview pane under the
+    /// cursor takes the artifact. Only otherwise is a pane opened.
     pub(crate) fn control_plane_open_preview(
         &mut self,
         path: std::path::PathBuf,
@@ -1592,7 +1593,9 @@ impl WorkspaceShell {
             path: path.clone(),
             preview_name: preview_name.clone(),
         };
-        if let Some(pane_id) = preview_pane_for_path(&self.preview_targets, &path) {
+        let existing = preview_pane_for_path(&self.preview_targets, &path)
+            .or_else(|| self.empty_preview_pane_under_cursor());
+        if let Some(pane_id) = existing {
             self.preview_targets.insert(pane_id, target);
             if let Some(PaneView::Cached(CachedPaneLeaf::Preview(view))) =
                 self.panes.get(&pane_id).cloned()
@@ -1621,6 +1624,21 @@ impl WorkspaceShell {
         Ok(())
     }
 
+    /// A preview pane under the cursor that has no artifact -- a pane
+    /// restored from a previous run (`ViewKindState::Preview`). Without
+    /// this, the only way to fill one would be to close it and open another,
+    /// since the path lookup can never match a pane that has no path.
+    /// Scoped to the cursor pane: with several empty panes, which one a
+    /// command filled would otherwise depend on map order.
+    fn empty_preview_pane_under_cursor(&self) -> Option<PaneId> {
+        let pane_id = self.workspace.cursor_pane_id()?;
+        let is_preview = matches!(
+            self.workspace.pane_kind(pane_id),
+            Some(PaneKind::View(ViewKind::Preview))
+        );
+        (is_preview && !self.preview_targets.contains_key(&pane_id)).then_some(pane_id)
+    }
+
     fn activate_preview_pane(
         &mut self,
         pane_id: PaneId,
@@ -1647,8 +1665,11 @@ impl WorkspaceShell {
     }
 }
 
-/// The preview name `horizon preview` uses when `--name` is omitted.
-const DEFAULT_PREVIEW_NAME: &str = "sample";
+/// The preview `horizon preview` selects when `--name` is omitted: the name
+/// of the preview this repository seeds. A plugin whose previews are named
+/// differently needs `--name`, and the pane's status line lists the names it
+/// does carry.
+const DEFAULT_PREVIEW_NAME: &str = crate::preview::sample::NAME;
 
 #[cfg(test)]
 mod tests {

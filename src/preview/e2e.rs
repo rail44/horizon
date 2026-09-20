@@ -415,6 +415,7 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
         painted(&before, &first_accent),
         "the guest did not resolve the host's accent: expected {first_accent:?} in {before:?}"
     );
+
     // --- a theme change from the host changes what the guest paints -------
     let second_theme = theme_with_accent("#cc7700");
     let second_accent = expected_accent_text(&second_theme);

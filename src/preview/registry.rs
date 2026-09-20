@@ -33,9 +33,9 @@ pub fn preview(name: &str) -> Option<&'static Preview> {
     PREVIEWS.iter().find(|preview| preview.name == name)
 }
 
-/// What the guest actually mounts on a surface: the selected preview's view
-/// on the theme's own background, so a preview fills the pane rather than
-/// painting over whatever the host drew there.
+/// What the guest mounts on a surface: the selected preview's view filling
+/// the pane, on the theme's own background and text color, so a preview that
+/// styles only its own widgets still reads as part of the shell.
 pub struct PreviewRoot {
     child: AnyView,
 }

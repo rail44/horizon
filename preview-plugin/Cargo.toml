@@ -20,12 +20,12 @@ crate-type = ["cdylib"]
 embedded_gpui = { git = "https://github.com/rail44/embedded_gpui", rev = "73858e5530433049b043f19676beea398a6b22d3" }
 horizon = { path = ".." }
 
-# The build profile for the edit-to-visible loop: optimized enough that
-# wasmtime's compile of the component is quick (compiling it dominates the
-# time from load to the first frame, and that tracks module size), without
-# LTO's link cost on every rebuild. A debug component is ~370 MiB and takes
-# seconds to compile in the host; an LTO release one rebuilds in ~50 s.
-# `scripts/check-preview-plugin.sh` builds with `--profile quick`.
+# The build profile for the edit-to-visible loop. The time from load to the
+# first frame is almost entirely wasmtime compiling the component, and that
+# tracks module size, so a debug component is the slow one to load; LTO
+# shrinks it further but pays its link cost on every rebuild. This profile
+# is the middle: optimized, no LTO. `scripts/check-preview-plugin.sh` builds
+# with `--profile quick`.
 [profile.quick]
 inherits = "release"
 lto = false
