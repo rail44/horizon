@@ -199,6 +199,7 @@ font_size = 13.0
 # back-board-list, add-board-task, post-board-message, move-board-task-up,
 # move-board-task-down, reorder-board-task, save-board-state,
 # toggle-board-closed, add-board-dependency, remove-board-dependency,
+# reload-preview (reload the active preview pane's plugin from disk),
 # increase-font-size / decrease-font-size / reset-font-size (move the live
 # terminal font size; already bound by default to the platform-standard zoom
 # chords -- cmd+= / cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on

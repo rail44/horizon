@@ -23,6 +23,20 @@ impl Workspace {
             .map(|pane| pane.kind)
     }
 
+    /// Where `pane_id` sits, as the `(tab index, pane index)` pair
+    /// [`Workspace::activate_pane_index`] takes -- how a caller holding
+    /// only a `PaneId` activates a pane in a tab that is not the active
+    /// one, which `Workspace::activate_pane` refuses.
+    pub fn pane_position(&self, pane_id: PaneId) -> Option<(usize, usize)> {
+        self.tabs.iter().enumerate().find_map(|(tab_index, tab)| {
+            tab.root
+                .pane_ids()
+                .iter()
+                .position(|id| *id == pane_id)
+                .map(|pane_index| (tab_index, pane_index))
+        })
+    }
+
     pub fn terminal_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
         self.panes
             .iter()

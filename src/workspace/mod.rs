@@ -45,6 +45,7 @@ use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
 use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
+use crate::preview::{PreviewPane, PreviewTarget};
 use crate::runtime::{AgentdHandle, TerminaldHandle, TerminaldSlot};
 use crate::session_manager::SessionManagerDelegate;
 use crate::terminal::{TerminalSession, TerminalView};
@@ -214,6 +215,7 @@ enum CachedPaneLeaf {
     Terminal(Entity<TerminalView>),
     ThemeSettings(Entity<ThemeSettingsView>),
     Board(Entity<BoardPaneView>),
+    Preview(Entity<PreviewPane>),
 }
 
 /// A pane that owns narrower cache boundaries internally. Composite panes must
@@ -230,6 +232,7 @@ impl CachedPaneLeaf {
             Self::Terminal(view) => view.focus_handle(cx),
             Self::ThemeSettings(view) => view.focus_handle(cx),
             Self::Board(view) => view.focus_handle(cx),
+            Self::Preview(view) => view.focus_handle(cx),
         }
     }
 
@@ -239,6 +242,7 @@ impl CachedPaneLeaf {
             Self::Terminal(view) => view.clone().cached(style()).into_any_element(),
             Self::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
             Self::Board(view) => view.clone().cached(style()).into_any_element(),
+            Self::Preview(view) => view.clone().cached(style()).into_any_element(),
         }
     }
 }
@@ -272,6 +276,10 @@ impl PaneView {
 
     fn board(view: Entity<BoardPaneView>) -> Self {
         Self::Cached(CachedPaneLeaf::Board(view))
+    }
+
+    fn preview(view: Entity<PreviewPane>) -> Self {
+        Self::Cached(CachedPaneLeaf::Preview(view))
     }
 
     fn focus_handle(&self, cx: &App) -> FocusHandle {
@@ -341,6 +349,12 @@ pub(crate) struct WorkspaceShell {
     // daemon it targets.
     reload_in_progress: bool,
     panes: HashMap<PaneId, PaneView>,
+    // What each `ViewKind::Preview` pane shows: the `.wasm` artifact and
+    // the name of the preview inside it. Keyed by pane id and kept out of
+    // the workspace model on purpose -- `ViewKind` stays `Copy` and the
+    // persisted schema stays a bare tag, so a restored preview pane comes
+    // back empty (see `ViewKindState::Preview`).
+    preview_targets: HashMap<PaneId, PreviewTarget>,
     // This window — needed by `Reload Agent Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
     // continuation (no `&mut Window` of its own to reuse).
@@ -429,6 +443,7 @@ impl WorkspaceShell {
             terminald_slot: TerminaldSlot::new(Some(terminald.clone())),
             reload_in_progress: false,
             panes: HashMap::new(),
+            preview_targets: HashMap::new(),
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
             palette: None,

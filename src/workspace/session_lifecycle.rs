@@ -16,12 +16,15 @@ use std::collections::{HashMap, HashSet};
 use gpui::*;
 use horizon_terminal_core::{TerminalSize, TerminalSpawnSpec, DEFAULT_SCROLLBACK_LINES};
 use horizon_workspace::types::SessionKind;
-use horizon_workspace::{PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind, Workspace};
+use horizon_workspace::{
+    PaneId, PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind, Workspace,
+};
 use uuid::Uuid;
 
 use super::{ensure_workspace_has_pane, CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
+use crate::preview::{preview_pane_for_path, PreviewPane, PreviewTarget};
 use crate::runtime::{
     wait_for_drain, AgentSessionHandle, AgentdHandle, AgentdResponder, TerminaldHandle,
 };
@@ -378,6 +381,7 @@ impl WorkspaceShell {
 
         let pane_ids = self.workspace.all_pane_ids();
         self.panes.retain(|id, _| pane_ids.contains(id));
+        self.preview_targets.retain(|id, _| pane_ids.contains(id));
         for pane_id in pane_ids {
             if self.panes.contains_key(&pane_id) {
                 continue;
@@ -442,6 +446,23 @@ impl WorkspaceShell {
                 });
                 self.watch_board_pane(view.clone(), cx);
                 self.panes.insert(pane_id, PaneView::board(view));
+            } else if matches!(
+                self.workspace.pane_kind(pane_id),
+                Some(PaneKind::View(ViewKind::Preview))
+            ) {
+                // A pane with no target (a restored one, see
+                // `ViewKindState::Preview`) still gets a view: it reports
+                // that nothing is loaded and reloads once `horizon preview`
+                // points it at an artifact.
+                let target = self.preview_targets.get(&pane_id).cloned();
+                let view = cx.new(|cx| {
+                    PreviewPane::new(
+                        target.as_ref().map(|target| target.path.clone()),
+                        target.map(|target| target.preview_name).unwrap_or_default(),
+                        cx,
+                    )
+                });
+                self.panes.insert(pane_id, PaneView::preview(view));
             }
         }
         self.sync_board_session_states(cx);
@@ -1549,7 +1570,85 @@ impl WorkspaceShell {
         }
         Ok(session_id.as_uuid().to_string())
     }
+
+    /// `horizon preview <path>`: show a preview plugin in a pane. A path
+    /// that already has a pane reloads that pane rather than opening a
+    /// second one, so re-running the command after a rebuild is the loop
+    /// an agent drives.
+    pub(crate) fn control_plane_open_preview(
+        &mut self,
+        path: std::path::PathBuf,
+        preview_name: Option<String>,
+        split: Option<(SessionId, SplitAxis)>,
+        activate: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<(), String> {
+        if self.restoring_workspace {
+            return Err("workspace restore is still in progress".to_string());
+        }
+        let preview_name = preview_name.unwrap_or_else(|| DEFAULT_PREVIEW_NAME.to_string());
+        let target = PreviewTarget {
+            path: path.clone(),
+            preview_name: preview_name.clone(),
+        };
+        if let Some(pane_id) = preview_pane_for_path(&self.preview_targets, &path) {
+            self.preview_targets.insert(pane_id, target);
+            if let Some(PaneView::Cached(CachedPaneLeaf::Preview(view))) =
+                self.panes.get(&pane_id).cloned()
+            {
+                view.update(cx, |pane, cx| pane.retarget(path, preview_name, cx));
+            }
+            if activate {
+                self.activate_preview_pane(pane_id, window, cx);
+            }
+            return Ok(());
+        }
+        let pane_id = match split {
+            Some((target_session, axis)) => self
+                .workspace
+                .split_session_with_view(target_session, ViewKind::Preview, axis, activate)
+                .ok_or_else(|| "unknown split target session".to_string())?,
+            None => self
+                .workspace
+                .open_tab_with_view_activated(ViewKind::Preview, activate),
+        };
+        self.preview_targets.insert(pane_id, target);
+        self.reconcile(window, cx);
+        if activate {
+            self.focus_active(window, cx);
+        }
+        Ok(())
+    }
+
+    fn activate_preview_pane(
+        &mut self,
+        pane_id: PaneId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some((tab_index, pane_index)) = self.workspace.pane_position(pane_id) {
+            self.workspace.activate_pane_index(tab_index, pane_index);
+            self.focus_active(window, cx);
+        }
+    }
+
+    /// `CommandId::ReloadPreview`: reload the active pane's plugin, if the
+    /// active pane is a preview pane.
+    pub(super) fn reload_active_preview(&mut self, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.workspace.cursor_pane_id() else {
+            return;
+        };
+        if let Some(PaneView::Cached(CachedPaneLeaf::Preview(view))) =
+            self.panes.get(&pane_id).cloned()
+        {
+            view.update(cx, |pane, cx| pane.reload(cx));
+        }
+    }
 }
+
+/// The preview name `horizon preview` uses when `--name` is omitted.
+const DEFAULT_PREVIEW_NAME: &str = "sample";
 
 #[cfg(test)]
 mod tests {

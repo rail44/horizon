@@ -89,6 +89,11 @@ mod accessors;
 #[cfg(not(target_family = "wasm"))]
 mod ansi;
 mod gpui_component;
+// Applying a scheme to the running shell (`Reload Config`, the theme
+// settings pane): touches gpui-component's global theme and the preview
+// panes, neither of which a guest has.
+#[cfg(not(target_family = "wasm"))]
+pub mod live;
 mod oklab;
 mod palette;
 mod scheme;

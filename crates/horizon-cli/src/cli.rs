@@ -12,7 +12,7 @@
 //! `docs/cli-control-plane-design.md`.
 
 use std::fmt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Flags meaningful across every subcommand.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +62,17 @@ pub enum Subcommand {
         split: Option<SplitFlag>,
         activate: bool,
         share: bool,
+    },
+    /// Shows a `wasm32-wasip2` preview plugin in a pane, or reloads the
+    /// pane that already shows that artifact. `name` selects one of the
+    /// previews inside the plugin; `None` leaves the choice to the server's
+    /// default. `path` is made absolute by [`crate::run`] before it goes on
+    /// the wire, since the shell's cwd is not the caller's.
+    Preview {
+        path: PathBuf,
+        name: Option<String>,
+        split: Option<SplitFlag>,
+        activate: bool,
     },
     Attach {
         session_id: String,
@@ -139,6 +150,7 @@ Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active] [--share]\n  \
   new-config-agent (alias for new-agent --role config)\n  \
+  preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
@@ -174,6 +186,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
     let mut yes = false;
     let mut prompt: Option<String> = None;
     let mut role: Option<String> = None;
+    let mut preview_name: Option<String> = None;
     let mut split: Option<SplitFlag> = None;
     let mut active = false;
     let mut share = false;
@@ -211,6 +224,13 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             prompt = Some(value.clone());
         } else if let Some(value) = arg.strip_prefix("--prompt=") {
             prompt = Some(value.to_string());
+        } else if arg == "--name" {
+            let value = iter
+                .next()
+                .ok_or_else(|| UsageError("--name requires a value".to_string()))?;
+            preview_name = Some(value.clone());
+        } else if let Some(value) = arg.strip_prefix("--name=") {
+            preview_name = Some(value.to_string());
         } else if arg == "--role" {
             let value = iter
                 .next()
@@ -270,6 +290,16 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 split: split.take(),
                 activate: std::mem::take(&mut active),
                 share: std::mem::take(&mut share),
+            }
+        }
+        "preview" => {
+            let path = next_required(&mut positionals, "preview", "path-to-wasm")?;
+            reject_extra(&mut positionals, "preview")?;
+            Subcommand::Preview {
+                path: PathBuf::from(path),
+                name: preview_name.take(),
+                split: split.take(),
+                activate: std::mem::take(&mut active),
             }
         }
         "attach" => {
@@ -361,14 +391,18 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             "--role is only valid with new-agent/new-config-agent".to_string(),
         ));
     }
+    if preview_name.is_some() {
+        return Err(UsageError("--name is only valid with preview".to_string()));
+    }
     if split.is_some() {
         return Err(UsageError(
-            "--split is only valid with new-terminal/new-agent/new-config-agent".to_string(),
+            "--split is only valid with new-terminal/new-agent/new-config-agent/preview"
+                .to_string(),
         ));
     }
     if active {
         return Err(UsageError(
-            "--active is only valid with new-terminal/new-agent/new-config-agent/attach"
+            "--active is only valid with new-terminal/new-agent/new-config-agent/preview/attach"
                 .to_string(),
         ));
     }
@@ -398,6 +432,19 @@ fn reject_extra(
             "{subcommand} does not take extra argument: {extra}"
         ))),
         None => Ok(()),
+    }
+}
+
+/// Makes `path` absolute against `cwd`. The CLI runs in the caller's
+/// working directory and the shell in its own, so a relative
+/// `horizon preview target/.../x.wasm` has to be resolved before it goes on
+/// the wire. Purely lexical -- no filesystem access, so a path that does not
+/// exist yet still resolves and the pane reports the load failure.
+pub fn absolute_path(path: &Path, cwd: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
     }
 }
 
@@ -434,9 +481,9 @@ pub fn resolved_split_for(
     env_session_id: Option<String>,
 ) -> Result<Option<String>, String> {
     match subcommand {
-        Subcommand::NewTerminal { split, .. } | Subcommand::NewAgent { split, .. } => {
-            resolve_split(split.clone(), env_session_id)
-        }
+        Subcommand::NewTerminal { split, .. }
+        | Subcommand::NewAgent { split, .. }
+        | Subcommand::Preview { split, .. } => resolve_split(split.clone(), env_session_id),
         _ => Ok(None),
     }
 }
@@ -486,6 +533,87 @@ mod tests {
                 json: false,
                 yes: false
             }
+        );
+    }
+
+    #[test]
+    fn parses_preview_with_only_a_path() {
+        let parsed = parse(&args(&["preview", "target/p.wasm"])).unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::Preview {
+                path: PathBuf::from("target/p.wasm"),
+                name: None,
+                split: None,
+                activate: false,
+            }
+        );
+    }
+
+    #[test]
+    fn preview_takes_a_name_a_split_target_and_active() {
+        let parsed = parse(&args(&[
+            "preview",
+            "/tmp/p.wasm",
+            "--name",
+            "sample",
+            "--split",
+            "abc",
+            "--active",
+        ]))
+        .unwrap();
+        assert_eq!(
+            parsed.subcommand,
+            Subcommand::Preview {
+                path: PathBuf::from("/tmp/p.wasm"),
+                name: Some("sample".to_string()),
+                split: Some(SplitFlag::Explicit("abc".to_string())),
+                activate: true,
+            }
+        );
+    }
+
+    #[test]
+    fn a_bare_split_on_preview_means_here() {
+        let parsed = parse(&args(&["preview", "/tmp/p.wasm", "--split"])).unwrap();
+        let Subcommand::Preview { split, .. } = parsed.subcommand else {
+            panic!("expected preview");
+        };
+        assert_eq!(split, Some(SplitFlag::Here));
+    }
+
+    #[test]
+    fn previews_split_resolves_against_the_pane_session_like_the_others() {
+        let parsed = parse(&args(&["preview", "/tmp/p.wasm", "--split"])).unwrap();
+        assert_eq!(
+            resolved_split_for(&parsed.subcommand, Some("pane-session".to_string())),
+            Ok(Some("pane-session".to_string()))
+        );
+    }
+
+    #[test]
+    fn preview_requires_a_path() {
+        assert!(parse(&args(&["preview"])).is_err());
+    }
+
+    #[test]
+    fn name_is_rejected_on_every_other_subcommand() {
+        let err = parse(&args(&["new-terminal", "--name", "sample"])).unwrap_err();
+        assert!(
+            err.0.contains("--name is only valid with preview"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_relative_preview_path_is_resolved_against_the_callers_directory() {
+        assert_eq!(
+            absolute_path(Path::new("target/p.wasm"), Path::new("/work/repo")),
+            PathBuf::from("/work/repo/target/p.wasm")
+        );
+        assert_eq!(
+            absolute_path(Path::new("/tmp/p.wasm"), Path::new("/work/repo")),
+            PathBuf::from("/tmp/p.wasm")
         );
     }
 

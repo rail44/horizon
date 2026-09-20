@@ -24,6 +24,12 @@ pub enum SessionKind {
 pub enum ViewKind {
     ThemeSettings,
     Board,
+    /// A gpui view compiled into a wasm plugin, drawn through
+    /// `embedded_gpui` (`src/preview/`). Which artifact and which named
+    /// preview a pane shows is shell-side state keyed by pane id, not part
+    /// of this kind: the kind stays `Copy` and the persisted schema stays a
+    /// bare tag.
+    Preview,
 }
 
 impl ViewKind {
@@ -31,6 +37,7 @@ impl ViewKind {
         match self {
             Self::ThemeSettings => "Theme Settings",
             Self::Board => "Board",
+            Self::Preview => "Preview",
         }
     }
 }

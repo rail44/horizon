@@ -7,6 +7,7 @@
 
 use std::io::{self, IsTerminal as _};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use gpui::*;
 use gpui_component::{Root, TitleBar};
@@ -73,8 +74,16 @@ impl log::Log for StderrLogger {
 /// Builds the application with GPUI's maintained native backend for the
 /// current OS. The backend owns its event loop, renderer, IME integration,
 /// and frame scheduling as one unit.
-fn build_application() -> Application {
-    gpui_platform::application()
+///
+/// The platform is constructed here rather than through
+/// `gpui_platform::application()` so its text system can be taken out and
+/// handed to preview plugins (`preview::PreviewTextSystem`): gpui exposes
+/// the platform text system on the `Platform` object only, and `App` keeps
+/// it behind `TextSystem` with no accessor.
+fn build_application() -> (Application, Arc<dyn PlatformTextSystem>) {
+    let platform = gpui_platform::current_platform(false);
+    let text_system = platform.text_system();
+    (Application::with_platform(platform), text_system)
 }
 
 fn run_gui() {
@@ -84,7 +93,7 @@ fn run_gui() {
     let _ = log::set_boxed_logger(Box::new(StderrLogger));
     log::set_max_level(log::LevelFilter::Info);
 
-    let application = build_application();
+    let (application, text_system) = build_application();
     // `.with_assets` registers the bundled SVGs (the `gpui-kit-assets` crate,
     // formerly gpui-component-assets), including the client-side titlebar's
     // window-control glyphs.
@@ -93,6 +102,7 @@ fn run_gui() {
         .run(move |cx| {
             gpui_component::init(cx);
             theme::apply_gpui_component_theme(cx);
+            cx.set_global(crate::preview::PreviewTextSystem(text_system));
             workspace::init(cx);
             // macOS treats a process with no main menu as owning no menu bar,
             // so the previous app's menu (and name) would linger even with

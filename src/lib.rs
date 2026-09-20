@@ -4,7 +4,8 @@
 //!
 //! The shell is a library so that code built for another target can import
 //! from it: a preview-pane plugin view compiles to `wasm32-wasip2` and
-//! links this crate for its colors ([`theme`]). Modules that reach the
+//! links this crate for its colors ([`theme`]) and for the previews and
+//! host/guest vocabulary in [`preview`]. Modules that reach the
 //! host — daemon clients over Unix sockets, PTY-backed views, the
 //! control-plane listener, the native gpui platform backend — cannot build
 //! for that target and are gated at their declaration here rather than
@@ -31,6 +32,7 @@ mod keymap;
 mod model_picker;
 #[cfg(not(target_family = "wasm"))]
 mod palette;
+pub mod preview;
 #[cfg(not(target_family = "wasm"))]
 mod runtime;
 #[cfg(not(target_family = "wasm"))]

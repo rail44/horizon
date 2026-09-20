@@ -244,8 +244,10 @@ impl ThemeSettingsView {
 
     /// Derives and applies the whole scheme from the current in-memory
     /// [`Seed`] -- the same live-apply sequence `Reload Config` uses
-    /// (`src/workspace.rs`'s `CommandId::ReloadConfig`): swap the resolved
-    /// scheme, re-project it onto gpui-component's global theme, refresh
+    /// (`src/workspace.rs`'s `CommandId::ReloadConfig`): `theme::live::
+    /// apply_scheme` (swap the resolved scheme, re-project it onto
+    /// gpui-component's global theme, republish it to loaded preview
+    /// plugins), refresh
     /// the window so every already-painted pane (terminal ANSI, chrome)
     /// picks it up immediately, then re-push the resolved terminal scheme
     /// to every running terminal session so a subsequent OSC 10/11/12
@@ -257,8 +259,7 @@ impl ThemeSettingsView {
     fn apply_live(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.dirty = true;
         self.status = None;
-        theme::reload_from(&self.seed.to_raw_config());
-        theme::apply_gpui_component_theme(cx);
+        theme::live::apply_scheme(&self.seed.to_raw_config(), cx);
         window.refresh();
         if let Some(terminald) = self.terminald.get() {
             terminald.broadcast_terminal_color_scheme(theme::terminal_color_scheme());

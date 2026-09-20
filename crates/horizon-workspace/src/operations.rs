@@ -85,6 +85,18 @@ impl Workspace {
         session_id
     }
 
+    /// [`Self::open_tab_with_new_session_activated`] for a session-less
+    /// view: same `activate` semantics, but there is no session id to
+    /// return, so this returns the new pane's id.
+    pub fn open_tab_with_view_activated(&mut self, kind: ViewKind, activate: bool) -> PaneId {
+        let previous_active_tab = self.active_tab;
+        let pane_id = self.open_tab(PaneKind::View(kind), None);
+        if !activate {
+            self.active_tab = previous_active_tab;
+        }
+        pane_id
+    }
+
     /// Test-only now: its last production caller was
     /// `split_active_with_new_session` (also `#[cfg(test)]` now -- see its
     /// doc comment), retired by `docs/roadmap.md`'s "Placement-first session
@@ -230,6 +242,38 @@ impl Workspace {
     /// nothing else able to move focus meanwhile.
     pub fn split_active_tab_with_view(&mut self, kind: ViewKind, axis: SplitAxis) -> PaneId {
         self.split_tab(self.active_tab, PaneKind::View(kind), None, true, axis)
+    }
+
+    /// [`Self::split_session_with_new_session`] for a session-less view: the
+    /// control plane's `--split <session-id>` placement for a pane that has
+    /// no session of its own to return, so this returns the new pane's id
+    /// instead. `None`, spawning nothing, when `target_session_id` is not
+    /// referenced by any pane.
+    pub fn split_session_with_view(
+        &mut self,
+        target_session_id: SessionId,
+        kind: ViewKind,
+        axis: SplitAxis,
+        activate: bool,
+    ) -> Option<PaneId> {
+        let target_pane_id = self
+            .panes
+            .iter()
+            .find(|pane| pane.session_id == Some(target_session_id))
+            .map(|pane| pane.id)?;
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|tab| tab.root.pane_ids().contains(&target_pane_id))
+            .map(|tab| tab.id)?;
+        Some(self.split_pane_in_tab(
+            tab_id,
+            Some(target_pane_id),
+            PaneKind::View(kind),
+            None,
+            activate,
+            axis,
+        ))
     }
 
     /// Attaches a detached `session_id` as a split in the active tab,
