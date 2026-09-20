@@ -7,10 +7,10 @@
 //! 1.4) showed them near-universal even among thin prompts — short
 //! communication and verification norms. The environment block is the only
 //! part that varies per session. The norms are deliberately model-agnostic
-//! (owner decision, 2026-07-07: Horizon expects to switch models, so
-//! provider-specific prompt lore is out of scope).
+//! (Horizon expects to switch models, so provider-specific prompt lore is
+//! out of scope).
 //!
-//! **Workflow prescriptions (owner decision, 2026-07-27).** This doc used
+//! **Workflow prescriptions.** This doc used
 //! to say "no step-by-step workflow prescriptions — over-prescription
 //! measurably harms newer models", model-agnostically (2026-07-07). That is
 //! now narrowed: a workflow prescription is permitted once it has been
@@ -135,7 +135,7 @@ fn is_git_repository(cwd: &Path) -> bool {
 ///    response. The same amendment appended a closing sentence prescribing
 ///    *continued* delegation of narrow follow-up questions during
 ///    implementation, explicitly marked to-be-measured. **Removed
-///    2026-07-29 (owner decision) after two runs measured it inert**: both
+///    2026-07-29 after two runs measured it inert**: both
 ///    session aa95e066 (M3, zero task launches across rounds 73-426) and
 ///    session 7b75d486 (GLM-5.2, zero mid-implementation launches, 91% of
 ///    post-report reads landing on files a child had already covered)

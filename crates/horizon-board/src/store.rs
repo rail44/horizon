@@ -5,7 +5,7 @@
 //! moved to `horizon-logd` in the logd v1 split (`docs/logd-design.md`). The
 //! library's write methods are now thin socket clients: connect-or-spawn logd,
 //! `hello`, send one `ingest` rtc call, return the result. The direct flock
-//! append path is gone (owner decision — no fallback). Reads stay file folds
+//! append path is gone (no fallback). Reads stay file folds
 //! with a shared lock: JSONL is world-readable, a single writer (logd) plus
 //! atomic appends make direct reads safe, and boards have no projection.
 

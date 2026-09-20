@@ -2297,7 +2297,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     fs::remove_dir_all(fixture_root).unwrap();
 }
 
-/// Owner decision 2026-08-17 (board #38): the GitOperation extended grant
+/// Board #38: the GitOperation extended grant
 /// excludes `hooks` and `config` from writing. This end-to-end test verifies
 /// that a compound command containing writes to both `.git/config` and
 /// `.git/hooks/` — which now reaches the judge after the prefilter reduction —
@@ -2827,7 +2827,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     unregister_session_runtime(session_id);
 }
 
-/// Backlog 55's fix (owner decision 2026-07-28), end to end on the
+/// Backlog 55's fix, end to end on the
 /// *approve* branch: the parked first-attempt outcome is discarded (the
 /// retry recomputes it), so the abandoned occurrence is closed with a
 /// terminal "superseded by retry" result instead of never receiving one.

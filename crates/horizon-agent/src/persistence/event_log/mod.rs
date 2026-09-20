@@ -98,8 +98,8 @@ enum DecodedLine {
     Record(Record),
     /// The envelope (schema, `sequence`, session, ...) is intact but
     /// `event` this build can't decode -- this project carries no
-    /// cross-build event-payload compatibility (owner decision
-    /// 2026-08-03), so the line contributes no event, but its `sequence`
+    /// cross-build event-payload compatibility, so the line contributes no
+    /// event, but its `sequence`
     /// still needs to be accounted for: see [`read`]'s `skipped_event_count`
     /// bookkeeping and the rewind/duplication hazard it guards against.
     SkippedEvent {

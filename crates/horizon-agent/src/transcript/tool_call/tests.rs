@@ -582,7 +582,7 @@ fn a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it() {
 }
 
 /// The same denial-retry shape, taken down the *approve* branch --
-/// backlog 55's fix (owner decision 2026-07-28). The parked outcome is
+/// backlog 55's fix. The parked outcome is
 /// discarded there (the retry recomputes it), so
 /// `tools::approval::superseded_by_retry_result` closes the abandoned
 /// occurrence with a terminal marker instead, and the retry's own

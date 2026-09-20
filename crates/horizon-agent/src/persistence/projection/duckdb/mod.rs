@@ -120,8 +120,8 @@ impl Store {
     /// the same treatment, rather than writing an in-place `ALTER TABLE`
     /// migration.
     ///
-    /// This project carries no on-disk schema compatibility by default
-    /// (owner decision 2026-08-03): the shape checks this function used to
+    /// This project carries no on-disk schema compatibility by default:
+    /// the shape checks this function used to
     /// run for the pre-`event_at`/pre-label/pre-`occurrence_id` DuckDB
     /// projections were retired with the rest of the compat sweep, since a
     /// stale `.duckdb` file is expected to be rotated rather than migrated

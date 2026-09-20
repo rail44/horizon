@@ -123,7 +123,7 @@ pub enum FilesystemGrantScope {
 /// capability sufficiency, so a ReadWrite grant on `.git/` can exclude
 /// `.git/hooks/` and `.git/config/` — the host-escalation vectors a deceived
 /// judge could otherwise enable. On macOS (no seccomp supervisor) the field
-/// is advisory. Owner decision 2026-08-17, board #38; see
+/// is advisory. Board #38; see
 /// `docs/agent-approval-design.md`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct FilesystemGrant {

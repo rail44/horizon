@@ -14,10 +14,8 @@
 //! "Nothing at all" is the whole failure model. Every failure mode -- no API
 //! key, an unreachable endpoint, a non-JSON body, a model that isn't listed,
 //! a listing without the two fields -- resolves to `None`, and a `None`
-//! window means Tier 1 clearing **never fires** (crush's `cw == 0`
-//! protection, `internal/agent/agent.go`). There is deliberately no
-//! conservative fallback window: guessing one would mean clearing history on
-//! the strength of a number Horizon made up.
+//! window means Tier 1 clearing **never fires**. There is no fallback
+//! window: an unknown window never clears history.
 //!
 //! The bearer token comes from the environment variable **named** by the
 //! session's [`RigAgentConfig::api_key_env`] -- the same variable
@@ -74,10 +72,9 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 pub(super) struct ModelLimits {
     pub(super) context_length: u64,
     /// The model's declared maximum output length. Recorded for
-    /// completeness (it is what made the 2026-07-27 `max_tokens` audit
-    /// legible) but deliberately *not* used to derive the effective window:
-    /// the window has to be reduced by the output budget Horizon really
-    /// sends, which is `RigAgentConfig::max_output_tokens`.
+    /// completeness; not used to derive the effective window, which is
+    /// reduced by the output budget Horizon sends
+    /// (`RigAgentConfig::max_output_tokens`).
     pub(super) max_output_length: Option<u64>,
 }
 

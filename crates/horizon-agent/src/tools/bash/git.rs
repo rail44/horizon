@@ -54,9 +54,9 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
 /// sequential-execution variants (`And`, `Or`, `Semicolon`, `Newline`) split a
 /// command into independently-classifiable segments; the rest (`Pipe`,
 /// `Background`, `OpenParen`, `CloseParen`) are data-crossing or
-/// code-structuring and route to the human rather than being split on (owner
-/// decision 2026-08-03: a widened `.git` grant must never carry a non-git
-/// segment, and a pipe/subshell smuggles arbitrary code across that grant).
+/// code-structuring and route to the human rather than being split on (a
+/// widened `.git` grant must never carry a non-git segment, and a
+/// pipe/subshell smuggles arbitrary code across that grant).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Separator {
     And,
@@ -341,7 +341,7 @@ pub(crate) enum GitPrefilterVerdict {
     /// Skip the judge and ask the human directly. Carries a static
     /// description of the detected construct for the approval reason text.
     ///
-    /// Currently never returned (owner decision 2026-08-17, board #38): the
+    /// Currently never returned (board #38): the
     /// prefilter passes every GitOperation to the judge. Retained as a seam
     /// for a future Codex-style "safe-side widening" that might block certain
     /// constructs without judge involvement.
@@ -354,7 +354,7 @@ pub(crate) enum GitPrefilterVerdict {
 /// Determines whether a Git metadata operation may go to the enforcing judge
 /// or must be asked of a human directly.
 ///
-/// Owner decision 2026-08-17 (board #38, evidence in
+/// Board #38 (evidence in
 /// `docs/research/shell-approval-evidence-2026-08-17.md`): the prefilter no
 /// longer blocks any shell or Git construct. Every GitOperation-classified
 /// command passes to the judge in full, so approval routing no longer varies
@@ -466,7 +466,7 @@ pub(crate) fn metadata_writable_roots(workspace_root: &Path) -> Result<Vec<PathB
 /// the host-escalation vectors: `hooks/` executes arbitrary code on the next
 /// host-side git invocation, and `config` can set `core.fsmonitor`,
 ///`core.pager`, credential helpers, etc. — all of which run outside the
-/// sandbox. Owner decision 2026-08-17, board #38; see
+/// sandbox. Board #38; see
 /// `docs/agent-approval-design.md` and
 /// `docs/research/shell-approval-evidence-2026-08-17.md`.
 const GIT_METADATA_EXCLUDED_SUBPATHS: &[&str] = &["hooks", "config"];
@@ -562,7 +562,7 @@ mod tests {
 
     #[test]
     fn prefilter_passes_dangerous_constructs_to_judge() {
-        // Owner decision 2026-08-17 (board #38): the prefilter no longer
+        // Board #38: the prefilter no longer
         // blocks any construct. Dangerous options, env-var prefixes, pipes,
         // redirects, command substitution, non-git segments, and dangerous
         // subcommands all pass to the judge in full — the deterministic
@@ -646,7 +646,7 @@ mod tests {
 
     #[test]
     fn prefilter_passes_schemed_urls_and_plain_fetch_to_judge() {
-        // Owner decision 2026-08-17: schemed URLs pass to the judge like
+        // Schemed URLs pass to the judge like
         // everything else. The judge prompt explicitly tells the judge to
         // escalate directly-specified URLs.
         let schemed = [
@@ -679,7 +679,7 @@ mod tests {
 
     #[test]
     fn prefilter_passes_redirect_and_heredoc_compounds_to_judge() {
-        // Owner decision 2026-08-17 (board #38): commands with redirects,
+        // Board #38: commands with redirects,
         // heredocs, pipes, and command substitution all reach the judge in
         // full. The deterministic defense moved to the grant shape.
         let compounds = [
@@ -705,7 +705,7 @@ mod tests {
 
     #[test]
     fn validated_metadata_grants_exclude_hooks_and_config() {
-        // Owner decision 2026-08-17 (board #38): the GitOperation extended
+        // Board #38: the GitOperation extended
         // grant excludes hooks/ and config from writing — the
         // host-escalation vectors. The exclusion is based on the resolved
         // gitdir, not a literal `.git` path name.

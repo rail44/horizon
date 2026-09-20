@@ -107,8 +107,8 @@ const CLEARING_THRESHOLD_PCT_VAR: &str = "HORIZON_AGENT_CLEARING_THRESHOLD_PCT";
 pub(crate) const JUDGE_MODEL_VAR: &str = "HORIZON_AGENT_JUDGE_MODEL";
 
 /// The judge's default model id: a synthetic.new provider-maintained
-/// small-model *alias* (owner decision 2026-07-19, `docs/agent-approval-
-/// design.md`'s "Judge model" bullet) -- concretely backed by GLM-4.7-Flash
+/// small-model *alias* (`docs/agent-approval-design.md`'s "Judge model"
+/// bullet) -- concretely backed by GLM-4.7-Flash
 /// today, updated by the provider as better small models ship. Chosen over
 /// a raw vendor id (`hf:zai-org/GLM-4.7-Flash`) so Horizon tracks the
 /// provider's own small-model choice rather than committing to one

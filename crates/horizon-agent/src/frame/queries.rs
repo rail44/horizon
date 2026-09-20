@@ -22,8 +22,8 @@ impl AgentFrame {
     /// current approval UI reads the *actionable* queue instead
     /// ([`Self::actionable_pending_approval_call_ids`], via
     /// `AgentSession::pending_approval_call_ids` in `src/agent/session.rs`)
-    /// for its row-centric rendering (owner decision 2026-07-13,
-    /// superseding the old composer banner) -- see the tool-approval
+    /// for its row-centric rendering (superseding the old composer banner)
+    /// -- see the tool-approval
     /// interaction rework's "targeting discipline" design note. Delegates
     /// to [`pending_approval_call_ids_in`] so a caller holding only the
     /// `items` field (not a whole `AgentFrame`) can reuse the exact same

@@ -10,8 +10,8 @@
 use horizon_agent::contract::ToolCallId;
 
 /// The approval keyboard-capture state (`docs/agent-output-ui-
-/// amendment.md` decision 4, stage E; re-scoped to row-centric v2 by
-/// owner decision 2026-07-13): `Normal`, or targeting one specific
+/// amendment.md` decision 4, stage E; re-scoped to row-centric v2):
+/// `Normal`, or targeting one specific
 /// pending call for the keyboard path. Its *rendering* surface is no
 /// longer a composer transformation -- stage E's banner is gone -- it's
 /// now a compact "⏎ approve · esc deny" annotation on that call's own
@@ -64,7 +64,7 @@ pub(crate) fn next_composer_mode(
 }
 
 /// Whether `call_id` is the exact call [`ComposerMode`] currently targets
-/// for the keyboard path (row-centric v2, owner decision 2026-07-13):
+/// for the keyboard path (row-centric v2):
 /// decides which single `Waiting` row, if any, shows the "⏎ approve · esc
 /// deny" annotation next to its Approve/Deny buttons. Derived purely from
 /// the mode -- never from queue position -- so the hint can never lie:
@@ -101,7 +101,7 @@ pub(crate) fn composer_placeholder(turn_in_flight: bool) -> &'static str {
 /// [`super::latest_turn_model`]'s own doc comment used to describe) with
 /// the latest completed turn's own model ([`super::latest_turn_model`]).
 ///
-/// **Precedence** (2026-09-19 owner decision, reversing the original rule):
+/// **Precedence** (reversing the original rule):
 /// `session_model` wins on disagreement. It used to be the steady-state
 /// value resolved once at session start, with `turn_model` overriding on
 /// divergence because "the latest completed turn is always closer to what
@@ -164,8 +164,8 @@ mod tests {
 
     #[test]
     fn composer_model_chip_prefers_the_session_model_when_the_turn_diverges() {
-        // Owner decision 2026-09-19 (reversing the original turn-wins
-        // rule): with the model switcher live, every mid-session change is
+        // Reversing the original turn-wins rule: with the model switcher
+        // live, every mid-session change is
         // an explicit `set_session_model` echoed back as a `SessionModel`
         // re-announcement, so the session value IS "what would happen if
         // you sent a message right now" and the latest completed turn is

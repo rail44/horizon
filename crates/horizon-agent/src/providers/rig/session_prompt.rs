@@ -46,7 +46,7 @@ pub(super) fn session_extra_sections(
 ) -> Vec<String> {
     // Untrusted project: embedded skills only (no `.horizon/skills/`
     // discovery), and no `AGENTS.md`/`CLAUDE.md` injection — see the `skills`
-    // module doc's trust note (owner decision 2026-08-05). Embedded skills
+    // module doc's trust note. Embedded skills
     // are ship-native, so they stay advertised; the repository layer is the
     // only thing the gate suppresses.
     let skills = if trusted_project {

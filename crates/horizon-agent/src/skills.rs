@@ -18,9 +18,9 @@
 //! `AGENTS.md`/`CLAUDE.md` ingestion — and arguably sharper here, since a
 //! repository skill *overrides* an embedded one by id (any session working
 //! in a repo could have `horizon-config`'s instructions silently shadowed).
-//! Originally accepted unconditionally (owner decision, 2026-07-07) as a
-//! personal-project hypothesis-testing convenience; now gated behind a
-//! user-level trust decision (owner decision, 2026-08-05): a session whose
+//! Originally accepted unconditionally as a personal-project
+//! hypothesis-testing convenience; now gated behind a user-level trust
+//! decision: a session whose
 //! project root is not in the user's `trusted_projects` config list gets
 //! [`SkillRegistry::embedded`] only — no repository skills are discovered
 //! or loaded, and the same gate suppresses `AGENTS.md`/`CLAUDE.md`
