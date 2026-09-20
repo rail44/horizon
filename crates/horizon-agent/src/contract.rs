@@ -228,9 +228,9 @@ pub enum Command {
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
     /// Mid-session provider/model switch, latest turn wins: `provider` names
-    /// a resolved `[[providers]]` entry and `model` is a model id — one the
-    /// entry declares or a raw id the provider's `/models` listing answered
-    /// (the same pass-through `role.model` accepts). Delivered on the
+    /// a resolved `[[providers]]` entry and `model` is a model id the
+    /// provider's `/models` listing answered (the same pass-through
+    /// `role.model` accepts). Delivered on the
     /// attachment's commands channel by `horizon-agentd`'s
     /// `set_session_model` RPC handler, which owns validating the pair and
     /// re-announcing the model (`AgentWireEvent::SessionModel`);

@@ -8,13 +8,14 @@
 //! Two stages live in ONE modal list: `Providers` lists every configured
 //! provider in the daemon's `list_providers` order (the `[[providers]]` file
 //! order), and confirming an available provider drills into `Models`. The
-//! model stage shows the entry's declared model ids (file order, the first
-//! being that entry's default) and, once the daemon answers a
-//! `list_provider_models` fetch, the provider's own live `/models` ids it has
-//! not already declared — so a provider can be left empty on disk and still
-//! offer everything it serves. Esc walks back a stage before it closes the
-//! modal. Key-unavailable providers stay visible but grayed with the reason
-//! (they are listed, never hidden), and confirming one is a no-op.
+//! model stage lists the ids the provider's own `/models` listing answers
+//! (`list_provider_models`) — the `[[providers]]` file declares no model
+//! list, only an optional `default_model` for what runs when nothing has
+//! been selected. Discovery is lazy per provider, so a key-unavailable
+//! provider never has its endpoint asked at all. Esc walks back a stage
+//! before it closes the modal. Key-unavailable providers stay visible but
+//! grayed with the reason (they are listed, never hidden), and confirming
+//! one is a no-op.
 
 use std::collections::HashMap;
 
@@ -110,23 +111,15 @@ impl PickerState {
         &self.all
     }
 
-    /// The model ids the model stage offers for `provider`: the entry's
-    /// declared ids first (file order), then the live `/models` ids it has
-    /// not already declared.
-    pub(crate) fn model_ids(&self, provider: usize) -> Vec<String> {
-        let mut ids = self
-            .all
-            .get(provider)
-            .map(|entry| entry.models.clone())
-            .unwrap_or_default();
-        if let Some(live) = self.live.get(&provider) {
-            for id in &live.ids {
-                if !ids.iter().any(|existing| existing == id) {
-                    ids.push(id.clone());
-                }
-            }
-        }
-        ids
+    /// How many model rows the stage has for `provider`.
+    fn model_count(&self, provider: usize) -> usize {
+        self.live.get(&provider).map_or(0, |live| live.ids.len())
+    }
+
+    /// The id at a row index — used by the render/filter hot path instead of
+    /// [`Self::model_ids`], which would clone the whole list per call.
+    fn model_id_at(&self, provider: usize, model: usize) -> Option<String> {
+        self.live.get(&provider)?.ids.get(model).cloned()
     }
 
     /// Marks `provider`'s live listing as in flight. `true` when this call
@@ -171,7 +164,7 @@ impl PickerState {
             PickerStage::Models { provider } => {
                 if self.is_live_loading(*provider) {
                     "Loading models…"
-                } else if self.model_ids(*provider).is_empty() {
+                } else if self.model_count(*provider) == 0 {
                     "No models listed"
                 } else {
                     "No matching models"
@@ -185,7 +178,7 @@ impl PickerState {
     fn rows(&self) -> Vec<PickerItem> {
         match self.stage {
             PickerStage::Providers => (0..self.all.len()).map(PickerItem::Provider).collect(),
-            PickerStage::Models { provider } => (0..self.model_ids(provider).len())
+            PickerStage::Models { provider } => (0..self.model_count(provider))
                 .map(|model| PickerItem::Model { provider, model })
                 .collect(),
         }
@@ -194,11 +187,9 @@ impl PickerState {
     fn item_text(&self, item: &PickerItem) -> String {
         match item {
             PickerItem::Provider(index) => self.all[*index].name.clone(),
-            PickerItem::Model { provider, model } => self
-                .model_ids(*provider)
-                .get(*model)
-                .cloned()
-                .unwrap_or_default(),
+            PickerItem::Model { provider, model } => {
+                self.model_id_at(*provider, *model).unwrap_or_default()
+            }
         }
     }
 
@@ -235,7 +226,7 @@ impl PickerState {
         match item {
             PickerItem::Model { provider, model } => {
                 let name = self.all.get(provider)?.name.clone();
-                let id = self.model_ids(provider).into_iter().nth(model)?;
+                let id = self.model_id_at(provider, model)?;
                 Some(ConfirmedModel {
                     provider: name,
                     model: id,
@@ -360,9 +351,7 @@ impl ListDelegate for ModelPickerDelegate {
             PickerItem::Model { provider, model } => {
                 let id = self
                     .state
-                    .model_ids(*provider)
-                    .get(*model)
-                    .cloned()
+                    .model_id_at(*provider, *model)
                     .unwrap_or_default();
                 let color = if is_selected {
                     theme::readable_on(theme::text_primary(), theme::surface_selected())
@@ -421,12 +410,17 @@ mod tests {
 
     use super::{unavailable_reason, ConfirmedModel, PickerItem, PickerStage, PickerState};
 
-    fn summary(name: &str, available: bool, default: bool, models: &[&str]) -> ProviderSummary {
+    fn summary(
+        name: &str,
+        available: bool,
+        default: bool,
+        default_model: Option<&str>,
+    ) -> ProviderSummary {
         ProviderSummary {
             name: name.to_string(),
             base_url: None,
             api_key_env: format!("{name}_API_KEY"),
-            models: models.iter().map(|model| model.to_string()).collect(),
+            default_model: default_model.map(str::to_string),
             available,
             default,
         }
@@ -434,8 +428,8 @@ mod tests {
 
     fn providers() -> Vec<ProviderSummary> {
         vec![
-            summary("openai", true, true, &["gpt-4o-2024", "gpt-4o-mini"]),
-            summary("anthropic", false, false, &["m-opus"]),
+            summary("openai", true, true, Some("gpt-4o-mini")),
+            summary("anthropic", false, false, None),
         ]
     }
 
@@ -452,7 +446,7 @@ mod tests {
     }
 
     #[test]
-    fn confirming_an_available_provider_drills_into_its_declared_models_in_order() {
+    fn confirming_an_available_provider_drills_in_and_lists_nothing_until_discovery() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         assert_eq!(
@@ -465,6 +459,13 @@ mod tests {
             &PickerStage::Models { provider: 0 },
             "the drill lands on the confirmed provider"
         );
+        assert!(
+            state.items().is_empty(),
+            "no file-declared list: rows wait for the /models reply"
+        );
+        assert!(state.begin_live_load(0), "the drill starts the live fetch");
+        assert_eq!(state.empty_label(), "Loading models…");
+        state.set_live_models(0, vec!["gpt-4o-mini".to_string(), "gpt-5.2".to_string()]);
         assert_eq!(
             state.items(),
             &[
@@ -477,7 +478,7 @@ mod tests {
                     model: 1
                 },
             ],
-            "the model stage lists the entry's declared ids in file order"
+            "the stage lists the discovered ids in listing order"
         );
     }
 
@@ -494,67 +495,32 @@ mod tests {
     }
 
     #[test]
-    fn a_model_less_available_provider_still_drills_in_and_asks_for_live_models() {
-        let mut state = PickerState::new();
-        state.set_providers(vec![summary("empty", true, false, &[])]);
-        assert_eq!(state.confirm_at(IndexPath::new(0)), None);
-        assert_eq!(state.stage(), &PickerStage::Models { provider: 0 });
-        assert!(
-            state.items().is_empty(),
-            "nothing declared, nothing discovered yet"
-        );
-        assert!(state.begin_live_load(0), "the drill starts a live fetch");
-        assert_eq!(state.empty_label(), "Loading models…");
-    }
-
-    #[test]
-    fn confirming_a_model_hands_back_the_provider_and_model_id() {
+    fn confirming_a_discovered_model_hands_back_the_provider_and_model_id() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         state.confirm_at(IndexPath::new(0));
+        state.set_live_models(0, vec!["gpt-4o-mini".to_string(), "gpt-5.2".to_string()]);
         assert_eq!(
             state.confirm_at(IndexPath::new(1)),
             Some(ConfirmedModel {
                 provider: "openai".to_string(),
-                model: "gpt-4o-mini".to_string(),
+                model: "gpt-5.2".to_string(),
             })
         );
     }
 
     #[test]
-    fn live_models_merge_after_the_declared_ids_without_duplicating_them() {
+    fn a_failed_or_empty_discovery_leaves_the_stage_empty() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         state.confirm_at(IndexPath::new(0));
         assert!(state.begin_live_load(0));
-        state.set_live_models(0, vec!["gpt-4o-mini".to_string(), "gpt-5.2".to_string()]);
-        assert_eq!(
-            state.model_ids(0),
-            vec![
-                "gpt-4o-2024".to_string(),
-                "gpt-4o-mini".to_string(),
-                "gpt-5.2".to_string(),
-            ],
-            "declared ids keep their place; a discovered id already declared is dropped"
-        );
-        assert_eq!(
-            state.items(),
-            &[
-                PickerItem::Model {
-                    provider: 0,
-                    model: 0
-                },
-                PickerItem::Model {
-                    provider: 0,
-                    model: 1
-                },
-                PickerItem::Model {
-                    provider: 0,
-                    model: 2
-                },
-            ]
-        );
-        assert!(!state.begin_live_load(0), "already loaded: no refetch");
+        state.set_live_models(0, Vec::new());
+        assert!(state.items().is_empty());
+        assert_eq!(state.empty_label(), "No models listed");
+        // An empty answer is not remembered as "known empty": a re-drill
+        // (Esc back in) retries.
+        assert!(state.begin_live_load(0));
     }
 
     #[test]
@@ -569,21 +535,6 @@ mod tests {
         );
         state.set_live_models(0, vec!["gpt-5.2".to_string()]);
         assert!(!state.begin_live_load(0), "already loaded: no refetch");
-    }
-
-    #[test]
-    fn discovering_a_model_lets_it_be_confirmed_as_a_raw_id() {
-        let mut state = PickerState::new();
-        state.set_providers(providers());
-        state.confirm_at(IndexPath::new(0));
-        state.set_live_models(0, vec!["gpt-5.2".to_string()]);
-        assert_eq!(
-            state.confirm_at(IndexPath::new(2)),
-            Some(ConfirmedModel {
-                provider: "openai".to_string(),
-                model: "gpt-5.2".to_string(),
-            })
-        );
     }
 
     #[test]
@@ -615,27 +566,16 @@ mod tests {
         // position: while filtered, row 0 here is `openai`.
         assert_eq!(state.confirm_at(IndexPath::new(0)), None);
         assert_eq!(state.stage(), &PickerStage::Models { provider: 0 });
-        // The drill drops the providers-stage query: the modal clears the
-        // search box, and the delegate's own filter resets with it.
-        assert_eq!(
-            state.items(),
-            &[
-                PickerItem::Model {
-                    provider: 0,
-                    model: 0
-                },
-                PickerItem::Model {
-                    provider: 0,
-                    model: 1
-                },
-            ]
-        );
+        // The drill drops the providers-stage query, and the model stage is
+        // empty until discovery answers.
+        assert!(state.items().is_empty());
+        state.set_live_models(0, vec!["gpt-4o-mini".to_string(), "gpt-5.2".to_string()]);
         state.refilter("mini");
         assert_eq!(
             state.items(),
             &[PickerItem::Model {
                 provider: 0,
-                model: 1
+                model: 0
             }]
         );
     }
@@ -654,7 +594,7 @@ mod tests {
 
     #[test]
     fn the_unavailable_reason_names_the_missing_variable() {
-        let mut entry = summary("anthropic", false, false, &["m-opus"]);
+        let mut entry = summary("anthropic", false, false, None);
         assert_eq!(
             unavailable_reason(&entry),
             "environment variable `anthropic_API_KEY` is not set"

@@ -504,12 +504,12 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
     let config = parse(
         "[[providers]]\n\
          name = \"synthetic\"\n\
-         models = [\"gpt-5.2\"]\n\
+         default_model = \"gpt-5.2\"\n\
          [[providers]]\n\
          name = \"claude\"\n\
          kind = \"anthropic\"\n\
          api_key_env = \"CLAUDE_KEY\"\n\
-         models = [\"claude-opus-4-6\"]\n",
+         default_model = \"claude-opus-4-6\"\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();
@@ -522,30 +522,33 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
         vec!["synthetic", "claude"]
     );
     // Defaults: kind -> openai-compatible, api_key_env -> the kind's own
-    // variable name, overridden api_key_env kept as-is.
+    // variable name, overridden api_key_env kept as-is, default_model kept.
     assert_eq!(
         resolution.providers[0].kind,
         RawProviderKind::OpenAiCompatible
     );
     assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
+    assert_eq!(
+        resolution.providers[0].default_model.as_deref(),
+        Some("gpt-5.2")
+    );
     assert_eq!(resolution.providers[1].kind, RawProviderKind::Anthropic);
     assert_eq!(resolution.providers[1].api_key_env, "CLAUDE_KEY");
+    assert_eq!(
+        resolution.providers[1].default_model.as_deref(),
+        Some("claude-opus-4-6")
+    );
     // default_provider absent -> the first entry's name.
     assert_eq!(resolution.default_name, "synthetic");
 }
 
 #[test]
-fn models_list_keeps_the_file_listing_order() {
-    // The picker's order is the file's own model order: a TOML array keeps
-    // document order natively, and the first id is the entry's default.
-    let config = parse(
-        "[[providers]]\n\
-         name = \"synthetic\"\n\
-         models = [\"m-zeta\", \"m-alpha\", \"m-mid\"]\n",
-    )
-    .unwrap();
-    let models = &config.resolved_providers().providers[0].models;
-    assert_eq!(models, &["m-zeta", "m-alpha", "m-mid"]);
+fn an_entry_without_a_default_model_carries_none() {
+    // There is no model list; only the optional default rides the entry.
+    let config = parse("[[providers]]\nname = \"synthetic\"\n").unwrap();
+    assert!(config.resolved_providers().providers[0]
+        .default_model
+        .is_none());
 }
 
 #[test]
@@ -590,9 +593,12 @@ fn legacy_provider_table_folds_in_as_one_implicit_default_entry() {
         resolution.providers[0].base_url.as_deref(),
         Some("https://example.invalid")
     );
-    // The single legacy model is the entry's one listed id, so the picker
-    // shows exactly what a `[provider]`-only file ever offered.
-    assert_eq!(resolution.providers[0].models, vec!["gpt-test".to_string()]);
+    // The legacy model becomes the implicit entry's default_model, so a
+    // `[provider]`-only file keeps its configured model byte-for-byte.
+    assert_eq!(
+        resolution.providers[0].default_model.as_deref(),
+        Some("gpt-test")
+    );
     assert_eq!(resolution.default_name, LEGACY_PROVIDER_NAME);
     assert!(provider_config_warnings(&config).is_empty());
 }
@@ -606,7 +612,7 @@ fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
     let resolution = config.resolved_providers();
     assert_eq!(resolution.providers.len(), 1);
     assert_eq!(resolution.providers[0].name, LEGACY_PROVIDER_NAME);
-    assert!(resolution.providers[0].models.is_empty());
+    assert!(resolution.providers[0].default_model.is_none());
     assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
     assert!(provider_config_warnings(&config).is_empty());
 }
@@ -615,17 +621,17 @@ fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
 fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
     let config = parse(
         "[provider]\nmodel = \"gpt-legacy\"\nbase_url = \"https://legacy.invalid\"\n\
-         [[providers]]\nname = \"synthetic\"\nmodels = [\"gpt-5.2\"]\n",
+         [[providers]]\nname = \"synthetic\"\ndefault_model = \"gpt-5.2\"\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();
     // [[providers]] wins; the legacy table is folded nowhere.
     assert_eq!(resolution.providers.len(), 1);
     assert_eq!(resolution.providers[0].name, "synthetic");
-    assert!(resolution.providers[0]
-        .models
-        .iter()
-        .all(|id| id != "gpt-legacy"));
+    assert_eq!(
+        resolution.providers[0].default_model.as_deref(),
+        Some("gpt-5.2")
+    );
     assert!(provider_config_warnings(&config)
         .iter()
         .any(|warning| warning.contains("[provider]: ignored because [[providers]] is set")));
@@ -635,7 +641,7 @@ fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
 fn nameless_entries_are_dropped_and_warned() {
     let config = parse(
         "[[providers]]\nname = \"synthetic\"\n\
-         [[providers]]\nmodels = [\"m\"]\n",
+         [[providers]]\ndefault_model = \"m\"\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();

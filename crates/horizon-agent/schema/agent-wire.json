@@ -605,7 +605,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Mid-session provider/model switch, latest turn wins: `provider` names\na resolved `[[providers]]` entry and `model` is a model id — one the\nentry declares or a raw id the provider's `/models` listing answered\n(the same pass-through `role.model` accepts). Delivered on the\nattachment's commands channel by `horizon-agentd`'s\n`set_session_model` RPC handler, which owns validating the pair and\nre-announcing the model (`AgentWireEvent::SessionModel`);\nthe session loop only swaps what the *next turn* builds with.\nNot persisted: the override lives in the daemon's session state, the\nsame \"running session keeps its spawn-time config\" philosophy\n`reload_provider_config` follows.",
+          "description": "Mid-session provider/model switch, latest turn wins: `provider` names\na resolved `[[providers]]` entry and `model` is a model id the\nprovider's `/models` listing answered (the same pass-through\n`role.model` accepts). Delivered on the\nattachment's commands channel by `horizon-agentd`'s\n`set_session_model` RPC handler, which owns validating the pair and\nre-announcing the model (`AgentWireEvent::SessionModel`);\nthe session loop only swaps what the *next turn* builds with.\nNot persisted: the override lives in the daemon's session state, the\nsame \"running session keeps its spawn-time config\" philosophy\n`reload_provider_config` follows.",
           "properties": {
             "SetSessionModel": {
               "properties": {
@@ -1660,12 +1660,12 @@
           "description": "Whether this is the surface's default entry (`default_provider`, or\nthe first entry when unset / the legacy fold-in).",
           "type": "boolean"
         },
-        "models": {
-          "description": "The model ids the file declares, in listing order; the first is the\nentry's own default model — the same \"first\" the picker shows. The\npicker augments these with whatever the provider's own `/models`\nlisting answers (`SessionHub::list_provider_models`).",
-          "items": {
-            "type": "string"
-          },
-          "type": "array"
+        "default_model": {
+          "description": "The model this entry runs when nothing has selected one, if the file\nnames it. `None` leaves the kind's own built-in default in place. The\npicker's candidate ids come from the provider's own `/models`\nlisting (`SessionHub::list_provider_models`), not from here.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "The `[[providers]]` `name` — what `set_session_model`'s `provider`\nargument names. The legacy `[provider]` fold-in resolves as\n`default`.",
@@ -1675,7 +1675,6 @@
       "required": [
         "name",
         "api_key_env",
-        "models",
         "available",
         "default"
       ],

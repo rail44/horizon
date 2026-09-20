@@ -275,21 +275,30 @@ impl WorkspaceShell {
     /// One `list_provider_models` pull for `provider`, off the UI thread —
     /// the model picker's drill-in discovery (v22). Guarded like
     /// [`Self::fetch_providers`]: a modal closed (or a runtime swapped out)
-    /// before the reply lands drops the result. A failed fetch delivers an
-    /// empty list, so the stage falls back to the declared ids alone and a
-    /// re-drill retries (the daemon caches only successful listings).
+    /// before the reply lands drops the result, and a reply is applied only
+    /// to the *same* picker instance that issued it (an Esc→reopen builds a
+    /// fresh list whose provider indices may name different entries). A
+    /// failed fetch delivers an empty list, so the stage shows "No models
+    /// listed" and a re-drill retries (the daemon caches only successful
+    /// listings).
     fn fetch_provider_models(&mut self, provider: usize, cx: &mut Context<Self>) {
         let Some(handle) = self.agentd.clone() else {
             return;
         };
-        let Some(provider_name) = self
-            .model_picker
-            .as_ref()
-            .and_then(|list| list.read(cx).delegate().state().providers().get(provider))
+        let Some(list) = self.model_picker.clone() else {
+            return;
+        };
+        let Some(provider_name) = list
+            .read(cx)
+            .delegate()
+            .state()
+            .providers()
+            .get(provider)
             .map(|entry| entry.name.clone())
         else {
             return;
         };
+        let picker_id = list.entity_id();
         let window_handle = self.window;
         cx.spawn(async move |this, cx| {
             let runtime = handle.clone();
@@ -297,9 +306,12 @@ impl WorkspaceShell {
                 .background_executor()
                 .spawn(async move { runtime.list_provider_models(provider_name) })
                 .await;
-            let _ = window_handle.update(cx, |_, _window, cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.model_picker.is_none()
+                    // Drop the reply unless it belongs to the picker that
+                    // issued it (a stale reply's provider index may name a
+                    // different entry after an Esc→reopen).
+                    if shell.model_picker.as_ref().map(|list| list.entity_id()) != Some(picker_id)
                         || shell
                             .agentd
                             .as_ref()
@@ -319,6 +331,10 @@ impl WorkspaceShell {
                             list.delegate_mut()
                                 .state_mut()
                                 .set_live_models(provider, ids);
+                            // The drill-in had nothing to select when the
+                            // stage was empty; point Enter at the first
+                            // discovered row now that there is one.
+                            select_first_row_on_open(list, window, cx);
                             cx.notify();
                         });
                     }

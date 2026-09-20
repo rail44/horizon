@@ -319,10 +319,7 @@ impl AgentConfig {
             api_key_env: OPENAI_API_KEY_VAR.to_string(),
             // Resolved centrally by `from_env_and_providers` below.
             api_key_present: false,
-            models: match model {
-                Some(model) => vec![model],
-                None => Vec::new(),
-            },
+            default_model: model,
         };
         Self::from_env_and_providers(vec![entry], LEGACY_PROVIDER_NAME.to_string(), Vec::new())
     }
@@ -390,7 +387,7 @@ impl AgentConfig {
 }
 
 /// One `[[moa]]` member: which `[[providers]]` entry runs it, and the model
-/// id to run, written out (an entry's `models` alias is not resolved here).
+/// id to run, written out.
 ///
 /// The two resolved fields come from that entry, filled in once by
 /// [`AgentConfig::from_env_and_providers`] — the surface's one env-read
@@ -542,9 +539,10 @@ pub struct NamedProviderConfig {
     /// honored by a *switch* (`Command::SetSessionModel` re-reads its
     /// target), not by this value.
     pub api_key_present: bool,
-    /// Model ids in file listing order. The first entry is this provider's
-    /// own default model — the same "first" the picker shows.
-    pub models: Vec<String>,
+    /// The model this entry runs when nothing else selected one — the
+    /// file's `default_model` (or the legacy `[provider].model`). `None`
+    /// leaves the kind's own built-in default in place.
+    pub default_model: Option<String>,
 }
 
 impl NamedProviderConfig {
@@ -562,7 +560,7 @@ impl NamedProviderConfig {
             return Vec::new();
         }
         let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
-        crate::providers::rig::list_model_ids(&self.discovery_base_url(), &api_key).await
+        crate::providers::rig::list_model_ids(self.kind, &self.discovery_base_url(), &api_key).await
     }
 
     /// Where this entry's `/models` discovery request goes: the kind's
@@ -612,26 +610,26 @@ impl NamedProviderConfig {
     }
 
     /// This entry's default model id: `HORIZON_RIG_MODEL` (the standing
-    /// env override) > the first listed model (file order) > for
-    /// openai-compatible entries the standing [`openai::GPT_4O_MINI`]
-    /// built-in. An anthropic entry that lists nothing has no Horizon-side
-    /// default model at all (`resolved`'s view carries the empty string,
-    /// which `resolved_model` reports as nothing): claiming a model is in
-    /// play when none is would be the same dishonesty the fallback-mode
-    /// `None` already refuses.
+    /// env override) > the entry's `default_model` > for openai-compatible
+    /// entries the standing [`openai::GPT_4O_MINI`] built-in. An anthropic
+    /// entry with no `default_model` has no Horizon-side default model at
+    /// all (`resolved`'s view carries the empty string, which
+    /// `resolved_model` reports as nothing): claiming a model is in play
+    /// when none is would be the same dishonesty the fallback-mode `None`
+    /// already refuses.
     fn default_model(&self) -> String {
         let env = std::env::var(RIG_MODEL_VAR).ok();
         match self.kind {
-            // The standing precedence, unchanged: env > the entry's first
-            // listed model > the built-in GPT_4O_MINI default.
-            ProviderKind::OpenAiCompatible => resolve_model(env, self.models.first().cloned()),
-            // An anthropic entry that lists nothing has no Horizon-side
+            // The standing precedence, unchanged: env > the entry's
+            // default_model > the built-in GPT_4O_MINI default.
+            ProviderKind::OpenAiCompatible => resolve_model(env, self.default_model.clone()),
+            // An anthropic entry with no default_model has no Horizon-side
             // default model at all (the empty string `resolved_model`
             // reports as nothing): claiming a model is in play when none
             // is would be the same dishonesty the fallback-mode `None`
             // already refuses.
             ProviderKind::Anthropic => env
-                .or_else(|| self.models.first().cloned())
+                .or_else(|| self.default_model.clone())
                 .unwrap_or_default(),
         }
     }
@@ -1226,7 +1224,7 @@ mod tests {
                 // variable that is certain to exist instead.
                 api_key_env: "PATH".to_string(),
                 api_key_present: false,
-                models: Vec::new(),
+                default_model: None,
             },
             NamedProviderConfig {
                 name: "absent".to_string(),
@@ -1234,7 +1232,7 @@ mod tests {
                 base_url: None,
                 api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
                 api_key_present: false,
-                models: Vec::new(),
+                default_model: None,
             },
         ];
         let moa = vec![MoaEntry {
@@ -1437,7 +1435,7 @@ mod tests {
             base_url: None,
             api_key_env: "ANTHROPIC_API_KEY".to_string(),
             api_key_present: true,
-            models: Vec::new(),
+            default_model: None,
         };
         let expected = resolve_base_url(std::env::var(ANTHROPIC_BASE_URL_VAR).ok(), None)
             .unwrap_or_else(|| "https://api.anthropic.com".to_string());

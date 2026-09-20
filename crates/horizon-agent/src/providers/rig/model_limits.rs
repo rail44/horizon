@@ -180,35 +180,59 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
 }
 
 /// The provider's live model-id listing, for the picker's discovery: the
-/// same `GET {base_url}/models` request as [`model_limits`], but it keeps
-/// every `data[].id` rather than looking up one model's limits.
+/// provider's own listing request, keeping every `data[].id` rather than
+/// looking up one model's limits.
 ///
-/// `base_url` is already resolved to a concrete endpoint by the caller (the
-/// kind's env var > the entry's `base_url` > the kind's own default), so an
-/// Anthropic entry reaches `api.anthropic.com` rather than rig's OpenAI
-/// default. A successful listing is cached process-lifetime, keyed by base
-/// URL (discovery rarely changes mid-run, and a picker reopen must not
-/// re-ask); a failure is not cached. An empty key is treated as "no key" and
-/// returns nothing without a request.
-pub(crate) async fn list_model_ids(base_url: &str, api_key: &str) -> Vec<String> {
+/// `kind` picks the request shape, not just the endpoint: openai-compatible
+/// takes `GET {base}/models` with `Authorization: Bearer`, while Anthropic
+/// takes `GET {host}/v1/models` with `x-api-key` and `anthropic-version`
+/// ([`models_url_for`]). `base_url` is already resolved to a concrete
+/// endpoint by the caller (the kind's env var > the entry's `base_url` >
+/// the kind's own default). A successful listing is cached process-lifetime,
+/// keyed by the request URL (discovery rarely changes mid-run, and a picker
+/// reopen must not re-ask); a failure is not cached. An empty key is
+/// treated as "no key" and returns nothing without a request.
+pub(crate) async fn list_model_ids(
+    kind: crate::config::ProviderKind,
+    base_url: &str,
+    api_key: &str,
+) -> Vec<String> {
     if api_key.is_empty() {
         return Vec::new();
     }
-    let base = base_url.to_string();
+    let url = models_url_for(kind, base_url);
     if let Some(cached) = cache_listings()
         .lock()
         .ok()
-        .and_then(|map| map.get(&base).cloned())
+        .and_then(|map| map.get(&url).cloned())
     {
         return cached;
     }
-    let ids = fetch_model_ids(&base, api_key).await;
+    let ids = fetch_model_ids(kind, &url, api_key).await;
     if !ids.is_empty() {
         if let Ok(mut map) = cache_listings().lock() {
-            map.insert(base, ids.clone());
+            map.insert(url, ids.clone());
         }
     }
     ids
+}
+
+/// The listing URL for a kind. Openai-compatible is `{base}/models`
+/// (tolerating a trailing slash); Anthropic is `{host}/v1/models`, where rig
+/// stores the bare host and appends `/v1` per route, stripping a `/v1` the
+/// configured base already carries.
+pub(super) fn models_url_for(kind: crate::config::ProviderKind, base_url: &str) -> String {
+    match kind {
+        crate::config::ProviderKind::OpenAiCompatible => models_url(base_url),
+        crate::config::ProviderKind::Anthropic => anthropic_models_url(base_url),
+    }
+}
+
+/// Anthropic's model-listing path: `{host}/v1/models`.
+fn anthropic_models_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    format!("{base}/v1/models")
 }
 
 fn cache_listings() -> &'static ListingCache {
@@ -216,9 +240,16 @@ fn cache_listings() -> &'static ListingCache {
     CACHE.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// One plain authenticated GET, keeping only the ids. Every error path
-/// returns an empty list.
-async fn fetch_model_ids(base_url: &str, api_key: &str) -> Vec<String> {
+/// Anthropic's required API-version header value on every request.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// One provider request in its kind's own shape, keeping only the ids. Every
+/// error path returns an empty list.
+async fn fetch_model_ids(
+    kind: crate::config::ProviderKind,
+    url: &str,
+    api_key: &str,
+) -> Vec<String> {
     let client = match reqwest::Client::builder()
         .timeout(MODELS_REQUEST_TIMEOUT)
         .build()
@@ -226,12 +257,15 @@ async fn fetch_model_ids(base_url: &str, api_key: &str) -> Vec<String> {
         Ok(client) => client,
         Err(_) => return Vec::new(),
     };
-    let response = match client
-        .get(models_url(base_url))
-        .bearer_auth(api_key)
-        .send()
-        .await
-    {
+    let request = match kind {
+        crate::config::ProviderKind::OpenAiCompatible => client.get(url).bearer_auth(api_key),
+        // Anthropic rejects a Bearer token and mandates the version header.
+        crate::config::ProviderKind::Anthropic => client
+            .get(url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION),
+    };
+    let response = match request.send().await {
         Ok(response) => response,
         Err(_) => return Vec::new(),
     };
@@ -581,6 +615,26 @@ mod tests {
         assert_eq!(
             models_url("https://api.synthetic.new/openai/v1/"),
             "https://api.synthetic.new/openai/v1/models"
+        );
+    }
+
+    /// The listing request differs by kind: openai-compatible appends
+    /// `/models`; Anthropic appends `/v1/models` to the bare host (and
+    /// tolerates a base that already carries `/v1`).
+    #[test]
+    fn listing_urls_match_each_kinds_request_shape() {
+        use crate::config::ProviderKind;
+        assert_eq!(
+            models_url_for(ProviderKind::OpenAiCompatible, "https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/models"
         );
     }
 

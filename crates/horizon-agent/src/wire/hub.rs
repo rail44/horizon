@@ -119,10 +119,11 @@ use crate::contract::{Command, SessionId};
 ///   the honest restart — unlike a daemon→client event addition, where a
 ///   stale peer simply never sends it (the no-bump TaskProgress precedent
 ///   below).
-/// - **v22 — live model discovery, and the model-id reshape**:
+/// - **v22 — live model discovery, and the model-list reshape**:
 ///   `list_provider_models` appended to [`SessionHub`] (a provider's own
-///   `/models` listing for the picker), and `ProviderSummary::models`
-///   reshaped from alias pairs to the file's plain model ids. The reshape
+///   `/models` listing for the picker), and `ProviderSummary` reshaped —
+///   its `models` alias list replaced by `default_model`, since the
+///   picker's candidates now come from the provider itself. The reshape
 ///   is why this is not a mere append: a stale peer must be drained and
 ///   respawned rather than decode a shape it never had.
 ///
@@ -274,20 +275,20 @@ pub trait SessionHub {
 
     // -- provider surface (v21, the multi-provider design's wire half) --
 
-    /// Every configured provider with its declared model ids and
-    /// availability — the model picker's data. Entries run in the config
-    /// file's order (each entry's model ids in their own listing order; the
-    /// first is that entry's default model). `available` is build-time
-    /// resolved: an entry whose API-key variable was unset registers but is
-    /// unavailable — grayed out, never hidden.
+    /// Every configured provider with its default model and availability —
+    /// the model picker's data. Entries run in the config file's order.
+    /// `available` is build-time resolved: an entry whose API-key variable
+    /// was unset registers but is unavailable — grayed out, never hidden.
+    /// The entry's candidate models are its own live `/models` listing
+    /// ([`Self::list_provider_models`]), not the file.
     async fn list_providers(&self) -> Result<Vec<ProviderSummary>, HubError>;
 
     /// Mid-session provider/model switch, latest turn wins: the *next*
     /// turn runs on `provider`/`model`, whatever is in flight finishes on
     /// its own selection. `provider` names a configured entry (see
-    /// [`Self::list_providers`]); `model` is a model id — either one the
-    /// entry declares or a raw id the provider's `/models` listed, the same
-    /// pass-through `role.model` accepts. Validates the pair, re-announces
+    /// [`Self::list_providers`]); `model` is a model id — typically one the
+    /// provider's `/models` listed, the same pass-through `role.model`
+    /// accepts. Validates the pair, re-announces
     /// the model through the existing `AgentWireEvent::SessionModel`
     /// announcement, and records it on the session so a (re)attach reports
     /// the switched model. Unknown provider, unknown session, or an empty
@@ -299,12 +300,12 @@ pub trait SessionHub {
         model: String,
     ) -> Result<(), HubError>;
 
-    /// A provider's own live model listing (`GET {base_url}/models`), the
-    /// ids the model picker offers alongside the entry's declared ones
-    /// (v22). `provider` names a configured entry. An entry with no usable
-    /// key, a provider that answers no listing, or a transport failure
-    /// yields an empty list — this augments the picker, it never blocks a
-    /// pick, so "nothing discovered" is not an error to the caller.
+    /// A provider's own live model listing (`GET {base_url}/models`) — the
+    /// ids the model picker offers (v22). `provider` names a configured
+    /// entry. An entry with no usable key, a provider that answers no
+    /// listing, or a transport failure yields an empty list — discovery
+    /// never blocks a pick, so "nothing discovered" is not an error to the
+    /// caller.
     async fn list_provider_models(&self, provider: String) -> Result<Vec<String>, HubError>;
 }
 

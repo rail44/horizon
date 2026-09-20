@@ -109,11 +109,11 @@ pub struct ProviderSummary {
     /// recorded so a picker can explain unavailability ("ANTHROPIC_API_KEY
     /// is not set"). Never a value (the secrets-stay-out rule).
     pub api_key_env: String,
-    /// The model ids the file declares, in listing order; the first is the
-    /// entry's own default model — the same "first" the picker shows. The
-    /// picker augments these with whatever the provider's own `/models`
-    /// listing answers (`SessionHub::list_provider_models`).
-    pub models: Vec<String>,
+    /// The model this entry runs when nothing has selected one, if the file
+    /// names it. `None` leaves the kind's own built-in default in place. The
+    /// picker's candidate ids come from the provider's own `/models`
+    /// listing (`SessionHub::list_provider_models`), not from here.
+    pub default_model: Option<String>,
     /// Build-time resolved (the entry's key variable was set when the
     /// provider surface was built). `false` = registered but unavailable
     /// (grayed out, not hidden). A mid-session environment change is

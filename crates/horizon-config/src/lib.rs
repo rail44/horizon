@@ -136,8 +136,7 @@ pub struct RawConfig {
     pub moa: Vec<RawMoaConfig>,
 }
 
-/// One `[[moa]]` entry as the file writes it. Model ids are written out;
-/// `[[providers]]`' `models` aliases are not resolved here.
+/// One `[[moa]]` entry as the file writes it. Model ids are written out.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawMoaConfig {
@@ -213,10 +212,10 @@ impl RawProviderKind {
     }
 }
 
-/// One `[[providers]]` entry as the file writes it. `models` is a plain
-/// array of model ids in the file's own order — the first is the entry's
-/// default model, and the picker shows them in that order (TOML arrays keep
-/// document order natively).
+/// One `[[providers]]` entry as the file writes it. There is no model list:
+/// the picker's candidates come from the provider's own `/models` listing.
+/// `default_model` only names the model a session runs when nothing has
+/// selected one.
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawNamedProviderConfig {
@@ -227,8 +226,11 @@ pub struct RawNamedProviderConfig {
     /// is read from. `None` means the kind's own default
     /// ([`RawProviderKind::default_api_key_env`]).
     pub api_key_env: Option<String>,
-    /// Model ids in listing order (the first is the entry's default).
-    pub models: Vec<String>,
+    /// The model this entry runs when nothing else selected one. `None`
+    /// leaves the kind's own built-in default in place (openai-compatible's
+    /// `gpt-4o-mini`; an anthropic entry with neither has no Horizon-side
+    /// default at all).
+    pub default_model: Option<String>,
 }
 
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
@@ -243,10 +245,10 @@ pub struct ResolvedProviderConfig {
     pub kind: RawProviderKind,
     pub base_url: Option<String>,
     pub api_key_env: String,
-    /// Model ids in file listing order. The first entry is the provider's
-    /// own default model — the same document order the picker shows, so
-    /// "first" means the same thing to both.
-    pub models: Vec<String>,
+    /// The model this entry runs when nothing else selected one
+    /// ([`RawNamedProviderConfig::default_model`], or the legacy
+    /// `[provider].model`). `None` means the kind's own built-in default.
+    pub default_model: Option<String>,
 }
 
 /// [`RawConfig::resolved_providers`]'s whole output: the effective entry
@@ -278,8 +280,8 @@ impl RawConfig {
     /// - No named `[[providers]]` entries (the legacy case, including a file
     ///   with no provider config at all) → one implicit entry named
     ///   [`LEGACY_PROVIDER_NAME`] carrying `[provider]`'s `base_url` and,
-    ///   when `[provider].model` is set, that model as its single listing
-    ///   entry. This is what keeps pre-`[[providers]]` behavior intact:
+    ///   when `[provider].model` is set, that model as its `default_model`.
+    ///   This is what keeps pre-`[[providers]]` behavior intact:
     ///   same entry count, same knobs, same env precedence (which
     ///   `horizon_agent::config` resolves on top).
     /// - Every entry's `kind`/`api_key_env` `Option`s collapse to their
@@ -293,10 +295,6 @@ impl RawConfig {
     pub fn resolved_providers(&self) -> ProvidersResolution {
         let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
         if self.providers.is_empty() {
-            let models = match &self.provider.model {
-                Some(model) => vec![model.clone()],
-                None => Vec::new(),
-            };
             providers.push(ResolvedProviderConfig {
                 name: LEGACY_PROVIDER_NAME.to_string(),
                 kind: RawProviderKind::OpenAiCompatible,
@@ -304,7 +302,7 @@ impl RawConfig {
                 api_key_env: RawProviderKind::OpenAiCompatible
                     .default_api_key_env()
                     .to_string(),
-                models,
+                default_model: self.provider.model.clone(),
             });
         } else {
             for entry in &self.providers {
@@ -320,7 +318,7 @@ impl RawConfig {
                         .api_key_env
                         .clone()
                         .unwrap_or_else(|| kind.default_api_key_env().to_string()),
-                    models: entry.models.clone(),
+                    default_model: entry.default_model.clone(),
                 });
             }
         }
