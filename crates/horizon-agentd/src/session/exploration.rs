@@ -132,6 +132,131 @@ mod tests {
     };
     use std::time::Duration;
 
+    /// A daemon whose only provider entry is named `solo` and has no API
+    /// key, so a session started on it answers from the deterministic
+    /// fallback responder instead of calling anything.
+    fn named_provider_state() -> Arc<crate::session::AgentdState> {
+        use horizon_agent::config::{
+            AgentConfig, AgentPersistenceConfig, NamedProviderConfig, ProviderKind, ProvidersTable,
+            RigAgentConfig,
+        };
+        use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
+        use horizon_agent::registry::ProviderRegistry;
+
+        let agent_config = AgentConfig {
+            rig: RigAgentConfig {
+                api_key_present: false,
+                model: "m-solo".to_string(),
+                ..Default::default()
+            },
+            providers: ProvidersTable {
+                entries: vec![NamedProviderConfig {
+                    name: "solo".to_string(),
+                    kind: ProviderKind::OpenAiCompatible,
+                    base_url: None,
+                    api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
+                    api_key_present: false,
+                    models: vec![("solo".to_string(), "m-solo".to_string())],
+                }],
+                default_name: "solo".to_string(),
+            },
+            moa: horizon_agent::config::MoaTable::default(),
+            persistence: AgentPersistenceConfig {
+                event_log_path: std::path::PathBuf::from("/tmp/horizon-moa-host-test-events.jsonl"),
+                duckdb_path: None,
+            },
+            tools: AgentToolsConfig::default(),
+        };
+        Arc::new(crate::session::AgentdState::new(
+            ProviderRegistry::builtin_with_config(
+                agent_config.clone(),
+                SharedDuckdbStore::unavailable(),
+            ),
+            agent_config,
+            None,
+            SharedDuckdbStore::unavailable(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        ))
+    }
+
+    /// A proposer names the `[[providers]]` entry it runs on. An entry the
+    /// registry does not know fails before any session is spawned, so the
+    /// caller never gets a session id it then has to clean up.
+    #[test]
+    fn starting_on_an_unknown_provider_fails_without_spawning() {
+        let state = judge_test_state();
+        let host = AgentdExplorationHost {
+            state: state.clone(),
+            requester_id: SessionId::new(),
+            provider_id: ProviderId("builtin.agent.mock".to_string()),
+            workspace_root: None,
+        };
+        let started = horizon_agent::tools::ExplorationHost::start(
+            &host,
+            horizon_agent::tools::ExplorationRequest {
+                prompt: "anything".to_string(),
+                provider: Some("not-configured".to_string()),
+                model: Some("m".to_string()),
+            },
+        );
+        let Err(error) = started else {
+            panic!("an unconfigured provider must not start a session");
+        };
+        assert!(error.contains("not-configured"), "{error}");
+        assert!(state.sessions.lock().unwrap().is_empty());
+    }
+
+    /// A named provider routes the spawned session to that entry's
+    /// registry id, and the prompt still reaches it.
+    #[test]
+    fn starting_on_a_named_provider_routes_the_session_to_that_entry() {
+        let state = named_provider_state();
+        let host = AgentdExplorationHost {
+            state: state.clone(),
+            requester_id: SessionId::new(),
+            provider_id: ProviderId("builtin.agent.mock".to_string()),
+            workspace_root: None,
+        };
+        let started = horizon_agent::tools::ExplorationHost::start(
+            &host,
+            horizon_agent::tools::ExplorationRequest {
+                prompt: "which provider answered?".to_string(),
+                provider: Some("solo".to_string()),
+                model: Some("m-solo".to_string()),
+            },
+        )
+        .expect("the configured entry starts");
+
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        let mut initialization = None;
+        let mut answer = None;
+        while std::time::Instant::now() < deadline && answer.is_none() {
+            let Ok(event) = started.events.recv_timeout(Duration::from_millis(500)) else {
+                continue;
+            };
+            if let Event::MessageCommitted(message) = event {
+                match message.role {
+                    horizon_agent::contract::MessageRole::Assistant if initialization.is_none() => {
+                        initialization = Some(message.text)
+                    }
+                    horizon_agent::contract::MessageRole::Assistant => answer = Some(message.text),
+                    _ => {}
+                }
+            }
+        }
+        let initialization = initialization.expect("the session announces its provider");
+        assert!(
+            initialization.contains("builtin.agent.rig.solo"),
+            "{initialization}"
+        );
+        let answer = answer.expect("the prompt reached the session");
+        assert!(answer.contains("which provider answered?"), "{answer}");
+
+        horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
+    }
+
     fn call(
         state: &Arc<crate::session::AgentdState>,
         tool_state: &ToolSessionState,
