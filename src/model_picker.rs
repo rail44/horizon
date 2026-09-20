@@ -353,12 +353,23 @@ impl ListDelegate for ModelPickerDelegate {
                     .state
                     .model_id_at(*provider, *model)
                     .unwrap_or_default();
+                let is_default = self
+                    .state
+                    .providers()
+                    .get(*provider)
+                    .and_then(|entry| entry.default_model.as_deref())
+                    == Some(id.as_str());
                 let color = if is_selected {
                     theme::readable_on(theme::text_primary(), theme::surface_selected())
                 } else {
                     theme::text_primary()
                 };
-                (id, String::new(), color)
+                let detail = if is_default {
+                    "default".to_string()
+                } else {
+                    String::new()
+                };
+                (id, detail, color)
             }
         };
         let mut row = div().flex().flex_col().py_0p5();
