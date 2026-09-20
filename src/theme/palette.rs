@@ -9,10 +9,10 @@ use gpui::{rgb, Hsla, Rgba};
 
 use super::scheme::TEXT_CONTRAST_FLOOR;
 
-/// `#rgb` / `#rrggbb` → packed 0xRRGGBB. `pub(crate)`: the theme settings
+/// `#rgb` / `#rrggbb` → packed 0xRRGGBB. `pub`: the theme settings
 /// view (`theme_settings::seed`) reuses this exact parser rather than
 /// forking a second copy for its own seed-editing controls.
-pub(crate) fn parse_hex(value: &str) -> Option<u32> {
+pub fn parse_hex(value: &str) -> Option<u32> {
     let hex = value.trim().strip_prefix('#')?;
     match hex.len() {
         3 => {
@@ -96,7 +96,7 @@ pub(super) fn contrast_snap(candidate: u32, surface: u32) -> u32 {
 /// itself is never called from any per-cell terminal painting path -- only
 /// from render methods, called at most once per visible text element per
 /// frame.
-pub(crate) fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
+pub fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
     packed_hsla(contrast_snap(
         packed_from_hsla(color),
         packed_from_hsla(surface),
@@ -113,7 +113,7 @@ pub(crate) fn readable_on(color: Hsla, surface: Hsla) -> Hsla {
 /// over model `list_active_composite` (this module's tests) and
 /// [`deny_button_fill_composite`] already use for an analogous
 /// gpui-component composite.
-pub(crate) fn tint_over_background(tint: Hsla, alpha: f32) -> Hsla {
+pub fn tint_over_background(tint: Hsla, alpha: f32) -> Hsla {
     packed_hsla(blend(
         super::scheme::scheme().background,
         packed_from_hsla(tint),
@@ -123,12 +123,12 @@ pub(crate) fn tint_over_background(tint: Hsla, alpha: f32) -> Hsla {
 
 /// `Hsla` -> packed `0xRRGGBB`, the inverse of [`packed_hsla`]. Every
 /// caller passes an opaque scheme-role color (alpha always `1.0`), so the
-/// dropped alpha byte is never meaningful. `pub(crate)`: the theme
+/// dropped alpha byte is never meaningful. `pub`: the theme
 /// settings view (`theme_settings::seed`) uses this to seed its
 /// `surface_base`/custom-accent color pickers from the already-public
 /// `background()`/`accent()` accessors, rather than adding a second,
 /// u32-returning accessor per role.
-pub(crate) fn packed_from_hsla(value: Hsla) -> u32 {
+pub fn packed_from_hsla(value: Hsla) -> u32 {
     let rgba: Rgba = value.to_rgb();
     u32::from(rgba) >> 8
 }
@@ -157,10 +157,10 @@ pub(super) fn primary_foreground_for(primary: u32) -> u32 {
 pub(super) const PRIMARY_FOREGROUND_DARK_TEXT: u32 = 0x0a0a0a;
 pub(super) const PRIMARY_FOREGROUND_LIGHT_TEXT: u32 = 0xfafafa;
 
-/// `pub(crate)`: the theme settings view's `toml_edit` save path
+/// `pub`: the theme settings view's `toml_edit` save path
 /// (`theme_settings::save`) reuses this exact formatter for the seed's
 /// hex-string config values, rather than forking a second copy.
-pub(crate) fn hex(value: u32) -> String {
+pub fn hex(value: u32) -> String {
     format!("#{value:06x}")
 }
 

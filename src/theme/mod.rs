@@ -76,11 +76,17 @@
 //! (terminal-facing color resolution), and [`oklab`] (already split out
 //! before this pass). This file re-exports the same surface the
 //! pre-split single file did, so no call site outside `src/theme/`
-//! changed; a later pass (`horizon` is a bin-only crate) narrowed every
-//! re-export here from `pub` to `pub(crate)`, since nothing outside the
-//! crate can ever observe the difference.
+//! changed. That re-export list is the crate's public theme API: this
+//! module is the one part of `src/` that also compiles for
+//! `wasm32-wasip2` (see `src/lib.rs`), where a plugin view resolves its
+//! colors through exactly these accessors and picks up a new scheme
+//! through [`reload_from`]. [`ansi`] is the exception -- it speaks
+//! `horizon_terminal_core`'s color vocabulary and stays native-only.
 
 mod accessors;
+// Terminal-facing color resolution: speaks `horizon_terminal_core`'s color
+// vocabulary, which is native-only.
+#[cfg(not(target_family = "wasm"))]
 mod ansi;
 mod gpui_component;
 mod oklab;
@@ -90,14 +96,15 @@ mod scheme;
 mod test_support;
 mod warnings;
 
-pub(crate) use accessors::{
+pub use accessors::{
     accent, background, border, danger, diff_added_surface, diff_added_text, diff_removed_surface,
     diff_removed_text, info, on_accent, success, surface_panel, surface_raised, surface_selected,
     terminal_selection, text_muted, text_primary, text_subtle, warning,
 };
-pub(crate) use accessors::{overlay_shadow, scrim_color, surface_chrome};
-pub(crate) use ansi::{resolve, terminal_color_scheme, to_hsla};
-pub(crate) use gpui_component::apply_gpui_component_theme;
-pub(crate) use palette::{hex, packed_from_hsla, parse_hex, readable_on, tint_over_background};
-pub(crate) use scheme::reload_from;
-pub(crate) use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};
+pub use accessors::{overlay_shadow, scrim_color, surface_chrome};
+#[cfg(not(target_family = "wasm"))]
+pub use ansi::{resolve, terminal_color_scheme, to_hsla};
+pub use gpui_component::apply_gpui_component_theme;
+pub use palette::{hex, packed_from_hsla, parse_hex, readable_on, tint_over_background};
+pub use scheme::reload_from;
+pub use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};

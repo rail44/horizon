@@ -38,10 +38,11 @@ name = "horizon"
 version = "0.1.0"
 edition = "2021"
 
+# Every dependency here must also build for `wasm32-wasip2`: the library
+# target is compiled for that target so a preview-pane plugin view can
+# import from it (`scripts/check-preview-wasm.sh`). Everything else lives
+# in the native-only section below.
 [dependencies]
-alacritty_terminal = "0.26.0"
-crossbeam-channel = "0.5"
-futures = "0.3"
 # gpui ships to crates.io as the `gpui-pre` family -- the packaging the
 # gpui-component v0.6 workspace itself is developed against (`gpui-pre`,
 # `gpui-pre-platform`, `gpui-pre-macros`, `gpui-pre-sum-tree`, ...). The
@@ -51,41 +52,56 @@ futures = "0.3"
 # split the graph into two incompatible `gpui` instances and a `[patch]`
 # was rejected by cargo): these are now ordinary crates.io requirements
 # resolved once into the committed lock like every other dependency.
+# `gpui-pre-platform` (the OS backend) is native-only, below.
 gpui = { package = "gpui-pre", version = "0.3.1" }
+# gpui-component (v0.6 workspace: crates/component) and the bundled icon
+# SVGs now ship as `gpui-kit-assets` (formerly gpui-component-assets); the
+# repository was renamed longbridge/gpui-component -> longbridge/gpui-kit.
+# Nothing else in the graph depends on them, so they carry an explicit rev
+# pin. Bump deliberately: update the rev here and on the two gpui-kit
+# crates in the native-only section (all three share one rev), then
+# `cargo update -p gpui-base -p gpui-component -p gpui-kit-assets`.
+gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
+horizon-config = { path = "crates/horizon-config" }
+# `theme::gpui_component` builds gpui-component's `ThemeConfig` as JSON and
+# deserializes it, so serde_json is on the wasm side of the split too.
+serde_json = "1.0"
+
+# Native-only: each of these either reaches the host (sockets, PTYs, the
+# daemon clients, the OS window/renderer backend) or is used exclusively by
+# a module gated `#[cfg(not(target_family = "wasm"))]` in src/lib.rs.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+alacritty_terminal = "0.26.0"
+crossbeam-channel = "0.5"
+futures = "0.3"
+# The OS event loop, renderer, IME integration, and frame scheduling
+# (`lib.rs`'s `build_application`). Same `gpui-pre` family and version as
+# `gpui` above.
 gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
     "font-kit",
     "wayland",
     "x11",
 ] }
-# gpui-component (v0.6 workspace: crates/component) and the bundled icon
-# SVGs now ship as `gpui-kit-assets` (formerly gpui-component-assets); the
-# repository was renamed longbridge/gpui-component -> longbridge/gpui-kit.
-# Nothing else in the graph depends on them, so they carry an explicit rev
-# pin. Bump deliberately: update the rev below, then
-# `cargo update -p gpui-component -p gpui-kit-assets`.
 # `TextSelection` (the window text-selection queries) lives in `gpui-base`,
 # gpui-component's foundation crate -- `WindowExt::selected_text` is now just
 # a deprecated wrapper around it. Same rev pin as gpui-component above; bump
-# the two together.
+# all three gpui-kit crates together.
 gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
-gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 horizon-agent = { path = "crates/horizon-agent" }
 horizon-board = { path = "crates/horizon-board" }
 horizon-cli = { path = "crates/horizon-cli" }
-horizon-config = { path = "crates/horizon-config" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-wire = { path = "crates/horizon-wire" }
 horizon-workspace = { path = "crates/horizon-workspace" }
-# The `log` facade backend lives in the shell binary (`main.rs`'s
+# The `log` facade backend lives in the shell library (`lib.rs`'s
 # StderrLogger): gpui and its platform crates — including the
 # system-notification stack — report diagnostics through `log`, and with
 # no backend installed they all vanish. Already in the graph via gpui, so
 # this adds no transitive dependencies.
 log = "0.4"
 remoc = { workspace = true }
-serde_json = "1.0"
 termwiz = "0.23.3"
 tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"] }
 # The theme settings view's explicit-Save writer (`src/theme_settings/save.rs`):
@@ -106,7 +122,7 @@ uuid = { version = "1.18", features = ["v4", "serde"] }
 # org.freedesktop.Notifications (gpui's notify-rust/zbus backend). No
 # per-platform dependency here: both backends ship inside the gpui-pre
 # platform crates already in the graph, and both report failures through
-# the `log` facade (see main.rs's StderrLogger). macOS still only
+# the `log` facade (see entry.rs's StderrLogger). macOS still only
 # delivers from a bundled, (ad-hoc) code-signed .app (`just dev-bundle`);
 # gpui's bundle guard degrades to a log line instead of crashing.
 
