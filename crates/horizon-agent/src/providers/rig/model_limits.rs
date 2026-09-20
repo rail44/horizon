@@ -17,35 +17,27 @@
 //! window means Tier 1 clearing **never fires**. There is no fallback
 //! window: an unknown window never clears history.
 //!
-//! The bearer token comes from the environment variable **named** by the
-//! session's [`RigAgentConfig::api_key_env`] -- the same variable
-//! `providers::rig::completion` reads to build the turn's client, never a
-//! hardcoded `OPENAI_API_KEY`. A `[[providers]]` entry keeping its key in
-//! its own variable is therefore discovered with *its* key; before this,
-//! such a session silently got no window and no clearing. Secrets still
-//! never come from the config file (`agent::config`'s module doc): the
-//! config carries the variable's name only, and an unset variable is just
-//! another route to `None`.
+//! The bearer token is read from the environment variable **named** by
+//! [`RigAgentConfig::api_key_env`], the same variable
+//! `providers::rig::completion` reads when it builds the turn's client.
+//! The config carries that name, never a value; an unset variable resolves
+//! to `None` like any other failure.
 //!
-//! The request is OpenAI-shaped throughout -- the `{base_url}/models` path,
-//! the bearer header, and the `context_length`/`max_output_length` fields
-//! are all the openai-compatible listing's -- so only
-//! [`ProviderKind::OpenAiCompatible`] entries are looked up at all.
-//! [`ProviderKind::Anthropic`] resolves to `None` without a request, which
-//! is what it already resolved to: rig's anthropic client authenticates
-//! with `x-api-key` plus `anthropic-version` rather than a bearer token,
-//! and an anthropic entry with no `base_url` falls through to
-//! [`DEFAULT_OPENAI_BASE_URL`] below, whose listing never carries an
-//! Anthropic model id. Short-circuiting keeps that outcome while making
-//! sure the entry's key is not handed to another vendor's endpoint.
+//! Only [`ProviderKind::OpenAiCompatible`] entries are looked up: the
+//! `{base_url}/models` path, the bearer header, and the
+//! `context_length`/`max_output_length` fields are the openai-compatible
+//! listing's. [`ProviderKind::Anthropic`] returns `None` without a request
+//! -- rig's anthropic client authenticates with `x-api-key` plus
+//! `anthropic-version`, and an anthropic entry with no `base_url` resolves
+//! to [`DEFAULT_OPENAI_BASE_URL`] below, so a request here would carry that
+//! entry's key to another vendor's endpoint.
 //!
 //! One lookup per process per `(base_url, api_key_env, model)`, negative
 //! results cached too -- a provider that doesn't publish limits must not be
-//! re-asked once per session for the life of the daemon. The key
-//! *variable's name* is part of that cache key: two entries can share a
-//! base URL and a model yet authenticate differently, and without it the
-//! first one's failure (an unset or wrong key, a `401`) would be served as
-//! the other's answer, disabling clearing for a session whose key is fine.
+//! re-asked once per session for the life of the daemon. The key variable's
+//! name is part of the cache key because two entries can share a base URL
+//! and a model while authenticating differently: one entry's `401` is not
+//! the other's answer.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -91,10 +83,8 @@ impl ModelLimits {
     }
 }
 
-/// Keyed by `(base_url, api_key_env, model)` -- the key variable's *name*,
-/// never its value (see the module doc for why it belongs in the key at
-/// all). The map's value is the *answer*, so a `None` (this provider
-/// declares no limits) is cached exactly like a hit.
+/// Keyed by `(base_url, api_key_env, model)`; the value is the *answer*, so
+/// a `None` (this provider declares no limits) is cached exactly like a hit.
 type LimitsCache = Mutex<HashMap<(String, String, String), Option<ModelLimits>>>;
 
 /// Resolves this process's cached limits for this session's provider entry,
@@ -136,9 +126,8 @@ fn cache() -> &'static LimitsCache {
 }
 
 /// One plain authenticated GET, the bearer token read from the variable
-/// `api_key_env` names. Every error path returns `None` -- see the module
-/// doc: a failed lookup disables clearing, it never degrades into a guessed
-/// window, and an unset key variable is one of those paths.
+/// `api_key_env` names. Every error path returns `None`, an unset key
+/// variable included.
 async fn fetch_model_limits(base_url: &str, api_key_env: &str, model: &str) -> Option<ModelLimits> {
     let api_key = std::env::var(api_key_env).ok()?;
     let client = reqwest::Client::builder()
@@ -284,9 +273,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_entrys_own_key_variable_authenticates_the_lookup() {
-        // A `[[providers]]` entry keeping its key somewhere other than
-        // OPENAI_API_KEY, with OPENAI_API_KEY set to something the mock
-        // rejects: reading the hardcoded variable would come back `None`.
+        // OPENAI_API_KEY holds a key the mock rejects, so a lookup reading
+        // it instead of the entry's own variable comes back `None`.
         std::env::set_var(crate::config::OPENAI_API_KEY_VAR, "not-this-entrys-key");
         std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "entry-key");
         let mock = ModelsMock::start("entry-key").await;
@@ -310,9 +298,8 @@ mod tests {
 
     #[tokio::test]
     async fn entries_differing_only_by_key_variable_do_not_share_an_answer() {
-        // Same base URL, same model, different key variables: the first
-        // entry's failure must not be served as the second's answer, or a
-        // session whose key is fine loses clearing for the daemon's life.
+        // Same base URL and model, different key variables: the rejected
+        // entry's `None` must not become the other entry's cached answer.
         std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_A", "stale-key");
         std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
         let mock = ModelsMock::start("live-key").await;
@@ -386,8 +373,7 @@ mod tests {
 
     #[tokio::test]
     async fn an_anthropic_entry_is_never_asked_for_an_openai_listing() {
-        // Its key must not reach an OpenAI-shaped endpoint, and the answer
-        // stays what it already was -- see the module doc.
+        // The entry's key must not reach an OpenAI-shaped endpoint.
         std::env::set_var("HORIZON_TEST_MODEL_LIMITS_KEY_B", "live-key");
         let mock = ModelsMock::start("live-key").await;
         let anthropic = RigAgentConfig {
