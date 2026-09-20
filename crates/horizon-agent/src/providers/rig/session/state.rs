@@ -733,8 +733,8 @@ mod tests {
     fn selecting_an_unknown_moa_entry_is_an_error_that_changes_nothing() {
         let mut config = RigAgentConfig::default();
         let before = config.model.clone();
-        let error =
-            apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "typo").unwrap_err();
+        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "typo")
+            .unwrap_err();
         assert!(error.contains("Unknown moa entry `typo`"), "{error}");
         assert_eq!(config.model, before);
         assert!(config.moa.is_none());
@@ -774,7 +774,14 @@ mod tests {
     #[test]
     fn switch_passes_a_raw_model_id_through_like_role_model_does() {
         let mut config = RigAgentConfig::default();
-        apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "raw-model-id").unwrap();
+        apply_set_session_model(
+            &mut config,
+            &table(),
+            &moa_table(),
+            "openai",
+            "raw-model-id",
+        )
+        .unwrap();
         assert_eq!(config.model, "raw-model-id");
         assert_eq!(config.kind, ProviderKind::OpenAiCompatible);
         assert_eq!(
@@ -824,9 +831,11 @@ mod tests {
     #[test]
     fn switch_rejects_an_unknown_provider_and_an_empty_model() {
         let mut config = RigAgentConfig::default();
-        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "typo", "m").unwrap_err();
+        let error =
+            apply_set_session_model(&mut config, &table(), &moa_table(), "typo", "m").unwrap_err();
         assert!(error.contains("Unknown provider `typo`"));
-        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "").unwrap_err();
+        let error =
+            apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "").unwrap_err();
         assert!(error.contains("A model id is required"));
         // A failed switch leaves the previous config untouched — the turn
         // in progress and the next one keep the old selection.

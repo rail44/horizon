@@ -127,7 +127,9 @@ pub(super) fn load_rig_session_history(
                 messages: rig_messages_from_horizon_events(fallback_events),
                 cleared_call_ids: cleared_call_ids_from_events(fallback_events),
                 memory_document: memory_document_from_events_if_nonempty(fallback_events),
-                moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
+                moa_conversation: super::session::moa::MoaConversation::from_events(
+                    fallback_events,
+                ),
                 seed_from_fallback: false,
             }
         })

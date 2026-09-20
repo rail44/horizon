@@ -9,10 +9,9 @@
 //! The proposals are projected into the provider-facing message list at a
 //! position fixed for the whole turn (see [`MoaTurn::index`] and
 //! `clearing::history_for_provider_request`) and are never appended to
-//! `rig_history`. The fixed position keeps the request prefix ahead of the
-//! block byte-identical across the turn's rounds and across turns, which is
-//! what the provider's prompt cache keys on; carrying them in the system
-//! prompt instead would change the head of every request.
+//! `rig_history`. The provider's prompt cache keys on the request prefix, so
+//! the position has to keep everything ahead of the block byte-identical
+//! across the turn's rounds and across turns.
 
 use rig_core::completion::Message;
 
@@ -270,11 +269,7 @@ impl SessionLoopState {
     fn install_proposals(&mut self, entry: &str, proposals: Vec<Proposal>) {
         let mut usable = Vec::new();
         for proposal in &proposals {
-            match proposal
-                .text
-                .as_deref()
-                .and_then(sanitize_proposal)
-            {
+            match proposal.text.as_deref().and_then(sanitize_proposal) {
                 Some(text) => usable.push((
                     usable.len() + 1,
                     proposal.member.session_id.as_uuid().to_string(),
@@ -625,8 +620,7 @@ mod tests {
         conversation.record_owner("second question".to_string());
         let rendered = conversation.render();
         assert_eq!(
-            rendered,
-            "User:\nfirst question\n\nAssistant:\nfinal answer\n\nUser:\nsecond question",
+            rendered, "User:\nfirst question\n\nAssistant:\nfinal answer\n\nUser:\nsecond question",
             "{rendered}"
         );
     }
@@ -660,7 +654,10 @@ mod tests {
             sanitize_proposal("Assistant:\nthe answer\n\nUser:\nwhat about x?"),
             Some("the answer".to_string())
         );
-        assert_eq!(sanitize_proposal("  plain answer "), Some("plain answer".to_string()));
+        assert_eq!(
+            sanitize_proposal("  plain answer "),
+            Some("plain answer".to_string())
+        );
         assert_eq!(sanitize_proposal("Assistant:\n   "), None);
     }
 

@@ -417,7 +417,12 @@ impl RawConfig {
             .map(|entry| ResolvedMoaConfig {
                 name: entry.name.clone(),
                 aggregator: resolve(&entry.aggregator),
-                proposers: entry.proposers.iter().filter(|m| known(m)).map(resolve).collect(),
+                proposers: entry
+                    .proposers
+                    .iter()
+                    .filter(|m| known(m))
+                    .map(resolve)
+                    .collect(),
             })
             .collect()
     }

@@ -459,9 +459,7 @@ impl ToolSessionState {
     /// `tools::explore::start` spawns and terminates through, and what
     /// `horizon-agentd` publishes to `tools::moa` for the session loop's
     /// own thread to reach.
-    pub fn exploration_host(
-        &self,
-    ) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
+    pub fn exploration_host(&self) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
         self.inner.exploration.clone()
     }
 
