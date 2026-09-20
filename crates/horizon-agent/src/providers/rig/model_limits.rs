@@ -87,6 +87,12 @@ impl ModelLimits {
 /// a `None` (this provider declares no limits) is cached exactly like a hit.
 type LimitsCache = Mutex<HashMap<(String, String, String), Option<ModelLimits>>>;
 
+/// Keyed by base URL; the value is the ids a *successful* listing returned.
+/// Failures (transport, non-2xx, no ids) are deliberately not cached — a
+/// provider that was briefly unreachable must still answer a later picker
+/// open.
+type ListingCache = Mutex<HashMap<String, Vec<String>>>;
+
 /// Resolves this process's cached limits for this session's provider entry,
 /// fetching them on the first call and reusing the answer -- including a
 /// negative one -- for every later session on the same
@@ -170,6 +176,92 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
             .get("max_output_length")
             .and_then(serde_json::Value::as_u64),
     })
+}
+
+/// The provider's live model-id listing, for the picker's discovery: the
+/// same `GET {base_url}/models` request as [`model_limits`], but it keeps
+/// every `data[].id` rather than looking up one model's limits.
+///
+/// A successful listing is cached process-lifetime, keyed by base URL
+/// (discovery rarely changes mid-run, and a picker reopen must not re-ask);
+/// a failure is not cached. An empty key is treated as "no key" and returns
+/// nothing without a request.
+pub(crate) async fn list_model_ids(base_url: Option<&str>, api_key: &str) -> Vec<String> {
+    if api_key.is_empty() {
+        return Vec::new();
+    }
+    let base = base_url.unwrap_or(DEFAULT_OPENAI_BASE_URL).to_string();
+    if let Some(cached) = cache_listings()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&base).cloned())
+    {
+        return cached;
+    }
+    let ids = fetch_model_ids(&base, api_key).await;
+    if !ids.is_empty() {
+        if let Ok(mut map) = cache_listings().lock() {
+            map.insert(base, ids.clone());
+        }
+    }
+    ids
+}
+
+fn cache_listings() -> &'static ListingCache {
+    static CACHE: OnceLock<ListingCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// One plain authenticated GET, keeping only the ids. Every error path
+/// returns an empty list.
+async fn fetch_model_ids(base_url: &str, api_key: &str) -> Vec<String> {
+    let client = match reqwest::Client::builder()
+        .timeout(MODELS_REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let response = match client
+        .get(models_url(base_url))
+        .bearer_auth(api_key)
+        .send()
+        .await
+    {
+        Ok(response) => response,
+        Err(_) => return Vec::new(),
+    };
+    if !response.status().is_success() {
+        return Vec::new();
+    }
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return Vec::new(),
+    };
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(body) => parse_model_ids(&body),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Every `data[].id` of a `/models` listing, in listing order. Tolerant by
+/// design: both the OpenAI-compatible and the Anthropic listing put the ids
+/// under `data`, and anything malformed simply contributes no ids.
+pub(super) fn parse_model_ids(body: &serde_json::Value) -> Vec<String> {
+    body.get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -486,5 +578,39 @@ mod tests {
             models_url("https://api.synthetic.new/openai/v1/"),
             "https://api.synthetic.new/openai/v1/models"
         );
+    }
+
+    #[test]
+    fn parses_every_id_of_a_listing_in_order() {
+        assert_eq!(
+            parse_model_ids(&synthetic_listing()),
+            vec![
+                "hf:MiniMaxAI/MiniMax-M3".to_string(),
+                "hf:moonshotai/Kimi-K2.7-Code".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_a_standard_openai_listing_too() {
+        // No limits, but the ids are exactly what the picker wants.
+        let body = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o", "object": "model", "owned_by": "openai"}
+            ]
+        });
+        assert_eq!(
+            parse_model_ids(&body),
+            vec!["gpt-4o-mini".to_string(), "gpt-4o".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_malformed_listing_yields_no_ids() {
+        assert!(parse_model_ids(&serde_json::json!({"error": "unauthorized"})).is_empty());
+        assert!(parse_model_ids(&serde_json::json!({"data": "nope"})).is_empty());
+        assert!(parse_model_ids(&serde_json::json!({"data": [{"object": "model"}]})).is_empty());
     }
 }

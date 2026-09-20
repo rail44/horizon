@@ -29,7 +29,7 @@ pub(crate) fn moa_configs(config: &horizon_config::RawConfig) -> Vec<MoaEntry> {
 }
 
 /// Translates the resolved provider surface out of a config file load.
-/// Returns the entries in file order (aliases included, document order
+/// Returns the entries in file order (model ids included, document order
 /// preserved by `horizon-config`) plus the default entry's name.
 pub(crate) fn named_provider_configs(
     config: &horizon_config::RawConfig,

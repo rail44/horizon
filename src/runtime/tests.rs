@@ -315,6 +315,11 @@ impl SessionHub for FakeSessionHub {
         Ok(Vec::new())
     }
 
+    async fn list_provider_models(&self, _provider: String) -> Result<Vec<String>, HubError> {
+        // Same: the fake has no live provider to discover models from.
+        Ok(Vec::new())
+    }
+
     async fn set_session_model(
         &self,
         _session_id: SessionId,

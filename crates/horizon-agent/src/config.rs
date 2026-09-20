@@ -320,7 +320,7 @@ impl AgentConfig {
             // Resolved centrally by `from_env_and_providers` below.
             api_key_present: false,
             models: match model {
-                Some(model) => vec![(model.clone(), model)],
+                Some(model) => vec![model],
                 None => Vec::new(),
             },
         };
@@ -523,9 +523,29 @@ pub struct NamedProviderConfig {
     /// honored by a *switch* (`Command::SetSessionModel` re-reads its
     /// target), not by this value.
     pub api_key_present: bool,
-    /// alias -> model id, in file listing order. The first entry is this
-    /// provider's own default model — the same "first" the picker shows.
-    pub models: Vec<(String, String)>,
+    /// Model ids in file listing order. The first entry is this provider's
+    /// own default model — the same "first" the picker shows.
+    pub models: Vec<String>,
+}
+
+impl NamedProviderConfig {
+    /// The provider's own live model listing (`GET {base_url}/models`), for
+    /// the picker's discovery (`SessionHub::list_provider_models`).
+    /// Resolves this entry the same way [`Self::resolved`] resolves its
+    /// base URL and key name; an unavailable entry (no key variable set) or
+    /// a provider that answers no listing yields an empty list. Never an
+    /// error: this augments the picker, it never blocks a pick.
+    pub async fn list_model_ids(&self) -> Vec<String> {
+        if !self.api_key_present {
+            return Vec::new();
+        }
+        let base_url = resolve_base_url(
+            std::env::var(self.kind.base_url_env()).ok(),
+            self.base_url.clone(),
+        );
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
+        crate::providers::rig::list_model_ids(base_url.as_deref(), &api_key).await
+    }
 }
 
 impl NamedProviderConfig {
@@ -574,16 +594,14 @@ impl NamedProviderConfig {
         match self.kind {
             // The standing precedence, unchanged: env > the entry's first
             // listed model > the built-in GPT_4O_MINI default.
-            ProviderKind::OpenAiCompatible => {
-                resolve_model(env, self.models.first().map(|(_, id)| id.clone()))
-            }
+            ProviderKind::OpenAiCompatible => resolve_model(env, self.models.first().cloned()),
             // An anthropic entry that lists nothing has no Horizon-side
             // default model at all (the empty string `resolved_model`
             // reports as nothing): claiming a model is in play when none
             // is would be the same dishonesty the fallback-mode `None`
             // already refuses.
             ProviderKind::Anthropic => env
-                .or_else(|| self.models.first().map(|(_, id)| id.clone()))
+                .or_else(|| self.models.first().cloned())
                 .unwrap_or_default(),
         }
     }

@@ -65,46 +65,6 @@
 pub mod grants;
 mod warnings;
 
-/// Deserializes a TOML table into its (key, value) pairs *in document
-/// order* — the mechanism [`RawNamedProviderConfig`]'s `models` field uses
-/// to keep the file's listing order (TOML 記載順, owner-agreed for the
-/// picker). serde's own `Vec<(K, V)>` impl expects a sequence and a plain
-/// table would sort keys; this visitor takes the map path instead, whose
-/// `next_entry` order is the parsed table's own — document order under the
-/// `preserve_order` toml feature.
-pub mod ordered_pairs {
-    use serde::de::{Deserializer, MapAccess, Visitor};
-    use std::fmt;
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Vec<(String, String)>, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct OrderedPairsVisitor;
-
-        impl<'de> Visitor<'de> for OrderedPairsVisitor {
-            type Value = Vec<(String, String)>;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("a map of model alias -> model id")
-            }
-
-            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
-            where
-                A: MapAccess<'de>,
-            {
-                let mut pairs = Vec::new();
-                while let Some(pair) = map.next_entry::<String, String>()? {
-                    pairs.push(pair);
-                }
-                Ok(pairs)
-            }
-        }
-
-        deserializer.deserialize_map(OrderedPairsVisitor)
-    }
-}
-
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -253,12 +213,10 @@ impl RawProviderKind {
     }
 }
 
-/// One `[[providers]]` entry as the file writes it. `models` is a map of
-/// *alias* -> model id; it deserializes into pairs so the file's own listing
-/// order survives — the picker's order is TOML 記載順 (owner-agreed), which
-/// the `preserve_order` toml feature backs (the default table would silently
-/// sort keys). TOML itself refuses duplicate keys in one table, so an alias
-/// can't repeat.
+/// One `[[providers]]` entry as the file writes it. `models` is a plain
+/// array of model ids in the file's own order — the first is the entry's
+/// default model, and the picker shows them in that order (TOML arrays keep
+/// document order natively).
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawNamedProviderConfig {
@@ -269,12 +227,8 @@ pub struct RawNamedProviderConfig {
     /// is read from. `None` means the kind's own default
     /// ([`RawProviderKind::default_api_key_env`]).
     pub api_key_env: Option<String>,
-    /// Deserialized through [`ordered_pairs`] so the file's listing order
-    /// survives (serde's own `Vec<(K, V)>` impl expects a sequence, and a
-    /// plain table would sort keys — either would break the order contract
-    /// above).
-    #[serde(default, with = "ordered_pairs")]
-    pub models: Vec<(String, String)>,
+    /// Model ids in listing order (the first is the entry's default).
+    pub models: Vec<String>,
 }
 
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
@@ -289,10 +243,10 @@ pub struct ResolvedProviderConfig {
     pub kind: RawProviderKind,
     pub base_url: Option<String>,
     pub api_key_env: String,
-    /// alias -> model id, in file listing order. The first entry is the
-    /// provider's own default model — the same document order the picker
-    /// shows, so "first" means the same thing to both.
-    pub models: Vec<(String, String)>,
+    /// Model ids in file listing order. The first entry is the provider's
+    /// own default model — the same document order the picker shows, so
+    /// "first" means the same thing to both.
+    pub models: Vec<String>,
 }
 
 /// [`RawConfig::resolved_providers`]'s whole output: the effective entry
@@ -324,11 +278,10 @@ impl RawConfig {
     /// - No named `[[providers]]` entries (the legacy case, including a file
     ///   with no provider config at all) → one implicit entry named
     ///   [`LEGACY_PROVIDER_NAME`] carrying `[provider]`'s `base_url` and,
-    ///   when `[provider].model` is set, that model as its single
-    ///   (model -> model) alias pair. This is what keeps
-    ///   pre-`[[providers]]` behavior intact: same entry count, same knobs,
-    ///   same env precedence (which `horizon_agent::config` resolves on
-    ///   top).
+    ///   when `[provider].model` is set, that model as its single listing
+    ///   entry. This is what keeps pre-`[[providers]]` behavior intact:
+    ///   same entry count, same knobs, same env precedence (which
+    ///   `horizon_agent::config` resolves on top).
     /// - Every entry's `kind`/`api_key_env` `Option`s collapse to their
     ///   defaults ([`RawProviderKind::default`]/[`RawProviderKind::
     ///   default_api_key_env`]).
@@ -341,7 +294,7 @@ impl RawConfig {
         let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
         if self.providers.is_empty() {
             let models = match &self.provider.model {
-                Some(model) => vec![(model.clone(), model.clone())],
+                Some(model) => vec![model.clone()],
                 None => Vec::new(),
             };
             providers.push(ResolvedProviderConfig {

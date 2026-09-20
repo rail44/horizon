@@ -96,20 +96,26 @@
 # - default_provider: which entry runs when nothing else selected it; unset
 #   means the first entry. A name matching no entry falls back to the first
 #   entry (warned).
-# - An entry that lists no models has nothing to select on it (it can still
-#   be a default_provider target only if its kind has a built-in default:
-#   openai-compatible's stays gpt-4o-mini for the legacy implicit entry).
+# - models: an array of model ids, in the order the picker shows them; the
+#   first is the entry's default. The picker augments this with the ids the
+#   provider's own GET /models listing answers (fetched when you drill into
+#   the entry), so an entry can list none and still offer everything the
+#   provider serves.
+# - An entry that lists no models and serves no listing has nothing to
+#   select on it (it can still be a default_provider target only if its kind
+#   has a built-in default: openai-compatible's stays gpt-4o-mini for the
+#   legacy implicit entry).
 #
 # [[providers]]
 # name = "synthetic"
-# models = { "strong" = "gpt-5.2", "fast" = "gpt-4o-mini" }
+# models = ["gpt-5.2", "gpt-4o-mini"]
 # default_provider = "synthetic"
 #
 # [[providers]]
 # name = "claude"
 # kind = "anthropic"
 # api_key_env = "ANTHROPIC_API_KEY"
-# models = { "opus" = "claude-opus-4-6" }
+# models = ["claude-opus-4-6"]
 
 # ---------------------------------------------------------------------------
 # [[moa]] — Mixture-of-Agents entries (docs/agent-moa-design.md).

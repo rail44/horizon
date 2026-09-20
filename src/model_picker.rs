@@ -1,18 +1,22 @@
 //! The model picker: the modal provider→model two-stage chooser opened from
-//! the composer's model chip or the "Switch Model…" palette entry (parent
-//! task #1's Phase 2). Same searchable-`List` delegate pattern as the view
-//! chooser (`src/view_chooser.rs`); the open/subscribe/close lifecycle lives
-//! in `WorkspaceShell::open_model_picker`/`close_model_picker`
+//! the composer's model chip or the "Switch Model…" palette entry. Same
+//! searchable-`List` delegate pattern as the view chooser
+//! (`src/view_chooser.rs`); the open/subscribe/close lifecycle lives in
+//! `WorkspaceShell::open_model_picker`/`close_model_picker`
 //! (`src/workspace/modals.rs`).
 //!
 //! Two stages live in ONE modal list: `Providers` lists every configured
 //! provider in the daemon's `list_providers` order (the `[[providers]]` file
-//! order), and confirming an available provider drills into `Models` (that
-//! provider's aliases, file order again; the first alias is the entry's
-//! default model). Esc walks back a stage before it closes the modal.
-//! Key-unavailable providers stay visible but grayed with the reason (they
-//! are listed, never hidden -- task #2's registry contract), and confirming
-//! one is a no-op.
+//! order), and confirming an available provider drills into `Models`. The
+//! model stage shows the entry's declared model ids (file order, the first
+//! being that entry's default) and, once the daemon answers a
+//! `list_provider_models` fetch, the provider's own live `/models` ids it has
+//! not already declared — so a provider can be left empty on disk and still
+//! offer everything it serves. Esc walks back a stage before it closes the
+//! modal. Key-unavailable providers stay visible but grayed with the reason
+//! (they are listed, never hidden), and confirming one is a no-op.
+
+use std::collections::HashMap;
 
 use gpui::*;
 use gpui_component::list::{ListDelegate, ListItem, ListState};
@@ -33,17 +37,27 @@ pub(crate) enum PickerStage {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PickerItem {
     Provider(usize),
-    Model { provider: usize, alias: usize },
+    Model { provider: usize, model: usize },
 }
 
 /// What a model-stage confirm hands back to the shell: the provider name and
-/// the alias to send to `SessionHub::set_session_model`. The daemon resolves
-/// the alias to the actual model id -- the `SessionModel` echo, not this
-/// pair, is authoritative for what will actually run.
+/// the model id to send to `SessionHub::set_session_model`. The `SessionModel`
+/// echo, not this pair, is authoritative for what will actually run.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct ConfirmedModel {
     pub(crate) provider: String,
-    pub(crate) alias: String,
+    pub(crate) model: String,
+}
+
+/// A provider's live `/models` discovery state (see
+/// `SessionHub::list_provider_models`).
+#[derive(Clone, Debug, Default)]
+struct LiveListings {
+    /// Ids the provider itself listed, in that listing's order. Empty until
+    /// the fetch answers.
+    ids: Vec<String>,
+    /// `true` from the drill-in until the fetch reply lands (or fails).
+    loading: bool,
 }
 
 /// The delegate's whole state, free of GPUI types so the stage machine,
@@ -53,10 +67,15 @@ pub(crate) struct PickerState {
     all: Vec<ProviderSummary>,
     stage: PickerStage,
     filtered: Vec<PickerItem>,
+    /// The active search query, kept so a live-models reply can re-filter
+    /// without dropping what the user typed.
+    query: String,
     /// `true` from open until the async `list_providers` reply lands, so the
     /// empty surface can render "Loading…" rather than "no providers
     /// configured".
     loading: bool,
+    /// Per provider index: the live `/models` discovery state (v22).
+    live: HashMap<usize, LiveListings>,
 }
 
 impl PickerState {
@@ -65,7 +84,9 @@ impl PickerState {
             all: Vec::new(),
             stage: PickerStage::Providers,
             filtered: Vec::new(),
+            query: String::new(),
             loading: true,
+            live: HashMap::new(),
         }
     }
 
@@ -75,11 +96,13 @@ impl PickerState {
 
     /// The async `list_providers` reply. A fetch failure delivers an empty
     /// list: the surface reads as "no providers configured", and a retry is
-    /// one close+reopen away (the picker re-fetches on every open).
+    /// one close+reopen away (the picker re-fetches on every open). Fresh
+    /// providers discard any previous run's live listings.
     pub(crate) fn set_providers(&mut self, providers: Vec<ProviderSummary>) {
         self.all = providers;
         self.stage = PickerStage::Providers;
         self.loading = false;
+        self.live.clear();
         self.refilter("");
     }
 
@@ -87,40 +110,106 @@ impl PickerState {
         &self.all
     }
 
+    /// The model ids the model stage offers for `provider`: the entry's
+    /// declared ids first (file order), then the live `/models` ids it has
+    /// not already declared.
+    pub(crate) fn model_ids(&self, provider: usize) -> Vec<String> {
+        let mut ids = self
+            .all
+            .get(provider)
+            .map(|entry| entry.models.clone())
+            .unwrap_or_default();
+        if let Some(live) = self.live.get(&provider) {
+            for id in &live.ids {
+                if !ids.iter().any(|existing| existing == id) {
+                    ids.push(id.clone());
+                }
+            }
+        }
+        ids
+    }
+
+    /// Marks `provider`'s live listing as in flight. `true` when this call
+    /// started the fetch (the caller then sends `list_provider_models`);
+    /// `false` when it was already loaded or already in flight, so a drill-in
+    /// that happens twice does not re-ask.
+    pub(crate) fn begin_live_load(&mut self, provider: usize) -> bool {
+        let entry = self.live.entry(provider).or_default();
+        if entry.loading || !entry.ids.is_empty() {
+            return false;
+        }
+        entry.loading = true;
+        true
+    }
+
+    /// The async `list_provider_models` reply (a failed fetch arrives as an
+    /// empty list). Re-filters so the new rows appear at once. An empty
+    /// answer is not cached as "known empty" beyond this modal instance --
+    /// the next open starts a fresh fetch.
+    pub(crate) fn set_live_models(&mut self, provider: usize, ids: Vec<String>) {
+        let entry = self.live.entry(provider).or_default();
+        entry.ids = ids;
+        entry.loading = false;
+        let query = self.query.clone();
+        self.refilter(&query);
+    }
+
+    fn is_live_loading(&self, provider: usize) -> bool {
+        self.live.get(&provider).is_some_and(|live| live.loading)
+    }
+
+    /// The empty-surface label for the current stage and state.
+    pub(crate) fn empty_label(&self) -> &'static str {
+        match &self.stage {
+            PickerStage::Providers => {
+                if self.is_loading() {
+                    "Loading providers…"
+                } else {
+                    "No providers configured"
+                }
+            }
+            PickerStage::Models { provider } => {
+                if self.is_live_loading(*provider) {
+                    "Loading models…"
+                } else if self.model_ids(*provider).is_empty() {
+                    "No models listed"
+                } else {
+                    "No matching models"
+                }
+            }
+        }
+    }
+
     /// Rows visible at a stage, unfiltered -- the pure stage→rows mapping the
     /// tests drive directly.
-    fn rows(stage: &PickerStage, all: &[ProviderSummary]) -> Vec<PickerItem> {
-        match stage {
-            PickerStage::Providers => (0..all.len()).map(PickerItem::Provider).collect(),
-            PickerStage::Models { provider } => {
-                let Some(entry) = all.get(*provider) else {
-                    return Vec::new();
-                };
-                (0..entry.models.len())
-                    .map(|alias| PickerItem::Model {
-                        provider: *provider,
-                        alias,
-                    })
-                    .collect()
-            }
+    fn rows(&self) -> Vec<PickerItem> {
+        match self.stage {
+            PickerStage::Providers => (0..self.all.len()).map(PickerItem::Provider).collect(),
+            PickerStage::Models { provider } => (0..self.model_ids(provider).len())
+                .map(|model| PickerItem::Model { provider, model })
+                .collect(),
         }
     }
 
     fn item_text(&self, item: &PickerItem) -> String {
         match item {
             PickerItem::Provider(index) => self.all[*index].name.clone(),
-            PickerItem::Model { provider, alias } => {
-                self.all[*provider].models[*alias].alias.clone()
-            }
+            PickerItem::Model { provider, model } => self
+                .model_ids(*provider)
+                .get(*model)
+                .cloned()
+                .unwrap_or_default(),
         }
     }
 
     fn refilter(&mut self, query: &str) {
-        let query = query.trim().to_ascii_lowercase();
-        self.filtered = Self::rows(&self.stage, &self.all)
+        self.query = query.to_string();
+        let needle = query.trim().to_ascii_lowercase();
+        self.filtered = self
+            .rows()
             .into_iter()
             .filter(|item| {
-                query.is_empty() || self.item_text(item).to_ascii_lowercase().contains(&query)
+                needle.is_empty() || self.item_text(item).to_ascii_lowercase().contains(&needle)
             })
             .collect();
     }
@@ -139,22 +228,22 @@ impl PickerState {
 
     /// Confirm semantics: `Some` closes the modal with a model switch,
     /// `None` keeps it open (drill into a provider, or a no-op row). A
-    /// provider row confirms only when it is available AND has at least one
-    /// model to offer.
+    /// provider row drills in only when it is available; a model row always
+    /// confirms.
     pub(crate) fn confirm_at(&mut self, index: IndexPath) -> Option<ConfirmedModel> {
         let item = self.item_at(index)?;
         match item {
-            PickerItem::Model { provider, alias } => {
-                let entry = self.all.get(provider)?;
-                let model = entry.models.get(alias)?;
+            PickerItem::Model { provider, model } => {
+                let name = self.all.get(provider)?.name.clone();
+                let id = self.model_ids(provider).into_iter().nth(model)?;
                 Some(ConfirmedModel {
-                    provider: entry.name.clone(),
-                    alias: model.alias.clone(),
+                    provider: name,
+                    model: id,
                 })
             }
             PickerItem::Provider(index) => {
                 let entry = self.all.get(index)?;
-                if !entry.available || entry.models.is_empty() {
+                if !entry.available {
                     return None;
                 }
                 self.stage = PickerStage::Models { provider: index };
@@ -268,14 +357,19 @@ impl ListDelegate for ModelPickerDelegate {
                 };
                 (entry.name.clone(), detail, color)
             }
-            PickerItem::Model { provider, alias } => {
-                let model = &self.state.providers()[*provider].models[*alias];
+            PickerItem::Model { provider, model } => {
+                let id = self
+                    .state
+                    .model_ids(*provider)
+                    .get(*model)
+                    .cloned()
+                    .unwrap_or_default();
                 let color = if is_selected {
                     theme::readable_on(theme::text_primary(), theme::surface_selected())
                 } else {
                     theme::text_primary()
                 };
-                (model.alias.clone(), String::new(), color)
+                (id, String::new(), color)
             }
         };
         let mut row = div().flex().flex_col().py_0p5();
@@ -310,11 +404,7 @@ impl ListDelegate for ModelPickerDelegate {
         _window: &mut Window,
         _cx: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        let label = if self.state.is_loading() {
-            "Loading providers…"
-        } else {
-            "No providers configured"
-        };
+        let label = self.state.empty_label();
         h_flex()
             .size_full()
             .justify_center()
@@ -327,27 +417,16 @@ impl ListDelegate for ModelPickerDelegate {
 #[cfg(test)]
 mod tests {
     use gpui_component::IndexPath;
-    use horizon_agent::wire::{ModelAlias, ProviderSummary};
+    use horizon_agent::wire::ProviderSummary;
 
     use super::{unavailable_reason, ConfirmedModel, PickerItem, PickerStage, PickerState};
 
-    fn summary(
-        name: &str,
-        available: bool,
-        default: bool,
-        aliases: &[(&str, &str)],
-    ) -> ProviderSummary {
+    fn summary(name: &str, available: bool, default: bool, models: &[&str]) -> ProviderSummary {
         ProviderSummary {
             name: name.to_string(),
             base_url: None,
             api_key_env: format!("{name}_API_KEY"),
-            models: aliases
-                .iter()
-                .map(|(alias, model)| ModelAlias {
-                    alias: alias.to_string(),
-                    model: model.to_string(),
-                })
-                .collect(),
+            models: models.iter().map(|model| model.to_string()).collect(),
             available,
             default,
         }
@@ -355,13 +434,8 @@ mod tests {
 
     fn providers() -> Vec<ProviderSummary> {
         vec![
-            summary(
-                "openai",
-                true,
-                true,
-                &[("gpt-4o", "gpt-4o-2024"), ("mini", "gpt-4o-mini")],
-            ),
-            summary("anthropic", false, false, &[("opus", "m-opus")]),
+            summary("openai", true, true, &["gpt-4o-2024", "gpt-4o-mini"]),
+            summary("anthropic", false, false, &["m-opus"]),
         ]
     }
 
@@ -378,7 +452,7 @@ mod tests {
     }
 
     #[test]
-    fn confirming_an_available_provider_drills_into_its_models_in_order() {
+    fn confirming_an_available_provider_drills_into_its_declared_models_in_order() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         assert_eq!(
@@ -396,19 +470,19 @@ mod tests {
             &[
                 PickerItem::Model {
                     provider: 0,
-                    alias: 0
+                    model: 0
                 },
                 PickerItem::Model {
                     provider: 0,
-                    alias: 1
+                    model: 1
                 },
             ],
-            "the model stage lists the entry's aliases in file order"
+            "the model stage lists the entry's declared ids in file order"
         );
     }
 
     #[test]
-    fn confirming_an_unavailable_or_model_less_provider_is_a_noop() {
+    fn confirming_an_unavailable_provider_is_a_noop() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         assert_eq!(state.confirm_at(IndexPath::new(1)), None);
@@ -417,14 +491,24 @@ mod tests {
             &PickerStage::Providers,
             "a key-unavailable provider must not drill"
         );
-        let mut state = PickerState::new();
-        state.set_providers(vec![summary("empty", true, false, &[])]);
-        assert_eq!(state.confirm_at(IndexPath::new(0)), None);
-        assert_eq!(state.stage(), &PickerStage::Providers);
     }
 
     #[test]
-    fn confirming_a_model_hands_back_the_provider_and_alias() {
+    fn a_model_less_available_provider_still_drills_in_and_asks_for_live_models() {
+        let mut state = PickerState::new();
+        state.set_providers(vec![summary("empty", true, false, &[])]);
+        assert_eq!(state.confirm_at(IndexPath::new(0)), None);
+        assert_eq!(state.stage(), &PickerStage::Models { provider: 0 });
+        assert!(
+            state.items().is_empty(),
+            "nothing declared, nothing discovered yet"
+        );
+        assert!(state.begin_live_load(0), "the drill starts a live fetch");
+        assert_eq!(state.empty_label(), "Loading models…");
+    }
+
+    #[test]
+    fn confirming_a_model_hands_back_the_provider_and_model_id() {
         let mut state = PickerState::new();
         state.set_providers(providers());
         state.confirm_at(IndexPath::new(0));
@@ -432,7 +516,72 @@ mod tests {
             state.confirm_at(IndexPath::new(1)),
             Some(ConfirmedModel {
                 provider: "openai".to_string(),
-                alias: "mini".to_string(),
+                model: "gpt-4o-mini".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn live_models_merge_after_the_declared_ids_without_duplicating_them() {
+        let mut state = PickerState::new();
+        state.set_providers(providers());
+        state.confirm_at(IndexPath::new(0));
+        assert!(state.begin_live_load(0));
+        state.set_live_models(0, vec!["gpt-4o-mini".to_string(), "gpt-5.2".to_string()]);
+        assert_eq!(
+            state.model_ids(0),
+            vec![
+                "gpt-4o-2024".to_string(),
+                "gpt-4o-mini".to_string(),
+                "gpt-5.2".to_string(),
+            ],
+            "declared ids keep their place; a discovered id already declared is dropped"
+        );
+        assert_eq!(
+            state.items(),
+            &[
+                PickerItem::Model {
+                    provider: 0,
+                    model: 0
+                },
+                PickerItem::Model {
+                    provider: 0,
+                    model: 1
+                },
+                PickerItem::Model {
+                    provider: 0,
+                    model: 2
+                },
+            ]
+        );
+        assert!(!state.begin_live_load(0), "already loaded: no refetch");
+    }
+
+    #[test]
+    fn a_live_fetch_is_not_started_twice_while_it_is_in_flight() {
+        let mut state = PickerState::new();
+        state.set_providers(providers());
+        state.confirm_at(IndexPath::new(0));
+        assert!(state.begin_live_load(0), "the first drill starts the fetch");
+        assert!(
+            !state.begin_live_load(0),
+            "still in flight: no second fetch"
+        );
+        state.set_live_models(0, vec!["gpt-5.2".to_string()]);
+        assert!(!state.begin_live_load(0), "already loaded: no refetch");
+    }
+
+    #[test]
+    fn discovering_a_model_lets_it_be_confirmed_as_a_raw_id() {
+        let mut state = PickerState::new();
+        state.set_providers(providers());
+        state.confirm_at(IndexPath::new(0));
+        state.set_live_models(0, vec!["gpt-5.2".to_string()]);
+        assert_eq!(
+            state.confirm_at(IndexPath::new(2)),
+            Some(ConfirmedModel {
+                provider: "openai".to_string(),
+                model: "gpt-5.2".to_string(),
             })
         );
     }
@@ -473,11 +622,11 @@ mod tests {
             &[
                 PickerItem::Model {
                     provider: 0,
-                    alias: 0
+                    model: 0
                 },
                 PickerItem::Model {
                     provider: 0,
-                    alias: 1
+                    model: 1
                 },
             ]
         );
@@ -486,7 +635,7 @@ mod tests {
             state.items(),
             &[PickerItem::Model {
                 provider: 0,
-                alias: 1
+                model: 1
             }]
         );
     }
@@ -505,7 +654,7 @@ mod tests {
 
     #[test]
     fn the_unavailable_reason_names_the_missing_variable() {
-        let mut entry = summary("anthropic", false, false, &[("opus", "m-opus")]);
+        let mut entry = summary("anthropic", false, false, &["m-opus"]);
         assert_eq!(
             unavailable_reason(&entry),
             "environment variable `anthropic_API_KEY` is not set"

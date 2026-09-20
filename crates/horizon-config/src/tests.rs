@@ -504,12 +504,12 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
     let config = parse(
         "[[providers]]\n\
          name = \"synthetic\"\n\
-         models = { \"strong\" = \"gpt-5.2\" }\n\
+         models = [\"gpt-5.2\"]\n\
          [[providers]]\n\
          name = \"claude\"\n\
          kind = \"anthropic\"\n\
          api_key_env = \"CLAUDE_KEY\"\n\
-         models = { \"opus\" = \"claude-opus-4-6\" }\n",
+         models = [\"claude-opus-4-6\"]\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();
@@ -535,25 +535,17 @@ fn named_providers_resolve_in_file_order_with_defaults_collapsed() {
 }
 
 #[test]
-fn models_map_keeps_the_file_listing_order() {
-    // The picker's order is TOML 記載順 (owner-agreed): a map whose keys
-    // would sort alphabetically under a BTreeMap-backed table must resolve
-    // in the order the file lists it — the whole point of the
-    // `preserve_order` toml feature.
+fn models_list_keeps_the_file_listing_order() {
+    // The picker's order is the file's own model order: a TOML array keeps
+    // document order natively, and the first id is the entry's default.
     let config = parse(
         "[[providers]]\n\
          name = \"synthetic\"\n\
-         models = { \"zeta\" = \"m-zeta\", \"alpha\" = \"m-alpha\", \"mid\" = \"m-mid\" }\n",
+         models = [\"m-zeta\", \"m-alpha\", \"m-mid\"]\n",
     )
     .unwrap();
     let models = &config.resolved_providers().providers[0].models;
-    assert_eq!(
-        models
-            .iter()
-            .map(|(alias, _)| alias.as_str())
-            .collect::<Vec<_>>(),
-        vec!["zeta", "alpha", "mid"]
-    );
+    assert_eq!(models, &["m-zeta", "m-alpha", "m-mid"]);
 }
 
 #[test]
@@ -598,12 +590,9 @@ fn legacy_provider_table_folds_in_as_one_implicit_default_entry() {
         resolution.providers[0].base_url.as_deref(),
         Some("https://example.invalid")
     );
-    // The single legacy model is its own (model -> model) alias pair, so the
-    // picker shows exactly what a `[provider]`-only file ever offered.
-    assert_eq!(
-        resolution.providers[0].models,
-        vec![("gpt-test".to_string(), "gpt-test".to_string())]
-    );
+    // The single legacy model is the entry's one listed id, so the picker
+    // shows exactly what a `[provider]`-only file ever offered.
+    assert_eq!(resolution.providers[0].models, vec!["gpt-test".to_string()]);
     assert_eq!(resolution.default_name, LEGACY_PROVIDER_NAME);
     assert!(provider_config_warnings(&config).is_empty());
 }
@@ -626,7 +615,7 @@ fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
 fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
     let config = parse(
         "[provider]\nmodel = \"gpt-legacy\"\nbase_url = \"https://legacy.invalid\"\n\
-         [[providers]]\nname = \"synthetic\"\nmodels = { \"strong\" = \"gpt-5.2\" }\n",
+         [[providers]]\nname = \"synthetic\"\nmodels = [\"gpt-5.2\"]\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();
@@ -636,7 +625,7 @@ fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
     assert!(resolution.providers[0]
         .models
         .iter()
-        .all(|(_, id)| id != "gpt-legacy"));
+        .all(|id| id != "gpt-legacy"));
     assert!(provider_config_warnings(&config)
         .iter()
         .any(|warning| warning.contains("[provider]: ignored because [[providers]] is set")));
@@ -646,7 +635,7 @@ fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
 fn nameless_entries_are_dropped_and_warned() {
     let config = parse(
         "[[providers]]\nname = \"synthetic\"\n\
-         [[providers]]\nmodels = { \"orphan\" = \"m\" }\n",
+         [[providers]]\nmodels = [\"m\"]\n",
     )
     .unwrap();
     let resolution = config.resolved_providers();

@@ -8,6 +8,8 @@ mod session;
 mod session_prompt;
 mod stream;
 
+pub(crate) use model_limits::list_model_ids;
+
 use clearing::ClearingState;
 #[allow(unused_imports)]
 use completion::{complete_rig_turn, ToolCallDescriptor, TurnCompletion};

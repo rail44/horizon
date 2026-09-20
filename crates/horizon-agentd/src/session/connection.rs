@@ -7,8 +7,7 @@ use std::time::Duration;
 use horizon_agent::contract::{Command, Event, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
-    AgentWireEvent, HostToolRequest, HostToolResponse, ModelAlias, ProviderSummary, SessionNew,
-    SessionSummary,
+    AgentWireEvent, HostToolRequest, HostToolResponse, ProviderSummary, SessionNew, SessionSummary,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -62,14 +61,15 @@ impl Connection {
         Ok(())
     }
 
-    /// Every configured provider with its model aliases and availability —
-    /// the model picker's data. Reads the agent config (the same table the
-    /// registry was built from), so it reflects the loaded `[[providers]]`
-    /// surface, or the legacy `[provider]` fold-in when the file has none;
-    /// entries run in the config file's order, aliases in their own listing
-    /// order. `available` is the build-time-resolved key presence — the
-    /// same rule the registry itself follows; a mid-session environment
-    /// change is honored by a *switch*, not by this listing.
+    /// Every configured provider with its declared model ids and
+    /// availability — the model picker's data. Reads the agent config (the
+    /// same table the registry was built from), so it reflects the loaded
+    /// `[[providers]]` surface, or the legacy `[provider]` fold-in when the
+    /// file has none; entries run in the config file's order, each entry's
+    /// model ids in their own listing order. `available` is the
+    /// build-time-resolved key presence — the same rule the registry itself
+    /// follows; a mid-session environment change is honored by a *switch*,
+    /// not by this listing.
     pub(crate) fn list_providers(&self) -> Vec<ProviderSummary> {
         let config = lock_unpoisoned(&self.state.agent_config);
         let table = &config.providers;
@@ -80,14 +80,7 @@ impl Connection {
                 name: entry.name.clone(),
                 base_url: entry.base_url.clone(),
                 api_key_env: entry.api_key_env.clone(),
-                models: entry
-                    .models
-                    .iter()
-                    .map(|(alias, model)| ModelAlias {
-                        alias: alias.clone(),
-                        model: model.clone(),
-                    })
-                    .collect(),
+                models: entry.models.clone(),
                 available: entry.api_key_present,
                 default: entry.name == table.default_name,
             })
@@ -115,10 +108,7 @@ impl Connection {
                     .moa
                     .entries
                     .iter()
-                    .map(|entry| ModelAlias {
-                        alias: entry.name.clone(),
-                        model: entry.name.clone(),
-                    })
+                    .map(|entry| entry.name.clone())
                     .collect(),
                 available,
                 default: false,
@@ -127,14 +117,28 @@ impl Connection {
         summaries
     }
 
+    /// A provider's own live model-id listing for the picker's discovery
+    /// (`SessionHub::list_provider_models`), fetched by the entry's own
+    /// resolved base URL and key. An unknown provider, an unavailable entry,
+    /// or an endpoint that answers nothing yields an empty list — discovery
+    /// augments the picker, it never blocks a pick.
+    pub(crate) async fn list_provider_models(&self, provider: &str) -> Vec<String> {
+        let entry = {
+            let config = lock_unpoisoned(&self.state.agent_config);
+            config.providers.entry(provider).cloned()
+        };
+        match entry {
+            Some(entry) => entry.list_model_ids().await,
+            None => Vec::new(),
+        }
+    }
+
     /// Applies a mid-session provider/model switch (latest turn wins):
-    /// validates the pair against the current surface, resolves the model
-    /// id (alias first — the picker only offers aliases — else the raw id,
-    /// the same pass-through `role.model` accepts), records the resolved id
+    /// validates the pair against the current surface, records the model id
     /// on the session (so a (re)attach re-announces the switched model),
     /// forwards `Command::SetSessionModel` to the session thread (its next
     /// turn builds with the target entry), and re-announces
-    /// [`AgentWireEvent::SessionModel`] — the owner-agreed design's
+    /// [`AgentWireEvent::SessionModel`] — the multi-provider design's
     /// "resolution results ride the existing announcement".
     ///
     /// The command is forwarded before the announcement so a turn that
@@ -169,15 +173,10 @@ impl Connection {
                 }
                 entry.aggregator.model.clone()
             } else {
-                let Some(entry) = config.providers.entry(&provider) else {
+                if config.providers.entry(&provider).is_none() {
                     return Err(format!("Unknown provider `{provider}`."));
-                };
-                entry
-                    .models
-                    .iter()
-                    .find(|(alias, _)| alias == &model)
-                    .map(|(_, id)| id.clone())
-                    .unwrap_or_else(|| model.clone())
+                }
+                model.clone()
             }
         };
         let inbound = {
@@ -564,7 +563,7 @@ mod tests {
                 base_url: None,
                 api_key_env: "OPENAI_API_KEY".to_string(),
                 api_key_present: true,
-                models: vec![("fast".to_string(), "m-fast".to_string())],
+                models: vec!["m-fast".to_string()],
             },
             NamedProviderConfig {
                 name: "claude".to_string(),
@@ -572,7 +571,7 @@ mod tests {
                 base_url: None,
                 api_key_env: "ANTHROPIC_API_KEY".to_string(),
                 api_key_present: false,
-                models: vec![("opus".to_string(), "m-opus".to_string())],
+                models: vec!["m-opus".to_string()],
             },
         ];
         let agent_config = horizon_agent::config::AgentConfig {
@@ -621,13 +620,7 @@ mod tests {
         assert_eq!(summaries[0].name, "openai");
         assert!(summaries[0].available);
         assert!(summaries[0].default);
-        assert_eq!(
-            summaries[0].models,
-            vec![horizon_agent::wire::ModelAlias {
-                alias: "fast".to_string(),
-                model: "m-fast".to_string(),
-            }]
-        );
+        assert_eq!(summaries[0].models, vec!["m-fast".to_string()]);
         assert_eq!(summaries[1].name, "claude");
         assert!(!summaries[1].available);
         assert!(!summaries[1].default);
@@ -636,13 +629,12 @@ mod tests {
         assert_eq!(summaries[1].api_key_env, "ANTHROPIC_API_KEY");
     }
 
-    /// `set_session_model` resolves the alias, records the resolved model
-    /// on the session, forwards `Command::SetSessionModel` to the session
-    /// thread (the next turn builds with it), and re-announces
-    /// `SessionModel` — the owner-agreed "resolution rides the existing
-    /// announcement".
+    /// `set_session_model` records the model id on the session, forwards
+    /// `Command::SetSessionModel` to the session thread (the next turn builds
+    /// with it), and re-announces `SessionModel` — the multi-provider
+    /// design's "resolution results ride the existing announcement".
     #[test]
-    fn set_session_model_resolves_announces_and_forwards_the_switch() {
+    fn set_session_model_records_announces_and_forwards_the_switch() {
         let (state, _entries) = two_provider_state();
         let session_id = SessionId::new();
         let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -663,11 +655,11 @@ mod tests {
         let connection = Connection { state };
         let mut events = connection.subscribe_agent(session_id);
         connection
-            .set_session_model(session_id, "claude".to_string(), "opus".to_string())
+            .set_session_model(session_id, "claude".to_string(), "m-opus".to_string())
             .unwrap();
 
-        // The resolved model (the alias -> id) landed on the session — a
-        // re-attach would re-announce the switched model, not the old one.
+        // The model id landed on the session — a re-attach would re-announce
+        // the switched model, not the old one.
         assert_eq!(
             connection.session_model(session_id).as_deref(),
             Some("m-opus")
@@ -678,7 +670,7 @@ mod tests {
             matches!(
                 &command,
                 Command::SetSessionModel { provider, model }
-                    if provider == "claude" && model == "opus"
+                    if provider == "claude" && model == "m-opus"
             ),
             "{command:?}"
         );
@@ -737,17 +729,11 @@ mod tests {
         assert_eq!(
             group.models,
             vec![
-                horizon_agent::wire::ModelAlias {
-                    alias: "mix".to_string(),
-                    model: "mix".to_string(),
-                },
+                "mix".to_string(),
                 // Listed even though its aggregator has no key: the group
                 // carries one availability flag, so an unusable entry is
                 // refused on confirm rather than hidden.
-                horizon_agent::wire::ModelAlias {
-                    alias: "stranded".to_string(),
-                    model: "stranded".to_string(),
-                },
+                "stranded".to_string(),
             ]
         );
 
@@ -849,8 +835,19 @@ mod tests {
         // A known provider against an unknown session is the caller's bug
         // too — an error, not a silent no-op.
         let error = connection
-            .set_session_model(SessionId::new(), "openai".to_string(), "fast".to_string())
+            .set_session_model(SessionId::new(), "openai".to_string(), "m-fast".to_string())
             .unwrap_err();
         assert!(error.contains("Unknown session"), "{error}");
+    }
+
+    /// Discovery never blocks a pick: an unavailable entry (no key) answers
+    /// an empty list without ever making a request, and an unknown provider
+    /// is empty too (not an error).
+    #[tokio::test]
+    async fn list_provider_models_is_empty_for_an_unavailable_or_unknown_provider() {
+        let (state, _entries) = two_provider_state();
+        let connection = Connection { state };
+        assert!(connection.list_provider_models("claude").await.is_empty());
+        assert!(connection.list_provider_models("typo").await.is_empty());
     }
 }

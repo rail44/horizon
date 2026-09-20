@@ -398,6 +398,34 @@ impl AgentdHandle {
             })?
     }
 
+    /// Call from a background task: the model picker fetches a provider's
+    /// live model listing this way when a provider is chosen (v22). Same
+    /// shape as [`Self::list_providers`]; an empty list (unavailable entry,
+    /// no listing, transport failure) is a normal answer, not an error.
+    pub(crate) fn list_provider_models(&self, provider: String) -> Result<Vec<String>, String> {
+        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
+        if self
+            .ops
+            .send(agent::Op::ListProviderModels {
+                provider,
+                reply: reply_tx,
+            })
+            .is_err()
+        {
+            return Err("session runtime stopped before the model list was sent".to_string());
+        }
+        reply_rx
+            .recv_timeout(SYNC_REPLY_TIMEOUT)
+            .map_err(|err| match err {
+                crossbeam_channel::RecvTimeoutError::Timeout => {
+                    "the model list did not complete in time".to_string()
+                }
+                crossbeam_channel::RecvTimeoutError::Disconnected => {
+                    "session runtime stopped before the model list completed".to_string()
+                }
+            })?
+    }
+
     /// Call from a background task: the model picker's confirm path. The
     /// reply carries the daemon's synchronous validation error (unknown
     /// provider, unknown session, empty model id) when the switch was

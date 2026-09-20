@@ -156,7 +156,7 @@ mod tests {
                     base_url: None,
                     api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
                     api_key_present: false,
-                    models: vec![("solo".to_string(), "m-solo".to_string())],
+                    models: vec!["m-solo".to_string()],
                 }],
                 default_name: "solo".to_string(),
             },

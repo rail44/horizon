@@ -145,21 +145,26 @@ impl WorkspaceShell {
                             }
                         }
                         // Either a provider confirm drilled into the model
-                        // stage (stay open on it) or a disabled/model-less
-                        // row was a no-op (stay open where it was).
+                        // stage (ask the daemon for its live /models listing,
+                        // once, and stay open on it) or a disabled provider row
+                        // was a no-op (stay open where it was).
                         None => {
-                            list.update(cx, |list, cx| {
-                                if list.delegate().state().stage()
-                                    == &crate::model_picker::PickerStage::Providers
-                                {
-                                    return;
-                                }
-                                // The providers-stage query carries no
-                                // meaning into the model stage: clear it and
-                                // re-select the new stage's first row.
+                            let stage = list.read(cx).delegate().state().stage().clone();
+                            let crate::model_picker::PickerStage::Models { provider } = stage
+                            else {
+                                return;
+                            };
+                            let needs_fetch = list.update(cx, |list, cx| {
+                                // The providers-stage query carries no meaning
+                                // into the model stage: clear it and re-select
+                                // the new stage's first row.
                                 list.set_query("", window, cx);
                                 select_first_row_on_open(list, window, cx);
+                                list.delegate_mut().state_mut().begin_live_load(provider)
                             });
+                            if needs_fetch {
+                                shell.fetch_provider_models(provider, cx);
+                            }
                         }
                     }
                 }
@@ -267,8 +272,64 @@ impl WorkspaceShell {
         .detach();
     }
 
+    /// One `list_provider_models` pull for `provider`, off the UI thread —
+    /// the model picker's drill-in discovery (v22). Guarded like
+    /// [`Self::fetch_providers`]: a modal closed (or a runtime swapped out)
+    /// before the reply lands drops the result. A failed fetch delivers an
+    /// empty list, so the stage falls back to the declared ids alone and a
+    /// re-drill retries (the daemon caches only successful listings).
+    fn fetch_provider_models(&mut self, provider: usize, cx: &mut Context<Self>) {
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let Some(provider_name) = self
+            .model_picker
+            .as_ref()
+            .and_then(|list| list.read(cx).delegate().state().providers().get(provider))
+            .map(|entry| entry.name.clone())
+        else {
+            return;
+        };
+        let window_handle = self.window;
+        cx.spawn(async move |this, cx| {
+            let runtime = handle.clone();
+            let result = cx
+                .background_executor()
+                .spawn(async move { runtime.list_provider_models(provider_name) })
+                .await;
+            let _ = window_handle.update(cx, |_, _window, cx| {
+                let _ = this.update(cx, |shell, cx| {
+                    if shell.model_picker.is_none()
+                        || shell
+                            .agentd
+                            .as_ref()
+                            .is_none_or(|current| !current.same_runtime(&handle))
+                    {
+                        return;
+                    }
+                    let ids = match result {
+                        Ok(ids) => ids,
+                        Err(error) => {
+                            eprintln!("failed to list models for provider {provider}: {error}");
+                            Vec::new()
+                        }
+                    };
+                    if let Some(list) = &shell.model_picker {
+                        list.update(cx, |list, cx| {
+                            list.delegate_mut()
+                                .state_mut()
+                                .set_live_models(provider, ids);
+                            cx.notify();
+                        });
+                    }
+                });
+            });
+        })
+        .detach();
+    }
+
     /// Fires `SessionHub::set_session_model` for the confirmed
-    /// (provider, alias) pair off the UI thread. Failure is a no-op beyond
+    /// (provider, model id) pair off the UI thread. Failure is a no-op beyond
     /// the log line: the chip keeps showing whatever the last `SessionModel`
     /// announcement said, which is exactly "the switch didn't take". On
     /// success the daemon's re-announcement drives the chip update through
@@ -291,7 +352,7 @@ impl WorkspaceShell {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    runtime.set_session_model(session_id, confirmed.provider, confirmed.alias)
+                    runtime.set_session_model(session_id, confirmed.provider, confirmed.model)
                 })
                 .await;
             if let Err(error) = result {
