@@ -1766,3 +1766,396 @@ async fn stale_log_triggers_duckdb_rebuild_on_respawn() {
         "a stale (grown) log must trigger real reconciliation work, not the skip path: {catch_up_line}"
     );
 }
+
+// --- the Mixture-of-Agents real-provider smoke test ------------------------
+//
+// Everything above this line runs against the mock provider or the
+// deterministic fallback. This one talks to a real endpoint with a real
+// key, so it is `#[ignore]`d (the gate and the `sandboxed` profile never
+// select it) and additionally gated on two environment variables, because
+// `cargo nextest run --run-ignored all` would otherwise spend money.
+//
+//   HORIZON_MOA_SMOKE=1 OPENAI_API_KEY=... \
+//     cargo nextest run -p horizon-agentd --run-ignored only \
+//       --no-capture moa_pass_runs_against_a_real_provider
+
+/// Set to `1` to let the smoke test below actually run.
+const MOA_SMOKE_VAR: &str = "HORIZON_MOA_SMOKE";
+
+/// The `[[providers]]` entry the fixture config defines, and the three
+/// models the pass runs on. The aggregator is the first proposer's model
+/// too, which is the paper's "one member sampled twice" setting and also
+/// proves the per-session model pin is not just "whatever the entry
+/// defaults to".
+const SMOKE_PROVIDER: &str = "synthetic";
+const SMOKE_BASE_URL: &str = "https://api.synthetic.new/openai/v1";
+const SMOKE_AGGREGATOR_MODEL: &str = "hf:deepseek-ai/DeepSeek-V4.1-Flash";
+const SMOKE_PROPOSER_MODELS: [&str; 3] = [
+    "hf:deepseek-ai/DeepSeek-V4.1-Flash",
+    "hf:zai-org/GLM-5.3-Flash",
+    "hf:Qwen/Qwen3.8-27B",
+];
+
+/// The fact the fixture hides. Not derivable from anything else in the
+/// tree, so an answer carrying it proves a proposer read the file.
+const SMOKE_SECRET_VALUE: &str = "48213";
+
+/// A MoA pass end to end against the configured provider: three proposer
+/// sessions each investigate the fixture with `fs.*`, and the aggregator
+/// answers from their reports.
+///
+/// What only a real provider can show, and what this exists for:
+///
+/// * each proposer's `provider_request_sent` names the model the `[[moa]]`
+///   entry pinned for it, not the `[[providers]]` entry's default — the
+///   model pin reaching the wire is otherwise only structural;
+/// * the aggregator's answer carries a value that exists nowhere but the
+///   fixture file, so the proposers really did read it and the aggregator
+///   really did use what they returned;
+/// * the injected proposal block stays out of the aggregator's committed
+///   history.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+#[ignore = "spends real provider credit; run explicitly with HORIZON_MOA_SMOKE=1"]
+async fn moa_pass_runs_against_a_real_provider() {
+    if std::env::var(MOA_SMOKE_VAR).as_deref() != Ok("1") {
+        println!("skipped: set {MOA_SMOKE_VAR}=1 to run the MoA real-provider smoke test");
+        return;
+    }
+    if std::env::var_os("OPENAI_API_KEY").is_none() {
+        println!("skipped: OPENAI_API_KEY is not set, so the provider cannot be reached");
+        return;
+    }
+
+    let fixture = write_smoke_fixture();
+    let config_path = write_smoke_config();
+    let paths = AgentdPaths::scratch("agentd-moa-smoke");
+    let event_log_path = paths.event_log_path.clone();
+    let agentd = AgentdSpawn::new(resolve_agentd_binary(), paths)
+        .env_remove(TEST_RESUME_DELAY_MS_VAR)
+        .env_remove(TEST_DUCKDB_REBUILD_DELAY_MS_VAR)
+        // Overrides the hermetic contract's deliberately-missing config
+        // with this test's own; every other isolated path stays as the
+        // contract set it.
+        .env("HORIZON_CONFIG", &config_path)
+        .spawn();
+    let client = connect_hub(&agentd.socket_path).await;
+
+    let session_id = SessionId::new();
+    let mut attachment = client
+        .hub
+        .new_agent(SessionNew {
+            session_id,
+            provider_id: horizon_agent::registry::moa_provider_id("mix"),
+            role_id: None,
+            workspace_root: Some(fixture.clone()),
+            spawn_source_session_id: None,
+            isolate: false,
+        })
+        .await
+        .expect("the [[moa]] entry must be registered as a provider");
+
+    let question = "What is the value of RETRY_BUDGET_MS in this repository, and which file \
+                    and line defines it? Answer with the number and the path."
+        .to_string();
+    let started = Instant::now();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: question.clone(),
+        })
+        .await
+        .unwrap();
+
+    // One pass runs three sessions to completion before the aggregator's
+    // own turn starts, so the wait is long and the read budget is large.
+    let deadline = Instant::now() + Duration::from_secs(600);
+    let mut turn_ended = false;
+    while !turn_ended {
+        let remaining = deadline
+            .checked_duration_since(Instant::now())
+            .expect("the MoA pass did not finish within 10 minutes");
+        let wire_event = tokio::time::timeout(remaining, attachment.events.recv())
+            .await
+            .expect("timed out waiting for the aggregator's turn to end")
+            .expect("agent event channel error")
+            .expect("the daemon should keep streaming events");
+        if let AgentWireEvent::Event(Event::TurnEnded(reason)) = wire_event {
+            assert_eq!(
+                reason,
+                TurnEndReason::Completed,
+                "the aggregator's turn must complete"
+            );
+            turn_ended = true;
+        }
+    }
+    let elapsed = started.elapsed();
+
+    // Drain first: the assertions read the event log from disk, and a
+    // graceful drain is what flushes the writer's queue.
+    client.drain().await;
+    let report = horizon_agent::persistence::event_log::read(&event_log_path)
+        .expect("the isolated event log must be readable");
+    let records = report.records;
+
+    // -- 1. one pass record, naming the three configured members ----------
+    let passes: Vec<&horizon_agent::contract::MoaPassStarted> = records
+        .iter()
+        .filter_map(|record| match &record.event {
+            Event::MoaPassStarted(pass) => Some(pass),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        passes.len(),
+        1,
+        "one owner message must open exactly one pass, got {}",
+        passes.len()
+    );
+    let pass = passes[0];
+    assert_eq!(pass.entry, "mix");
+    assert_eq!(
+        pass.proposers
+            .iter()
+            .map(|proposer| (proposer.provider.as_str(), proposer.model.as_str()))
+            .collect::<Vec<_>>(),
+        SMOKE_PROPOSER_MODELS
+            .iter()
+            .map(|model| (SMOKE_PROVIDER, *model))
+            .collect::<Vec<_>>(),
+        "the record must name every configured member, in order"
+    );
+
+    // -- 2/3. every request carries the model that session was pinned to --
+    let mut summaries = Vec::new();
+    for (position, proposer) in pass.proposers.iter().enumerate() {
+        let stats = session_stats(&records, proposer.session_id);
+        assert!(
+            !stats.request_models.is_empty(),
+            "proposer {} ({}) issued no provider request",
+            position + 1,
+            proposer.model
+        );
+        for model in &stats.request_models {
+            assert_eq!(
+                model,
+                &proposer.model,
+                "proposer {} must run the model the entry pinned for it, not the entry's \
+                 default; its requests named {model}",
+                position + 1
+            );
+        }
+        assert!(
+            stats.tool_calls > 0,
+            "proposer {} ({}) answered without reading anything",
+            position + 1,
+            proposer.model
+        );
+        summaries.push((format!("proposer {}", position + 1), stats));
+    }
+
+    let aggregator = session_stats(&records, session_id);
+    assert!(
+        !aggregator.request_models.is_empty(),
+        "the aggregator issued no provider request"
+    );
+    for model in &aggregator.request_models {
+        assert_eq!(
+            model, SMOKE_AGGREGATOR_MODEL,
+            "the aggregator must run the entry's aggregator model, its requests named {model}"
+        );
+    }
+
+    // -- 4. the answer carries what only the fixture knows -----------------
+    let answer = aggregator
+        .final_assistant_text
+        .clone()
+        .expect("the aggregator committed no assistant message");
+    assert!(
+        answer.contains(SMOKE_SECRET_VALUE),
+        "the answer must carry the value only the fixture defines ({SMOKE_SECRET_VALUE}); \
+         got: {answer}"
+    );
+
+    // -- 5. no proposal ever entered the aggregator's history --------------
+    for text in &aggregator.committed_texts {
+        assert!(
+            !text.contains("--- Answer 1 (session_id"),
+            "the injected proposal block must never be committed to history; found it in: {text}"
+        );
+        for proposer in &pass.proposers {
+            let id = proposer.session_id.as_uuid().to_string();
+            assert!(
+                !text.contains(&id),
+                "a proposer session id leaked into the aggregator's history: {text}"
+            );
+        }
+    }
+
+    summaries.push(("aggregator".to_string(), aggregator.clone()));
+
+    // -- the summary ------------------------------------------------------
+    println!(
+        "\n=== MoA smoke: {} in {:.1}s ===",
+        pass.entry,
+        elapsed.as_secs_f64()
+    );
+    println!("question: {question}");
+    for (role, stats) in &summaries {
+        println!(
+            "{role:<12} model={:<40} requests={:<3} tool_calls={:<3} in={:<8} out={:<7} \
+             cached={:<8} {:.1}s",
+            stats
+                .request_models
+                .first()
+                .map(String::as_str)
+                .unwrap_or("-"),
+            stats.request_models.len(),
+            stats.tool_calls,
+            stats.input_tokens,
+            stats.output_tokens,
+            stats.cached_input_tokens,
+            stats.wall_seconds,
+        );
+    }
+    for (position, proposer) in pass.proposers.iter().enumerate() {
+        let stats = session_stats(&records, proposer.session_id);
+        let text = stats.final_assistant_text.unwrap_or_default();
+        let head: String = text.chars().take(300).collect();
+        println!(
+            "\n--- proposal {} ({}) ---\n{head}",
+            position + 1,
+            proposer.model
+        );
+    }
+    println!("\n--- aggregator answer ---\n{answer}\n");
+
+    // Reported, never failed: the instruction asks the aggregator not to
+    // reveal the mechanism, and a model that ignores it is a prompt finding
+    // rather than a broken pass.
+    for leak in ["assistants", "proposals"] {
+        if answer.to_ascii_lowercase().contains(leak) {
+            println!("NOTE: the answer mentions {leak:?} — the aggregator revealed the mechanism");
+        }
+    }
+}
+
+/// What one session did, folded out of the event log.
+#[derive(Clone, Debug, Default)]
+struct SessionStats {
+    /// The model named by every `provider_request_sent`, in order.
+    request_models: Vec<String>,
+    tool_calls: usize,
+    input_tokens: u64,
+    output_tokens: u64,
+    cached_input_tokens: u64,
+    wall_seconds: f64,
+    /// Every assistant-role message text, for the history assertions.
+    committed_texts: Vec<String>,
+    /// The last of them — the session's answer.
+    final_assistant_text: Option<String>,
+}
+
+fn session_stats(
+    records: &[horizon_agent::persistence::event_log::Record],
+    session_id: SessionId,
+) -> SessionStats {
+    let mut stats = SessionStats::default();
+    let mut first_ms = None;
+    let mut last_ms = 0;
+    for record in records.iter().filter(|r| r.session_id == session_id) {
+        first_ms.get_or_insert(record.created_at_unix_ms);
+        last_ms = record.created_at_unix_ms;
+        match &record.event {
+            Event::ProviderRequestSent(sent) => stats.request_models.push(sent.model.clone()),
+            Event::ToolCallRequested(_) => stats.tool_calls += 1,
+            Event::ProviderRequestUsage(usage) => {
+                stats.input_tokens += usage.input_tokens;
+                stats.output_tokens += usage.output_tokens;
+                stats.cached_input_tokens += usage.cached_input_tokens;
+            }
+            Event::MessageCommitted(message) if message.role == MessageRole::Assistant => {
+                stats.committed_texts.push(message.text.clone());
+                stats.final_assistant_text = Some(message.text.clone());
+            }
+            Event::MessageCommitted(message) => stats.committed_texts.push(message.text.clone()),
+            _ => {}
+        }
+    }
+    // The session's own startup notice is an assistant message; it is never
+    // the answer.
+    if stats
+        .final_assistant_text
+        .as_deref()
+        .is_some_and(|text| text.starts_with("Rig provider `"))
+    {
+        stats.final_assistant_text = None;
+    }
+    stats.wall_seconds = (last_ms.saturating_sub(first_ms.unwrap_or(last_ms))) as f64 / 1000.0;
+    stats
+}
+
+/// The config the smoke daemon loads: one openai-compatible entry and one
+/// `[[moa]]` entry over it. No `models` alias map — a `[[providers]]` entry
+/// needs none, and `[[moa]]` members name model ids directly.
+fn write_smoke_config() -> PathBuf {
+    let path = horizon_daemon_testkit::scratch_file("agentd-moa-smoke-config", "toml");
+    let proposers = SMOKE_PROPOSER_MODELS
+        .iter()
+        .map(|model| format!("  {{ provider = \"{SMOKE_PROVIDER}\", model = \"{model}\" }},"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    // `default_provider` is a top-level key, so it has to precede the first
+    // array-of-tables header; after one, TOML reads it as a key of that
+    // table instead.
+    let contents = format!(
+        "default_provider = \"{SMOKE_PROVIDER}\"\n\
+         \n\
+         [[providers]]\n\
+         name = \"{SMOKE_PROVIDER}\"\n\
+         base_url = \"{SMOKE_BASE_URL}\"\n\
+         \n\
+         [[moa]]\n\
+         name = \"mix\"\n\
+         aggregator = {{ provider = \"{SMOKE_PROVIDER}\", model = \"{SMOKE_AGGREGATOR_MODEL}\" }}\n\
+         proposers = [\n{proposers}\n]\n"
+    );
+    std::fs::write(&path, contents).expect("the smoke config must be writable");
+    path
+}
+
+/// A small tree whose only interesting content is one constant nothing else
+/// in the world knows, plus decoys so finding it takes a real search.
+fn write_smoke_fixture() -> PathBuf {
+    let root = horizon_daemon_testkit::scratch_file("agentd-moa-smoke-fixture", "dir");
+    let src = root.join("src");
+    std::fs::create_dir_all(&src).expect("the smoke fixture must be writable");
+    std::fs::write(
+        root.join("README.md"),
+        "# smoke-fixture\n\nA tiny crate used by Horizon's MoA smoke test.\n\
+         Tunables live under `src/`.\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("limits.rs"),
+        "//! Retry and backoff tunables.\n\n\
+         /// How long a single request may keep retrying before it is given up on.\n\
+         pub const RETRY_BUDGET_MS: u64 = 48213;\n\n\
+         pub const BACKOFF_STEP_MS: u64 = 250;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("timeouts.rs"),
+        "//! Decoy: connect/read timeouts, deliberately unrelated to the retry budget.\n\n\
+         pub const CONNECT_TIMEOUT_MS: u64 = 3000;\n\
+         pub const READ_TIMEOUT_MS: u64 = 9000;\n",
+    )
+    .unwrap();
+    std::fs::write(
+        src.join("lib.rs"),
+        "pub mod limits;\npub mod timeouts;\n\n\
+         /// Decoy: names a budget but defines none.\n\
+         pub fn retry_budget() -> u64 {\n    limits::RETRY_BUDGET_MS\n}\n",
+    )
+    .unwrap();
+    root
+}
