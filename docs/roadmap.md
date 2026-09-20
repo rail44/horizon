@@ -561,6 +561,19 @@ DuckDB re-justification with its exit clause, open v1-slicing items);
 `docs/research/duckdb-ecosystem.md` carry the surveys. Supersedes the
 notification half of the deferred item below when built.
 
+### Mixture-of-Agents as a selectable model (designed 2026-09-20, not started)
+
+Several cost-effective models combined behind one entry in model
+selection, chosen by the owner when a situation is hard: per owner
+message, harness-launched `task`-shaped read-only proposer sessions each
+investigate and answer, then the aggregator writes its own answer and can
+inspect the proposers' records through `recall`. Configured as `[[moa]]`
+with `{provider, model}` members (model IDs written directly, providers
+mixable). `docs/agent-moa-design.md` is the self-contained record
+(owner decisions with quotes, the evidence and its limits, why no
+external proxy fits, implementation constraints, one point still open
+for owner review: cancel semantics).
+
 ### Deferred: session-attention surface and non-interrupting sends
 
 Recorded on owner request 2026-08-05; to be designed together with the
