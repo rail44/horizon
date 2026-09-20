@@ -127,6 +127,10 @@
 # - An entry whose aggregator names no [[providers]] entry is dropped and
 #   warned about; a proposer that does is dropped on its own, and a proposer
 #   that fails or returns nothing is skipped for that message.
+# - A member whose provider entry has no API key is not asked at all (that
+#   session would answer from the deterministic fallback responder, not from
+#   a model). An entry whose *aggregator* is in that state cannot be
+#   selected; the moa group grays out when no entry can run.
 # - Reloads like [[providers]]: new sessions see the change.
 #
 # [[moa]]

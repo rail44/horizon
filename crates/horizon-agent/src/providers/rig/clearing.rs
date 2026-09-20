@@ -161,6 +161,26 @@ impl ClearingState {
         self.latest_input_tokens = input_tokens;
     }
 
+    /// Points this state at a different model's window, after the session
+    /// switched models. Only the window changes: the frozen cleared set and
+    /// the last measured input size both describe the session's own history,
+    /// which the switch does not touch, so resetting either would either
+    /// un-freeze a pass the event log already records or throw away the one
+    /// measured number the trigger is allowed to use.
+    pub(super) fn adopt_window(&mut self, effective_window_tokens: Option<u64>) {
+        self.effective_window_tokens = effective_window_tokens;
+    }
+
+    #[cfg(test)]
+    pub(super) fn effective_window_tokens(&self) -> Option<u64> {
+        self.effective_window_tokens
+    }
+
+    #[cfg(test)]
+    pub(super) fn latest_input_tokens(&self) -> u64 {
+        self.latest_input_tokens
+    }
+
     pub(super) fn cleared(&self) -> &ClearedResults {
         &self.cleared
     }

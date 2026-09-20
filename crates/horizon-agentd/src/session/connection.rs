@@ -97,11 +97,16 @@ impl Connection {
         // `set_session_model` need no MoA-specific wire surface. Omitted
         // entirely when nothing is configured.
         if !config.moa.entries.is_empty() {
-            let available = config.moa.entries.iter().any(|entry| {
-                table
-                    .entry(&entry.aggregator.provider)
-                    .is_some_and(|provider| provider.api_key_present)
-            });
+            // One flag for the group, as `ProviderSummary` carries: false
+            // when no entry could run at all, which grays the group out the
+            // way a key-less provider entry is grayed out. A group with some
+            // usable entries stays selectable and an unusable entry inside
+            // it is refused by `set_session_model`.
+            let available = config
+                .moa
+                .entries
+                .iter()
+                .any(|entry| entry.aggregator.api_key_present);
             summaries.push(ProviderSummary {
                 name: horizon_agent::config::MOA_PROVIDER_NAME.to_string(),
                 base_url: None,
@@ -152,6 +157,16 @@ impl Connection {
                 let Some(entry) = config.moa.entry(&model) else {
                     return Err(format!("Unknown moa entry `{model}`."));
                 };
+                // Refused here as well as in the session loop, so the caller
+                // gets the reason back from the call instead of only seeing
+                // an error event on the session.
+                if !entry.aggregator.api_key_present {
+                    return Err(format!(
+                        "moa entry `{model}` is unavailable: its `{}` provider's key variable \
+                         {} is not set.",
+                        entry.aggregator.provider, entry.aggregator.api_key_env
+                    ));
+                }
                 entry.aggregator.model.clone()
             } else {
                 let Some(entry) = config.providers.entry(&provider) else {
@@ -676,19 +691,34 @@ mod tests {
         );
     }
 
+    fn moa_member(
+        provider: &str,
+        model: &str,
+        api_key_present: bool,
+    ) -> horizon_agent::config::MoaMember {
+        horizon_agent::config::MoaMember {
+            api_key_present,
+            api_key_env: format!("{}_API_KEY", provider.to_uppercase()),
+            ..horizon_agent::config::MoaMember::new(provider.to_string(), model.to_string())
+        }
+    }
+
+    /// `mix` aggregates on the available `openai` entry; `stranded` on the
+    /// key-less `claude` one.
     fn moa_table() -> horizon_agent::config::MoaTable {
         horizon_agent::config::MoaTable {
-            entries: vec![horizon_agent::config::MoaEntry {
-                name: "mix".to_string(),
-                aggregator: horizon_agent::config::MoaMember {
-                    provider: "openai".to_string(),
-                    model: "m-aggregate".to_string(),
+            entries: vec![
+                horizon_agent::config::MoaEntry {
+                    name: "mix".to_string(),
+                    aggregator: moa_member("openai", "m-aggregate", true),
+                    proposers: vec![moa_member("openai", "m-fast", true)],
                 },
-                proposers: vec![horizon_agent::config::MoaMember {
-                    provider: "openai".to_string(),
-                    model: "m-fast".to_string(),
-                }],
-            }],
+                horizon_agent::config::MoaEntry {
+                    name: "stranded".to_string(),
+                    aggregator: moa_member("claude", "m-opus", false),
+                    proposers: vec![moa_member("openai", "m-fast", true)],
+                },
+            ],
         }
     }
 
@@ -706,10 +736,19 @@ mod tests {
         assert!(group.available, "its aggregator's key is present");
         assert_eq!(
             group.models,
-            vec![horizon_agent::wire::ModelAlias {
-                alias: "mix".to_string(),
-                model: "mix".to_string(),
-            }]
+            vec![
+                horizon_agent::wire::ModelAlias {
+                    alias: "mix".to_string(),
+                    model: "mix".to_string(),
+                },
+                // Listed even though its aggregator has no key: the group
+                // carries one availability flag, so an unusable entry is
+                // refused on confirm rather than hidden.
+                horizon_agent::wire::ModelAlias {
+                    alias: "stranded".to_string(),
+                    model: "stranded".to_string(),
+                },
+            ]
         );
 
         let (state, _entries) = two_provider_state();
@@ -760,6 +799,42 @@ mod tests {
             .set_session_model(session_id, "moa".to_string(), "typo".to_string())
             .unwrap_err();
         assert!(error.contains("Unknown moa entry `typo`"), "{error}");
+
+        // An entry whose aggregator's key variable is unset is refused with
+        // the reason, not accepted into a session that would then answer
+        // from the deterministic fallback responder.
+        let error = connection
+            .set_session_model(session_id, "moa".to_string(), "stranded".to_string())
+            .unwrap_err();
+        assert!(error.contains("unavailable"), "{error}");
+        assert!(error.contains("CLAUDE_API_KEY"), "{error}");
+        assert_eq!(
+            connection.session_model(session_id).as_deref(),
+            Some("m-aggregate"),
+            "the refused switch left the previous selection in place"
+        );
+    }
+
+    /// The group is grayed out only when no entry could run at all; with a
+    /// mix it stays selectable and the unusable entry is refused on confirm.
+    #[test]
+    fn the_moa_group_is_unavailable_only_when_no_entry_can_run() {
+        let (state, _entries) = two_provider_state_with_moa(moa_table());
+        let connection = Connection { state };
+        assert!(connection.list_providers().last().unwrap().available);
+
+        let stranded_only = horizon_agent::config::MoaTable {
+            entries: vec![horizon_agent::config::MoaEntry {
+                name: "stranded".to_string(),
+                aggregator: moa_member("claude", "m-opus", false),
+                proposers: vec![moa_member("openai", "m-fast", true)],
+            }],
+        };
+        let (state, _entries) = two_provider_state_with_moa(stranded_only);
+        let connection = Connection { state };
+        let group = connection.list_providers().last().unwrap().clone();
+        assert_eq!(group.name, "moa");
+        assert!(!group.available);
     }
 
     #[test]

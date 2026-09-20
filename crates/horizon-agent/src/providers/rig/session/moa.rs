@@ -387,17 +387,17 @@ mod tests {
         }
     }
 
+    /// A member whose entry had its key, so the pass launches it.
+    fn member(model: &str) -> MoaMember {
+        MoaMember {
+            api_key_present: true,
+            api_key_env: "HORIZON_TEST_MOA_KEY".to_string(),
+            ..MoaMember::new("synthetic".to_string(), model.to_string())
+        }
+    }
+
     fn members() -> Vec<MoaMember> {
-        vec![
-            MoaMember {
-                provider: "synthetic".to_string(),
-                model: "hf:a/A".to_string(),
-            },
-            MoaMember {
-                provider: "synthetic".to_string(),
-                model: "hf:b/B".to_string(),
-            },
-        ]
+        vec![member("hf:a/A"), member("hf:b/B")]
     }
 
     /// A loop state selected onto a `[[moa]]` entry, with a live command
@@ -592,6 +592,85 @@ mod tests {
 
         assert!(matches!(outcome, PassOutcome::Proceed));
         assert!(state.moa_turn.is_none(), "nothing is injected");
+        crate::tools::unregister_exploration_host(state.session_id);
+    }
+
+    /// A member on an entry whose key variable is unset is never launched:
+    /// such a session answers from the deterministic fallback responder,
+    /// and that text is indistinguishable from a model's answer once the
+    /// event fold has it.
+    #[tokio::test]
+    async fn a_member_on_a_key_less_entry_is_never_launched() {
+        let host = Arc::new(ScriptedHost::default());
+        let (mut state, _commands, events) = moa_state(host.clone());
+        state.config.moa = Some(MoaPass {
+            name: "mix".to_string(),
+            proposers: vec![
+                member("hf:a/A"),
+                MoaMember {
+                    api_key_present: false,
+                    api_key_env: "HORIZON_TEST_MOA_MISSING_KEY".to_string(),
+                    ..MoaMember::new("keyless".to_string(), "hf:b/B".to_string())
+                },
+            ],
+        });
+
+        let driver = tokio::spawn({
+            let host = host.clone();
+            async move {
+                loop {
+                    if !host.events.lock().unwrap().is_empty() {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                host.answer(0, "the available member's answer");
+            }
+        });
+        let outcome = state.run_moa_pass("the question").await;
+        driver.await.unwrap();
+        assert!(matches!(outcome, PassOutcome::Proceed));
+
+        assert_eq!(
+            host.started_members(),
+            vec![("synthetic".to_string(), "hf:a/A".to_string())],
+            "only the available member was asked"
+        );
+        let record = pass_record(&events).expect("the pass is recorded");
+        assert_eq!(
+            record.proposers.len(),
+            1,
+            "a member that was never launched is not a proposer session"
+        );
+        let block = state.moa_turn.as_ref().expect("the pass still proceeds");
+        assert!(block.block.contains("the available member's answer"));
+        assert!(
+            !block.block.contains("Answer 2"),
+            "the key-less member contributes nothing: {}",
+            block.block
+        );
+        crate::tools::unregister_exploration_host(state.session_id);
+    }
+
+    /// With every member on a key-less entry nothing is launched at all and
+    /// the aggregator answers alone.
+    #[tokio::test]
+    async fn every_member_key_less_launches_nothing() {
+        let host = Arc::new(ScriptedHost::default());
+        let (mut state, _commands, _events) = moa_state(host.clone());
+        state.config.moa = Some(MoaPass {
+            name: "mix".to_string(),
+            proposers: vec![MoaMember {
+                api_key_present: false,
+                api_key_env: "HORIZON_TEST_MOA_MISSING_KEY".to_string(),
+                ..MoaMember::new("keyless".to_string(), "hf:b/B".to_string())
+            }],
+        });
+
+        let outcome = state.run_moa_pass("the question").await;
+        assert!(matches!(outcome, PassOutcome::Proceed));
+        assert!(host.started_members().is_empty());
+        assert!(state.moa_turn.is_none());
         crate::tools::unregister_exploration_host(state.session_id);
     }
 

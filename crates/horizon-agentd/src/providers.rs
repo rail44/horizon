@@ -11,9 +11,11 @@ use horizon_agent::config::{MoaEntry, MoaMember, NamedProviderConfig, ProviderKi
 /// refused (no name, an aggregator naming no `[[providers]]` entry) are gone
 /// by here, having warned on stderr.
 pub(crate) fn moa_configs(config: &horizon_config::RawConfig) -> Vec<MoaEntry> {
-    let member = |member: &horizon_config::ResolvedMoaMember| MoaMember {
-        provider: member.provider.clone(),
-        model: member.model.clone(),
+    // Availability and the key variable's name are filled in centrally by
+    // `from_env_and_providers`, from the `[[providers]]` entry each member
+    // names.
+    let member = |member: &horizon_config::ResolvedMoaMember| {
+        MoaMember::new(member.provider.clone(), member.model.clone())
     };
     config
         .resolved_moa()

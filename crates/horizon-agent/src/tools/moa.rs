@@ -115,6 +115,19 @@ impl MoaLaunch {
     }
 }
 
+/// Why a member on an unavailable entry was not asked, naming the entry and
+/// the variable its key is read from (never a value).
+pub(crate) fn unavailable_reason(member: &MoaMember) -> String {
+    if member.api_key_env.is_empty() {
+        format!("the `{}` provider is not configured", member.provider)
+    } else {
+        format!(
+            "the `{}` provider's key variable {} is not set",
+            member.provider, member.api_key_env
+        )
+    }
+}
+
 /// Starts one proposer session per member and returns without waiting; the
 /// caller consumes [`MoaLaunch::results`] until every launched proposer has
 /// reported. A member whose session cannot be started becomes a failed
@@ -131,6 +144,22 @@ pub(crate) fn launch(
     let mut cancels = Vec::new();
 
     for (position, member) in members.iter().enumerate() {
+        // A session on a key-less entry answers from the deterministic
+        // fallback responder, which the event fold cannot tell apart from a
+        // model's answer. Never launched, so that text can never become a
+        // proposal.
+        if !member.api_key_present {
+            unavailable.push(Proposal {
+                member: LaunchedProposer {
+                    session_id: SessionId::new(),
+                    provider: member.provider.clone(),
+                    model: member.model.clone(),
+                },
+                text: None,
+                failure: Some(unavailable_reason(member)),
+            });
+            continue;
+        }
         let request = ExplorationRequest {
             prompt: prompt.to_string(),
             provider: Some(member.provider.clone()),

@@ -361,6 +361,24 @@ impl AgentConfig {
             .default_entry()
             .map(NamedProviderConfig::resolved)
             .unwrap_or_default();
+        // Every MoA member resolves against the same entries, so a member's
+        // availability is that entry's availability and is decided here too
+        // rather than re-read per pass.
+        let resolve_member = |mut member: MoaMember| {
+            if let Some(entry) = providers.entry(&member.provider) {
+                member.api_key_present = entry.api_key_present;
+                member.api_key_env = entry.api_key_env.clone();
+            }
+            member
+        };
+        let moa = moa
+            .into_iter()
+            .map(|entry| MoaEntry {
+                name: entry.name,
+                aggregator: resolve_member(entry.aggregator),
+                proposers: entry.proposers.into_iter().map(resolve_member).collect(),
+            })
+            .collect();
         Self {
             rig,
             providers,
@@ -373,10 +391,37 @@ impl AgentConfig {
 
 /// One `[[moa]]` member: which `[[providers]]` entry runs it, and the model
 /// id to run, written out (an entry's `models` alias is not resolved here).
+///
+/// The two resolved fields come from that entry, filled in once by
+/// [`AgentConfig::from_env_and_providers`] — the surface's one env-read
+/// point. A member is a plain `{provider, model}` pair as the file writes
+/// it; callers that construct one directly (tests) state the availability
+/// they mean.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct MoaMember {
     pub provider: String,
     pub model: String,
+    /// Whether the named entry's API-key variable was set when the surface
+    /// was built. `false` means a session started on it would answer from
+    /// the deterministic fallback responder instead of the model, so the
+    /// pass skips the member rather than treating that text as an answer.
+    pub api_key_present: bool,
+    /// The environment variable **name** that entry's key is read from
+    /// (never a value), for the message a skipped member is reported with.
+    pub api_key_env: String,
+}
+
+impl MoaMember {
+    /// The file-level pair, before [`AgentConfig::from_env_and_providers`]
+    /// resolves the entry behind it.
+    pub fn new(provider: String, model: String) -> Self {
+        Self {
+            provider,
+            model,
+            api_key_present: false,
+            api_key_env: String::new(),
+        }
+    }
 }
 
 /// One resolved `[[moa]]` entry: the aggregator that writes the answer, plus
@@ -1116,6 +1161,55 @@ mod tests {
             config.rig.base_url,
             Some("https://provider.invalid".to_string())
         );
+    }
+
+    /// Every MoA member resolves its availability and key-variable name
+    /// from the `[[providers]]` entry it names, at the one point the whole
+    /// surface reads the environment.
+    #[test]
+    fn moa_members_resolve_availability_from_the_entry_they_name() {
+        let entries = vec![
+            NamedProviderConfig {
+                name: "present".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: None,
+                // Always set: this process's own argv[0] path variable is
+                // not something a test may mutate, so the fixture uses a
+                // variable that is certain to exist instead.
+                api_key_env: "PATH".to_string(),
+                api_key_present: false,
+                models: Vec::new(),
+            },
+            NamedProviderConfig {
+                name: "absent".to_string(),
+                kind: ProviderKind::OpenAiCompatible,
+                base_url: None,
+                api_key_env: "HORIZON_TEST_KEY_NEVER_SET".to_string(),
+                api_key_present: false,
+                models: Vec::new(),
+            },
+        ];
+        let moa = vec![MoaEntry {
+            name: "mix".to_string(),
+            aggregator: MoaMember::new("present".to_string(), "m-a".to_string()),
+            proposers: vec![
+                MoaMember::new("present".to_string(), "m-b".to_string()),
+                MoaMember::new("absent".to_string(), "m-c".to_string()),
+                MoaMember::new("not-an-entry".to_string(), "m-d".to_string()),
+            ],
+        }];
+
+        let config = AgentConfig::from_env_and_providers(entries, "present".to_string(), moa);
+        let entry = config.moa.entry("mix").expect("the entry resolves");
+        assert!(entry.aggregator.api_key_present);
+        assert_eq!(entry.aggregator.api_key_env, "PATH");
+        assert!(entry.proposers[0].api_key_present);
+        assert!(!entry.proposers[1].api_key_present);
+        assert_eq!(entry.proposers[1].api_key_env, "HORIZON_TEST_KEY_NEVER_SET");
+        // A member naming no entry has nothing to resolve against and stays
+        // unavailable, so the pass skips it too.
+        assert!(!entry.proposers[2].api_key_present);
+        assert!(entry.proposers[2].api_key_env.is_empty());
     }
 
     #[test]

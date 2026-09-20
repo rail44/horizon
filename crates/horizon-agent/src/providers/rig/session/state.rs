@@ -317,7 +317,7 @@ impl SessionLoopState {
                 // `AgentWireEvent::SessionModel`); the loop only fails a
                 // switch it cannot resolve, as an ordinary error event.
                 Command::SetSessionModel { provider, model } => {
-                    self.handle_set_session_model(&provider, &model);
+                    self.handle_set_session_model(&provider, &model).await;
                 }
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
@@ -579,18 +579,32 @@ impl SessionLoopState {
     /// unit-tested separately because the command pump's arm is otherwise
     /// the one untested join between the daemon-side forward and the next
     /// turn's config.
-    fn handle_set_session_model(&mut self, provider: &str, model: &str) {
-        if let Err(message) = apply_set_session_model(
+    async fn handle_set_session_model(&mut self, provider: &str, model: &str) {
+        match apply_set_session_model(
             &mut self.config,
             &self.table,
             &self.moa_table,
             provider,
             model,
         ) {
-            let _ = self
-                .events_tx
-                .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+            Ok(()) => self.rediscover_clearing_window().await,
+            Err(message) => {
+                let _ = self
+                    .events_tx
+                    .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+            }
         }
+    }
+
+    /// Re-reads the effective context window for the model this session now
+    /// runs, keeping the rest of the clearing state
+    /// ([`ClearingState::adopt_window`]). Without this a switch would keep
+    /// clearing against the previous model's window — with a smaller model
+    /// that puts the trigger above its whole window, so the session runs to
+    /// its context ceiling instead of clearing.
+    pub(crate) async fn rediscover_clearing_window(&mut self) {
+        let window = super::discover_effective_window(&self.config).await;
+        self.clearing.adopt_window(window);
     }
 }
 
@@ -633,6 +647,16 @@ pub(super) fn apply_set_session_model(
         let Some(entry) = moa_table.entry(model) else {
             return Err(format!("Unknown moa entry `{model}`."));
         };
+        // An unavailable aggregator would answer from the deterministic
+        // fallback responder, which reads in the pane as the model's own
+        // answer. Refused instead, the way a key-less `[[providers]]` entry
+        // is not offered for selection.
+        if !entry.aggregator.api_key_present {
+            return Err(format!(
+                "moa entry `{model}` is unavailable: {}.",
+                crate::tools::moa::unavailable_reason(&entry.aggregator)
+            ));
+        }
         if !crate::config::apply_moa_selection(config, table, entry) {
             return Err(format!(
                 "moa entry `{model}` names no provider `{}`.",
@@ -684,26 +708,51 @@ mod tests {
         }
     }
 
+    /// A member on `provider`, available or not. `openai` in [`table`] has
+    /// its key, `claude` does not.
+    fn moa_member(provider: &str, model: &str, api_key_present: bool) -> crate::config::MoaMember {
+        crate::config::MoaMember {
+            api_key_present,
+            api_key_env: format!("{}_API_KEY", provider.to_uppercase()),
+            ..crate::config::MoaMember::new(provider.to_string(), model.to_string())
+        }
+    }
+
+    /// `mix` aggregates on the available entry; `stranded` aggregates on the
+    /// key-less one.
     fn moa_table() -> crate::config::MoaTable {
         crate::config::MoaTable {
-            entries: vec![crate::config::MoaEntry {
-                name: "mix".to_string(),
-                aggregator: crate::config::MoaMember {
-                    provider: "openai".to_string(),
-                    model: "m-aggregate".to_string(),
+            entries: vec![
+                crate::config::MoaEntry {
+                    name: "mix".to_string(),
+                    aggregator: moa_member("openai", "m-aggregate", true),
+                    proposers: vec![
+                        moa_member("openai", "m-fast", true),
+                        moa_member("claude", "m-opus", false),
+                    ],
                 },
-                proposers: vec![
-                    crate::config::MoaMember {
-                        provider: "openai".to_string(),
-                        model: "m-fast".to_string(),
-                    },
-                    crate::config::MoaMember {
-                        provider: "claude".to_string(),
-                        model: "m-opus".to_string(),
-                    },
-                ],
-            }],
+                crate::config::MoaEntry {
+                    name: "stranded".to_string(),
+                    aggregator: moa_member("claude", "m-opus", false),
+                    proposers: vec![moa_member("openai", "m-fast", true)],
+                },
+            ],
         }
+    }
+
+    /// A MoA entry whose aggregator's key variable is unset is refused
+    /// rather than installed: a session on it would answer from the
+    /// deterministic fallback responder.
+    #[test]
+    fn selecting_a_moa_entry_with_an_unavailable_aggregator_is_refused() {
+        let mut config = RigAgentConfig::default();
+        let before = config.model.clone();
+        let error = apply_set_session_model(&mut config, &table(), &moa_table(), "moa", "stranded")
+            .unwrap_err();
+        assert!(error.contains("unavailable"), "{error}");
+        assert!(error.contains("CLAUDE_API_KEY"), "{error}");
+        assert_eq!(config.model, before);
+        assert!(config.moa.is_none());
     }
 
     /// Selecting the `moa` group points the session at the entry's
@@ -815,19 +864,55 @@ mod tests {
         };
         state.config.model = "role-model".to_string();
 
-        state.handle_set_session_model("claude", "opus");
+        state.handle_set_session_model("claude", "opus").await;
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
         assert!(events_rx.try_recv().is_err(), "no error event on success");
 
         // An unresolvable switch leaves the config untouched and reports
         // the failure on the provider channel instead.
-        state.handle_set_session_model("typo", "m");
+        state.handle_set_session_model("typo", "m").await;
         assert_eq!(state.config.model, "m-opus");
         let received = events_rx.try_recv().unwrap();
         assert!(
             matches!(received.event, crate::contract::Event::Error(_)),
             "{received:?}"
+        );
+    }
+
+    /// A switch re-reads the window for the model the session now runs.
+    /// The `claude` entry is anthropic, which declares no window without
+    /// issuing a request, so the switch ends with clearing disabled — and
+    /// the frozen cleared set and the last measured input size, both of
+    /// which describe history the switch did not touch, survive it.
+    #[tokio::test]
+    async fn a_switch_rediscovers_the_window_and_keeps_the_frozen_clearing_state() {
+        let (events_tx, _events_rx) = crossbeam_channel::unbounded();
+        let mut state = SessionLoopState {
+            events_tx,
+            table: table(),
+            clearing: ClearingState::new(Some(500_000), 60),
+            ..Default::default()
+        };
+        state
+            .clearing
+            .seed_cleared(vec![crate::contract::ToolCallId("call-0".to_string())]);
+        state.clearing.record_input_tokens(400_000);
+
+        state.handle_set_session_model("claude", "opus").await;
+
+        assert_eq!(
+            state.clearing.effective_window_tokens(),
+            None,
+            "the previous model's window must not outlive the switch"
+        );
+        assert_eq!(state.clearing.latest_input_tokens(), 400_000);
+        assert!(
+            state
+                .clearing
+                .cleared()
+                .contains(&crate::contract::ToolCallId("call-0".to_string())),
+            "a frozen pass stays frozen across a switch"
         );
     }
 

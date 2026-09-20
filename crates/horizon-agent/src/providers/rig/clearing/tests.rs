@@ -117,6 +117,36 @@ fn input_at_the_threshold_share_fires() {
     assert!(!cleared.cleared_call_ids.is_empty());
 }
 
+/// A model change re-points the trigger at the new model's window without
+/// disturbing the two things that describe the session's own history: the
+/// frozen cleared set (which `Event::HistoryCleared` already records, and
+/// which resume replays) and the provider's last reported input size.
+#[test]
+fn adopting_a_window_keeps_the_frozen_set_and_the_last_measurement() {
+    let mut state = ClearingState::new(Some(500_000), 60);
+    state.seed_cleared(vec![call_id("call-0")]);
+    state.record_input_tokens(100_000);
+
+    // A smaller model: 100k of input is under 60% of 500k but over 60% of
+    // 131k, so the same history now crosses the trigger.
+    let history = read_rounds(40, chars_for_tokens(4_000));
+    assert!(state.run_pass(&history).is_none());
+    state.adopt_window(Some(131_072));
+
+    assert_eq!(state.effective_window_tokens(), Some(131_072));
+    assert_eq!(state.latest_input_tokens(), 100_000);
+    assert!(state.cleared().contains(&call_id("call-0")));
+    assert!(
+        state.run_pass(&history).is_some(),
+        "the trigger now measures against the model actually in use"
+    );
+
+    // An unknown window disables clearing again, and still keeps the set.
+    state.adopt_window(None);
+    assert!(state.run_pass(&history).is_none());
+    assert!(state.cleared().contains(&call_id("call-0")));
+}
+
 #[test]
 fn a_pass_below_the_recovery_floor_does_not_fire_even_over_the_threshold() {
     // Over the trigger, but the only clearable text is far under the 16k
