@@ -1,6 +1,6 @@
 # Mixture-of-Agents as a selectable model (`[[moa]]`)
 
-Status: designed, not implemented.
+Status: implemented (v1).
 
 A `[[moa]]` entry is a model the user can pick in model selection. A
 session running on it answers each user message with one Mixture-of-Agents
@@ -47,8 +47,8 @@ families by construction.
 
 Handing a conversation over as text can make a model continue the
 transcript instead of answering (observed once in ~70 calls: an invented
-tool call and result ahead of the answer). Such an output is detected and
-dropped or retried.
+tool call and result ahead of the answer). Such an output is trimmed to
+its answer, or dropped when nothing usable is left; it is not retried.
 
 ## Aggregator
 
@@ -115,39 +115,81 @@ sessions see the change.
 In model selection `moa` sits beside the provider entries, and its items
 are the `[[moa]]` names.
 
-## Implementation constraints
+`moa` is a reserved group name: a `[[providers]]` entry called `moa` is
+warned about and cannot be selected. An entry whose aggregator's provider
+has no key is refused on selection with the reason; the `moa` group is
+marked unavailable only when none of its entries can run (`ModelAlias`
+carries no per-item availability).
 
-- **Seam.** `registry::Provider` is session-granular, so a pass is not one
-  more `Provider` impl. It belongs in the rig session loop around a turn
-  that answers a user message. Waiting for a *set* of sessions is new:
-  `task` delivery coalesces completions but does not wait for all.
-- **Where the proposals go in the request.** Appending them to the system
-  prompt (`prompt::system_prompt`'s `extra_sections`) changes the head of
-  the request on every pass and forfeits the provider's prompt cache for
-  the whole history behind it. Projecting them into the provider-facing
-  view at a position fixed for the turn — right after the user message
-  that opened it — keeps the cached prefix.
-  `clearing::history_for_provider_request` is the single seam between
-  canonical history and what a request carries, and it already projects
-  the standing-role memory document in without touching canonical history;
-  its contract is that consecutive request builds stay byte-identical
-  while nothing changed.
-- **Spawning on a named entry and model.** The exploration host pins the
-  requester's `provider_id`
-  (`crates/horizon-agentd/src/session/exploration.rs`). A member needs its
-  own entry (`builtin.agent.rig.<name>`) and model ID; the role model seat
-  is `&'static str` and cannot carry a configured ID.
-- **Record linkage.** A `task` child is tied to its requester through the
-  launching tool call's events. Harness-launched proposers have no such
-  call, so the turn ↔ proposer-session-ids relation needs its own durable
-  record, queryable from DuckDB.
-- **Context-window discovery per member.** `model_limits` must
-  authenticate with the entry's `api_key_env`; with a hardcoded variable a
-  member on another key gets no window and its Tier 1 clearing never
-  fires.
-- **Wire.** Surfacing MoA entries to the model picker touches the
-  `list_providers` summary type. A non-additive change needs the protocol
-  bump, and a bump needs a full app restart (`AGENTS.md`).
+## Where it lives
+
+- **Config.** `crates/horizon-config`: `[[moa]]` parsing, resolution, and
+  unknown-key warnings. `crates/horizon-agentd/src/providers.rs::moa_configs`
+  translates it for the agent at startup and on `Reload Config`.
+  `crates/horizon-agent/src/config.rs`: `MoaMember` / `MoaEntry` /
+  `MoaTable`; a member's availability (`api_key_present`) is resolved from
+  the `[[providers]]` entry it names.
+- **Selection.** `registry.rs` registers `builtin.agent.moa.<name>` per
+  entry, running the aggregator's `{provider, model}`.
+  `session/state.rs::apply_set_session_model` handles `provider == "moa"`.
+  `horizon-agentd/src/session/connection.rs` appends the `moa` group to
+  `list_providers` as one more `ProviderSummary`; the wire type is
+  unchanged and the shell needed no edit.
+- **The pass.** `providers/rig/session/moa.rs`: the conversation proposers
+  are given (kept for every session, so a mid-session switch into `moa`
+  starts with context; rebuilt from persisted events on resume), the
+  proposer prompt, the barrier, the injected block. `tools/moa.rs`: launch
+  and watcher threads over `explore::fold_until_terminal`. The
+  `Command::UserMessage` arm in `session/state.rs` runs the pass before
+  the turn; tool-result, continue-turn, and task-notification rounds do
+  not.
+- **Spawning on a named entry and model.** `ExplorationRequest { prompt,
+  provider, model }` replaces `ExplorationHost::start(prompt)`. The daemon
+  spawns the proposer on `builtin.agent.rig.<provider>` and sends
+  `SetSessionModel` ahead of the prompt on the same ordered channel.
+- **Record linkage.** `Event::MoaPassStarted { entry, proposers:
+  [{session_id, provider, model}] }`, emitted at launch with the sessions
+  that actually started; event kind `moa_pass_started`, stored as an
+  ordinary event-log / DuckDB row and ignored by the frame fold.
+- **Smoke test.** `crates/horizon-agentd/tests/e2e.rs`,
+  `moa_pass_runs_against_a_real_provider`: `#[ignore]`d and gated on
+  `HORIZON_MOA_SMOKE=1` plus a real key, so the gate never runs it. It
+  drives one pass against the real provider and checks that each
+  proposer's requests carry its pinned model, that proposers used tools,
+  that the answer is right, and that the block never enters history.
+
+## Constraints the code depends on
+
+- **Where the proposals go in the request.** They are projected into the
+  provider-facing view as one user-role message at an index fixed for the
+  turn — the length `rig_history` had before the turn's opening message —
+  through `clearing::history_for_provider_request`. Appending to the
+  system prompt instead would change the head of the request on every
+  pass and forfeit the provider's prompt cache for the history behind it.
+  The index keeps everything ahead of the block byte-identical across the
+  turn's rounds and never lands between a tool call and its result.
+- **A key-less member is never launched.** A session on a key-less entry
+  answers from the deterministic fallback responder, and the event fold
+  cannot tell that text from a model's answer.
+- **The clearing window follows the model.** A proposer's model is pinned
+  after session construction, so the window discovered at construction
+  belongs to the entry's default model. `apply_set_session_model`
+  re-discovers it (for every session, picker switches included);
+  `ClearingState::adopt_window` moves only the window and leaves the
+  frozen cleared set and the last measured input size in place.
+- **Context-window discovery authenticates per entry.** `model_limits`
+  reads the entry's `api_key_env` and caches per `(base_url, api_key_env,
+  model)`. The judge and title clients still read a hardcoded variable.
+- **Wire.** `contract::Event` gained a variant: additive, no protocol
+  bump. A shell process started before the rebuild cannot decode
+  `MoaPassStarted` (skipped per item); restarting the app avoids the
+  noise.
+- **An entry with no `models` list has no default model** and falls back
+  to rig's built-in `gpt-4o-mini` for the construction-time window lookup
+  (one wasted `/models` request per key, cached). It matters once the
+  alias map is removed.
+- **Echo trimming keys on `User:` at line start.** A legitimate answer
+  containing that string on its own line is cut there.
 
 ## Not in v1
 

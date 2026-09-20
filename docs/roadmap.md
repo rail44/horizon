@@ -561,7 +561,7 @@ DuckDB re-justification with its exit clause, open v1-slicing items);
 `docs/research/duckdb-ecosystem.md` carry the surveys. Supersedes the
 notification half of the deferred item below when built.
 
-### Mixture-of-Agents as a selectable model (designed 2026-09-20, not started)
+### Mixture-of-Agents as a selectable model (v1 implemented 2026-09-20)
 
 Several models combined behind one entry in model selection: per user
 message, harness-launched `task`-shaped read-only proposer sessions each
