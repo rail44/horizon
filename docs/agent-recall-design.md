@@ -84,7 +84,11 @@ remain non-goals per `docs/agent-duckdb-state-design.md`):
   (`agent_tool_calls.input_json`), and tool results
   (`agent_tool_results.output_json`). Input: `query` (optional if
   `turn_outcome` is given -- see below), optional `scope: "session" | "all"`
-  (default `"session"` — the calling session), optional `limit` (default
+  (default `"session"` — the calling session), optional `session_id`
+  (search that one session instead of the caller's own; `scope` must then
+  be absent or `"session"` — combining it with `"all"` is an error, and an
+  unparseable id errors the same way `recall.read`'s does), optional
+  `limit` (default
   20), optional `turn_outcome` filter. Omitting `query` while giving
   `turn_outcome` is *listing mode* (`docs/agent-feedback-design.md`'s
   2026-07-07 skill-distillation addendum): every hit matching
