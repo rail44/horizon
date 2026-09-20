@@ -496,7 +496,26 @@ impl ProviderKind {
             ProviderKind::Anthropic => ANTHROPIC_BASE_URL_VAR,
         }
     }
+
+    /// The endpoint this kind's rig client uses when neither the entry's
+    /// `base_url` nor the kind's base-URL env var is set — rig's own
+    /// per-kind default (`completion_client` leaves the builder's default in
+    /// place for `None`). Named here so callers outside the client (the
+    /// picker's `/models` discovery) resolve the same endpoint the client
+    /// actually talks to.
+    pub(crate) fn default_base_url(self) -> &'static str {
+        match self {
+            ProviderKind::OpenAiCompatible => DEFAULT_OPENAI_BASE_URL,
+            ProviderKind::Anthropic => DEFAULT_ANTHROPIC_BASE_URL,
+        }
+    }
 }
+
+/// rig's own default endpoint for an OpenAI-compatible client — the value
+/// `completion_client` leaves in place when `config.base_url` is `None`.
+pub(crate) const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// rig's own default endpoint for an Anthropic client.
+pub(crate) const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 
 /// One resolved `[[providers]]` entry as the caller (`horizon-agentd`'s
 /// `main` / `AgentdState::reload_provider_config`) translates it from
@@ -532,19 +551,30 @@ impl NamedProviderConfig {
     /// The provider's own live model listing (`GET {base_url}/models`), for
     /// the picker's discovery (`SessionHub::list_provider_models`).
     /// Resolves this entry the same way [`Self::resolved`] resolves its
-    /// base URL and key name; an unavailable entry (no key variable set) or
-    /// a provider that answers no listing yields an empty list. Never an
-    /// error: this augments the picker, it never blocks a pick.
+    /// base URL and key name — the kind's env var, then the entry's
+    /// `base_url`, then the kind's own default endpoint — so an Anthropic
+    /// entry with no `base_url` asks `api.anthropic.com`, not rig's OpenAI
+    /// default. An unavailable entry (no key variable set) or a provider
+    /// that answers no listing yields an empty list. Never an error: this
+    /// augments the picker, it never blocks a pick.
     pub async fn list_model_ids(&self) -> Vec<String> {
         if !self.api_key_present {
             return Vec::new();
         }
-        let base_url = resolve_base_url(
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
+        crate::providers::rig::list_model_ids(&self.discovery_base_url(), &api_key).await
+    }
+
+    /// Where this entry's `/models` discovery request goes: the kind's
+    /// base-URL env var > the entry's `base_url` > the kind's own default
+    /// endpoint (the same endpoint `completion_client` would talk to for
+    /// this entry).
+    fn discovery_base_url(&self) -> String {
+        resolve_base_url(
             std::env::var(self.kind.base_url_env()).ok(),
             self.base_url.clone(),
-        );
-        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
-        crate::providers::rig::list_model_ids(base_url.as_deref(), &api_key).await
+        )
+        .unwrap_or_else(|| self.kind.default_base_url().to_string())
     }
 }
 
@@ -1378,5 +1408,39 @@ mod tests {
         assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
         assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
         assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
+    }
+
+    /// Each kind names the endpoint its rig client would actually talk to
+    /// when no base URL is configured — an Anthropic entry must not fall
+    /// through to rig's OpenAI default on the discovery path.
+    #[test]
+    fn provider_kinds_name_their_own_default_endpoints() {
+        assert_eq!(
+            ProviderKind::OpenAiCompatible.default_base_url(),
+            "https://api.openai.com/v1"
+        );
+        assert_eq!(
+            ProviderKind::Anthropic.default_base_url(),
+            "https://api.anthropic.com"
+        );
+    }
+
+    /// An Anthropic entry with no `base_url` discovers against the kind's own
+    /// default (or its env-var override), never rig's OpenAI endpoint. Env
+    /// compared against the same read so the assertion holds whatever the
+    /// environment carries.
+    #[test]
+    fn discovery_base_url_falls_back_to_the_kinds_own_default() {
+        let entry = NamedProviderConfig {
+            name: "claude".to_string(),
+            kind: ProviderKind::Anthropic,
+            base_url: None,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
+            api_key_present: true,
+            models: Vec::new(),
+        };
+        let expected = resolve_base_url(std::env::var(ANTHROPIC_BASE_URL_VAR).ok(), None)
+            .unwrap_or_else(|| "https://api.anthropic.com".to_string());
+        assert_eq!(entry.discovery_base_url(), expected);
     }
 }

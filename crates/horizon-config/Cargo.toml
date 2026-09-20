@@ -8,11 +8,11 @@ edition = "2021"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-# `preserve_order`: `[[providers]]`'s `models` map (alias -> model id) must
-# keep the document order the file lists it in -- the model picker's order
-# is an owner-agreed UI constraint ("TOML 記載順"), and the default toml
-# table (BTreeMap-backed) would silently sort it alphabetically. indexmap
-# is already in the dependency graph.
+# `preserve_order`: `[[providers]]` entries (and their `models`) are read in
+# the file's own order, and the model picker shows model ids in listed order.
+# `models` is a plain array now, so TOML keeps document order natively and
+# the flag is no longer load-bearing for it; it stays until its remaining
+# users are audited. indexmap is already in the dependency graph.
 toml = { version = "1", features = ["preserve_order"] }
 # `[grants]` validation only: the "which absolute paths are too broad to
 # hand out as a writable tree" rule is one security predicate, and the

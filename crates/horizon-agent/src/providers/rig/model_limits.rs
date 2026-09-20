@@ -53,8 +53,9 @@ const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Rig's own default when `RigAgentConfig::base_url` is `None` (see
 /// `providers::rig::completion::completion_client`). Named here so
 /// the cache key and the request URL agree on what "no base URL" resolves
-/// to.
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// to. The picker's discovery path passes a concrete URL (the kind's own
+/// default is resolved by the caller), so only [`model_limits`] reads this.
+const DEFAULT_OPENAI_BASE_URL: &str = crate::config::DEFAULT_OPENAI_BASE_URL;
 
 /// What a provider declares about one model's context budget. Both numbers
 /// are as-reported; the effective window is derived by the caller
@@ -182,15 +183,18 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
 /// same `GET {base_url}/models` request as [`model_limits`], but it keeps
 /// every `data[].id` rather than looking up one model's limits.
 ///
-/// A successful listing is cached process-lifetime, keyed by base URL
-/// (discovery rarely changes mid-run, and a picker reopen must not re-ask);
-/// a failure is not cached. An empty key is treated as "no key" and returns
-/// nothing without a request.
-pub(crate) async fn list_model_ids(base_url: Option<&str>, api_key: &str) -> Vec<String> {
+/// `base_url` is already resolved to a concrete endpoint by the caller (the
+/// kind's env var > the entry's `base_url` > the kind's own default), so an
+/// Anthropic entry reaches `api.anthropic.com` rather than rig's OpenAI
+/// default. A successful listing is cached process-lifetime, keyed by base
+/// URL (discovery rarely changes mid-run, and a picker reopen must not
+/// re-ask); a failure is not cached. An empty key is treated as "no key" and
+/// returns nothing without a request.
+pub(crate) async fn list_model_ids(base_url: &str, api_key: &str) -> Vec<String> {
     if api_key.is_empty() {
         return Vec::new();
     }
-    let base = base_url.unwrap_or(DEFAULT_OPENAI_BASE_URL).to_string();
+    let base = base_url.to_string();
     if let Some(cached) = cache_listings()
         .lock()
         .ok()
