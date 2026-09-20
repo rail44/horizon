@@ -167,6 +167,51 @@ pub struct RawConfig {
     /// each entry is the project's main-repository toplevel, a session in
     /// an isolated worktree resolves back to it, and matching is exact.
     pub trusted_projects: Vec<String>,
+    /// `[[moa]]`: Mixture-of-Agents entries, each a named combination of one
+    /// aggregator and a list of proposers over the `[[providers]]` entries
+    /// above (`docs/agent-moa-design.md`). Empty unless the file sets it.
+    /// Selected like a provider — the model picker shows a `moa` group whose
+    /// items are these names — and reloaded like `[[providers]]`: new
+    /// sessions see the change.
+    pub moa: Vec<RawMoaConfig>,
+}
+
+/// One `[[moa]]` entry as the file writes it. Model ids are written out;
+/// `[[providers]]`' `models` aliases are not resolved here.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawMoaConfig {
+    pub name: String,
+    /// The member that writes the answer the pane shows.
+    pub aggregator: RawMoaMember,
+    /// One read-only `task`-shaped proposer session per entry, each on its
+    /// own `{provider, model}`. Duplicates are kept: the same member listed
+    /// twice runs twice.
+    pub proposers: Vec<RawMoaMember>,
+}
+
+/// One `[[moa]]` member: a `[[providers]]` entry name plus a model id.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RawMoaMember {
+    pub provider: String,
+    pub model: String,
+}
+
+/// One resolved `[[moa]]` entry — [`RawConfig::resolved_moa`]'s output, with
+/// nameless/aggregator-less entries and members naming no `[[providers]]`
+/// entry already dropped.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedMoaConfig {
+    pub name: String,
+    pub aggregator: ResolvedMoaMember,
+    pub proposers: Vec<ResolvedMoaMember>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolvedMoaMember {
+    pub provider: String,
+    pub model: String,
 }
 
 /// `[provider]`: model selection and base URL for the built-in rig/OpenAI
@@ -338,6 +383,122 @@ impl RawConfig {
             default_name,
         }
     }
+}
+
+/// The picker group (and `set_session_model` `provider` argument) the
+/// `[[moa]]` entries are offered under. A `[[providers]]` entry with this
+/// name is warned about and loses the name to MoA — see
+/// [`moa_config_warnings`].
+pub const MOA_PROVIDER_NAME: &str = "moa";
+
+impl RawConfig {
+    /// Folds `[[moa]]` into the entries a session can be started on: an
+    /// entry needs a name, an aggregator whose `provider` names one of
+    /// [`Self::resolved_providers`]' entries, and a non-empty model id.
+    /// A proposer failing the same test is dropped on its own, leaving the
+    /// entry usable. Warnings live in [`moa_config_warnings`], run once per
+    /// parse like the provider ones.
+    pub fn resolved_moa(&self) -> Vec<ResolvedMoaConfig> {
+        let providers = self.resolved_providers();
+        let known = |member: &RawMoaMember| {
+            !member.model.is_empty()
+                && providers
+                    .providers
+                    .iter()
+                    .any(|entry| entry.name == member.provider)
+        };
+        let resolve = |member: &RawMoaMember| ResolvedMoaMember {
+            provider: member.provider.clone(),
+            model: member.model.clone(),
+        };
+        self.moa
+            .iter()
+            .filter(|entry| !entry.name.is_empty() && known(&entry.aggregator))
+            .map(|entry| ResolvedMoaConfig {
+                name: entry.name.clone(),
+                aggregator: resolve(&entry.aggregator),
+                proposers: entry.proposers.iter().filter(|m| known(m)).map(resolve).collect(),
+            })
+            .collect()
+    }
+}
+
+/// Value-level warnings for `[[moa]]`, beside [`provider_config_warnings`]
+/// and with the same warn-and-continue policy: an entry this crate refused
+/// (no name, an aggregator naming no `[[providers]]` entry, a member with no
+/// model id) is named on stderr rather than silently missing from the
+/// picker.
+pub fn moa_config_warnings(config: &RawConfig) -> Vec<String> {
+    let providers = config.resolved_providers();
+    let mut warnings = Vec::new();
+    if config.moa.is_empty() {
+        return warnings;
+    }
+    if providers
+        .providers
+        .iter()
+        .any(|entry| entry.name == MOA_PROVIDER_NAME)
+    {
+        warnings.push(format!(
+            "[[providers]]: the name {MOA_PROVIDER_NAME:?} is reserved for the [[moa]] group in \
+             model selection — rename that provider entry, it cannot be selected"
+        ));
+    }
+    let describe = |member: &RawMoaMember| {
+        if member.model.is_empty() {
+            Some("has no model id".to_string())
+        } else if !providers
+            .providers
+            .iter()
+            .any(|entry| entry.name == member.provider)
+        {
+            Some(format!(
+                "names no [[providers]] entry ({:?})",
+                member.provider
+            ))
+        } else {
+            None
+        }
+    };
+    let mut seen: Vec<&str> = Vec::new();
+    for (index, entry) in config.moa.iter().enumerate() {
+        if entry.name.is_empty() {
+            warnings.push(format!(
+                "[[moa]]: entry {index} has no name, dropping it (name it so it can be selected)"
+            ));
+            continue;
+        }
+        if seen.contains(&entry.name.as_str()) {
+            warnings.push(format!(
+                "[[moa]]: duplicate name {} — the later entry is shadowed",
+                entry.name
+            ));
+        } else {
+            seen.push(entry.name.as_str());
+        }
+        if let Some(reason) = describe(&entry.aggregator) {
+            warnings.push(format!(
+                "[[moa]]: entry {:?} aggregator {reason}, dropping the whole entry",
+                entry.name
+            ));
+            continue;
+        }
+        for (position, proposer) in entry.proposers.iter().enumerate() {
+            if let Some(reason) = describe(proposer) {
+                warnings.push(format!(
+                    "[[moa]]: entry {:?} proposer {position} {reason}, dropping that proposer",
+                    entry.name
+                ));
+            }
+        }
+        if entry.proposers.is_empty() {
+            warnings.push(format!(
+                "[[moa]]: entry {:?} lists no proposers — the aggregator will answer alone",
+                entry.name
+            ));
+        }
+    }
+    warnings
 }
 
 /// Value-level warnings for the provider sections, beside the name-walking
@@ -671,6 +832,12 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
             // `default_provider`, nameless/duplicate entries) are likewise
             // name-walk-invisible, off the same successful parse.
             for warning in provider_config_warnings(&config) {
+                eprintln!("horizon config: {warning}");
+            }
+            // `[[moa]]`'s value warnings ride the same seam: which entries
+            // resolve at all depends on the provider entries beside them,
+            // which a name walk cannot see either.
+            for warning in moa_config_warnings(&config) {
                 eprintln!("horizon config: {warning}");
             }
             ConfigRead::Parsed(Box::new(config))

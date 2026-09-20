@@ -59,6 +59,15 @@ pub fn named_rig_provider_id(name: &str) -> ProviderId {
     ProviderId(format!("builtin.agent.rig.{name}"))
 }
 
+/// A `[[moa]]` entry's registry id (`docs/agent-moa-design.md`). The
+/// provider behind it is an ordinary rig provider running the entry's
+/// aggregator; what makes its sessions MoA ones is
+/// [`crate::config::RigAgentConfig::moa`], which the rig session loop acts
+/// on around each owner message.
+pub fn moa_provider_id(name: &str) -> ProviderId {
+    ProviderId(format!("builtin.agent.moa.{name}"))
+}
+
 impl ProviderRegistry {
     /// Test-only convenience: no real event-log writer exists behind this
     /// registry, so the rig provider gets an already-resolved-to-`None`
@@ -102,6 +111,7 @@ impl ProviderRegistry {
         let mut registry = Self::default();
         registry.insert(Arc::new(crate::providers::mock::MockProvider::new()));
         let table = config.providers.clone();
+        let moa = config.moa.clone();
         for entry in &table.entries {
             let id = named_rig_provider_id(&entry.name);
             let provider = if entry.name == table.default_name {
@@ -109,6 +119,7 @@ impl ProviderRegistry {
                     id.clone(),
                     config.rig.clone(),
                     table.clone(),
+                    moa.clone(),
                     duckdb_cell.clone(),
                 )
             } else {
@@ -116,6 +127,7 @@ impl ProviderRegistry {
                     id.clone(),
                     entry.resolved(),
                     table.clone(),
+                    moa.clone(),
                     duckdb_cell.clone(),
                 )
             };
@@ -124,6 +136,27 @@ impl ProviderRegistry {
             if entry.name == table.default_name {
                 registry.insert_under(ProviderId("builtin.agent.rig".to_string()), provider);
             }
+        }
+        // One rig provider per `[[moa]]` entry, under its own id namespace:
+        // the session runs the aggregator's entry and model and carries the
+        // pass on its config. `horizon-config` already dropped entries whose
+        // aggregator names no provider, so a `None` here means a table that
+        // changed under this build; it is skipped.
+        for entry in &moa.entries {
+            let Some(config) = crate::config::moa_session_config(&table, entry) else {
+                continue;
+            };
+            let id = moa_provider_id(&entry.name);
+            registry.insert_under(
+                id.clone(),
+                Arc::new(crate::providers::rig::Provider::for_entry(
+                    id,
+                    config,
+                    table.clone(),
+                    moa.clone(),
+                    duckdb_cell.clone(),
+                )),
+            );
         }
         // A surface with no entries at all (the never-fail shape
         // `AgentConfig::from_env_and_providers` still carries) has nothing
@@ -149,6 +182,13 @@ impl ProviderRegistry {
     /// surface (or the legacy `[provider]` fold-in) built the registry.
     pub fn default_provider_id(&self) -> ProviderId {
         ProviderId("builtin.agent.rig".to_string())
+    }
+
+    /// Whether a provider is registered under `provider_id` — checked
+    /// before spawning a session against a configured name, so an unknown
+    /// one fails at the caller instead of inside the session thread.
+    pub fn contains(&self, provider_id: &ProviderId) -> bool {
+        self.providers.contains_key(provider_id)
     }
 
     /// Starts a session, forwarding `role_id` to whichever provider is
@@ -262,6 +302,7 @@ mod tests {
                 ],
                 default_name: "openai".to_string(),
             },
+            moa: crate::config::MoaTable::default(),
             persistence: AgentPersistenceConfig {
                 event_log_path: std::path::PathBuf::from("/tmp/horizon-registry-test-events.jsonl"),
                 duckdb_path: None,

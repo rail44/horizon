@@ -73,7 +73,7 @@ impl Connection {
     pub(crate) fn list_providers(&self) -> Vec<ProviderSummary> {
         let config = lock_unpoisoned(&self.state.agent_config);
         let table = &config.providers;
-        table
+        let mut summaries: Vec<ProviderSummary> = table
             .entries
             .iter()
             .map(|entry| ProviderSummary {
@@ -91,7 +91,35 @@ impl Connection {
                 available: entry.api_key_present,
                 default: entry.name == table.default_name,
             })
-            .collect()
+            .collect();
+        // The `[[moa]]` entries ride the same shape as one more group whose
+        // "models" are the entry names, so the picker and
+        // `set_session_model` need no MoA-specific wire surface. Omitted
+        // entirely when nothing is configured.
+        if !config.moa.entries.is_empty() {
+            let available = config.moa.entries.iter().any(|entry| {
+                table
+                    .entry(&entry.aggregator.provider)
+                    .is_some_and(|provider| provider.api_key_present)
+            });
+            summaries.push(ProviderSummary {
+                name: horizon_agent::config::MOA_PROVIDER_NAME.to_string(),
+                base_url: None,
+                api_key_env: String::new(),
+                models: config
+                    .moa
+                    .entries
+                    .iter()
+                    .map(|entry| ModelAlias {
+                        alias: entry.name.clone(),
+                        model: entry.name.clone(),
+                    })
+                    .collect(),
+                available,
+                default: false,
+            });
+        }
+        summaries
     }
 
     /// Applies a mid-session provider/model switch (latest turn wins):
@@ -115,18 +143,27 @@ impl Connection {
     ) -> Result<(), String> {
         let resolved = {
             let config = lock_unpoisoned(&self.state.agent_config);
-            let Some(entry) = config.providers.entry(&provider) else {
-                return Err(format!("Unknown provider `{provider}`."));
-            };
             if model.is_empty() {
                 return Err("A model id is required.".to_string());
             }
-            entry
-                .models
-                .iter()
-                .find(|(alias, _)| alias == &model)
-                .map(|(_, id)| id.clone())
-                .unwrap_or_else(|| model.clone())
+            if provider == horizon_agent::config::MOA_PROVIDER_NAME {
+                // The announced model is the aggregator's: it is what the
+                // session's provider requests actually name.
+                let Some(entry) = config.moa.entry(&model) else {
+                    return Err(format!("Unknown moa entry `{model}`."));
+                };
+                entry.aggregator.model.clone()
+            } else {
+                let Some(entry) = config.providers.entry(&provider) else {
+                    return Err(format!("Unknown provider `{provider}`."));
+                };
+                entry
+                    .models
+                    .iter()
+                    .find(|(alias, _)| alias == &model)
+                    .map(|(_, id)| id.clone())
+                    .unwrap_or_else(|| model.clone())
+            }
         };
         let inbound = {
             let mut sessions = self.state.sessions.lock().unwrap();
@@ -499,6 +536,12 @@ mod tests {
     /// one anthropic entry with its key unset — the two-provider
     /// completion condition's state-level shape.
     fn two_provider_state() -> (Arc<AgentdState>, Vec<NamedProviderConfig>) {
+        two_provider_state_with_moa(horizon_agent::config::MoaTable::default())
+    }
+
+    fn two_provider_state_with_moa(
+        moa: horizon_agent::config::MoaTable,
+    ) -> (Arc<AgentdState>, Vec<NamedProviderConfig>) {
         let entries = vec![
             NamedProviderConfig {
                 name: "openai".to_string(),
@@ -527,6 +570,7 @@ mod tests {
                 entries: entries.clone(),
                 default_name: "openai".to_string(),
             },
+            moa,
             persistence: horizon_agent::config::AgentPersistenceConfig {
                 event_log_path: std::path::PathBuf::from(
                     "/tmp/horizon-connection-test-events.jsonl",
@@ -630,6 +674,92 @@ mod tests {
             matches!(&sent, horizon_agent::wire::AgentWireEvent::SessionModel(model) if model == "m-opus"),
             "{sent:?}"
         );
+    }
+
+    fn moa_table() -> horizon_agent::config::MoaTable {
+        horizon_agent::config::MoaTable {
+            entries: vec![horizon_agent::config::MoaEntry {
+                name: "mix".to_string(),
+                aggregator: horizon_agent::config::MoaMember {
+                    provider: "openai".to_string(),
+                    model: "m-aggregate".to_string(),
+                },
+                proposers: vec![horizon_agent::config::MoaMember {
+                    provider: "openai".to_string(),
+                    model: "m-fast".to_string(),
+                }],
+            }],
+        }
+    }
+
+    /// The configured `[[moa]]` entries are offered as one more group
+    /// whose items are the entry names; a surface with none adds nothing.
+    #[test]
+    fn list_providers_offers_the_moa_entries_as_their_own_group() {
+        let (state, _entries) = two_provider_state_with_moa(moa_table());
+        let connection = Connection { state };
+        let summaries = connection.list_providers();
+        assert_eq!(summaries.len(), 3);
+        let group = summaries.last().unwrap();
+        assert_eq!(group.name, "moa");
+        assert!(!group.default);
+        assert!(group.available, "its aggregator's key is present");
+        assert_eq!(
+            group.models,
+            vec![horizon_agent::wire::ModelAlias {
+                alias: "mix".to_string(),
+                model: "mix".to_string(),
+            }]
+        );
+
+        let (state, _entries) = two_provider_state();
+        let connection = Connection { state };
+        assert_eq!(connection.list_providers().len(), 2);
+    }
+
+    /// Selecting a MoA entry announces the aggregator's model (what the
+    /// session's requests name) and forwards the selection unchanged.
+    #[test]
+    fn set_session_model_accepts_a_moa_entry_and_announces_the_aggregator_model() {
+        let (state, _entries) = two_provider_state_with_moa(moa_table());
+        let session_id = SessionId::new();
+        let (inbound_tx, inbound_rx) = unbounded::<Command>();
+        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        state.sessions.lock().unwrap().insert(
+            session_id,
+            SessionEntry {
+                provider_id: ProviderId("builtin.agent.rig".to_string()),
+                role_id: None,
+                model: Some("test-model".to_string()),
+                inbound: inbound_tx,
+                replay: replay_tx,
+                parent_session_id: None,
+                workspace_root: None,
+                worktree: None,
+            },
+        );
+        let connection = Connection { state };
+        connection
+            .set_session_model(session_id, "moa".to_string(), "mix".to_string())
+            .unwrap();
+        assert_eq!(
+            connection.session_model(session_id).as_deref(),
+            Some("m-aggregate")
+        );
+        let command = inbound_rx.recv().unwrap();
+        assert!(
+            matches!(
+                &command,
+                Command::SetSessionModel { provider, model }
+                    if provider == "moa" && model == "mix"
+            ),
+            "{command:?}"
+        );
+
+        let error = connection
+            .set_session_model(session_id, "moa".to_string(), "typo".to_string())
+            .unwrap_err();
+        assert!(error.contains("Unknown moa entry `typo`"), "{error}");
     }
 
     #[test]

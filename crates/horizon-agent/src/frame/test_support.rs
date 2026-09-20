@@ -158,6 +158,11 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
             | Event::InputOutcome(_)
             | Event::DeliveryAcknowledged(_)
             | Event::MemorySeeded => lines.push("memory: seeded".to_string()),
+            Event::MoaPassStarted(pass) => lines.push(format!(
+                "moa pass: {} ({} proposers)",
+                pass.entry,
+                pass.proposers.len()
+            )),
             Event::Error(error) => lines.push(format!("error: {}", error.message)),
             Event::Exited(exit) => lines.push(format!("exited: {}", exit.reason)),
             Event::TurnEnded(reason) => lines.push(format!("turn ended: {reason:?}")),

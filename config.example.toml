@@ -112,6 +112,33 @@
 # models = { "opus" = "claude-opus-4-6" }
 
 # ---------------------------------------------------------------------------
+# [[moa]] — Mixture-of-Agents entries (docs/agent-moa-design.md).
+#
+# Each entry is a named combination of one aggregator and a list of
+# proposers over the [[providers]] entries above. It appears in model
+# selection as a "moa" group whose items are these names; picking one makes
+# every message you send run a two-layer pass — each proposer investigates
+# the question in its own read-only session, then the aggregator writes the
+# single answer the pane shows.
+#
+# - provider: a [[providers]] entry name. model: the model id, written out
+#   (a models alias is not resolved here).
+# - Listing the same {provider, model} twice runs it twice.
+# - An entry whose aggregator names no [[providers]] entry is dropped and
+#   warned about; a proposer that does is dropped on its own, and a proposer
+#   that fails or returns nothing is skipped for that message.
+# - Reloads like [[providers]]: new sessions see the change.
+#
+# [[moa]]
+# name = "mix"
+# aggregator = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
+# proposers = [
+#   { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" },
+#   { provider = "synthetic", model = "hf:zai-org/GLM-5.3-Flash" },
+#   { provider = "synthetic", model = "hf:Qwen/Qwen3.8-27B" },
+# ]
+
+# ---------------------------------------------------------------------------
 # [terminal] — cell rendering metrics for the spawned shell.
 #
 # Everything this section used to also cover is fixed now: line height is

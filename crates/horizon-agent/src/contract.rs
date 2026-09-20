@@ -426,6 +426,34 @@ pub enum Event {
     /// Audit/observability-only: no frame item, no projection beyond the
     /// event log row.
     MemorySeeded,
+    /// The proposer sessions a Mixture-of-Agents pass launched for the owner
+    /// message that opened this turn (`docs/agent-moa-design.md`). A
+    /// harness-launched proposer has no `ToolCallRequested`/`ToolCallFinished`
+    /// pair naming it, so this is the only record tying a turn to the
+    /// sessions that answered for it; each proposer's own cost and trajectory
+    /// are then ordinary rows under its `session_id`. Emitted once per pass,
+    /// at launch, so a cancelled pass still leaves the relation behind.
+    /// Carries no frame item and no projection table row.
+    MoaPassStarted(MoaPassStarted),
+}
+
+/// Payload for [`Event::MoaPassStarted`].
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct MoaPassStarted {
+    /// The `[[moa]]` entry name the session is running.
+    pub entry: String,
+    /// One record per proposer session that started, in configured order.
+    /// A member that could not be started at all is absent.
+    pub proposers: Vec<MoaProposer>,
+}
+
+/// One proposer session of a [`Event::MoaPassStarted`] record.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct MoaProposer {
+    pub session_id: SessionId,
+    /// The `[[providers]]` entry name this proposer ran on.
+    pub provider: String,
+    pub model: String,
 }
 
 /// Payload for [`Event::HistoryCleared`]: exactly which tool calls' results
@@ -576,6 +604,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::SessionResumed => "session_resumed",
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
+        Event::MoaPassStarted(_) => "moa_pass_started",
     }
 }
 

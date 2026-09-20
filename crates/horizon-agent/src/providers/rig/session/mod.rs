@@ -41,6 +41,7 @@ use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
 mod environment;
 mod input;
+pub(crate) mod moa;
 mod state;
 mod turn;
 
@@ -64,6 +65,7 @@ pub(super) fn spawn_rig_session(
     request: StartSession,
     config: RigAgentConfig,
     table: crate::config::ProvidersTable,
+    moa_table: crate::config::MoaTable,
     role: Option<&'static RoleDefinition>,
     duckdb_cell: SharedDuckdbStore,
 ) -> SessionHandle {
@@ -118,6 +120,7 @@ pub(super) fn spawn_rig_session(
             let rig_history = persisted.messages;
             let cleared_call_ids = persisted.cleared_call_ids;
             let memory_document = persisted.memory_document;
+            let moa_conversation = persisted.moa_conversation;
             let seed_from_fallback = persisted.seed_from_fallback;
             // Issue 012: when the DuckDB projection store is unavailable and
             // the JSONL event log also yielded no reconstructable history for
@@ -182,12 +185,14 @@ pub(super) fn spawn_rig_session(
                     events_tx,
                     config,
                     table,
+                    moa_table,
                     environment,
                     extra_sections,
                     role,
                     rig_history,
                     cleared_call_ids,
                     memory_document,
+                    moa_conversation,
                 )
                 .await;
                 state.inputs = restored_inputs;

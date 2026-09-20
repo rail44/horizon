@@ -138,6 +138,10 @@ impl SessionLoopState {
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let token = CancellationToken::new();
+        // Resolved here, against the history as it stands before this round
+        // appends anything, so every round of one turn injects the block at
+        // the same index.
+        let moa = self.moa_injection();
         let memory = self
             .memory
             .as_ref()
@@ -151,6 +155,7 @@ impl SessionLoopState {
             &self.events_tx,
             &mut self.clearing,
             memory,
+            moa.as_ref(),
             fallback,
             &token,
         );
@@ -182,6 +187,12 @@ impl SessionLoopState {
     /// no tool calls — without the explicit flag the two would be
     /// indistinguishable.
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnCompletion) {
+        // Every branch below except the outstanding-tool-calls one ends the
+        // turn, and the injected Mixture-of-Agents block belongs to the turn
+        // that opened it.
+        if outcome.cancelled || outcome.failed || outcome.requested_tool_call_ids.is_empty() {
+            self.moa_turn = None;
+        }
         if outcome.cancelled {
             self.finish_input(crate::contract::InputResult::Interrupted);
             self.cancelled_call_ids
@@ -222,9 +233,9 @@ impl SessionLoopState {
         }
 
         if outcome.requested_tool_call_ids.is_empty() {
-            self.finish_input(crate::contract::InputResult::Success {
-                text: outcome.final_text.unwrap_or_default(),
-            });
+            let final_text = outcome.final_text.unwrap_or_default();
+            self.moa_conversation.record_answer(final_text.clone());
+            self.finish_input(crate::contract::InputResult::Success { text: final_text });
             let _ = self
                 .events_tx
                 .send(Event::TurnEnded(TurnEndReason::Completed).into());
@@ -490,6 +501,7 @@ impl SessionLoopState {
 
         self.finish_input(crate::contract::InputResult::Interrupted);
         self.guard.reset();
+        self.moa_turn = None;
         let _ = self
             .events_tx
             .send(Event::TurnEnded(halt.turn_end_reason()).into());

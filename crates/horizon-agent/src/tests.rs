@@ -45,6 +45,7 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
                 entries: Vec::new(),
                 default_name: String::new(),
             },
+            crate::config::MoaTable::default(),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )),
     ];

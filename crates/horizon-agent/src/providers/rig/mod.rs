@@ -18,7 +18,7 @@ use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 
 use crate::{
-    config::{ProviderKind, ProvidersTable, RigAgentConfig},
+    config::{MoaTable, ProviderKind, ProvidersTable, RigAgentConfig},
     contract::{ProviderId, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
     registry::{Provider as AgentProvider, SessionHandle},
@@ -42,6 +42,10 @@ pub(crate) struct Provider {
     /// spawn-time surface the same way it keeps its spawn-time entry
     /// config.
     table: ProvidersTable,
+    /// The MoA surface at build time, for the same reason `table` is here: a
+    /// mid-session switch into (or out of) a `[[moa]]` entry resolves
+    /// against this session's spawn-time copy.
+    moa: MoaTable,
     /// Shared, multi-reader-blocking handle onto the live DuckDB projection
     /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
     /// session's own dedicated rig thread (`start_session`/
@@ -60,12 +64,14 @@ impl Provider {
         id: ProviderId,
         config: RigAgentConfig,
         table: ProvidersTable,
+        moa: MoaTable,
         duckdb_cell: SharedDuckdbStore,
     ) -> Self {
         Self {
             id,
             config,
             table,
+            moa,
             duckdb_cell,
         }
     }
@@ -90,6 +96,7 @@ impl AgentProvider for Provider {
             request,
             config,
             self.table.clone(),
+            self.moa.clone(),
             role,
             self.duckdb_cell.clone(),
         )

@@ -10,7 +10,7 @@ use horizon_agent::wire::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
-use super::state::AgentdState;
+use super::state::{lock_unpoisoned, AgentdState};
 
 /// `horizon-agent`'s `task` seam (`docs/agent-explore-design.md`),
 /// implemented against this daemon's own session hosting: spawn a peer
@@ -41,7 +41,23 @@ pub(super) struct AgentdExplorationHost {
 }
 
 impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
-    fn start(&self, prompt: String) -> Result<horizon_agent::tools::StartedExploration, String> {
+    fn start(
+        &self,
+        request: horizon_agent::tools::ExplorationRequest,
+    ) -> Result<horizon_agent::tools::StartedExploration, String> {
+        // A named provider is validated before anything is spawned: an id
+        // the registry does not know would otherwise fail inside the
+        // session thread, after the caller already got a session id.
+        let provider_id = match &request.provider {
+            Some(name) => {
+                let id = horizon_agent::registry::named_rig_provider_id(name);
+                if !lock_unpoisoned(&self.state.providers).contains(&id) {
+                    return Err(format!("no provider `{name}` is configured"));
+                }
+                id
+            }
+            None => self.provider_id.clone(),
+        };
         let session_id = SessionId::new();
         // Subscribe first, spawn second -- the ordering requirement
         // `super::subscription` documents: the subscription has to exist
@@ -50,7 +66,7 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         spawn_session_thread(
             self.state.clone(),
             session_id,
-            self.provider_id.clone(),
+            provider_id,
             Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
             self.workspace_root.clone(),
             None,
@@ -58,10 +74,23 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
             None,
             Vec::new(),
         );
-        if !self
-            .state
-            .send_command(session_id, Command::UserMessage { text: prompt })
-        {
+        // Ordered ahead of the prompt on the same channel, so the session's
+        // first turn already runs the pinned model.
+        if let (Some(provider), Some(model)) = (&request.provider, &request.model) {
+            self.state.send_command(
+                session_id,
+                Command::SetSessionModel {
+                    provider: provider.clone(),
+                    model: model.clone(),
+                },
+            );
+        }
+        if !self.state.send_command(
+            session_id,
+            Command::UserMessage {
+                text: request.prompt,
+            },
+        ) {
             self.state.unsubscribe_from_session(session_id);
             return Err("the task session ended before it could be asked".to_string());
         }

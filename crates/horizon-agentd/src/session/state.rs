@@ -199,8 +199,14 @@ impl AgentdState {
         // `[[providers]]` when set, the legacy `[provider]` fold-in
         // otherwise.
         let (provider_entries, provider_default) = crate::providers::named_provider_configs(&raw);
-        let new_agent_config =
-            AgentConfig::from_env_and_providers(provider_entries, provider_default);
+        // `[[moa]]` reloads with `[[providers]]` — same rule, same seam:
+        // new sessions see the change (`docs/agent-moa-design.md`
+        // decision 9).
+        let new_agent_config = AgentConfig::from_env_and_providers(
+            provider_entries,
+            provider_default,
+            crate::providers::moa_configs(&raw),
+        );
         let new_providers = ProviderRegistry::builtin_with_config(
             new_agent_config.clone(),
             self.duckdb_cell.clone(),

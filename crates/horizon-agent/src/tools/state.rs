@@ -456,8 +456,10 @@ impl ToolSessionState {
     }
 
     /// This session's exploration host, if one is installed -- what
-    /// `tools::explore::start` spawns and terminates through.
-    pub(crate) fn exploration_host(
+    /// `tools::explore::start` spawns and terminates through, and what
+    /// `horizon-agentd` publishes to `tools::moa` for the session loop's
+    /// own thread to reach.
+    pub fn exploration_host(
         &self,
     ) -> Option<Arc<dyn crate::tools::explore::ExplorationHost>> {
         self.inner.exploration.clone()
@@ -706,6 +708,7 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 pub fn unregister_session_runtime(session_id: SessionId) {
     crate::tools::web::cancel_session(session_id);
     crate::tools::explore::cancel_session(session_id);
+    crate::tools::moa::unregister_exploration_host(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });

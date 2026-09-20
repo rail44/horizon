@@ -54,6 +54,12 @@ const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
 /// tables.
 const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "models"];
 
+/// Keys a single `[[moa]]` entry recognizes, and the keys of the inline
+/// member tables under `aggregator`/`proposers`. Checked the same way
+/// [`PROVIDER_ENTRY_KEYS`] is.
+const MOA_ENTRY_KEYS: &[&str] = &["name", "aggregator", "proposers"];
+const MOA_MEMBER_KEYS: &[&str] = &["provider", "model"];
+
 /// Pure collection of warning strings for `contents` -- factored out from
 /// [`warn`] so tests can assert on the returned strings instead of
 /// capturing stderr, mirroring `theme::warnings`' own
@@ -80,8 +86,62 @@ fn collect_warnings(contents: &str) -> Vec<String> {
     }
     warnings.extend(project_grant_warnings(&root));
     warnings.extend(provider_entry_warnings(&root));
+    warnings.extend(moa_entry_warnings(&root));
     warnings.sort();
     warnings
+}
+
+/// Probable-typo warnings for keys inside each `[[moa]]` entry and its
+/// member tables — same rationale as [`provider_entry_warnings`]: serde's
+/// `#[serde(default)]` would otherwise turn a misspelled `proposers = [...]`
+/// into a silently empty proposer list.
+fn moa_entry_warnings(root: &toml::Table) -> Vec<String> {
+    let Some(toml::Value::Array(entries)) = root.get("moa") else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    for (index, entry) in entries.iter().enumerate() {
+        let toml::Value::Table(table) = entry else {
+            continue;
+        };
+        for key in table.keys() {
+            if !MOA_ENTRY_KEYS.contains(&key.as_str()) {
+                warnings.push(format!(
+                    "[[moa]]: entry {index} unrecognized key {key:?}, ignoring (see \
+                     config.example.toml for the recognized names)"
+                ));
+            }
+        }
+        if let Some(aggregator) = table.get("aggregator") {
+            warnings.extend(moa_member_warnings(index, "aggregator", aggregator));
+        }
+        if let Some(toml::Value::Array(proposers)) = table.get("proposers") {
+            for (position, proposer) in proposers.iter().enumerate() {
+                warnings.extend(moa_member_warnings(
+                    index,
+                    &format!("proposer {position}"),
+                    proposer,
+                ));
+            }
+        }
+    }
+    warnings
+}
+
+fn moa_member_warnings(index: usize, label: &str, value: &toml::Value) -> Vec<String> {
+    let toml::Value::Table(table) = value else {
+        return Vec::new();
+    };
+    table
+        .keys()
+        .filter(|key| !MOA_MEMBER_KEYS.contains(&key.as_str()))
+        .map(|key| {
+            format!(
+                "[[moa]]: entry {index} {label} unrecognized key {key:?}, ignoring (see \
+                 config.example.toml for the recognized names)"
+            )
+        })
+        .collect()
 }
 
 /// Probable-typo warnings for keys inside each `[[providers]]` entry — same
@@ -224,6 +284,29 @@ mod tests {
         assert_eq!(warnings.len(), 1, "warnings = {warnings:?}");
         assert!(warnings[0].contains("tree"));
         assert!(warnings[0].contains("unrecognized"));
+    }
+
+    #[test]
+    fn a_well_formed_moa_entry_warns_about_nothing() {
+        let warnings = collect_warnings(
+            "[[moa]]\nname = \"mix\"\n\
+             aggregator = { provider = \"synthetic\", model = \"a\" }\n\
+             proposers = [{ provider = \"synthetic\", model = \"b\" }]\n",
+        );
+        assert!(warnings.is_empty(), "warnings = {warnings:?}");
+    }
+
+    #[test]
+    fn an_unrecognized_key_inside_a_moa_entry_or_member_warns_as_a_probable_typo() {
+        let warnings = collect_warnings(
+            "[[moa]]\nname = \"mix\"\nproposer = []\n\
+             aggregator = { provider = \"synthetic\", modle = \"a\" }\n",
+        );
+        assert_eq!(warnings.len(), 2, "warnings = {warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("\"proposer\"")));
+        assert!(warnings
+            .iter()
+            .any(|w| w.contains("aggregator") && w.contains("\"modle\"")));
     }
 
     #[test]

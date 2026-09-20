@@ -21,6 +21,9 @@ pub(super) struct RigSessionHistory {
     /// `None` when no `MemoryDigest` events were found (a non-standing session,
     /// or a standing session that has never updated its memory).
     pub(super) memory_document: Option<MemoryDocument>,
+    /// The owner messages and answers a Mixture-of-Agents pass hands its
+    /// proposers, replayed from the same events. Empty for a fresh session.
+    pub(super) moa_conversation: super::session::moa::MoaConversation,
     /// `true` when the memory document was built from `fallback_events`
     /// (a cross-session seed, board #39/#41) rather than from this
     /// session's own DuckDB events. Only set in the store path, where the
@@ -68,6 +71,7 @@ pub(super) fn load_rig_session_history(
             messages: rig_messages_from_horizon_events(fallback_events),
             cleared_call_ids: cleared_call_ids_from_events(fallback_events),
             memory_document: memory_document_from_events_if_nonempty(fallback_events),
+            moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
             seed_from_fallback: false,
         };
     }
@@ -79,6 +83,7 @@ pub(super) fn load_rig_session_history(
             messages: rig_messages_from_horizon_events(fallback_events),
             cleared_call_ids: cleared_call_ids_from_events(fallback_events),
             memory_document: memory_document_from_events_if_nonempty(fallback_events),
+            moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
             seed_from_fallback: false,
         };
     };
@@ -108,6 +113,7 @@ pub(super) fn load_rig_session_history(
                 messages: rig_messages_from_horizon_events(&events),
                 cleared_call_ids: cleared_call_ids_from_events(&events),
                 memory_document,
+                moa_conversation: super::session::moa::MoaConversation::from_events(&events),
                 seed_from_fallback,
             }
         })
@@ -121,6 +127,7 @@ pub(super) fn load_rig_session_history(
                 messages: rig_messages_from_horizon_events(fallback_events),
                 cleared_call_ids: cleared_call_ids_from_events(fallback_events),
                 memory_document: memory_document_from_events_if_nonempty(fallback_events),
+                moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
                 seed_from_fallback: false,
             }
         })
