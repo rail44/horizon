@@ -3,8 +3,7 @@
 //! crate's `theme::warnings` -- see that module's doc comment; unaffected
 //! by this one) and `[keybindings]` (a chord-to-command-id map validated
 //! by the shell crate's `keymap`, not schema-shaped here). This project
-//! carries no retired-key compatibility warnings (owner decision
-//! 2026-08-03): an old key from a since-removed section (e.g. `[agent]`,
+//! carries no retired-key compatibility warnings: an old key from a since-removed section (e.g. `[agent]`,
 //! `[provider] temperature`) is just another unrecognized key now, the
 //! same probable-typo treatment as any misspelling.
 //!

@@ -180,20 +180,26 @@ font_size = 13.0
 # `escape`, `tab`, `space`, `backspace`, `delete`, `up`/`arrowup`, `down`,
 # `left`, `right`, `home`, `end`, `pageup`, `pagedown`). Case-insensitive.
 #
-# Command ids (see `src/app/commands.rs`'s `CommandId`): split-right (opens
-# the palette's view chooser to split the active pane horizontally),
-# split-down (same chooser, but vertically), new-tab (opens the chooser to
-# open a new tab), focus-next-pane, close-active-pane,
-# close-active-tab, terminate-active-session, approve-tool-call,
-# deny-tool-call, cancel-agent-turn, reload-agent-runtime,
-# reload-terminal-runtime (restarts horizon-terminald -- destructive: every
-# terminal session ends), reload-config,
-# manage-sessions (opens the session manager modal), increase-font-size /
-# decrease-font-size / reset-font-size (move the live terminal font size;
-# already bound by default to the platform-standard zoom chords -- cmd+= /
-# cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on Linux/Windows (one
-# built-in set spelled via gpui's `secondary` modifier), so an entry
-# here overrides that default). The reserved pseudo-command
+# Command ids (see `crates/horizon-workspace/src/commands.rs`'s `CommandId`):
+# split-right (opens the palette's view chooser to split the active pane
+# horizontally), split-down (same chooser, but vertically), new-tab (opens the
+# chooser to open a new tab), focus-next-pane, close-active-pane,
+# close-active-tab, terminate-active-session, terminate-all-detached-sessions,
+# approve-tool-call, deny-tool-call, cancel-agent-turn, continue-agent-turn,
+# switch-model, reload-agent-runtime (`reload-session-runtime` is accepted as a
+# legacy alias for it), reload-terminal-runtime (restarts horizon-terminald --
+# destructive: every terminal session ends), reload-config, manage-sessions
+# (opens the session manager modal), open-terminal-in-session-directory,
+# open-board, toggle-board-expansion, toggle-board-closed-visibility,
+# open-board-organizer, open-board-task-session, open-board-related-item,
+# back-board-list, add-board-task, post-board-message, move-board-task-up,
+# move-board-task-down, reorder-board-task, save-board-state,
+# toggle-board-closed, add-board-dependency, remove-board-dependency,
+# increase-font-size / decrease-font-size / reset-font-size (move the live
+# terminal font size; already bound by default to the platform-standard zoom
+# chords -- cmd+= / cmd+- / cmd+0 on macOS, ctrl+= / ctrl+- / ctrl+0 on
+# Linux/Windows (one built-in set spelled via gpui's `secondary` modifier), so
+# an entry here overrides that default). The reserved pseudo-command
 # `open-palette` is also accepted here — it isn't a real `CommandId` (opening
 # the palette isn't an operation the palette itself can list or run), and
 # overrides the chord that opens the command palette. Unbound by default:
@@ -202,9 +208,7 @@ font_size = 13.0
 #
 # Likewise, the reserved pseudo-command `workspace-mode` overrides the
 # chord that enters workspace mode (`ctrl+'` by default -- see
-# `docs/workspace-mode-design.md`). An agent pane's message box also
-# accepts a bare `Esc` as a second entry path regardless of this setting,
-# since (unlike a terminal) it has no protocol-level claim on that key.
+# `docs/workspace-mode-design.md`).
 #
 # An unparsable chord or an unrecognized command id is warned about on
 # stderr and skipped — never a startup failure.
@@ -227,7 +231,7 @@ font_size = 13.0
 # foreground/background/cursor, the ANSI black/white/bright_* slots -- is
 # derived from the seed; none of them are independently settable any more.
 # If you don't like a derived value, tune the seed (or the derivation
-# itself, in `src/theme.rs`) rather than looking for a per-role override --
+# itself, in `src/theme/scheme.rs`) rather than looking for a per-role override --
 # that escape hatch is gone by design (an interactive settings view is the
 # planned way to explore this without editing files by hand).
 #

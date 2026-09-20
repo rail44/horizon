@@ -1204,7 +1204,7 @@ fn system_prompt_stays_within_line_budget() {
 
 #[test]
 fn system_prompt_carries_communication_and_verification_norms() {
-    // The 2026-07-07 owner decision: model-agnostic behavior norms only
+    // Model-agnostic behavior norms only
     // (conciseness, faithful reporting, verify-after-change, session
     // persistence) -- see prompt.rs's module doc. This pins their presence
     // without pinning wording.

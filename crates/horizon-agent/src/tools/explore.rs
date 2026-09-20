@@ -10,8 +10,8 @@
 //! only the conclusion does. So the sweep runs in a session of its own,
 //! whose history is discarded with it.
 //!
-//! **Asynchronous since 2026-07-28** (`docs/agent-async-task-design.md`,
-//! owner-approved). [`start`] returns immediately with `{session_id,
+//! **Asynchronous since 2026-07-28** (`docs/agent-async-task-design.md`).
+//! [`start`] returns immediately with `{session_id,
 //! description, status: "started"}`; there is no blocking path left in this
 //! tool. What used to be a waiter that stalled the requester's turn is now
 //! a *completion subscription*: the waiter thread folds the child's event

@@ -125,7 +125,7 @@ pub(crate) struct AgentdState {
     pub(super) project_grants: Vec<horizon_config::ProjectGrant>,
     /// Validated `trusted_projects` entries from the same config load
     /// (`main`'s `horizon_config::trusted_projects` call) -- the
-    /// repository-trust gate (owner decision 2026-08-05). A session whose
+    /// repository-trust gate. A session whose
     /// project root is not in this list gets embedded skills only and no
     /// `AGENTS.md`/`CLAUDE.md` instructions; behavioral defense (sandbox,
     /// approval) is unaffected. Same lifecycle as `project_grants`:

@@ -2,7 +2,7 @@
 //! project root, with an always-loaded prompt index and two tools
 //! (`knowledge.read` / `knowledge.write`).
 //!
-//! **Design** (owner-approved 2026-08-05). The store lives outside any
+//! **Design.** The store lives outside any
 //! repository, under the user's data home:
 //! `$XDG_DATA_HOME/horizon/knowledge/<sanitized-root>/<id>.md` (same
 //! XDG-resolution shape as `config::default_event_log_path_from`), keyed

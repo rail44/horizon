@@ -116,7 +116,7 @@ pub(super) fn configured_mach_services(
 }
 
 /// Whether this session's project root is in the user's `trusted_projects`
-/// config list -- the repository-trust gate (owner decision 2026-08-05).
+/// config list -- the repository-trust gate.
 /// Resolved the same way [`configured_filesystem_grants`] resolves grants:
 /// `workspace_root` -> `worktree::project_root` (the main repository
 /// toplevel, so an isolated worktree session inherits its parent's trust)

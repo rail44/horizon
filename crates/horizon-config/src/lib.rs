@@ -8,7 +8,7 @@
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
 //!
-//! The 2026-07-18 config-narrowing wave (owner decision) cut the surface
+//! The 2026-07-18 config-narrowing wave cut the surface
 //! to exactly: `[provider]` `model`/`base_url`; `[terminal]` `font_size`;
 //! `[ui]` `font_family`; `[keybindings]`; `[theme]`'s seed plus
 //! `[theme.ansi]`'s six hues. Everything that used to be tunable beyond
@@ -19,7 +19,7 @@
 //! (`horizon-agent`'s `config` module for the former `[agent]` knobs; the
 //! shell crate's `terminal`/`main` modules for the rest) — this crate no
 //! longer parses any of them into a field at all, and carries no separate
-//! retired-key compatibility warning either (owner decision 2026-08-03): a
+//! retired-key compatibility warning either: a
 //! config file that still sets one of those names gets
 //! [`warnings::warn`]'s ordinary "probable typo" treatment, the same as
 //! any other unrecognized key.

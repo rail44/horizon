@@ -315,7 +315,7 @@ impl AgentTranscript {
     /// dispatch by pending-queue order (`AgentSession::approve`/`deny`),
     /// independent of which row's buttons a pointer happens to click.
     ///
-    /// Row-centric approval v2 (owner decision 2026-07-13, superseding
+    /// Row-centric approval v2 (superseding
     /// stage E's composer banner): a `Waiting` row additionally shows
     /// exactly one of two things below its header. If it's the exact
     /// call `self.composer_mode` targets, its buttons carry a trailing
@@ -426,7 +426,7 @@ impl AgentTranscript {
                             view.session.read(cx).deny(deny_id.clone(), None);
                         })),
                 );
-            // Row-centric approval v2 (owner decision 2026-07-13): only
+            // Row-centric approval v2: only
             // the exact row `self.composer_mode` currently targets is
             // keyboard-operable, so only that row gets the hint --
             // derived from the mode itself (`is_keyboard_approval_target`),

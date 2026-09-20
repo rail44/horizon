@@ -1,7 +1,6 @@
 # terminald 分離 — ターミナルを reload の巻き添えから外す
 
-Status: **implemented 2026-07-30**（wire v17）。決定 1–7 すべて実装済み。
-実装の記録は末尾「実装記録」に。
+Status: implemented 2026-07-30。当時の wire は v17（番号は以降 drift するため、現行値はコード — `TERMINAL_PROTOCOL_VERSION` — を参照）。
 
 ## 動機（実測）
 
@@ -31,61 +30,28 @@ Claude Code）が道連れになるのが現在最大の運用痛。
 
 ## 決定
 
-1. **`horizon-terminald` を分離する**（TerminalHost + PTY 所有、
-   ~900 LOC = 非共有コードの 13%。agent 状態との共有はゼロ —
-   lineage 木もターミナルを除外済み）。自分の socket を持ち、
-   sessiond と同様に on-demand spawn。
-2. **`Reload Agent Runtime` は sessiond（agent runtime）だけを
-   drain・respawn** する。ターミナルは無傷。
-3. terminal-core の変更を反映する **`Reload Terminal Runtime`** を
-   別コマンドとして新設（明示的・破壊的 — close/terminate 分離の
-   既存規律に一致）。
-4. **UI 側の再 adopt を reload 経路に配線**: `prepare_workspace_for_
-   runtime_reload` のターミナル terminate をやめ、
-   `session_lifecycle.rs:848` で `spawn_terminal_resume` を
-   `spawn_agent_resume` と並走させる（UI 再起動側で実証済みの機構の
-   再利用 — S サイズ）。
-5. **terminal 向きプロトコルスライスは append-only 規律に移行**
-   （オーナー受諾済み）: 以後、terminal 系 wire 型の reshape は
-   「terminald の再起動を要求する重い変更」として扱い、原則追記のみ。
-   agent 側スライス（v14/15/16 の類）は従来通り自由に動かしてよい。
-6. **下層破壊への保険**: hello の `binary_id` を使い、transport/
-   serialization 層の不一致が疑われる場合（デコード失敗の初回）に
-   silent 継続でなく **clean refuse + 再起動案内**へ落とす。tmux 3.6
-   の教訓の機械化。
-7. **backstop はスナップショット復元**（workspace restore、既設）。
-   terminald が死ぬ時は今まで通り正直に死ぬ。
-
-## スコープ・分担の見取り
-
-- 新 crate（or bin target）`horizon-terminald`: TerminalHost 移設、
-  terminal-only hub（既存 trait のサブセット）
-- `horizon-session-protocol`: terminal サブセットの切り出し（追記
-  のみで可能な見込み）
-- `src/sessiond/`（client runtime）: **最大の作業箇所** — 「接続は
-  1 本」前提の解体（RuntimeControl/Routes/op queue の 2 本化、
-  call site ごとの routing: terminal 系 → terminald、他 → sessiond）
-- `src/workspace/`: reload 2 コマンド化、`sessiond_slot` の 2 slot 化
-- 既知の要注意: `spawn_workspace_restore` の cross-inventory 衝突
-  検査（1 daemon が両方を報告する前提）、backlog 50（reload 時
-  reseed — 本件で moot 化）、backlog 51（stale daemon 面が 2 倍）
-
-サイズ感: M。フェーズ分割（先に UI 側 4 と config-only reload、
-次に daemon 分離本体）を推奨。
-
-## 却下した代替
-
-- **fd handoff / self re-exec**: 先行事例ゼロ・失敗時全損・状態転送
-  （エミュレータのモードフラグ等、Ink 系 CLI が依存する部分）が
-  未解決。将来「terminald 自体の無停止更新」が欲しくなったら、
-  小さくなった terminald の上で再検討する方が安全。
-- **agent サブプロセス化（c2）**: 分割を一段深くした形だが persistence
-  （単一 writer スレッド）の再設計が付随し、fit が最低。
+1. **`horizon-terminald` を分離する**: TerminalHost と全 PTY を所有し、
+   自分の socket を持つ（on-demand spawn）。
+2. **`Reload Agent Runtime` は agent runtime のみ drain・respawn**
+   する。ターミナルは無傷。
+3. **`Reload Terminal Runtime` を別コマンドとして新設**（明示的・
+   破壊的 — close/terminate 分離の既存規律に一致）。
+4. **UI 側の reload 経路を 2 ランタイム化**: agent reload はターミナルを
+   触らず（terminate しない）。その再 adopt は agent 側の
+   `spawn_agent_resume` のみ（ターミナルは切断されていないので再 adopt
+   不要）。両 handle を検証する `spawn_workspace_restore` は UI 起動時の
+   restore 経路。terminal の terminate は destructive な `Reload Terminal
+   Runtime` の経路（`prepare_workspace_for_terminal_runtime_reload`）のみ。
+5. **terminal 向き wire 型は append-only**。reshape は terminald 再起動を
+   要求する重い変更として扱う。
+6. **binary 不一致は clean refuse + 再起動案内**（hello の `binary_id` を
+   使い、silent 継続にしない）。
+7. **backstop はスナップショット復元**（workspace restore）。
 
 ## 実装記録（2026-07-30、wire v17）
 
 The split landed as one change; what follows is what a reader of the code
-needs that the decisions above do not already say.
+needs that the design above does not already say.
 
 **Shape.** `horizon-terminald` is a new workspace crate
 (`crates/horizon-terminald`) with `TerminalHost` moved into it verbatim and
@@ -121,7 +87,7 @@ shared). Splitting the route tables removed a coupling the design doc did
 not name: the single `Routes` used to fan a connection failure out to *both*
 domains, so a dead agent daemon painted every terminal pane with an error.
 Terminald's connection additionally issues one `list_terminals` probe right
-after `hello` — decision 6's insurance — and refuses cleanly, naming the
+after `hello` — the clean-refuse insurance described above — and refuses cleanly, naming the
 peer's `binary_id` and `Reload Terminal Runtime`, when that probe fails on a
 still-live connection. Per-item decode failures on the live attachment
 channels stay tolerant (skipped, rate-limit logged): one poisoned frame must

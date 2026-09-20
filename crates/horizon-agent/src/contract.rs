@@ -918,7 +918,7 @@ pub struct MessageDelta {
 ///   answer — Postbag rejects it outright (`DeserializeAnyUnsupported`),
 ///   so a raw `Value` cannot cross the v10 wire at all. Tool I/O is
 ///   control-plane traffic; the double encode is an accepted cost for
-///   keeping the single pinned Postbag codec (owner decision, 2026-07-20).
+///   keeping the single pinned Postbag codec.
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
 /// indexing keep their shape); construct via `From<serde_json::Value>`,

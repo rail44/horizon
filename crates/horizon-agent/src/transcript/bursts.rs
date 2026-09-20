@@ -36,8 +36,8 @@ fn is_assistant_text(item: &AgentFrameItem) -> bool {
 /// are relative to the turn's own item slice (the same convention
 /// [`build_tool_call_views`] uses), `[start, end)`.
 ///
-/// Round 5 (owner decision 2026-07-13, "monotone burst splitting" --
-/// superseding round 2's whole-turn provisional-receipt flip-back, see
+/// Round 5 ("monotone burst splitting" -- superseding round 2's whole-turn
+/// provisional-receipt flip-back, see
 /// `docs/agent-output-ui-amendment.md`'s post-review note): a turn can
 /// fold into *more than one* receipt as it progresses -- tools run,
 /// finish, the model answers, then decides to run more tools, answers

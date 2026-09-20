@@ -2,8 +2,8 @@
 //! (`docs/agent-output-ui-amendment.md` stage C, decisions 1-2). The
 //! *structural* reading of the event stream this used to hold in full --
 //! turn/burst grouping, tool-call/approval derivation, and receipt/change
-//! aggregation -- moved to `horizon_agent::transcript` (owner decision
-//! 2026-07-18, shape c: "structure moves, presentation stays"), so any
+//! aggregation -- moved to `horizon_agent::transcript` (shape c:
+//! "structure moves, presentation stays"), so any
 //! future frontend shares one official reading of "which turn is this
 //! item in" / "did the user approve this call" rather than each
 //! reimplementing it. What's left here is display-only: humanized

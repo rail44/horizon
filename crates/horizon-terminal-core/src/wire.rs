@@ -46,7 +46,7 @@ use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, 
 /// here.
 ///
 /// **This slice is append-only** (`docs/terminald-split-design.md` decision
-/// 5, owner-accepted): `horizon-terminald` is deliberately rarely restarted
+/// 5): `horizon-terminald` is rarely restarted
 /// — a running one keeps its PTYs across every `Reload Agent Runtime` — so a
 /// reshape of [`TerminalHub`], [`TerminalAttachment`], or this crate's
 /// vocabularies is a *heavy* change that kills every live shell on the next
@@ -169,7 +169,7 @@ pub struct TerminalAttachment {
 /// PTY, while `Reload Terminal Runtime` is the explicit, destructive
 /// counterpart for this one.
 ///
-/// **Append-only from here on** (design decision 5, owner-accepted): every
+/// **Append-only from here on** (design decision 5): every
 /// restart of the daemon serving this trait kills real interactive shells,
 /// so a reshape is a heavy, user-visible change. New methods and new
 /// `#[serde(default)]`/`Unknown`-guarded vocabulary go on the end; a retired

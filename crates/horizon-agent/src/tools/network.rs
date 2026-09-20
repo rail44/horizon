@@ -6,7 +6,7 @@
 //! start-session argument from `horizon-agentd` (leg 4a's shape --
 //! `horizon-agentd`'s own `network.rs` is gone).
 //!
-//! **Ownership moved from the daemon to here** (owner decision, leg 4b):
+//! **Ownership moved from the daemon to here** (leg 4b):
 //! the proxy's responsibility sits with the agent implementation, which
 //! already owns every other piece of per-session tool state (`tools::state::
 //! ToolSessionState`) -- `horizon-agentd` becomes a pure consumer, handing

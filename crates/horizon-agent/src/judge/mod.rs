@@ -234,8 +234,8 @@ pub(crate) fn start_approval_gate(
     mut candidate: ApprovalCandidate,
     result_tx: crossbeam_channel::Sender<crate::tools::ToolCompletion>,
 ) -> ApprovalGate {
-    // Deterministic prefilter for Git metadata operations. Owner decision
-    // 2026-08-17 (board #38): the prefilter no longer blocks any construct —
+    // Deterministic prefilter for Git metadata operations (board #38): the
+    // prefilter no longer blocks any construct —
     // every GitOperation-classified command passes to the judge in full.
     // The HumanDirect branch is retained as a seam but is currently
     // unreachable; the deterministic defense against host-escalation
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn git_prefilter_passes_dangerous_commands_to_the_judge() {
-        // Owner decision 2026-08-17 (board #38): the prefilter no longer
+        // Board #38: the prefilter no longer
         // blocks dangerous constructs. A command carrying `-c` now reaches
         // the judge (Pending) instead of going straight to the human.
         let path = temp_event_log("git-dangerous");

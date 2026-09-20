@@ -1,13 +1,8 @@
 # Compaction — 二層の文脈削減（Tier 1: 復元可能な clearing / Tier 2: 状態要約）
 
-Status: designed 2026-07-28（オーナー承認）。**Tier 1 は 2026-07-28 実装
-済み**（下記「Tier 1 実装記録」）。**Tier 2 は着手せず保留続行（オーナー
-判断 2026-08-14、board #37 の field 実測を受けて）**: 現用モデル
-`syn:large:text` の申告窓は 512k、実測ピーク input は実効窓の 46.5%、
-context 起因エラーは 43 日間ゼロ。Tier 1 は閾値未達で正しく不発火
-（窓 262k の MiniMax-M3 では設計どおり発火 — 機構は健全）。コーディング
-用途の窓逼迫という Tier 2 の動機は実測上休眠。集計の詳細は board #37 の
-コメントに記録。
+Status: Tier 1 implemented 2026-07-28（実装記録は下記）。Tier 2 は保留。
+現用モデル `syn:large:text` の実効窓に対し実測ピーク input は 46.5%、
+context 起因エラーは 43 日間ゼロで、窓逼迫は実測上休眠（詳細は board #37）。
 
 証拠基盤: `docs/research/agent-compaction-prior-art-2026-07-28.md`（本
 設計の全判断の出典。以下「証拠 doc」）と
@@ -45,7 +40,7 @@ T-callid 級のタスクは有効窓 229k を使い切って死ぬ（追補 4）
   PRUNE_MINIMUM と同思想）。
 - 有効窓 = `/models` 申告の context_length − 送信中の max_tokens。
   agentd がセッション開始時に取得・キャッシュし、取得不能なら
-  **発火しない**（crush の cw==0 保護）+ 保守的既定 128k で警告。
+  **発火しない**（fallback 窓は持たない — `providers/rig/model_limits.rs`）。
 - 透明性: 何をどの範囲 clear したかを専用イベントとして event log に
   記録し、transcript に区切りを表示。
 - 計測スイッチ: 閾値の env-only 強制（LangChain 方式の強制発火計測用。
@@ -83,16 +78,12 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
 
 設計からの確定事項・差分:
 
-- **fallback 有効窓 128k は採らなかった。** 設計表の「fallback 有効窓
-  128k」は「発火なし + 警告」と併記されていたが、発火しない以上その数値
-  は何にも使われない。実装は限界不明なら窓を持たず（`None`）、
-  セッション開始時に stderr へ 1 行出すだけ。推測した窓を根拠に履歴を
-  削ることは起きない。
+- **有効窓が不明なら窓を持たない**（`None`）。セッション開始時に stderr へ
+  1 行出すだけ。
 - **cleared set は凍結**。pass は 1 回だけ集合を決め、
   `Event::HistoryCleared`（`cleared_call_ids` + `recovered_chars`）として
   event log に載る。以後のリクエストは同じ集合を適用するので projection は
-  バイト一致し、cache 損は pass ごとに 1 回。**リクエストごとの再計算は
-  却下設計**（seam の doc comment に明記）。
+  バイト一致し、cache 損は pass ごとに 1 回。
 - **保護は構造で担保**: 触るのは tool result の content のみ（user /
   assistant / TaskNotification は型として対象外）、tail 予算まで遡って
   停止、最後に tool call を要求した assistant メッセージ＝「今の往復」は
@@ -116,10 +107,9 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
   入口）でのみ走る。`WaitingForApproval` 中はリクエストを組み立てないので
   構造的に走らず、`Event::TurnEnded` は不変。
 
-実測は 2026-08-14 に field データで実施（board #37 — 冒頭 Status 参照）。
-T-callid 再走は Tier 2 正当化の目的では実施しない（オーナー判断
-2026-08-14）: field で窓逼迫自体が休眠と判明したため。Tier 1 の強制発火
-計測が将来必要になれば `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` で可能。
+実測は 2026-08-14 に field データで実施（board #37）。T-callid 再走は
+実施しない: field で窓逼迫自体が休眠と判明したため。強制発火計測が必要に
+なれば `HORIZON_AGENT_CLEARING_THRESHOLD_PCT` で可能。
 
 ## Tier 2 — LLM 状態要約（最終段・生存保証）
 
@@ -151,9 +141,9 @@ Tier 1 適用後もなお 80% を超える場合のみ。
 | Tier 2 発火 | 有効窓の 80% | Tier 1 後の実測で再判定 |
 | tail 保護予算 | 16k トークン | 往復単位で遡る（turn 非依存） |
 | 要約上限 | 8k トークン | |
-| fallback 有効窓 | 128k | /models 不能時、発火なし + 警告 |
+| fallback 有効窓 | なし | /models 不能なら窓を持たず、発火しない |
 
-## Letta の示唆との差分（オーナー確認済み、2026-07-28）
+## Letta の示唆との差分
 
 原則面（正本・参照・検索と刈り込みの併用・読み取り専用保護領域）は
 letta.md の survey に準拠。実行面は測定に従い乖離する:
@@ -167,7 +157,7 @@ letta.md の survey に準拠。実行面は測定に従い乖離する:
 4. **エージェント編集の可変メモリブロック（core memory / todo）は
    見送り** — 証拠が割れている（Manus の todo 撤回）ことに加え、
    これは DuckDB 採用の狙い（ナレッジベース・archival 層構想）と
-   一体で設計すべき領域のため、そちらの設計回に送る（オーナー方針）
+   一体で設計すべき領域のため、そちらの設計回に送る
 5. archival 層・sleep-time compute もスコープ外（sleep-time は async
    task の購読配管が将来の土台になる）
 

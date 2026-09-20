@@ -1,15 +1,8 @@
 //! Tier 1 compaction: reversible, mechanical clearing of old tool-result
 //! bodies (`docs/agent-compaction-design.md`).
 //!
-//! This module reinstates the provider-view seam that was deleted on
-//! 2026-07-25 (`docs/research/agent-context-memory-separation-2026-07-20.md`,
-//! the reversal note). That removal's stated precondition -- fix the amount
-//! of context ordinary work produces before introducing a lossy history
-//! transformation -- has since been discharged by the 2026-07-26..27
-//! consumption campaign, and the removal note itself recorded that bringing
-//! the seam back is "one function call at one call site". This is that
-//! function ([`history_for_provider_request`]) and that call site
-//! (`completion::complete_rig_turn`).
+//! The provider-view seam: [`history_for_provider_request`], called from
+//! `completion::complete_rig_turn`.
 //!
 //! **Projection, not rewrite.** `rig_history`, the event log, and the DuckDB
 //! projection are never touched. Only the `Vec<Message>` handed to one
@@ -20,16 +13,11 @@
 //! placeholder's "re-fetch it" pointer honest rather than a polite fiction --
 //! `recall.search`/`recall.read` read the same event log.
 //!
-//! **The cleared set is frozen, and that is load-bearing.** A pass decides
-//! its set exactly once, from the history as it stands at that moment, and
-//! records it both in session state and as `Event::HistoryCleared`. Every
-//! later request applies that identical set, so the projected prefix is
-//! byte-stable and the provider's prompt cache is invalidated once per pass
-//! rather than on every round. **Recomputing the set per request is a
-//! rejected design**: a moving window would re-clear a different suffix each
-//! round, churning the cache continuously and making a resumed session
-//! disagree with the one it resumed -- the exact opposite of what a
-//! compaction layer is for.
+//! **The cleared set is frozen.** A pass decides its set once, from the
+//! history as it stands at that moment, and records it both in session state
+//! and as `Event::HistoryCleared`. Every later request applies that identical
+//! set, so the projected prefix is byte-stable and the provider's prompt
+//! cache is invalidated once per pass rather than on every round.
 //!
 //! **A frozen `call_id` only ever blanks the results that existed when it
 //! froze.** Providers reuse `call_id`s across turns (measured on Kimi, whose
@@ -242,7 +230,7 @@ pub(super) struct ClearingPlan {
 /// 4. **Already-cleared results are not re-counted**, so a second pass
 ///    reports only what it newly recovered.
 ///
-/// No per-tool exemptions in v1 -- deliberately, per the design doc.
+/// No per-tool exemptions in v1.
 pub(super) fn plan_clearing_pass(
     history: &[Message],
     already_cleared: &ClearedResults,
@@ -270,10 +258,9 @@ pub(super) fn plan_clearing_pass(
 /// reference placeholder.
 ///
 /// This is the single seam between canonical history and what a provider
-/// request carries. It is a pure function of `(history, cleared)`, which is
-/// what makes two consecutive request builds byte-identical while nothing
-/// else changed -- see the module doc on why the set is frozen and why
-/// recomputing it per request is rejected.
+/// request carries. It is a pure function of `(history, cleared)`, so two
+/// consecutive request builds are byte-identical while nothing else changed
+/// (module doc: the cleared set is frozen).
 ///
 /// The walk is ordered and counts occurrences per `call_id`, replacing only
 /// the first `cleared_occurrences(call_id)` of them: a result appended after
