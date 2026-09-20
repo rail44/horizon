@@ -30,3 +30,6 @@ fi
 
 echo "pre-commit: scripts/check-wire-schema.sh"
 ./scripts/check-wire-schema.sh
+
+echo "pre-commit: scripts/check-preview-wasm.sh"
+./scripts/check-preview-wasm.sh

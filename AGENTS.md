@@ -49,18 +49,19 @@ merging the v19 bump; diagnosed only after a standalone `horizon-agentd`
 proved the writer was healthy).
 
 There is no CI. The local quality gate below is mandatory before finishing
-any work — run it yourself and make sure all four are clean:
+any work — run it yourself and make sure all five are clean:
 
 ```sh
 cargo fmt
 cargo clippy --workspace --all-targets --locked -- -D warnings
 cargo nextest run --workspace --locked
 ./scripts/check-wire-schema.sh
+./scripts/check-preview-wasm.sh
 ```
 
 **Inside a sandboxed agent session, run the `sandboxed` nextest profile
 instead of the default one** (`cargo nextest run --profile sandboxed
---workspace --locked`; the other three steps are unchanged). 63 tests
+--workspace --locked`; the other four steps are unchanged). 63 tests
 verify the host boundary the sandbox enforces — they bind real sockets,
 write to literal `/tmp`, need directories outside any repository, or
 spawn a real `horizon-agentd` — so they cannot pass from inside
@@ -81,7 +82,7 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 --format json` with `jq` rather than grepping the prose log — it is more
 reliable and cheaper.
 
-The last step is the wire skew checker (`docs/remoc-adoption-design.md`
+The fourth step is the wire skew checker (`docs/remoc-adoption-design.md`
 §4). There is one committed wire-schema artifact per runtime —
 `crates/horizon-agent/schema/agent-wire.json`,
 `crates/horizon-terminal-core/schema/terminal-wire.json`, and
@@ -95,6 +96,16 @@ the artifacts first:
 `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent
 -p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
 is itself a red nextest test).
+
+The fifth step checks that the root package's library still builds for
+`wasm32-wasip2`, the target preview-pane plugins are compiled for
+(`docs/preview-pane-design.md`). It needs that target installed once per
+machine (`rustup target add wasm32-wasip2`); the first run compiles gpui
+for it and takes minutes, later runs take seconds. When it fails, a module
+reachable from the plugin started using something a wasm guest does not
+have: mark the module `#[cfg(not(target_family = "wasm"))]` at its
+declaration in `src/lib.rs`, or move the dependency under the root
+`Cargo.toml`'s `cfg(not(target_family = "wasm"))` table.
 
 `--workspace` is load-bearing: bare `cargo clippy`/`cargo nextest run`
 from the repo root silently skip the
@@ -134,6 +145,17 @@ Machines without a system libduckdb can build with
 `cargo build --workspace --features horizon-agent/bundled-duckdb`, which
 compiles DuckDB from source instead (slow — it's the single largest
 compile unit in this workspace).
+
+The quality gate's last step and the preview plugin build for
+`wasm32-wasip2`: install the target once with `rustup target add
+wasm32-wasip2`. No WASI C toolchain is needed. `preview-plugin/` is its own
+sub-workspace with its own `target/` and a tracked `Cargo.lock` seeded from
+the root lockfile; when a root dependency it shares is bumped, re-seed it
+(copy the root `Cargo.lock` over it and let cargo extend it —
+`cargo generate-lockfile` would discard the seed). The plugin depends on
+`rail44/embedded_gpui` branch `gpui-pre` pinned by revision in both
+`Cargo.toml` files; a `gpui-pre` bump needs that fork to build against the
+new snapshot first.
 
 Every worktree builds into its own `target/` — nothing is shared
 between checkouts at any level, so cross-worktree correctness is
@@ -252,6 +274,16 @@ check: it creates two terminal tabs plus a split, restarts the UI against the
 same agentd and persisted workspace, and verifies stable session ids,
 layout, and a restored terminal frame.
 
+A view under development can be checked before it is merged: register a
+named preview with sample data, build `preview-plugin/`, and run
+`scripts/check-preview-plugin.sh` (windowless, real wasmtime; builds the
+plugin first, so minutes when cold and not part of the gate). `horizon
+preview <wasm> --name <preview>` then shows it in a pane of the running
+Horizon, drawn by the real renderer and reloaded on every rebuild — that
+is how an agent asks a person to look, not a self-check. The steps are in
+the `preview-view` skill (`.claude/skills/preview-view/SKILL.md`); the
+design is `docs/preview-pane-design.md`.
+
 Manual smoke after `cargo run`: press `ctrl+'` to enter workspace mode
 (`docs/workspace-mode-design.md`), then `:` to open the control surface —
 a Commands-only palette. An empty (zero-tab) workspace is an implicit
@@ -309,9 +341,20 @@ The shell is GPUI-based (the Floem shell retired at tag
   client is `horizon <subcommand>` itself (`crates/horizon-cli`). Panes
   get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment. See
   `docs/cli-control-plane-design.md`.
+- `preview/` — the preview pane: a session-less view kind that loads a
+  `wasm32-wasip2` plugin (`preview-plugin/`, its own sub-workspace) and
+  replays its display lists through the native renderer. The named
+  previews, the sample, and the host/guest vocabulary compile for both
+  targets; the pane, watcher, and theme publication are native-only. See
+  `docs/preview-pane-design.md`.
 - `keymap.rs` — `[keybindings]` chord/command translation;
   `theme.rs` — config-driven color scheme; `terminal_focus.rs` — the
-  focus-reporting decision; `main.rs` — CLI-vs-GUI entry point.
+  focus-reporting decision.
+- `lib.rs` / `entry.rs` / `main.rs` — the root package is a library plus a
+  thin binary: `lib.rs` declares the modules and marks the ones a
+  preview plugin cannot build (`#[cfg(not(target_family = "wasm"))]`),
+  `entry.rs` is the CLI-vs-GUI entry point, and `main.rs` only calls
+  `horizon::run()`.
 - There is no cross-domain UI-primitive module and no plugin module:
   `ui/` and `plugins/` were Floem-era directories, both deleted when that
   shell was retired. The shared visual vocabulary is gpui-component's
