@@ -1,280 +1,187 @@
 # Mixture-of-Agents as a selectable model (`[[moa]]`)
 
-Status: designed 2026-09-19..20 (owner consultation; every numbered
-decision below is the owner's, quoted where a quote exists). **Not
-implemented.** No decision is pending.
+Status: designed, not implemented.
 
-This document is the self-contained record. An implementation brief should
-point here rather than restate it.
+A `[[moa]]` entry is a model the user can pick in model selection. A
+session running on it answers each user message with one Mixture-of-Agents
+pass: several proposer models each investigate and answer, then an
+aggregator model writes the session's answer with the proposals as
+reference. Nothing in the mechanism decides *when* to use it; selecting
+the entry is what turns it on.
 
-## Why
+## Flow
 
-The owner's aim, in the owner's words (2026-09-19/20):
+One pass per user message, two layers.
 
-- 「難しい局面での解の質を上げたい」
-- 「『難局である』という判断がAIには難しいので、モデル選択で高性能なもの
-  として扱える手段がほしい」 — the human decides when a situation is hard,
-  and expresses that by choosing a model. Any shape in which a model
-  decides when to bring in other models (an advisor/consult tool the agent
-  calls at its own discretion) is outside the requirement.
-- 「LLMをローカル動作させる必要はない」 — what runs locally is the
-  combining mechanism; the member models are cloud APIs.
-- The motive is cost: 「オープンモデルの進歩が激しく、claudeやopenaiに
-  比べてプロバイダが格安で提供するように状況が変化しているので、その中でも
-  コストパフォーマンスに優れるモデルいくつかを組み合わせることで性能面も
-  得ることができれば、コーディングなどの作業を超えて設計相談などの判断力を
-  要するタスクでも常用したい」. Switching to an expensive single model is
-  therefore not an answer (「既にコストの面でKimi-k3が突出して高いので」);
-  an expensive model is at most a yardstick.
-- What is to be built is MoA: 「そもそも私が実現したかったのはMoAであって」.
-- Build first, improve through use: 「とりあえず作ってから改善を経てみれば
-  いい」.
+1. A user message arrives in a MoA session. The harness starts one
+   proposer session per configured member. The model never launches them.
+2. Each proposer investigates on its own and writes a complete answer.
+   Proposers do not wait on each other; one that needs to read more keeps
+   reading while the rest sit finished.
+3. When every proposer has finished (or failed), the aggregator's turn
+   runs. It writes its own answer; the proposals are input to it, not
+   candidates to pick from.
+4. Tool-result rounds and follow-on rounds inside the aggregator's turn
+   never start another pass.
 
-### Why inside Horizon
+## Proposers
 
-The delivery shape wanted is Sakana Fugu's — a multi-model system that
-presents as one model. An external OpenAI-compatible proxy registered as a
-`[[providers]]` entry would need no Horizon change, but no existing
-implementation survives Horizon's request shape. Every provider round
-carries `tools`, the full tool-call history, and `stream: true`
-(`providers/rig/completion.rs`, `run_provider_stream`). Checked against
-source on 2026-09-19:
+A proposer is a `task`-shaped session (`docs/agent-explore-design.md`,
+`docs/agent-async-task-design.md`): a read-only peer on the requester's
+`workspace_root`, `fs.read` / `fs.grep` / `fs.glob` only, no approval
+reachable, iteration cap 25 with summarize-on-cap, a first-class session in
+the event log and the DuckDB projection, never attached to a pane. Unlike a
+`task` child it runs on its member's own `{provider, model}` rather than
+the requester's.
 
-| Candidate | What happens with Horizon's requests |
-|---|---|
-| Maestro (`walidboulanouar/maestro`) | With `tools` present it becomes a single-model passthrough; verify/escalate and `maestro-ultra` are disabled (`src/core/orchestrator.ts`, "re-running mid tool-call would break the agent"). |
-| OptiLLM (`moa`, `bon`, …) | Flattens the conversation to `(system_prompt, initial_query)` strings; tools never reach the inner calls; one base model sampled repeatedly, not different models. |
-| OpenFugu | `serve.py` uses only the last user message; no tools, history, or streaming; needs local Qwen3-0.6B inference. |
-| Thug-Fugu | Requires a string `content` on every message and carries role+content only, so a tool-call history is not representable (source reading, not run). |
+Input is the conversation written out as plain text — the user's messages
+and the aggregator's answers so far — followed by the new user message.
+Nothing else: no tool calls, no tool results, no earlier proposals. A
+proposer that needs something read in an earlier round reads it again.
 
-Fugu itself, and the TRINITY / Conductor coordinators it builds on, are
-closed (no weights, no code).
+Plain text is a constraint, not a style: a structured history produced
+under one model family can violate another family's chat template and be
+rejected with a provider 400 (the failure recorded in
+`docs/agent-explore-design.md`, 2026-07-27 addendum). A pass mixes
+families by construction.
 
-### Why this granularity
+Handing a conversation over as text can make a model continue the
+transcript instead of answering (observed once in ~70 calls: an invented
+tool call and result ahead of the answer). Such an output is detected and
+dropped or retried.
 
-MoA as published and as implemented (arXiv:2406.04692;
-`togethercomputer/MoA`) is tool-less single-turn: each proposer writes one
-complete answer to the user's message, the aggregator rewrites. The
-tool-using studies that show gains keep that unit — each agent
-investigates on its own and produces a complete answer, and the answers
-are aggregated:
+## Aggregator
 
-- arXiv:2604.11753 (Princeton, v3 2026-08; agentic search and deep
-  research, six benchmarks; GLM-4.7 / Qwen3.5 / MiniMax-M2.5; eight
-  independent rollouts of the *same* model; not coding). Averages:
-  Pass@1 30.01 / 40.15 / 44.02 → concatenating final answers and
-  re-synthesizing (plain MoA-style aggregation) 42.58 / 52.78 / 54.90 →
-  an aggregator that can inspect the rollouts' records with tools
-  47.90 / 55.83 / 57.31. Synthesis beat selecting one rollout, most on
-  open-ended tasks: "quality is distributed across trajectories, so no
-  single trajectory dominates". Exposing thinking traces mattered little
-  (−0.03 to −2.77); what mattered was access to tool observations.
-- arXiv:2510.01279 (TUMIX, Google, ICLR 2026): agents with different tool
-  strategies answer, share answers, refine for a few rounds; +3.55%
-  average over the best baseline (including Self-MoA) on Gemini-2.5.
-- arXiv:2406.04692 §3.3: "Mixture-of-Agents significantly outperforms LLM
-  rankers" — rewriting with the proposals as reference beats picking one.
+The aggregator is the MoA session's own model call, so everything around
+it is unchanged: the input queue, approvals, the judge, the turn-loop
+guards, Tier 1 clearing. It alone writes or executes; edits, `bash`, and
+approvals happen in its ordinary turn.
 
-Not evidenced, and therefore to be learned by use: MoA applied per tool
-step (no study found); mixing *different* models in a tool-using setting
-(both studies above repeat one model; arXiv:2502.00674, single-turn, 2024
-open models, found repeating the best model ≥ mixing); coding tasks. One
-local observation favors mixing (2026-09-20 read-compare on the owner's
-own board #26 consultation, n=1): all five DeepSeek-V4.1-Flash samples
-missed the status-based alternative the owner took next, while
-Qwen3.8-27B and GLM-5.3-Flash raised it.
+The proposals stay available to it for every provider round of the turn
+(it may call tools before answering). Beyond the proposals it can inspect
+each proposer session's persisted record — tool calls and tool results
+included — with `recall.search` / `recall.read` (both take a `session_id`)
+and read a full report with `task_output`.
 
-Counter-evidence considered: arXiv:2512.08296 reports every multi-agent
-topology degrading sequential planning by 39–70% and negative returns once
-the single-agent baseline exceeds 45% — under *matched total iterations*,
-i.e. each agent's budget is cut ("multi-agent systems fragment the
-per-agent token budget"). This design does not split a budget; the owner's
-premise is that extra calls to cheap models are affordable.
-arXiv:2602.18998 reports a verification gap when whole-task samples are
-*selected* by the model itself; this design synthesizes instead.
+Proposals never enter `rig_history`. Canonical history holds user messages
+and aggregator output only, which is also exactly what the next pass's
+proposers are given.
 
-## Decisions (owner, 2026-09-19..20)
+The instruction starts from the Mixture-of-Agents paper's
+Aggregate-and-Synthesize prompt: evaluate the proposals critically, do not
+replicate them.
 
-1. **A selectable model; the human chooses it.** MoA appears in model
-   selection and is chosen per session (or switched to mid-session) by the
-   owner. Nothing in the mechanism judges difficulty.
+## What the pane shows
 
-2. **It is MoA, and the aggregator writes its own answer.** The aggregator
-   uses the proposals as reference; it does not adopt one wholesale
-   (「『選ぶ』というのが、あるモデルの回答を全面的に受け入れるという意味だとは
-   思っていなかった」).
+The aggregator's output only. While proposers run the pane shows the
+ordinary in-progress state; proposer activity and proposals are not
+rendered, and the live task-progress rows are not used. Every proposer
+session persists in the event log and DuckDB like any other session.
 
-3. **Unit: one owner message = one MoA pass, two layers.** Proposers
-   answer, then the aggregator answers (「2層で始めましょう」). The paper's
-   default of three layers (a middle round where proposers rewrite after
-   seeing each other) is deferred; it roughly doubles cost and latency.
+## Cancelling
 
-4. **Proposers are `task`-shaped sessions, launched by the harness.** Each
-   proposer is a read-only peer session of the existing `task` form
-   (`docs/agent-explore-design.md`, `docs/agent-async-task-design.md`):
-   `fs.read`/`fs.grep`/`fs.glob` only, no approvals reachable, iteration
-   cap 25 with summarize-on-cap, a first-class session in the event log
-   and the DuckDB projection, never attached to a pane. The harness starts
-   them automatically when an owner message arrives in a MoA session — the
-   model never decides to. Each proposer investigates independently and
-   writes a complete answer; one that wants to read more keeps reading
-   while the others wait (「もっと読みたいと言っているモデルのみ続行すれば
-   いいのではない？」).
+Cancelling the aggregator's turn stops that pass's proposers. This differs
+from `task` children, which survive `cancel-turn`: a proposer's output has
+no consumer once its turn is gone. `task` children the aggregator launches
+itself keep the `task` rule.
 
-5. **Proposers receive the conversation as text, and nothing else.** The
-   prompt carries the owner's messages and the aggregator's answers so
-   far, written out as plain text, plus the new owner message. Earlier
-   rounds' investigation is *not* passed; a proposer re-reads what it
-   needs (「まずは前者にしましょう」). Plain text is deliberate:
-   structured history seeding was built for `task` and removed by owner
-   decision on 2026-07-27 after a fork-seeded child died on a chat-template
-   400 (`docs/agent-explore-design.md`, 2026-07-27 addendum); with several
-   model families in one pass that failure is likelier, and text avoids it.
-   Giving proposers `recall` over earlier rounds is deferred until
-   re-reading proves wasteful.
+## Failure
 
-6. **The aggregator can inspect the proposers' records, through the
-   existing recall tools.** Besides the proposals, the aggregator can look
-   into each proposer session's persisted record (tool calls and tool
-   results included) with `recall.search` / `recall.read` and read full
-   reports with `task_output` (owner: 「toolでduckdbから確認できる機構は既に
-   あるのでこれを使うのでよさそうですかね」). These map onto the Princeton
-   aggregator's tools (get_solution / search_trajectory / get_segment).
-   One extension is needed: `recall.search` takes scope `"session"` (own)
-   or `"all"` today; it needs a specific-session filter. The store-level
-   `search_history(scope: Option<SessionId>, …)` already takes one.
+A failed, capped, or unavailable (missing key) proposer does not fail the
+pass. It contributes whatever report it has, under `task`'s empty-report
+rule, and the pass proceeds with the rest. With no usable proposal the
+aggregator answers alone; the log says so, the pane does not.
 
-7. **Only the aggregator writes or executes.** Proposers stay read-only,
-   which is the standing decision for `task` children
-   (`docs/agent-async-task-design.md` decision 7). Edits, `bash`, and any
-   approval happen in the aggregator's ordinary turn.
+## Configuration
 
-8. **The pane shows the aggregator's answer only.** Proposals and
-   proposer activity are not rendered. They persist in the event log and
-   DuckDB like any session. The live task-progress rows (2026-09-10) do not
-   apply here; the owner's reason for those rows: 「タスクの作業が見えて
-   ほしいのは、セッションに依頼した作業のうち具体的に何を委譲されて進めて
-   いるのかを知りたいのが理由で、今回はこれに当てはまらない」. While
-   proposers run, the pane shows the ordinary in-progress state.
+```toml
+[[moa]]
+name = "mix"
+aggregator = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
+proposers = [
+  { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" },
+  { provider = "synthetic", model = "hf:zai-org/GLM-5.3-Flash" },
+  { provider = "another",   model = "..." },
+]
+```
 
-9. **Configuration lives in the config file, with model IDs written
-   directly, and providers may be mixed from the start.** A new
-   `[[moa]]` array; each member names a `[[providers]]` entry and a model
-   ID. No aliases — the owner intends to remove the alias feature
-   (「alias自体が不要なのに足された機能なので削ろうとしています。なので、
-   モデルIDを直接記述して指定するようにしたい」), so nothing here may
-   depend on it. Key names are provisional:
+`provider` names a `[[providers]]` entry (connection and key variable come
+from there); `model` is a model ID written directly. Members may sit on
+different entries. Listing a member twice samples that model twice. Several
+`[[moa]]` tables may coexist. The table does not use the `[[providers]]`
+alias map. `Reload Config` applies as it does for `[[providers]]`: new
+sessions see the change.
 
-   ```toml
-   [[moa]]
-   name = "mix"
-   aggregator = { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" }
-   proposers = [
-     { provider = "synthetic", model = "hf:deepseek-ai/DeepSeek-V4.1-Flash" },
-     { provider = "synthetic", model = "hf:zai-org/GLM-5.3-Flash" },
-     { provider = "another",   model = "..." },
-   ]
-   ```
+In model selection `moa` sits beside the provider entries, and its items
+are the `[[moa]]` names.
 
-   Listing the same member twice is the paper's single-proposer setting.
-   Several `[[moa]]` entries may coexist. `Reload Config` applies like
-   `[[providers]]` does: new sessions see the change.
+## Implementation constraints
 
-   In model selection, `moa` sits beside the provider entries and its
-   items are the `[[moa]]` names (put to the owner as the designer's
-   reading and confirmed 2026-09-20: 「この2点は問題ないです」, covering this
-   and decision 10). Which models to use, how many, and who aggregates are
-   the owner's config values, not design decisions.
-
-10. **Cancelling the aggregator's turn stops the proposers.** This is
-    deliberately the opposite of `task`, whose children survive
-    `cancel-turn` by owner decision (`docs/agent-async-task-design.md`
-    decision 4: interrupting the requester must not vaporize in-flight
-    investigation). A `task` child carries work the requester delegated
-    and can still use; a MoA proposer is internal to the turn, and its
-    output has no consumer once that turn is cancelled. Confirmed by the
-    owner 2026-09-20 (same reply as above). `task` children a MoA
-    session's aggregator launches itself keep the `task` rule.
-
-## Implementation shape (held by the implementing session)
-
-Not owner decisions; recorded so the constraints are not rediscovered.
-
-- **Seam.** `registry::Provider` is session-granular, so MoA is not "one
-  more `Provider` impl". The pass belongs in the rig session loop around a
-  turn that answers an owner message: launch proposers, wait for all of
-  them (a barrier — today's `task` delivery coalesces completions but does
-  not wait for a set), then run the aggregator's turn with the proposals
-  available for *every* provider round of that turn (the aggregator may
-  call `recall`/`fs` tools before answering). Tool-result rounds and
-  follow-on rounds never start another pass.
-- **Handing the proposals to the aggregator.** Together's reference
-  implementation appends them to the system prompt, and
-  `prompt::system_prompt`'s `extra_sections` is the existing mechanism for
-  that. It changes the head of the request each pass, which forfeits the
-  provider's prompt cache for the whole history behind it. Cached reads
-  are ~20× cheaper on the owner's current provider ($0.03 vs $0.6 per 1M
-  for DeepSeek-V4.1-Flash), and the cache does work there: in the
-  2026-09-20 replays a repeated prefix hit ~99.8% (58.5% of all prompt
-  tokens over 26 calls, the first call per model and question being a
-  necessary miss). The alternative is to project the proposals into the
-  provider-facing view at a position that stays fixed for the turn — right
-  after the owner message that opened it — through
-  `clearing::history_for_provider_request`, the single seam between
-  canonical history and what a request carries, where the standing-role
-  memory document is already projected in as a user-role message without
-  entering canonical history. That seam's contract is that consecutive
-  request builds stay byte-identical while nothing changed; an injection
-  has to keep it. Decide by measurement; either way the proposals must
-  not enter `rig_history` (decision 8, and decision 5's input is owner
-  messages plus aggregator answers only).
-- **Aggregator instruction.** Start from the paper's
-  Aggregate-and-Synthesize prompt (critically evaluate, do not replicate).
-- **Spawning a proposer on a named entry and model.** The exploration host
-  pins the requester's `provider_id` today
-  (`crates/horizon-agentd/src/session/exploration.rs`); MoA needs a
-  per-member entry (`builtin.agent.rig.<name>`) and model ID. The role
-  model seat is `&'static str`, so it is not the carrier.
-- **Failure handling.** A failed or capped proposer contributes whatever
-  report it has (the existing empty-report rule applies); the pass
-  proceeds with the rest. If none produce a usable report the aggregator
-  answers alone and says so in the log, not in the pane. An unavailable
-  member (missing key) is skipped the same way.
-- **Record linkage.** `task` ties a child to its requester through the
+- **Seam.** `registry::Provider` is session-granular, so a pass is not one
+  more `Provider` impl. It belongs in the rig session loop around a turn
+  that answers a user message. Waiting for a *set* of sessions is new:
+  `task` delivery coalesces completions but does not wait for all.
+- **Where the proposals go in the request.** Appending them to the system
+  prompt (`prompt::system_prompt`'s `extra_sections`) changes the head of
+  the request on every pass and forfeits the provider's prompt cache for
+  the whole history behind it. Projecting them into the provider-facing
+  view at a position fixed for the turn — right after the user message
+  that opened it — keeps the cached prefix.
+  `clearing::history_for_provider_request` is the single seam between
+  canonical history and what a request carries, and it already projects
+  the standing-role memory document in without touching canonical history;
+  its contract is that consecutive request builds stay byte-identical
+  while nothing changed.
+- **Spawning on a named entry and model.** The exploration host pins the
+  requester's `provider_id`
+  (`crates/horizon-agentd/src/session/exploration.rs`). A member needs its
+  own entry (`builtin.agent.rig.<name>`) and model ID; the role model seat
+  is `&'static str` and cannot carry a configured ID.
+- **Record linkage.** A `task` child is tied to its requester through the
   launching tool call's events. Harness-launched proposers have no such
   call, so the turn ↔ proposer-session-ids relation needs its own durable
-  record — improving by use depends on being able to pull "what did each
-  member say for this message" out of DuckDB.
-- **Echoing the transcript format.** Handing a conversation over as text
-  can make a model continue the transcript instead of answering — seen
-  once in ~70 calls on 2026-09-20 (a DeepSeek sample invented a tool call
-  and its result before answering). Detect and drop or retry.
-- **Context-window discovery per member.** `model_limits` reads
-  `GET {base_url}/models` with `OPENAI_API_KEY` hardcoded
-  (`providers/rig/model_limits.rs`), as do the judge and title clients.
-  With mixed providers, a member on another key gets no window and its
-  Tier 1 clearing never fires. Make the lookup follow the entry's
-  `api_key_env`.
-- **Wire and config.** `[[moa]]` is a new `horizon-config` table (the
-  unknown-key warning machinery covers typos). Surfacing MoA entries to
-  the model picker touches the `list_providers` summary type — regenerate
-  `agent-wire.json`; a non-additive change needs the protocol bump and
-  the full-restart discipline in `AGENTS.md`.
-- **Tests.** The deterministic fallback provider is the harness, as for
-  `task`.
+  record, queryable from DuckDB.
+- **Context-window discovery per member.** `model_limits` must
+  authenticate with the entry's `api_key_env`; with a hardcoded variable a
+  member on another key gets no window and its Tier 1 clearing never
+  fires.
+- **Wire.** Surfacing MoA entries to the model picker touches the
+  `list_providers` summary type. A non-additive change needs the protocol
+  bump, and a bump needs a full app restart (`AGENTS.md`).
 
-## Out of scope for v1
+## Not in v1
 
-Three or more layers; `recall` for proposers; write-capable proposers;
-MoA per tool step; any learned or automatic choice of when to use MoA;
-rendering proposals in the pane.
+More than two layers; `recall` for proposers; write-capable proposers; a
+pass per tool step; any automatic choice of when to use MoA; rendering
+proposals in the pane.
 
-## How we will know
+## Reference material
 
-By use, per the owner's direction. Every proposer session is an ordinary
-session in the event log and DuckDB, so "what each member contributed to
-this answer" and "what it cost" are queries, not new instrumentation
-(`agent-inspect` skill). The 2026-09-20 read-compare (`q1`–`q3` over the
-owner's own consultations) is the only local data so far and was judged
-by the owner as too thin to decide anything (「題材が悪くてあんまり差を
-見出しづらいのと、実際にやりとりをしてみないと感触は分からない」).
+- Mixture-of-Agents, arXiv:2406.04692 (2024-06), and
+  `togethercomputer/MoA`. Tool-less, single-turn. Layers of proposers,
+  each seeing the previous layer's answers; a final aggregator. §3.3: the
+  aggregator rewriting with the proposals as reference outperforms an LLM
+  ranker that picks one. The reference implementation appends proposals to
+  the system prompt and keeps only the aggregator's answer in history.
+- arXiv:2604.11753 (Princeton, v3 2026-08). Agentic search and deep
+  research, six benchmarks; GLM-4.7, Qwen3.5, MiniMax-M2.5; eight
+  independent tool-using rollouts of one model, then aggregation. Average
+  scores: single rollout 30.01 / 40.15 / 44.02; concatenating the final
+  answers and re-synthesizing 42.58 / 52.78 / 54.90; an aggregator that
+  searches and reads the rollouts' records with tools 47.90 / 55.83 /
+  57.31. Synthesis beat selecting one rollout, most on open-ended tasks.
+  Hiding thinking traces from the aggregator cost 0.03–2.77; the gain came
+  from access to tool observations. Same model throughout; not coding.
+- TUMIX, arXiv:2510.01279 (Google, ICLR 2026). Agents with different tool
+  strategies answer, share answers, and refine for a few rounds; +3.55%
+  average over the best baseline, Self-MoA included, on Gemini-2.5.
+- Self-MoA, arXiv:2502.00674 (2025-02). Single-turn, 2024 open models:
+  sampling the best single model repeatedly scored 65.7 on AlpacaEval 2.0
+  against 59.1 for a mixed pool and 53.1 for the best model alone.
+- Not covered by any of the above: a pass per tool step; mixing different
+  models in a tool-using setting; coding tasks.
+- Prompt-cache behavior on the current provider, from replaying three
+  consultations on 2026-09-20: a repeated prefix was served ~99.8% from
+  cache (58.5% of all prompt tokens over 26 calls, the first call per
+  model and question being a miss); cached reads were billed at $0.03
+  against $0.6 per 1M tokens for DeepSeek-V4.1-Flash.
