@@ -391,11 +391,14 @@ impl SessionLoopState {
                         })
                         .into(),
                     );
+                    // An owner message opens a Mixture-of-Agents pass; the
+                    // aggregator's turn runs once every proposer has
+                    // answered. The message joins the conversation only
+                    // after the pass, which carries it separately from the
+                    // conversation so far.
+                    let pass = self.run_moa_pass(&text).await;
                     self.moa_conversation.record_owner(text.clone());
-                    // An owner message is the one thing that opens a
-                    // Mixture-of-Agents pass. The aggregator's turn runs
-                    // after every proposer has answered.
-                    if let super::moa::PassOutcome::Cancelled = self.run_moa_pass(&text).await {
+                    if let super::moa::PassOutcome::Cancelled = pass {
                         continue;
                     }
                     let (prompt, injected) =

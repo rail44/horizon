@@ -439,6 +439,41 @@ mod tests {
         })
     }
 
+    /// The message being answered is carried once, as the message, and the
+    /// conversation the prompt renders is what came before it.
+    #[tokio::test]
+    async fn the_proposer_prompt_carries_the_new_message_exactly_once() {
+        let host = Arc::new(ScriptedHost::default());
+        let (mut state, _commands, _events) = moa_state(host.clone());
+        state
+            .moa_conversation
+            .record_owner("an earlier question".to_string());
+        state
+            .moa_conversation
+            .record_answer("an earlier answer".to_string());
+
+        let driver = tokio::spawn({
+            let host = host.clone();
+            async move {
+                loop {
+                    if host.events.lock().unwrap().len() == 2 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                host.answer(0, "a");
+                host.answer(1, "b");
+            }
+        });
+        state.run_moa_pass("the new question").await;
+        driver.await.unwrap();
+
+        let prompt = host.started.lock().unwrap()[0].3.clone();
+        assert_eq!(prompt.matches("the new question").count(), 1, "{prompt}");
+        assert!(prompt.contains("an earlier answer"), "{prompt}");
+        crate::tools::unregister_exploration_host(state.session_id);
+    }
+
     #[tokio::test]
     async fn a_pass_launches_one_proposer_per_member_and_injects_their_answers() {
         let host = Arc::new(ScriptedHost::default());
