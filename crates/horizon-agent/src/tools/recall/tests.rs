@@ -108,6 +108,125 @@ fn search_scope_all_crosses_sessions_and_flags_own_session_correctly() {
 }
 
 #[test]
+fn search_with_an_explicit_session_id_hits_only_that_session() {
+    let session_a = SessionId::new();
+    let session_b = SessionId::new();
+    let (tool_state, path) = tool_state_with_seeded_store(
+        session_a,
+        vec![
+            (session_a, vec!["widget in session a"]),
+            (session_b, vec!["widget in session b"]),
+        ],
+    );
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({ "query": "widget", "session_id": session_id_json(session_b) }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(
+        output["total"], 1,
+        "session_id must select that session only"
+    );
+    let hits = output["hits"].as_array().expect("hits array");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0]["session_id"], session_id_json(session_b));
+    assert_eq!(
+        hits[0]["own_session"], false,
+        "a hit from another session must not be flagged as own"
+    );
+    assert!(hits[0]["snippet"]
+        .as_str()
+        .unwrap()
+        .contains("widget in session b"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_accepts_session_id_together_with_an_explicit_session_scope() {
+    let session_a = SessionId::new();
+    let session_b = SessionId::new();
+    let (tool_state, path) = tool_state_with_seeded_store(
+        session_a,
+        vec![
+            (session_a, vec!["widget in session a"]),
+            (session_b, vec!["widget in session b"]),
+        ],
+    );
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({
+            "query": "widget",
+            "scope": "session",
+            "session_id": session_id_json(session_b),
+        }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(output["total"], 1);
+    let hits = output["hits"].as_array().expect("hits array");
+    assert_eq!(hits[0]["session_id"], session_id_json(session_b));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_rejects_session_id_combined_with_scope_all() {
+    let session_a = SessionId::new();
+    let session_b = SessionId::new();
+    let (tool_state, path) = tool_state_with_seeded_store(
+        session_a,
+        vec![
+            (session_a, vec!["widget in session a"]),
+            (session_b, vec!["widget in session b"]),
+        ],
+    );
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({
+            "query": "widget",
+            "scope": "all",
+            "session_id": session_id_json(session_b),
+        }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(output["is_error"], true);
+    assert!(output["message"].as_str().unwrap().contains("session_id"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn search_rejects_an_invalid_session_id() {
+    let session_id = SessionId::new();
+    let (tool_state, path) =
+        tool_state_with_seeded_store(session_id, vec![(session_id, vec!["widget"])]);
+
+    let output = execute_auto(
+        &tool_state,
+        "recall.search",
+        &json!({ "query": "widget", "session_id": "not-a-session-id" }),
+    )
+    .expect("recall.search handled");
+
+    assert_eq!(output["is_error"], true);
+    assert!(output["message"]
+        .as_str()
+        .unwrap()
+        .contains("invalid session_id"));
+
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn search_without_a_configured_db_path_errors_clearly() {
     let tool_state =
         ToolSessionState::for_current_dir(AgentToolsConfig::default(), RecallContext::default());
@@ -562,4 +681,23 @@ fn catalog_lists_recall_tools_as_auto_allow_read() {
             Some(crate::contract::ToolPermission::AutoAllowRead)
         );
     }
+}
+
+#[test]
+fn catalog_advertises_recall_search_session_id() {
+    let definitions = crate::tools::definitions();
+    let definition = definitions
+        .iter()
+        .find(|definition| definition.id == "recall.search")
+        .expect("catalog must list `recall.search`");
+    // The schema is `additionalProperties: false`, so an undeclared
+    // argument is rejected before it ever reaches this module.
+    assert!(
+        definition.input_schema["properties"]["session_id"].is_object(),
+        "recall.search's schema must declare `session_id`"
+    );
+    assert!(
+        definition.description.contains("session_id"),
+        "the catalog description must mention `session_id`"
+    );
 }
