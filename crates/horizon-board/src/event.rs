@@ -1,6 +1,8 @@
-//! Versioned ordinary task events and their tolerant JSONL reader.
-
-use std::path::Path;
+//! Versioned ordinary task events and their tolerant decoder.
+//!
+//! Everything here works on text already in memory: the types, the
+//! per-line decode, and the report the readers build. Opening the event
+//! file (and locking it) is the file source's job — `store::file`.
 
 use serde::{Deserialize, Serialize};
 
@@ -122,14 +124,8 @@ impl ReadReport {
     }
 }
 
-/// Reads and tolerantly decodes the event log. Returns an empty report
-/// when the file doesn't exist yet (first invocation).
-pub fn read(path: &Path) -> std::io::Result<ReadReport> {
-    if !path.exists() {
-        return Ok(ReadReport::default());
-    }
-    let text = std::fs::read_to_string(path)?;
-
+/// Tolerantly decodes the whole event log held as text.
+pub fn read_text(text: &str) -> ReadReport {
     let torn_trailing = !text.is_empty() && !text.ends_with('\n');
     let mut lines: Vec<&str> = text.lines().collect();
     if torn_trailing {
@@ -166,11 +162,11 @@ pub fn read(path: &Path) -> std::io::Result<ReadReport> {
         }
     }
 
-    Ok(report)
+    report
 }
 
 /// Extracts the item id from any event variant (for max-id tracking).
-fn event_id(event: &BoardEvent) -> Option<u64> {
+pub(crate) fn event_id(event: &BoardEvent) -> Option<u64> {
     match event {
         BoardEvent::ImportedItem { id, .. }
         | BoardEvent::ItemStored { id, .. }
@@ -185,31 +181,6 @@ fn event_id(event: &BoardEvent) -> Option<u64> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn reader_keeps_unknown_event_high_water_and_physical_positions() {
-        let path = std::env::temp_dir().join(format!(
-            "horizon-board-reader-{}-{}.jsonl",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let good = serde_json::json!({"schema":SCHEMA,"version":VERSION,"at":0,"type":"import-high-water","id":3});
-        let unknown = serde_json::json!({"schema":SCHEMA,"version":VERSION,"at":0,"type":"future-record","id":77});
-        std::fs::write(
-            &path,
-            format!("{good}\n{unknown}\nnot-json\n{good}\n{{torn"),
-        )
-        .unwrap();
-        let report = read(&path).unwrap();
-        std::fs::remove_file(path).unwrap();
-        assert_eq!(report.max_id, Some(77));
-        assert_eq!(report.sequences, vec![1, 4]);
-        assert_eq!(report.skipped_count, 1);
-        assert_eq!(report.corrupt_count, 1);
-        assert!(report.torn_trailing);
-    }
     #[test]
     fn legacy_schema_is_not_folded_as_an_active_task() {
         let line=serde_json::json!({"schema":SCHEMA,"version":1,"at":0,"type":"item-created","id":1,"title":"old","body":"","rank":"n"}).to_string();
