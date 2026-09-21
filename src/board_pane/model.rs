@@ -151,26 +151,6 @@ impl Render for BoardDragValue {
     }
 }
 
-/// What a live-update poke should refresh: the whole item list, or just the
-/// currently-open detail item. The pure decision behind [`BoardPaneView::on_poke`],
-/// extracted so the poke->reload mapping is unit-testable without a GPUI window.
-pub(super) enum PokeReloadTarget {
-    /// Reload the full list (list mode).
-    List,
-    /// Reload just this item (detail mode).
-    Item(u64),
-}
-
-/// The pure decision behind a live-update poke: `None` (list view, no item
-/// open) reloads the whole list; `Some(id)` (a detail view open on `id`)
-/// reloads just that item.
-pub(super) fn poke_reload_target(open_item_id: Option<u64>) -> PokeReloadTarget {
-    match open_item_id {
-        Some(id) => PokeReloadTarget::Item(id),
-        None => PokeReloadTarget::List,
-    }
-}
-
 /// The pure fallback behind the pane's root resolution, kept free of
 /// `WorkspaceShell`/`App` so it's unit-testable without a GPUI window: the
 /// active session's `workspace_root` wins; when that is absent (no active
@@ -178,7 +158,8 @@ pub(super) fn poke_reload_target(open_item_id: Option<u64>) -> PokeReloadTarget 
 /// terminal-only state) the shell process's own cwd stands in. Both are
 /// *starting* directories -- `Store::from_dir` does the worktree -> main-root
 /// collapse.
-pub(crate) fn board_root_dir(
+#[cfg(not(target_family = "wasm"))]
+pub(super) fn board_root_dir(
     session_root: Option<PathBuf>,
     cwd: Option<PathBuf>,
 ) -> Option<PathBuf> {
@@ -186,16 +167,11 @@ pub(crate) fn board_root_dir(
 }
 
 /// The pure decision behind the list's `ListEvent::Confirm` handler: a
-/// confirm on a row opens the detail view *iff* both the row's item and a
-/// resolvable store root are present. Extracted so the event→transition
+/// confirm on a row opens the detail view *iff* the row has an item and the
+/// pane has a store to re-read it from. Extracted so the event→transition
 /// mapping is unit-testable without a GPUI window.
-pub(super) fn board_confirm_transition(
-    item: Option<Item>,
-    root: Option<PathBuf>,
-) -> Option<(Item, PathBuf)> {
-    let item = item?;
-    let root = root?;
-    Some((item, root))
+pub(super) fn board_confirm_transition(item: Option<Item>, has_store: bool) -> Option<Item> {
+    item.filter(|_| has_store)
 }
 
 /// The pure validation behind the pane's add-item composer: returns the

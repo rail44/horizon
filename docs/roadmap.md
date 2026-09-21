@@ -579,10 +579,12 @@ renderer through a fork of Zed's experimental embedded_gpui, reloaded when
 the artifact changes, opened with `horizon preview`. The root package is a
 library plus a thin binary so the plugin can link the theme and the named
 previews. `docs/preview-pane-design.md` describes the design, the measured
-costs, and what does not reach a guest. Open ends: no existing view is
-previewable yet (each needs its outside-world access made replaceable and
-its module built for wasm); IME, clipboard, and modifier keys are not
-forwarded by the fork; a failed plugin load leaks one thread in the fork.
+costs, and what does not reach a guest. The board pane is the first real
+view carried this way (`board-list`, `board-list-empty`, `board-detail`,
+over a read-only in-memory store); every other view still needs its
+outside-world access made replaceable and its module built for wasm. Open
+ends: IME, clipboard, and modifier keys are not forwarded by the fork; a
+failed plugin load leaks one thread in the fork.
 
 ### Deferred: session-attention surface and non-interrupting sends
 

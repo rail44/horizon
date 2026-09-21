@@ -78,9 +78,20 @@ gpui-component = { git = "https://github.com/longbridge/gpui-kit", rev = "36b518
 # default wasm asset source fetches over HTTP, which a WASI guest cannot do.
 gpui-kit-assets = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 horizon-config = { path = "crates/horizon-config" }
+# The board pane is previewable (`src/board_pane/previews.rs`), so its two
+# model crates compile for the plugin target as well. `horizon-board`'s
+# queries and its in-memory store source build anywhere; reaching the event
+# file, the git root and the logd socket is gated inside that crate.
+# `horizon-workspace` is framework-free (serde/serde_json/uuid).
+horizon-board = { path = "crates/horizon-board" }
+horizon-workspace = { path = "crates/horizon-workspace" }
 # `theme::gpui_component` builds gpui-component's `ThemeConfig` as JSON and
 # deserializes it, so serde_json is on the wasm side of the split too.
 serde_json = "1.0"
+# Board items carry their bound session ids as text; parsing one into a
+# `horizon_workspace::SessionId` happens in the shared half of the board
+# pane. Already in the graph via `horizon-workspace`.
+uuid = { version = "1.18", features = ["v4", "serde"] }
 
 # Native-only: each of these either reaches the host (sockets, PTYs, the
 # daemon clients, the OS window/renderer backend) or is used exclusively by
@@ -103,12 +114,10 @@ gpui_platform = { package = "gpui-pre-platform", version = "0.3.1", features = [
 # all three gpui-kit crates together.
 gpui-base = { git = "https://github.com/longbridge/gpui-kit", rev = "36b51819deb52c947a79f8de29e0e9175eda7464" }
 horizon-agent = { path = "crates/horizon-agent" }
-horizon-board = { path = "crates/horizon-board" }
 horizon-cli = { path = "crates/horizon-cli" }
 horizon-control = { path = "crates/horizon-control" }
 horizon-terminal-core = { path = "crates/horizon-terminal-core" }
 horizon-wire = { path = "crates/horizon-wire" }
-horizon-workspace = { path = "crates/horizon-workspace" }
 # The `log` facade backend lives in the shell library (`lib.rs`'s
 # StderrLogger): gpui and its platform crates — including the
 # system-notification stack — report diagnostics through `log`, and with
@@ -131,7 +140,6 @@ tokio = { version = "1.52", features = ["rt", "net", "io-util", "time", "macros"
 # directly rather than (de)serializing a typed struct through it.
 toml_edit = "0.25"
 unicode-width = "0.2"
-uuid = { version = "1.18", features = ["v4", "serde"] }
 
 # Desktop notifications (`src/desktop_notify.rs`, fed by OSC 9/777 via
 # horizon-terminal-core) go through gpui's unified system-notification

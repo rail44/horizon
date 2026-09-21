@@ -1,11 +1,15 @@
 //! Sessionless board with ranked task hierarchy and task-associated consultation.
+//!
+//! The view compiles for the preview-plugin target as well
+//! (`docs/preview-pane-design.md`); [`previews`] shows it over sample data.
+//! The two halves that reach the host are gated here: [`live`], the poke
+//! pump over the logd socket, and [`sessions`], the agent-session
+//! observation. The store itself is handed in rather than opened — see
+//! [`execute`].
 
 use std::future::Future;
-use std::path::PathBuf;
 use std::pin::Pin;
 
-use futures::channel::{mpsc, oneshot};
-use futures::StreamExt;
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
@@ -13,21 +17,41 @@ use gpui_component::input::{Escape, Input, InputEvent, InputState};
 use gpui_component::list::{List, ListDelegate, ListEvent, ListItem, ListState};
 use gpui_component::text::TextView;
 use gpui_component::{h_flex, v_flex, IndexPath, Sizable as _};
-use horizon_board::{tree_order, Item, Position, Store, StoreError, SubscribeStream};
+use horizon_board::{tree_order, Item, Position, Store, StoreError};
 
 use crate::theme;
 use horizon_workspace::commands::CommandId;
 
+mod activity;
 mod detail;
+mod execute;
 mod list;
-mod live;
 mod model;
 mod operations;
+pub(crate) mod previews;
+
+#[cfg(not(target_family = "wasm"))]
+mod live;
+#[cfg(not(target_family = "wasm"))]
 mod sessions;
+
+use activity::*;
+use execute::*;
 use list::*;
-use live::*;
-pub(crate) use model::board_root_dir;
 use model::*;
+
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
+
+#[cfg(not(target_family = "wasm"))]
+use futures::channel::{mpsc, oneshot};
+#[cfg(not(target_family = "wasm"))]
+use futures::StreamExt;
+#[cfg(not(target_family = "wasm"))]
+use horizon_board::SubscribeStream;
+#[cfg(not(target_family = "wasm"))]
+use live::*;
+#[cfg(not(target_family = "wasm"))]
 use sessions::*;
 
 pub(crate) struct BoardCommand(pub(crate) CommandId);
@@ -56,6 +80,7 @@ pub(crate) struct BoardPaneView {
     pub(crate) command_subscription: Option<Subscription>,
     pub(crate) inventory_subscription: Option<Subscription>,
     inventory_pending: std::collections::HashSet<horizon_workspace::SessionId>,
+    #[cfg(not(target_family = "wasm"))]
     session_watches: std::collections::HashMap<horizon_workspace::SessionId, SessionWatch>,
     error: Option<String>,
     navigation_item: Option<u64>,
@@ -67,7 +92,9 @@ pub(crate) struct BoardPaneView {
     read_positions: std::collections::HashMap<u64, String>,
     navigation_epoch: u64,
     focus_handle: FocusHandle,
-    root: Option<PathBuf>,
+    /// Where every store call in this pane gets its store. `None` when
+    /// nothing resolved one, which is the empty (non-loading) state.
+    store: Option<BoardStoreSource>,
     list: Entity<ListState<BoardListDelegate>>,
     _list_subscription: Subscription,
     new_item_input: Entity<InputState>,
@@ -75,6 +102,7 @@ pub(crate) struct BoardPaneView {
     mode: BoardPaneMode,
     /// The live-update pump, started on open when a store root was resolved.
     /// Owned here (not detached) so the pane closing ends it; see `Drop`.
+    #[cfg(not(target_family = "wasm"))]
     _live_updates: Option<LiveUpdates>,
 }
 
@@ -83,6 +111,7 @@ impl BoardPaneView {
     /// `cwd` is the shell process cwd. Both are starting directories for
     /// `Store::from_dir`'s worktree -> main-root collapse. When neither is
     /// available the pane shows an empty (non-loading) state.
+    #[cfg(not(target_family = "wasm"))]
     pub(crate) fn new(
         session_root: Option<PathBuf>,
         cwd: Option<PathBuf>,
@@ -90,6 +119,43 @@ impl BoardPaneView {
         cx: &mut Context<Self>,
     ) -> Self {
         let root = board_root_dir(session_root, cwd);
+        let mut view = Self::build(
+            root.clone().map(BoardStoreSource::Root),
+            Default::default(),
+            window,
+            cx,
+        );
+        // `root` is resolved here, so the pump can start before the first
+        // read. A pane with no root gets no pump and no live updates,
+        // matching its no-read empty state.
+        view._live_updates = root.as_deref().map(|root| start_live_updates(root, cx));
+        view.spawn_load(cx);
+        view
+    }
+
+    /// Builds the pane over a store the caller already holds, with
+    /// `activity` standing in for the sessions the shell would observe.
+    /// A ready store's contents do not change behind the pane's back, so
+    /// there is no live-update pump.
+    fn with_store(
+        store: Store,
+        activity: std::collections::HashMap<horizon_workspace::SessionId, BoardSessionActivity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let view = Self::build(Some(BoardStoreSource::Ready(store)), activity, window, cx);
+        view.spawn_load(cx);
+        view
+    }
+
+    /// Everything both constructors share. Neither the first read nor the
+    /// live-update pump is started here.
+    fn build(
+        store: Option<BoardStoreSource>,
+        activity: std::collections::HashMap<horizon_workspace::SessionId, BoardSessionActivity>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let list = cx.new(|cx| {
             let mut list = ListState::new(BoardListDelegate::new(), window, cx).searchable(true);
             select_first_row_on_open(&mut list, window, cx);
@@ -98,14 +164,8 @@ impl BoardPaneView {
         let _list_subscription = cx.subscribe_in(
             &list,
             window,
-            |view, list, event: &ListEvent, _window, cx| match event {
-                ListEvent::Confirm(index) => {
-                    let item = list.read(cx).delegate().item_at(*index).cloned();
-                    if let Some((item, _)) = board_confirm_transition(item, view.root.clone()) {
-                        view.navigation_item = Some(item.id);
-                        cx.emit(BoardCommand(CommandId::OpenBoardRelatedItem));
-                    }
-                }
+            |view, _list, event: &ListEvent, _window, cx| match event {
+                ListEvent::Confirm(index) => view.confirm_row(*index, cx),
                 ListEvent::Cancel | ListEvent::Select(_) => {}
             },
         );
@@ -124,13 +184,10 @@ impl BoardPaneView {
             },
         );
         window.focus(&list.focus_handle(cx), cx);
-        // Start the live-update pump before constructing `Self` (it needs
-        // `cx`); `root` is already resolved here. A pane with no root gets no
-        // pump and no live updates, matching its no-read empty state.
-        let live_updates = root.as_ref().map(|r| start_live_updates(r, cx));
         let view_entity = cx.entity().downgrade();
         list.update(cx, |list, cx| {
             list.delegate_mut().view = Some(view_entity);
+            list.delegate_mut().session_activity = activity;
             cx.notify();
         });
         let state_input = cx.new(|cx| InputState::new(window, cx).placeholder("Project state"));
@@ -138,10 +195,11 @@ impl BoardPaneView {
             cx.new(|cx| InputState::new(window, cx).placeholder("Search prerequisite tasks"));
         let dependency_subscription =
             cx.subscribe(&dependency_input, |_, _, _: &InputEvent, cx| cx.notify());
-        let view = Self {
+        Self {
             command_subscription: None,
             inventory_subscription: None,
             inventory_pending: Default::default(),
+            #[cfg(not(target_family = "wasm"))]
             session_watches: Default::default(),
             error: None,
             navigation_item: None,
@@ -153,107 +211,94 @@ impl BoardPaneView {
             read_positions: Default::default(),
             navigation_epoch: 0,
             focus_handle: cx.focus_handle(),
-            root,
+            store,
             list,
             _list_subscription,
             new_item_input,
             _new_item_subscription,
             mode: BoardPaneMode::List,
-            _live_updates: live_updates,
-        };
-        view.spawn_load(cx);
-        view
+            #[cfg(not(target_family = "wasm"))]
+            _live_updates: None,
+        }
     }
 
-    /// Triggers the off-thread store read that fills the list delegate. A
-    /// `None` root (no session root and no shell cwd) drops straight to the
-    /// empty (non-loading) state.
+    /// Opens the detail view for the row at `index`. The list's confirm
+    /// handler and anything else that opens a row share this one path; the
+    /// transition itself goes through the command model.
+    fn confirm_row(&mut self, index: IndexPath, cx: &mut Context<Self>) {
+        let item = self.list.read(cx).delegate().item_at(index).cloned();
+        if let Some(item) = board_confirm_transition(item, self.store.is_some()) {
+            self.navigation_item = Some(item.id);
+            cx.emit(BoardCommand(CommandId::OpenBoardRelatedItem));
+        }
+    }
+
+    /// The display row item `id` currently occupies, or `None` while the
+    /// store read has not landed or the row is filtered out.
+    fn row_of(&self, id: u64, cx: &App) -> Option<IndexPath> {
+        self.list.read(cx).delegate().row_of(id).map(IndexPath::new)
+    }
+
+    /// Triggers the store read that fills the list delegate. A pane with no
+    /// store drops straight to the empty (non-loading) state.
     fn spawn_load(&self, cx: &mut Context<Self>) {
-        match &self.root {
-            Some(root) => {
-                let root = root.clone();
-                let epoch = self.navigation_epoch;
-                cx.spawn(async move |this, cx| {
-                    let result = cx
-                        .background_executor()
-                        .spawn(async move {
-                            Store::from_dir(&root).and_then(|store| {
-                                Ok((
-                                    store.list(None, true)?.items,
-                                    store.read_positions("owner")?,
-                                ))
-                            })
-                        })
-                        .await;
-                    let _ = this.update(cx, |view, cx| match result {
-                        Ok((items, positions)) => {
-                            let sessions = bound_sessions(&items)
-                                .into_iter()
-                                .filter(|id| view.inventory_pending.insert(*id))
-                                .collect::<Vec<_>>();
-                            cx.emit(BoardSessionsRefreshed(sessions));
-                            view.read_positions = positions;
-                            let unread = unread_tasks(&items, &view.read_positions);
-                            view.list.update(cx, |list, cx| {
-                                list.delegate_mut().unread = unread;
-                                list.delegate_mut().set_loaded(items);
-                                cx.notify();
-                            });
-                            cx.notify();
-                        }
-                        Err(error) if view.navigation_epoch == epoch => {
-                            view.set_error(error.to_string(), cx)
-                        }
-                        Err(_) => {}
-                    });
-                })
-                .detach();
-            }
-            None => {
-                self.list.update(cx, |list, cx| {
-                    list.delegate_mut().set_loaded(Vec::new());
-                    cx.notify();
-                });
-            }
-        }
-    }
-
-    /// Reacts to one logd poke by re-reading whichever view is showing: the
-    /// full list (list mode) or just the open item (detail mode -- so a
-    /// comment posted from outside appears in the open thread). A poke for
-    /// the user's *own* just-posted comment re-reads the same item the inline
-    /// `post_comment` reload already refreshed; that one redundant file fold
-    /// is the cost of staying naive (no seq tracking) -- harmless, and pokes
-    /// are lossy by design so correctness can't depend on suppressing it.
-    fn on_poke(&mut self, cx: &mut Context<Self>) {
-        let open = match &self.mode {
-            BoardPaneMode::List => None,
-            BoardPaneMode::Detail { item, .. } => Some(item.id),
-        };
-        match poke_reload_target(open) {
-            PokeReloadTarget::List => self.spawn_load(cx),
-            PokeReloadTarget::Item(id) => {
-                self.spawn_show(id, cx);
-                self.spawn_load(cx);
-            }
-        }
-    }
-
-    /// Reloads a single open item off-thread (a sync file fold via
-    /// `Store::show`) and writes it back into the detail view. Guards the id
-    /// so a poke for a different item -- or a navigation back to the list
-    /// between the poke and the read returning -- doesn't clobber the wrong
-    /// view.
-    fn spawn_show(&self, id: u64, cx: &mut Context<Self>) {
-        let Some(root) = self.root.clone() else {
+        let Some(source) = self.store.clone() else {
+            self.list.update(cx, |list, cx| {
+                list.delegate_mut().set_loaded(Vec::new());
+                cx.notify();
+            });
             return;
         };
         let epoch = self.navigation_epoch;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { Store::from_dir(&root).and_then(|store| store.show(id)) })
-                .await;
+            let result = run_store_job(cx, source, |store| {
+                Box::pin(async move {
+                    Ok((
+                        store.list(None, true)?.items,
+                        store.read_positions("owner")?,
+                    ))
+                })
+            })
+            .await;
+            let _ = this.update(cx, |view, cx| match result {
+                Ok((items, positions)) => {
+                    let sessions = bound_sessions(&items)
+                        .into_iter()
+                        .filter(|id| view.inventory_pending.insert(*id))
+                        .collect::<Vec<_>>();
+                    cx.emit(BoardSessionsRefreshed(sessions));
+                    view.read_positions = positions;
+                    let unread = unread_tasks(&items, &view.read_positions);
+                    view.list.update(cx, |list, cx| {
+                        list.delegate_mut().unread = unread;
+                        list.delegate_mut().set_loaded(items);
+                        cx.notify();
+                    });
+                    cx.notify();
+                }
+                Err(error) if view.navigation_epoch == epoch => {
+                    view.set_error(error.to_string(), cx)
+                }
+                Err(_) => {}
+            });
+        })
+        .detach();
+    }
+
+    /// Re-reads a single open item (`Store::show`) and writes it back into
+    /// the detail view. Guards the id so a poke for a different item -- or a
+    /// navigation back to the list between the poke and the read returning --
+    /// doesn't clobber the wrong view.
+    fn spawn_show(&self, id: u64, cx: &mut Context<Self>) {
+        let Some(source) = self.store.clone() else {
+            return;
+        };
+        let epoch = self.navigation_epoch;
+        cx.spawn(async move |this, cx| {
+            let result = run_store_job(cx, source, move |store| {
+                Box::pin(async move { store.show(id) })
+            })
+            .await;
             let _ = this.update(cx, |view, cx| {
                 if !navigation_matches(epoch, view.navigation_epoch, id, view.open_item_id()) {
                     return;
@@ -405,8 +450,8 @@ impl BoardPaneView {
         });
     }
 
-    /// Moves item `item_id` to `position` via the store (same tokio-runtime
-    /// pattern as `add_item`), then reloads the list.
+    /// Moves item `item_id` to `position` via the store, then reloads the
+    /// list -- one write like `add_item`'s.
     fn spawn_move(&self, item_id: u64, position: Position, cx: &mut Context<Self>) {
         self.mutate(cx, move |store| {
             Box::pin(async move { store.move_item(item_id, position).await.map(|_| ()) })
@@ -420,6 +465,7 @@ impl BoardPaneView {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for BoardPaneView {
     fn drop(&mut self) {
         // End the live-update pump. Firing the shutdown oneshot wakes the

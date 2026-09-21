@@ -41,8 +41,10 @@ for `wasm32-wasip2`:
   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` in the root
   `Cargo.toml`.
 - Modules that need them carry `#[cfg(not(target_family = "wasm"))]` at
-  their declaration in `src/lib.rs`. Today every module except `theme` and
-  `preview` is native-only.
+  their declaration in `src/lib.rs`. `theme`, `preview` and `board_pane`
+  build for both targets; every other module is native-only. A module that
+  carries previews of its own view is gated inside itself instead, so the
+  view and the native-only halves it uses can live in one directory.
 - `scripts/check-preview-wasm.sh` checks that the library still builds for
   the plugin target. It is part of the quality gate.
 
@@ -170,11 +172,17 @@ primary entry point and the view chooser does not list the preview kind.
 - `scripts/check-preview-wasm.sh` — the library builds for the plugin
   target. Seconds when warm; part of the quality gate.
 - `scripts/check-preview-plugin.sh` — builds the plugin with the `quick`
-  profile and runs an `#[ignore]`d windowless test through real wasmtime:
-  the sample paints its label, a host theme change changes what is
-  painted, a reload from the same path re-attaches to the same surface
-  with exactly one live instance, and a broken artifact fails the load
-  without disturbing the pane. Minutes when cold; not part of the gate.
+  profile and runs the `#[ignore]`d windowless tests through real
+  wasmtime. The sample's: it paints its label, a host theme change changes
+  what is painted, a reload from the same path re-attaches to the same
+  surface with exactly one live instance, and a broken artifact fails the
+  load without disturbing the pane. The board's: `board-list` paints row
+  titles from its sample store and the rows' activity icons reach the host
+  as images, `board-list-empty` paints its chrome and no row, and
+  `board-detail` paints the item's body and its comment thread. A board
+  preview's surface is tall, because gpui culls primitives outside the
+  content mask and an assertion on text that scrolled out of view is an
+  assertion on nothing. Minutes when cold; not part of the gate.
 
 ## Costs measured at introduction
 

@@ -10,6 +10,7 @@ use gpui::{
     div, rgb, AnyView, App, Context, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
+use crate::board_pane::previews as board;
 use crate::preview::sample;
 
 /// One entry: the name the shell selects by, and the constructor that builds
@@ -20,10 +21,24 @@ pub struct Preview {
 }
 
 /// Every preview in this build.
-const PREVIEWS: &[Preview] = &[Preview {
-    name: sample::NAME,
-    build: sample::build,
-}];
+const PREVIEWS: &[Preview] = &[
+    Preview {
+        name: sample::NAME,
+        build: sample::build,
+    },
+    Preview {
+        name: board::LIST,
+        build: board::build_list,
+    },
+    Preview {
+        name: board::LIST_EMPTY,
+        build: board::build_list_empty,
+    },
+    Preview {
+        name: board::DETAIL,
+        build: board::build_detail,
+    },
+];
 
 pub fn previews() -> &'static [Preview] {
     PREVIEWS
