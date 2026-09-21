@@ -135,9 +135,12 @@ Measured, not speculative (`docs/research/agent-ceiling-death-autopsy-
    consumers (notification injection, auto-turn wake, `task_output`
    readiness). Approval-forwarding for future write-capable children is
    the same subscription with one more event kind — no new seam later.
-7. **v1 children stay read-only**, so approvals are structurally
-   impossible inside a child (not suppressed — impossible: the role
-   allowlist contains no tool that can cross a boundary). Write-capable
+7. **v1 children stay read-only.** The role allowlist contains no tool
+   that can write, but a read whose path leaves the workspace root is
+   still a boundary crossing and still reaches the approval gate, so a
+   child is additionally marked unattended: a call that would need a
+   human resolves as an error tool result and the child keeps working.
+   See `docs/agent-explore-design.md` decision 4. Write-capable
    task roles are explicitly out of scope here; their open questions
    (worktree/branch policy for child edits, approval forwarding,
    reconciling half-done work after a cap) are recorded for the next

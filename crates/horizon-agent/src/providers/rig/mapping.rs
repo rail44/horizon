@@ -472,6 +472,17 @@ pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) ->
     Message::tool_result(result.call_id.0.clone(), tool_id, result.output.to_string())
 }
 
+/// One `fs.read` of `path` — the deterministic fallback's hook for driving
+/// a real file read (an out-of-workspace one included) through the whole
+/// tool pipeline without a network provider. See
+/// `completion::deterministic_rig_response`.
+pub(super) fn rig_fs_read_call(path: &str) -> ToolCall {
+    ToolCall::new(
+        rig_core::message::ToolCallId::new_or_mint("rig-fs-read-1"),
+        ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": path })),
+    )
+}
+
 pub(super) fn rig_workspace_snapshot_call() -> ToolCall {
     ToolCall::new(
         rig_core::message::ToolCallId::new_or_mint("rig-workspace-snapshot-1"),

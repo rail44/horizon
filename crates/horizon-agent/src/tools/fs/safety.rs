@@ -71,6 +71,53 @@ fn canonicalize(requested: &str) -> Result<PathBuf, Value> {
     Ok(resolved)
 }
 
+/// Which paths a call may resolve to without going through the approval
+/// gate.
+#[derive(Clone, Copy)]
+enum Confinement {
+    /// The workspace root only — `fs.write`/`fs.edit`.
+    WorkspaceRoot,
+    /// The workspace root plus this session's Git metadata roots —
+    /// `fs.read`/`fs.glob`/`fs.grep`. See [`git_metadata_roots`].
+    ReadableRoots,
+}
+
+/// This session's Git metadata locations: the gitdir a linked worktree's
+/// `.git` pointer file names, and the repository's common dir. Derived by
+/// the same resolver the Git-operation approval uses
+/// (`tools::metadata_writable_roots`), so both agree on what belongs to
+/// this workspace. Empty when the session has no root, is not in a Git
+/// repository, or the layout does not validate.
+///
+/// A session in an ordinary checkout reaches this metadata through its own
+/// in-root `.git/`; a session in a linked worktree cannot, because the
+/// worktree keeps it elsewhere. Reads only — `fs.write`/`fs.edit` stay
+/// confined to the workspace root.
+fn git_metadata_roots(tool_state: &ToolSessionState) -> Vec<PathBuf> {
+    tool_state
+        .workspace_root()
+        .map(crate::tools::metadata_writable_roots)
+        .and_then(Result::ok)
+        .unwrap_or_default()
+}
+
+fn within(tool_state: &ToolSessionState, resolved: &Path, confinement: Confinement) -> bool {
+    let Some(workspace_root) = tool_state.workspace_root() else {
+        return false;
+    };
+    if resolved.starts_with(workspace_root) {
+        return true;
+    }
+    match confinement {
+        Confinement::WorkspaceRoot => false,
+        // Only computed for a path already known to sit outside the root,
+        // so an ordinary in-workspace call pays nothing for this.
+        Confinement::ReadableRoots => git_metadata_roots(tool_state)
+            .iter()
+            .any(|root| resolved.starts_with(root)),
+    }
+}
+
 /// Resolves `requested` to an absolute, canonicalized path confined to
 /// `tool_state`'s workspace root.
 ///
@@ -85,6 +132,35 @@ pub(super) fn resolve_path(
     requested: &str,
     allow_out_of_root: bool,
 ) -> Result<PathBuf, Value> {
+    resolve(
+        tool_state,
+        requested,
+        allow_out_of_root,
+        Confinement::WorkspaceRoot,
+    )
+}
+
+/// [`resolve_path`] for the read tools, which additionally accept this
+/// session's Git metadata roots — see [`git_metadata_roots`].
+pub(super) fn resolve_read_path(
+    tool_state: &ToolSessionState,
+    requested: &str,
+    allow_out_of_root: bool,
+) -> Result<PathBuf, Value> {
+    resolve(
+        tool_state,
+        requested,
+        allow_out_of_root,
+        Confinement::ReadableRoots,
+    )
+}
+
+fn resolve(
+    tool_state: &ToolSessionState,
+    requested: &str,
+    allow_out_of_root: bool,
+    confinement: Confinement,
+) -> Result<PathBuf, Value> {
     let Some(workspace_root) = tool_state.workspace_root() else {
         return Err(error_output(
             "workspace root is unavailable for this session — file tools cannot resolve any path",
@@ -93,7 +169,7 @@ pub(super) fn resolve_path(
 
     let resolved = canonicalize(requested)?;
 
-    if !allow_out_of_root && !resolved.starts_with(workspace_root) {
+    if !allow_out_of_root && !within(tool_state, &resolved, confinement) {
         return Err(error_output(format!(
             "path `{requested}` escapes the workspace root `{}` — the fs tools can only touch \
              paths inside the session's workspace; write scratch files (commit messages, PR \
@@ -105,7 +181,9 @@ pub(super) fn resolve_path(
     Ok(resolved)
 }
 
-/// Whether `requested` resolves to a path outside the workspace root.
+/// Whether `requested` resolves to a path a read tool may not reach
+/// without approval: outside the workspace root and outside this session's
+/// Git metadata roots.
 ///
 /// Uses the same canonicalization as [`resolve_path`] to catch symlink
 /// escapes — a path that lexically starts with the workspace root but
@@ -118,8 +196,67 @@ pub(super) fn escapes_root(tool_state: &ToolSessionState, requested: &str) -> bo
     let Ok(resolved) = canonicalize(requested) else {
         return false;
     };
-    let Some(workspace_root) = tool_state.workspace_root() else {
+    if tool_state.workspace_root().is_none() {
         return false;
+    }
+    !within(tool_state, &resolved, Confinement::ReadableRoots)
+}
+
+/// The same relative path inside this session's own workspace, when
+/// `requested` names a file in another working tree of the same repository
+/// (the main worktree or a sibling linked worktree) and that file exists
+/// here too. `None` otherwise.
+pub(super) fn in_workspace_equivalent(
+    tool_state: &ToolSessionState,
+    requested: &str,
+) -> Option<PathBuf> {
+    let workspace_root = tool_state.workspace_root()?;
+    let resolved = canonicalize(requested).ok()?;
+    for checkout in other_working_trees(tool_state) {
+        let Ok(relative) = resolved.strip_prefix(&checkout) else {
+            continue;
+        };
+        let candidate = workspace_root.join(relative);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+/// Every working tree of this session's repository except its own: the main
+/// worktree (the common dir's parent) and each linked worktree registered
+/// under `<common dir>/worktrees/*/gitdir`.
+fn other_working_trees(tool_state: &ToolSessionState) -> Vec<PathBuf> {
+    let Some(workspace_root) = tool_state.workspace_root() else {
+        return Vec::new();
     };
-    !resolved.starts_with(workspace_root)
+    // The resolver returns `[git_dir]` for an ordinary checkout and
+    // `[git_dir, common_dir]` for a linked worktree, so the common dir is
+    // the last entry either way.
+    let roots = git_metadata_roots(tool_state);
+    let Some(common_dir) = roots.last() else {
+        return Vec::new();
+    };
+    let mut trees = Vec::new();
+    if common_dir.file_name().is_some_and(|name| name == ".git") {
+        if let Some(main) = common_dir.parent() {
+            trees.push(main.to_path_buf());
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(common_dir.join("worktrees")) {
+        for entry in entries.flatten() {
+            let Ok(pointer) = std::fs::read_to_string(entry.path().join("gitdir")) else {
+                continue;
+            };
+            let Some(tree) = Path::new(pointer.trim()).parent() else {
+                continue;
+            };
+            if let Ok(tree) = tree.canonicalize() {
+                trees.push(tree);
+            }
+        }
+    }
+    trees.retain(|tree| tree != workspace_root);
+    trees
 }

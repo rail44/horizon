@@ -185,8 +185,12 @@ const EXPLORE_ITERATION_CAP: u32 = 25;
 /// question about the shared workspace, and terminated as soon as it has.
 ///
 /// The allowlist is the whole restriction mechanism: three read-only tools,
-/// every one of them `ToolPermission::AutoAllowRead`, so an exploration can
-/// never reach an approval prompt no human is watching for. `task`
+/// every one of them `ToolPermission::AutoAllowRead`. That alone does not
+/// keep approvals out of the session -- a read whose path escapes the
+/// workspace root is still routed to the approval gate -- so the session is
+/// additionally marked unattended (`ToolSessionState::is_unattended`),
+/// which turns a prompt no human is watching for into a refused tool
+/// result the session can carry on from. `task`
 /// itself is absent, which is what makes recursion structurally impossible
 /// rather than merely discouraged -- and, since 2026-07-27, is also what
 /// keeps the prompt's delegation-routing block out of an exploration's own
@@ -382,9 +386,10 @@ mod tests {
         }
     }
 
-    /// Every advertised exploration tool must be auto-allowed, or an
-    /// exploration could park on an approval prompt no human is watching
-    /// (decision 4).
+    /// Every advertised exploration tool must be auto-allowed: an
+    /// in-workspace call then runs with no approval round trip at all
+    /// (decision 4). Out-of-workspace reads are the exception the
+    /// unattended refusal covers -- see [`EXPLORE_ROLE`]'s doc comment.
     #[test]
     fn every_explore_tool_is_auto_allowed() {
         for tool_id in EXPLORE_ROLE

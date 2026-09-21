@@ -505,10 +505,12 @@ pub(super) enum Terminal {
     /// `TurnEnded` at all -- the turn ended some way this watcher never saw
     /// named.
     TurnEnded(Option<TurnEndReason>),
-    /// The child parked on an approval. Unreachable by construction -- every
-    /// tool in the explore role's allowlist is auto-allowed -- but if it
-    /// ever happens the task fails immediately rather than waiting forever
-    /// for a human who is not watching this session
+    /// The child parked on an approval. A task session is marked unattended
+    /// (`ToolSessionState::is_unattended`), so a call that would need a
+    /// human resolves as a refused tool result and never becomes a prompt
+    /// on the child's event stream -- this arm is the safety net for a path
+    /// that bypasses that, and it fails the task immediately rather than
+    /// waiting forever for a human who is not watching this session
     /// (`docs/agent-explore-design.md` decision 4).
     Approval,
     /// The session terminated without ending its turn.
@@ -679,8 +681,9 @@ pub(super) fn fold_until_terminal(
                     // and approval-gated async-tool boundaries — backlog
                     // 47). Both are unreachable in a v1 task child (the
                     // host never sends `Initialize` after the user message,
-                    // approvals cannot occur, every allowed tool is
-                    // synchronous, and task children are never resumed) —
+                    // an approval that would need a human is refused rather
+                    // than raised, every allowed tool is synchronous, and
+                    // task children are never resumed) —
                     // but if they ever gain an async or approval-capable
                     // tool, this arm becomes a premature-completion hazard
                     // and must be revisited.
@@ -735,8 +738,9 @@ pub(super) fn fold_until_terminal(
                     // terminal event for this child watcher.
                     | Event::HistoryCleared(_)
                     // Operator-intervention audit events: audit-only, not
-                    // terminal (and unreachable in a v1 task child -- approvals
-                    // cannot occur there; see the note above).
+                    // terminal (and unreachable in a v1 task child -- no
+                    // approval it raises ever reaches an operator; see the
+                    // note above).
                     | Event::ApprovalResolved(_)
                     | Event::ContinueTurnRequested(_)
                     // Provider rate-limit pacing is not terminal.

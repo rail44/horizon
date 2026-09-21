@@ -13,7 +13,7 @@ use horizon_agent::contract::{
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
-    resolve_auto_approval, should_fold_completion, JudgeDecision, ToolCompletion,
+    refuse_unattended, resolve_auto_approval, should_fold_completion, JudgeDecision, ToolCompletion,
 };
 use horizon_agent::wire::AgentWireEvent;
 
@@ -163,6 +163,13 @@ fn fold_approval_judgment(
             forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
         }
         JudgeDecision::Escalate => {
+            // A session nobody can approve for gets the refusal instead of
+            // a prompt that would never be answered.
+            if let Some(outcome) = refuse_unattended(session_id, &judgment.candidate.request) {
+                let call_id = judgment.candidate.request.call_id.clone();
+                forward_approval_outcome(state, commands_tx, session_id, call_id, outcome);
+                return;
+            }
             emit_human_approval(state, live_state, session_id, judgment.candidate.approval);
         }
     }
@@ -1047,6 +1054,155 @@ mod tests {
             assert!(commands_rx.try_recv().is_err());
             assert!(drain_events(&mut outgoing_rx).is_empty());
         }
+    }
+
+    /// An out-of-root read in a session nobody watches: the judge is still
+    /// asked, and only its escalation — the verdict that would have gone to
+    /// a human — becomes a refusal. The call resolves with an error result
+    /// the model receives, and no prompt reaches the client.
+    #[test]
+    fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let state = judge_test_state();
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let connection = Connection::new(state.clone());
+        let mut outgoing_rx = connection.subscribe_agent(session_id);
+        let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
+        horizon_agent::tools::register_session_runtime(
+            session_id,
+            horizon_agent::tools::ToolSessionState::for_root(
+                root.clone(),
+                horizon_agent::config::AgentToolsConfig::default(),
+                horizon_agent::tools::RecallContext::default(),
+            )
+            .with_unattended(true),
+            live_state.clone(),
+            results_tx,
+        );
+
+        let request = horizon_agent::contract::ToolCallRequest {
+            call_id: ToolCallId("unattended-escalated".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({ "path": "/etc/hostname" }).into(),
+            occurrence_id: None,
+        };
+        live_state.extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ));
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_approval_judgment(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            horizon_agent::tools::ApprovalJudgment {
+                candidate: ApprovalCandidate {
+                    approval: ApprovalRequest {
+                        call_id: request.call_id.clone(),
+                        reason: "outside the workspace root".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: None,
+                    },
+                    request: request.clone(),
+                },
+                decision: JudgeDecision::Escalate,
+            },
+        );
+
+        let forwarded = commands_rx.try_recv().expect("the model gets a result");
+        let Command::ToolCallResult(result) = forwarded else {
+            panic!("expected a tool result, got {forwarded:?}");
+        };
+        assert_eq!(result.call_id, request.call_id);
+        assert!(result.is_error);
+        assert!(result.output["message"]
+            .as_str()
+            .unwrap()
+            .contains(&root.display().to_string()));
+
+        let fanned = drain_events(&mut outgoing_rx);
+        assert!(
+            !fanned
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_))),
+            "a session nobody watches must never be shown a prompt: {fanned:?}"
+        );
+        horizon_agent::tools::unregister_session_runtime(session_id);
+    }
+
+    /// The judge's other verdict is untouched by the refusal: a call it
+    /// allows runs, out-of-root read included.
+    #[test]
+    fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let outside = root.join(format!("horizon-unattended-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&outside).unwrap();
+        let file = outside.join("allowed.txt");
+        std::fs::write(&file, "judge said yes\n").unwrap();
+        // A workspace root the file is genuinely outside of.
+        let workspace = outside.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
+
+        let state = judge_test_state();
+        let live_state = LiveState::with_disabled_persistence();
+        let session_id = SessionId::new();
+        let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
+        horizon_agent::tools::register_session_runtime(
+            session_id,
+            horizon_agent::tools::ToolSessionState::for_root(
+                workspace,
+                horizon_agent::config::AgentToolsConfig::default(),
+                horizon_agent::tools::RecallContext::default(),
+            )
+            .with_unattended(true),
+            live_state.clone(),
+            results_tx,
+        );
+
+        let request = horizon_agent::contract::ToolCallRequest {
+            call_id: ToolCallId("unattended-allowed".to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({ "path": file.display().to_string() }).into(),
+            occurrence_id: None,
+        };
+        live_state.extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ));
+        let (commands_tx, commands_rx) = unbounded::<Command>();
+
+        fold_approval_judgment(
+            &state,
+            &live_state,
+            &commands_tx,
+            session_id,
+            horizon_agent::tools::ApprovalJudgment {
+                candidate: ApprovalCandidate {
+                    approval: ApprovalRequest {
+                        call_id: request.call_id.clone(),
+                        reason: "outside the workspace root".to_string(),
+                        kind: ApprovalKind::Standard,
+                        occurrence_id: None,
+                    },
+                    request: request.clone(),
+                },
+                decision: JudgeDecision::AutoApprove,
+            },
+        );
+
+        let forwarded = commands_rx.try_recv().expect("the read produces a result");
+        let Command::ToolCallResult(result) = forwarded else {
+            panic!("expected a tool result, got {forwarded:?}");
+        };
+        assert!(!result.is_error, "{:?}", result.output);
+        assert!(result.output["content"]
+            .as_str()
+            .unwrap()
+            .contains("judge said yes"));
+
+        horizon_agent::tools::unregister_session_runtime(session_id);
+        std::fs::remove_dir_all(outside).unwrap();
     }
 
     #[test]

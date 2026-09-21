@@ -9,7 +9,7 @@ use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
 use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
 use crate::tools::error_output;
-use crate::tools::state::{session_runtime, SessionRuntime};
+use crate::tools::state::{session_runtime, SessionRuntime, ToolSessionState};
 use crate::transcript::SUPERSEDED_BY_RETRY;
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -172,6 +172,70 @@ pub fn resolve_auto_approval(
     } else {
         resolve_synchronous_tool(&runtime, request, &ApprovalDecision::Approve)
     }
+}
+
+/// The result a tool call resolves to when it would otherwise wait for a
+/// human in a session that has none (`ToolSessionState::is_unattended`):
+/// the call does not run, and the model is told what it may reach instead.
+/// `None` in an attended session, whose approval path is unchanged.
+///
+/// This is the pre-fold shape, for a call whose `ToolCallRequested` has not
+/// been folded into the session's live frame yet — the daemon's
+/// synchronous approval gate. [`refuse_unattended`] is the same refusal for
+/// a request already in the frame.
+pub fn unattended_refusal_result(
+    tool_state: &ToolSessionState,
+    request: &ToolCallRequest,
+) -> Option<ToolCallResult> {
+    let message = unattended_refusal_message(tool_state, request)?;
+    Some(ToolCallResult::new(
+        request.call_id.clone(),
+        request.occurrence_id.clone(),
+        error_output(message),
+    ))
+}
+
+/// [`unattended_refusal_result`] folded into the session's live frame and
+/// paired with the provider command, for a request already recorded there
+/// — what the judge's escalation verdict resolves to in an unattended
+/// session. `None` when the session is attended or has no registered
+/// runtime.
+pub fn refuse_unattended(
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> Option<ApprovalOutcome> {
+    let runtime = session_runtime(session_id)?;
+    let result = unattended_refusal_result(&runtime.tool_state, request)?;
+    // No `ToolRunning`/`ToolCallStarted`: nothing ran, exactly as for a
+    // denied call.
+    let events = vec![Event::ToolCallFinished(result.clone())];
+    let frame = runtime
+        .live_state
+        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    Some(ApprovalOutcome::Executed {
+        events,
+        frame,
+        command: Command::ToolCallResult(result),
+    })
+}
+
+fn unattended_refusal_message(
+    tool_state: &ToolSessionState,
+    request: &ToolCallRequest,
+) -> Option<String> {
+    if !tool_state.is_unattended() {
+        return None;
+    }
+    Some(
+        crate::tools::out_of_root_refusal(tool_state, &request.tool_id, &request.input)
+            .unwrap_or_else(|| {
+                format!(
+                    "`{}` needs approval and this session has nobody who can give it; the call \
+                     was not run.",
+                    request.tool_id
+                )
+            }),
+    )
 }
 
 fn try_execute(

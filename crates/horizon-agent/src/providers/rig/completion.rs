@@ -26,7 +26,7 @@ use crate::{
 use super::{
     clearing::{history_for_provider_request, ClearingState},
     mapping::{
-        horizon_provider_events_from_rig_message, rig_multi_snapshot_calls,
+        horizon_provider_events_from_rig_message, rig_fs_read_call, rig_multi_snapshot_calls,
         rig_tool_call_provider_payload, rig_tool_call_request,
     },
     rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
@@ -1210,8 +1210,25 @@ pub(super) fn partial_assistant_message(
     }
 }
 
+/// Line prefix the deterministic fallback reads an `fs.read` target from;
+/// the rest of the line is the path, verbatim (case-sensitive, unlike the
+/// keyword triggers below).
+pub(super) const READ_PATH_TRIGGER: &str = "fs.read path: ";
+
 pub(super) fn deterministic_rig_response(text: &str) -> Message {
     let lower = text.to_ascii_lowercase();
+    if let Some(path) = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix(READ_PATH_TRIGGER))
+    {
+        // Deterministic hook for driving a real `fs.read` -- including one
+        // whose path leaves the workspace root, so the approval/refusal
+        // routing is exercisable without a network provider.
+        return Message::Assistant {
+            id: None,
+            content: vec![AssistantContent::ToolCall(rig_fs_read_call(path.trim()))],
+        };
+    }
     if lower.contains("multi tool") {
         // Deterministic hook for exercising a parallel-tool-call batch (see
         // `rig_multi_snapshot_calls`'s doc comment) without a network

@@ -17,13 +17,16 @@ mod work_boundary;
 pub use work_boundary::session_tool_work_settled;
 pub(crate) mod web;
 
-pub use approval::{resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome};
+pub use approval::{
+    refuse_unattended, resolve_approval, resolve_auto_approval, unattended_refusal_result,
+    ApprovalDecision, ApprovalOutcome,
+};
 pub(crate) use bash::{
     git_prefilter, metadata_writable_roots, requires_metadata_write, GitPrefilterVerdict,
 };
 pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
-pub(crate) use fs::call_escapes_root;
+pub(crate) use fs::{call_escapes_root, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every
 // session's `ToolSessionState`, the same way it constructs the network

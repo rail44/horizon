@@ -28,8 +28,10 @@ One pass per user message, two layers.
 
 A proposer is a `task`-shaped session (`docs/agent-explore-design.md`,
 `docs/agent-async-task-design.md`): a read-only peer on the requester's
-`workspace_root`, `fs.read` / `fs.grep` / `fs.glob` only, no approval
-reachable, iteration cap 25 with summarize-on-cap, a first-class session in
+`workspace_root`, `fs.read` / `fs.grep` / `fs.glob` only, unattended — a
+call that would need a human's approval is refused with an error result
+rather than parking the session — iteration cap 25 with summarize-on-cap, a
+first-class session in
 the event log and the DuckDB projection, never attached to a pane. Unlike a
 `task` child it runs on its member's own `{provider, model}` rather than
 the requester's.
@@ -91,6 +93,10 @@ A failed, capped, or unavailable (missing key) proposer does not fail the
 pass. It contributes whatever report it has, under `task`'s empty-report
 rule, and the pass proceeds with the rest. With no usable proposal the
 aggregator answers alone; the log says so, the pane does not.
+
+A proposer that reads outside the workspace root is not one of these cases:
+the read is refused with an error result and the proposer keeps working, so
+its answer still reaches the aggregator.
 
 ## Configuration
 

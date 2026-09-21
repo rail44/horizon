@@ -330,7 +330,12 @@ fn handle_provider_event(
     provider_event: ProviderEvent,
 ) {
     let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
-    gate_processing_approval(session_id, &mut processing.horizon_events);
+    gate_processing_approval(
+        tool_state,
+        session_id,
+        &mut processing.horizon_events,
+        &mut processing.provider_commands,
+    );
 
     let mut to_forward: Vec<AgentWireEvent> = Vec::new();
     for event in &processing.horizon_events {
@@ -486,6 +491,10 @@ fn prepare_environment(
     let board = board_host_for(workspace_root.as_deref(), state.clone());
     let tool_state = tool_session_state_for(workspace_root, agent_config.tools, recall)
         .with_isolated_worktree(isolated)
+        // An explore-role session (`task` children and Mixture-of-Agents
+        // proposers) is never attached to a pane, so an approval prompt
+        // raised for it would reach nobody.
+        .with_unattended(role_id.is_some_and(horizon_agent::roles::is_exploration))
         .with_filesystem_grants(filesystem_grants.clone())
         .with_loopback_connect(loopback_connect)
         .with_skills(if trusted {
