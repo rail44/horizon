@@ -346,10 +346,10 @@ fn gpui_component_theme_config(scheme: &Scheme) -> gpui_component::ThemeConfig {
 /// Projects the resolved `[theme]` scheme onto gpui-component's global
 /// `Theme`, via [`gpui_component_theme_config`] and gpui-component's own
 /// `ThemeColor::apply_config` fallback chain. Call once at startup, right
-/// after `gpui_component::init` (`src/main.rs`), and again after
+/// after `gpui_component::init` (`src/entry.rs`), and again after
 /// [`super::scheme::reload_from`] on `Reload Config` so an overridden
 /// `[theme]` scheme keeps applying live.
-pub(crate) fn apply_gpui_component_theme(cx: &mut gpui::App) {
+pub fn apply_gpui_component_theme(cx: &mut gpui::App) {
     let config = gpui_component_theme_config(&scheme());
     gpui_component::Theme::global_mut(cx).apply_config(&std::rc::Rc::new(config));
 }

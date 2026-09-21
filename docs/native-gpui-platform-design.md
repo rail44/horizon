@@ -4,8 +4,12 @@ Status: adopted on every OS (2026-07-22).
 
 ## Decision
 
-Horizon constructs its application with `gpui_platform::application()` and
-does not provide its own `gpui::Platform` implementation. The selected Zed
+Horizon constructs its application on the platform object that
+`gpui_platform` selects — `gpui_platform::current_platform(false)` passed to
+`Application::with_platform`, which is what `gpui_platform::application()`
+does internally; `src/entry.rs` spells it out only to keep a handle on the
+platform text system for preview plugins (`docs/preview-pane-design.md`) —
+and does not provide its own `gpui::Platform` implementation. The selected Zed
 backend owns the complete platform boundary for the current OS: window and
 event-loop integration, input and IME delivery, clipboard, renderer
 presentation, and frame scheduling.

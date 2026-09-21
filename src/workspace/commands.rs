@@ -413,6 +413,7 @@ impl WorkspaceShell {
                     view.update(cx, |view, cx| view.board_command(id, window, cx));
                 }
             }
+            CommandId::ReloadPreview => self.reload_active_preview(cx),
             CommandId::OpenBoardOrganizer => self.open_board_organizer(cx),
             CommandId::OpenBoardTaskSession => self.open_board_task_session(cx),
             CommandId::ToggleBoardExpansion => {
@@ -475,8 +476,7 @@ impl WorkspaceShell {
             }
             CommandId::ReloadConfig => match horizon_config::reload() {
                 Ok(raw) => {
-                    theme::reload_from(&raw);
-                    theme::apply_gpui_component_theme(cx);
+                    theme::live::apply_scheme(&raw, cx);
                     super::bindings::apply_bindings(cx, &raw);
                     window.refresh();
                     self.broadcast_terminal_color_scheme();

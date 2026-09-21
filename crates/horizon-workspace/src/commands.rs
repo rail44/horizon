@@ -49,6 +49,12 @@ pub enum CommandId {
     ToggleBoardExpansion,
     /// Includes or hides closed tasks in the board list.
     ToggleBoardClosedVisibility,
+    /// Reloads the active preview pane's plugin from the artifact on disk
+    /// (`src/preview/`). The pane also reloads on its own when the file
+    /// changes; this is the manual path. Palette-only -- no default
+    /// keybinding (see `keymap::command_for`'s `"reload-preview"` entry for
+    /// an optional user binding).
+    ReloadPreview,
     /// Moves the live terminal font size up one step (the shell crate's
     /// `terminal::FONT_SIZE_STEP` px, clamped). Affects the terminal grid
     /// and the agent transcript's base text size without a restart.
@@ -373,6 +379,11 @@ pub fn core_commands() -> Vec<CommandSpec> {
                 "Remove Task Prerequisite",
                 "Remove the selected prerequisite from this task.",
             ),
+            (
+                CommandId::ReloadPreview,
+                "Reload Preview",
+                "Reload the active preview pane's plugin from disk.",
+            ),
         ]
         .map(|(id, title, description)| CommandSpec {
             id,
@@ -417,7 +428,8 @@ pub(crate) fn command_enabled(command_id: CommandId, state: CommandState) -> boo
         | CommandId::SaveBoardState
         | CommandId::ToggleBoardClosed
         | CommandId::AddBoardDependency
-        | CommandId::RemoveBoardDependency => true,
+        | CommandId::RemoveBoardDependency
+        | CommandId::ReloadPreview => true,
         CommandId::OpenBoardOrganizer => state.has_cursor_board,
         CommandId::CloseActivePane => state.visible_pane_count > 1,
         // Unlike `CloseActivePane` -- workspace-mode `x` falls through to
@@ -477,7 +489,7 @@ mod tests {
     fn core_commands_have_stable_ids_and_titles() {
         let commands = core_commands();
 
-        assert_eq!(commands.len(), 37);
+        assert_eq!(commands.len(), 38);
         assert_eq!(commands[0].id, CommandId::SplitRight);
         assert_eq!(commands[0].title, "Split Right…");
         assert_eq!(commands[1].id, CommandId::SplitDown);

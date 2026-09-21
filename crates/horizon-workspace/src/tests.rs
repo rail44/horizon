@@ -131,6 +131,86 @@ fn closing_a_board_pane_detaches_no_session() {
 }
 
 #[test]
+fn a_preview_pane_has_no_session_and_registers_none() {
+    let mut workspace = Workspace::mvp();
+    let session_count_before = workspace.session_count();
+    let pane_id = workspace.open_tab(PaneKind::View(ViewKind::Preview), None);
+
+    assert_eq!(
+        workspace.pane_kind(pane_id),
+        Some(PaneKind::View(ViewKind::Preview))
+    );
+    assert_eq!(workspace.active_session_id(), None);
+    assert_eq!(workspace.session_count(), session_count_before);
+    assert_eq!(
+        workspace.pane_title_for(pane_id),
+        Some("Preview".to_string())
+    );
+}
+
+#[test]
+fn opening_a_view_tab_without_activating_leaves_the_active_tab_alone() {
+    let mut workspace = Workspace::mvp();
+    let first_tab = workspace.active_tab_index();
+
+    let pane_id = workspace.open_tab_with_view_activated(ViewKind::Preview, false);
+
+    assert_eq!(workspace.tab_count(), 2);
+    assert_eq!(workspace.active_tab_index(), first_tab);
+    // The pane exists and is addressable even though nothing dove into it.
+    assert_eq!(
+        workspace.pane_kind(pane_id),
+        Some(PaneKind::View(ViewKind::Preview))
+    );
+}
+
+#[test]
+fn splitting_a_target_session_with_a_view_adds_a_session_less_pane_beside_it() {
+    let mut workspace = Workspace::mvp();
+    let terminal_pane = workspace.visible_pane_id(0).expect("terminal pane");
+    let target = workspace.active_session_id().expect("the mvp terminal");
+    let session_count_before = workspace.session_count();
+
+    let pane_id = workspace
+        .split_session_with_view(target, ViewKind::Preview, SplitAxis::Horizontal, true)
+        .expect("the target session has a pane");
+
+    assert_eq!(workspace.visible_pane_ids(), vec![terminal_pane, pane_id]);
+    assert_eq!(
+        workspace.pane_kind(pane_id),
+        Some(PaneKind::View(ViewKind::Preview))
+    );
+    assert_eq!(workspace.session_count(), session_count_before);
+}
+
+#[test]
+fn splitting_an_unknown_session_with_a_view_spawns_nothing() {
+    let mut workspace = Workspace::mvp();
+    let panes_before = workspace.visible_pane_ids();
+
+    assert_eq!(
+        workspace.split_session_with_view(
+            SessionId::new(),
+            ViewKind::Preview,
+            SplitAxis::Horizontal,
+            true
+        ),
+        None
+    );
+    assert_eq!(workspace.visible_pane_ids(), panes_before);
+}
+
+#[test]
+fn pane_position_locates_a_pane_in_a_tab_that_is_not_the_active_one() {
+    let mut workspace = Workspace::mvp();
+    let first_pane = workspace.visible_pane_id(0).expect("first pane");
+    workspace.open_tab(PaneKind::Terminal, Some(SessionId::new()));
+
+    assert_eq!(workspace.pane_position(first_pane), Some((0, 0)));
+    assert_eq!(workspace.pane_position(PaneId::new()), None);
+}
+
+#[test]
 fn is_active_pane_reflects_the_tabs_own_active_pane_by_id() {
     let mut workspace = Workspace::mvp();
     let first_pane_id = workspace.visible_pane_id(0).expect("first pane");

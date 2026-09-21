@@ -25,6 +25,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
     match subcommand {
         Subcommand::NewTerminal { .. } => "new-terminal",
         Subcommand::NewAgent { .. } => "new-agent",
+        Subcommand::Preview { .. } => "preview",
         Subcommand::Attach { .. } => "attach",
         Subcommand::TerminateSession { .. } => "terminate-session",
         Subcommand::TerminateAllDetached => "terminate-all-detached",
@@ -94,6 +95,15 @@ pub fn to_request(
                 share.then_some(false),
                 issuer,
             ),
+        ),
+        Subcommand::Preview {
+            path,
+            name,
+            activate,
+            ..
+        } => invoke(
+            "preview",
+            preview_args(path, name.as_deref(), resolved_split, *activate),
         ),
         Subcommand::Attach {
             session_id,
@@ -169,6 +179,35 @@ pub fn to_request(
     }
 }
 
+/// `preview`'s wire args. `split`/`name` ride only when given, so a bare
+/// `horizon preview <path>` sends just the path and `activate`.
+fn preview_args(
+    path: &std::path::Path,
+    name: Option<&str>,
+    split: Option<&str>,
+    activate: bool,
+) -> serde_json::Value {
+    let mut args = serde_json::Map::new();
+    args.insert(
+        "path".to_string(),
+        serde_json::Value::String(path.display().to_string()),
+    );
+    if let Some(name) = name {
+        args.insert(
+            "name".to_string(),
+            serde_json::Value::String(name.to_string()),
+        );
+    }
+    if let Some(split) = split {
+        args.insert(
+            "split".to_string(),
+            serde_json::Value::String(split.to_string()),
+        );
+    }
+    args.insert("activate".to_string(), serde_json::Value::Bool(activate));
+    serde_json::Value::Object(args)
+}
+
 fn invoke(command: &str, args: serde_json::Value) -> Request {
     Request::Invoke(Invoke {
         command: command.to_string(),
@@ -236,6 +275,53 @@ mod tests {
 
     fn new_terminal(split: Option<SplitFlag>, activate: bool) -> Subcommand {
         Subcommand::NewTerminal { split, activate }
+    }
+
+    fn preview(name: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {
+        Subcommand::Preview {
+            path: std::path::PathBuf::from("/tmp/p.wasm"),
+            name: name.map(str::to_string),
+            split,
+            activate,
+        }
+    }
+
+    #[test]
+    fn preview_sends_the_path_and_nothing_it_was_not_given() {
+        let Request::Invoke(invoke) = to_request(&preview(None, None, false), None, None) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(invoke.command, "preview");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({ "path": "/tmp/p.wasm", "activate": false })
+        );
+    }
+
+    #[test]
+    fn preview_sends_the_name_the_resolved_split_and_activate() {
+        let Request::Invoke(invoke) = to_request(
+            &preview(Some("sample"), Some(SplitFlag::Here), true),
+            Some("resolved-session"),
+            None,
+        ) else {
+            panic!("expected an invoke");
+        };
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({
+                "path": "/tmp/p.wasm",
+                "name": "sample",
+                "split": "resolved-session",
+                "activate": true
+            })
+        );
+    }
+
+    #[test]
+    fn preview_is_not_destructive_and_keeps_its_external_name() {
+        assert_eq!(external_name(&preview(None, None, false)), "preview");
+        assert!(!is_destructive(&preview(None, None, false)));
     }
 
     fn new_agent(prompt: Option<&str>, split: Option<SplitFlag>, activate: bool) -> Subcommand {

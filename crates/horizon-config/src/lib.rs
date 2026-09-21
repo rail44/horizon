@@ -69,7 +69,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 pub use grants::{ProjectGrant, RawGrantsConfig, RawProjectGrant};
 
@@ -532,7 +532,13 @@ pub struct RawTerminalConfig {
 /// everything in one flat namespace — leaves room for a future named-scheme
 /// layer (e.g. `[theme.schemes.dracula]`) to nest in the same way without
 /// reshaping either table's keys.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+///
+/// [`Serialize`] is what lets the shell hand this section to a preview-pane
+/// plugin (`src/preview/`) as JSON and have the guest deserialize it back
+/// into the same struct the scheme resolver consumes. JSON rather than TOML:
+/// `colors` is `#[serde(flatten)]`ed and `ansi` is a sub-table, an ordering
+/// TOML's "values before tables" rule rejects.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct RawThemeConfig {
     pub ansi: RawThemeAnsiConfig,
@@ -583,7 +589,7 @@ where
 /// seed" decision; the ten bright/black/white slots are derived-only and no
 /// longer configurable). See `ui::theme::ansi` for the built-in defaults
 /// each falls back to when unset here.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 #[serde(default)]
 pub struct RawThemeAnsiConfig {
     pub red: Option<String>,

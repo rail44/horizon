@@ -161,6 +161,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "toggle-board-closed" => Some(CommandId::ToggleBoardClosed),
         "add-board-dependency" => Some(CommandId::AddBoardDependency),
         "remove-board-dependency" => Some(CommandId::RemoveBoardDependency),
+        "reload-preview" => Some(CommandId::ReloadPreview),
 
         "increase-font-size" => Some(CommandId::IncreaseFontSize),
         "decrease-font-size" => Some(CommandId::DecreaseFontSize),

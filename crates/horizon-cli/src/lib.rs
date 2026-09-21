@@ -97,6 +97,15 @@ pub fn run(
         }
     }
 
+    // `preview`'s path resolution: the shell's working directory is not the
+    // caller's, so a relative path is made absolute here (the one
+    // `current_dir` read, kept next to `send`'s stdin fallback rather than
+    // inside the pure `cli::parse`).
+    if let cli::Subcommand::Preview { path, .. } = &mut parsed.subcommand {
+        let cwd = std::env::current_dir().unwrap_or_default();
+        *path = cli::absolute_path(path, &cwd);
+    }
+
     let resolved_split = match cli::resolved_split_for(&parsed.subcommand, env_session_id.clone()) {
         Ok(resolved) => resolved,
         Err(message) => {

@@ -571,6 +571,19 @@ with `{provider, model}` members (model IDs written directly, providers
 mixable). `docs/agent-moa-design.md` describes the design, the
 implementation constraints, and the reference material.
 
+### Preview pane for views under development (v1 implemented 2026-09-21)
+
+A gpui view from an unmerged branch shown inside a pane of the running
+Horizon: compiled into a `wasm32-wasip2` plugin, drawn by Horizon's own
+renderer through a fork of Zed's experimental embedded_gpui, reloaded when
+the artifact changes, opened with `horizon preview`. The root package is a
+library plus a thin binary so the plugin can link the theme and the named
+previews. `docs/preview-pane-design.md` describes the design, the measured
+costs, and what does not reach a guest. Open ends: no existing view is
+previewable yet (each needs its outside-world access made replaceable and
+its module built for wasm); IME, clipboard, and modifier keys are not
+forwarded by the fork; a failed plugin load leaks one thread in the fork.
+
 ### Deferred: session-attention surface and non-interrupting sends
 
 Recorded on owner request 2026-08-05; to be designed together with the

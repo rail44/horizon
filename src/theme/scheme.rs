@@ -96,13 +96,13 @@ pub(super) const LIST_ACTIVE_BLEND_RATIO: f32 = 0.1;
 // color spaces that were never going to land on identical bytes).
 
 /// `text_contrast`'s floor -- WCAG 2.x AA's normal-text contrast
-/// threshold. No knob value may go below it. `pub(crate)`: the theme
+/// threshold. No knob value may go below it. `pub`: the theme
 /// settings view's contrast slider (`theme_settings::seed`) reads this as
 /// its own clamp/range floor rather than duplicating the number.
-pub(crate) const TEXT_CONTRAST_FLOOR: f64 = 4.5;
+pub const TEXT_CONTRAST_FLOOR: f64 = 4.5;
 /// `text_contrast`'s ceiling -- WCAG's own maximum possible ratio (pure
-/// black on pure white). `pub(crate)`, see [`TEXT_CONTRAST_FLOOR`].
-pub(crate) const TEXT_CONTRAST_CEIL: f64 = 21.0;
+/// black on pure white). `pub`, see [`TEXT_CONTRAST_FLOOR`].
+pub const TEXT_CONTRAST_CEIL: f64 = 21.0;
 /// `text_contrast`'s built-in default -- the built-in dark scheme's own
 /// measured `foreground`/`background` ratio (`docs/theme-design.md`'s
 /// Evidence table: 15.01), so a config that leaves the knob unset keeps
@@ -190,6 +190,8 @@ pub(super) const ANSI16_DEFAULT: [u32; 16] = [
 pub(super) struct Scheme {
     pub(super) background: u32,
     pub(super) foreground: u32,
+    /// Read only by `ansi`, which is native-only.
+    #[cfg_attr(target_family = "wasm", allow(dead_code))]
     pub(super) cursor: u32,
     pub(super) ansi: [u32; 16],
     pub(super) accent: u32,
@@ -575,7 +577,7 @@ pub(super) fn scheme() -> Scheme {
 /// Applies a re-read config's `[theme]` live -- the GPUI half of the
 /// `Reload Config` command (the caller refreshes the window after, and
 /// separately re-applies [`apply_gpui_component_theme`]).
-pub(crate) fn reload_from(raw: &RawConfig) {
+pub fn reload_from(raw: &RawConfig) {
     *scheme_store().write().unwrap() = scheme_from(raw);
 }
 

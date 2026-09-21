@@ -1,0 +1,517 @@
+//! The preview pane's end-to-end check: a real `wasm32-wasip2` component in
+//! a real wasmtime store, driven through GPUI's deterministic test executor
+//! with no window on screen.
+//!
+//! `#[ignore]`d, because it needs the plugin built first (a multi-minute
+//! wasm build) — `scripts/check-preview-plugin.sh` builds it, points
+//! `HORIZON_PREVIEW_WASM` at the artifact, and runs these.
+//!
+//! Two traps this kind of test walks into, both hit in the spike this work
+//! productizes:
+//!
+//! * gpui's `NoopTextSystem` reports zero raster bounds for every glyph and
+//!   gpui skips painting those, so a Noop-backed surface receives no glyph
+//!   primitives at all and the test is blind to text. [`ProbeTextSystem`]
+//!   reports a real raster box and maps one character to one glyph id.
+//! * display-list order is not reading order: gpui batches sprites before
+//!   the scene is serialized, so glyphs from different strings interleave.
+//!   Every assertion here is on the character multiset, never on order.
+//!
+//! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
+//! counts primitives and reports glyph ids; the primitives' colors are not
+//! exposed. The sample preview paints its accent role's hex as text, so a
+//! theme change is asserted through the glyph stream instead.
+
+use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+use std::sync::{Arc, Weak};
+use std::time::Duration;
+
+use embedded_gpui::surface::Geometry;
+use embedded_gpui::{
+    PluginHost, PluginHostHandle as _, PluginInstance, PluginOptions, SceneSummary, Surface,
+};
+use gpui::{
+    px, size, AppContext as _, Bounds, DevicePixels, Entity, Font, FontId, FontMetrics, FontRun,
+    GlyphId, LineLayout, Pixels, PlatformTextSystem, Point, RenderGlyphParams, ShapedGlyph,
+    ShapedRun, Size, TestAppContext, TextRenderingMode,
+};
+use horizon_config::{RawConfig, RawThemeConfig};
+
+use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
+use crate::preview::sample;
+use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
+
+// ---------------------------------------------------------------------------
+// A text system that makes rendered text visible to assertions
+// ---------------------------------------------------------------------------
+
+struct ProbeTextSystem;
+
+const UNITS_PER_EM: u32 = 1000;
+const ADVANCE_UNITS: f32 = 500.0;
+
+impl ProbeTextSystem {
+    fn metrics() -> FontMetrics {
+        FontMetrics {
+            units_per_em: UNITS_PER_EM,
+            ascent: 800.0,
+            descent: -200.0,
+            line_gap: 0.0,
+            underline_position: -100.0,
+            underline_thickness: 50.0,
+            cap_height: 700.0,
+            x_height: 500.0,
+            bounding_box: Bounds {
+                origin: Point { x: 0.0, y: -200.0 },
+                size: Size {
+                    width: 500.0,
+                    height: 1000.0,
+                },
+            },
+        }
+    }
+}
+
+impl PlatformTextSystem for ProbeTextSystem {
+    fn add_fonts(&self, _fonts: Vec<Cow<'static, [u8]>>) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    fn all_font_names(&self) -> Vec<String> {
+        Vec::new()
+    }
+
+    fn font_id(&self, _descriptor: &Font) -> anyhow::Result<FontId> {
+        Ok(FontId(1))
+    }
+
+    fn font_metrics(&self, _font_id: FontId) -> FontMetrics {
+        Self::metrics()
+    }
+
+    fn typographic_bounds(
+        &self,
+        _font_id: FontId,
+        _glyph_id: GlyphId,
+    ) -> anyhow::Result<Bounds<f32>> {
+        Ok(Bounds {
+            origin: Point { x: 0.0, y: 0.0 },
+            size: Size {
+                width: ADVANCE_UNITS,
+                height: 700.0,
+            },
+        })
+    }
+
+    fn advance(&self, _font_id: FontId, _glyph_id: GlyphId) -> anyhow::Result<Size<f32>> {
+        Ok(size(ADVANCE_UNITS, 0.0))
+    }
+
+    /// The whole point: the glyph id *is* the character.
+    fn glyph_for_char(&self, _font_id: FontId, ch: char) -> Option<GlyphId> {
+        Some(GlyphId(ch as u32))
+    }
+
+    fn glyph_raster_bounds(
+        &self,
+        _params: &RenderGlyphParams,
+    ) -> anyhow::Result<Bounds<DevicePixels>> {
+        Ok(Bounds {
+            origin: Point {
+                x: DevicePixels(0),
+                y: DevicePixels(-8),
+            },
+            size: Size {
+                width: DevicePixels(6),
+                height: DevicePixels(10),
+            },
+        })
+    }
+
+    fn rasterize_glyph(
+        &self,
+        _params: &RenderGlyphParams,
+        raster_bounds: Bounds<DevicePixels>,
+    ) -> anyhow::Result<(Size<DevicePixels>, Vec<u8>)> {
+        let count = (raster_bounds.size.width.0 * raster_bounds.size.height.0).max(0) as usize;
+        Ok((raster_bounds.size, vec![0u8; count]))
+    }
+
+    fn layout_line(&self, text: &str, font_size: Pixels, runs: &[FontRun]) -> LineLayout {
+        let font_id = runs.first().map(|run| run.font_id).unwrap_or(FontId(1));
+        let em_width = font_size * (ADVANCE_UNITS / UNITS_PER_EM as f32);
+        let mut position = px(0.);
+        let mut glyphs = Vec::new();
+        for (index, ch) in text.char_indices() {
+            glyphs.push(ShapedGlyph {
+                id: GlyphId(ch as u32),
+                position: gpui::point(position, px(0.)),
+                index,
+                is_emoji: false,
+            });
+            position += em_width;
+        }
+        let metrics = Self::metrics();
+        let mut shaped = Vec::new();
+        if !glyphs.is_empty() {
+            shaped.push(ShapedRun { font_id, glyphs });
+        } else {
+            position = px(0.);
+        }
+        LineLayout {
+            font_size,
+            width: position,
+            ascent: font_size * (metrics.ascent / UNITS_PER_EM as f32),
+            descent: font_size * (metrics.descent / UNITS_PER_EM as f32),
+            runs: shaped,
+            len: text.len(),
+        }
+    }
+
+    fn recommended_rendering_mode(
+        &self,
+        _font_id: FontId,
+        _font_size: Pixels,
+    ) -> TextRenderingMode {
+        TextRenderingMode::Grayscale
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Harness
+// ---------------------------------------------------------------------------
+
+/// Where `scripts/check-preview-plugin.sh` leaves the built component.
+fn built_artifact() -> PathBuf {
+    let path = std::env::var_os("HORIZON_PREVIEW_WASM").expect(
+        "HORIZON_PREVIEW_WASM must name the built preview plugin -- run \
+         scripts/check-preview-plugin.sh, which builds it and sets this",
+    );
+    PathBuf::from(path)
+}
+
+/// A scratch copy the test overwrites, so the built artifact is never
+/// touched and parallel runs do not collide.
+fn live_artifact() -> PathBuf {
+    std::env::temp_dir().join(format!("horizon-preview-e2e-{}.wasm", std::process::id()))
+}
+
+const SLOT: Geometry = Geometry {
+    width: 480.,
+    height: 360.,
+    scale_factor: 1.,
+};
+
+/// One loaded plugin plus the weak handle that says whether its wasmtime
+/// store is really gone: the store owns the text system `PluginOptions` was
+/// built with, so a `Weak` to it fails to upgrade once the instance drops.
+struct Loaded {
+    host: Entity<PluginHost>,
+    _root: Entity<PreviewHostRoot>,
+    /// Held so the object the guest observes for theme changes outlives the
+    /// guest's remote.
+    _theme_source: Entity<PreviewThemeSource>,
+    text_system: Weak<ProbeTextSystem>,
+}
+
+fn load(path: &std::path::Path, cx: &mut TestAppContext) -> anyhow::Result<Loaded> {
+    let text_system = Arc::new(ProbeTextSystem);
+    let weak = Arc::downgrade(&text_system);
+    let options = PluginOptions::new(text_system);
+    let instance = cx.update(|_| PluginInstance::new(path, options))?;
+    let host = cx.new(|cx| PluginHost::new(instance, cx));
+    let (root, theme_source) = cx.update(|cx| {
+        let theme_source = cx.new(PreviewThemeSource::new);
+        let theme_ref = host.share(&theme_source, cx);
+        let root = cx.new(|_| {
+            PreviewHostRoot::new(theme_source.clone(), theme_ref, sample::NAME.to_string())
+        });
+        host.share_root(&root, cx);
+        (root, theme_source)
+    });
+    Ok(Loaded {
+        host,
+        _root: root,
+        _theme_source: theme_source,
+        text_system: weak,
+    })
+}
+
+fn settle(cx: &mut TestAppContext) {
+    for _ in 0..10 {
+        cx.executor().run_until_parked();
+        cx.executor().advance_clock(Duration::from_millis(100));
+    }
+    cx.executor().run_until_parked();
+}
+
+/// Hand the guest a surface and drive one frame on it.
+fn mount(host: &Entity<PluginHost>, surface: &Entity<Surface>, cx: &mut TestAppContext) {
+    let surface_ref = cx.update(|cx| host.share(surface, cx));
+    let plugin = cx.update(|cx| host.root::<PreviewPlugin>(cx));
+    cx.update(|cx| plugin.mount(surface_ref, cx));
+    settle(cx);
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| {
+        use embedded_gpui::surface::ViewApiCaller as _;
+        view.resize(SLOT, cx);
+    });
+    settle(cx);
+}
+
+fn summary(surface: &Entity<Surface>, cx: &mut TestAppContext) -> SceneSummary {
+    surface
+        .read_with(cx, |surface, _| surface.scene_summary())
+        .expect("the surface received a display list")
+}
+
+/// Every character a guest painted, with multiplicities (see the module
+/// doc: order is meaningless, multiplicity is not).
+fn glyph_counts(summary: &SceneSummary) -> BTreeMap<char, usize> {
+    let mut counts = BTreeMap::new();
+    for id in &summary.glyph_ids {
+        if let Some(ch) = char::from_u32(*id) {
+            *counts.entry(ch).or_insert(0) += 1;
+        }
+    }
+    counts
+}
+
+fn word_counts(word: &str) -> BTreeMap<char, usize> {
+    let mut counts = BTreeMap::new();
+    for ch in word.chars() {
+        *counts.entry(ch).or_insert(0) += 1;
+    }
+    counts
+}
+
+/// Whether `word` could have been painted: every character present at least
+/// as often as the word needs it.
+fn painted(counts: &BTreeMap<char, usize>, word: &str) -> bool {
+    word_counts(word)
+        .into_iter()
+        .all(|(ch, needed)| counts.get(&ch).copied().unwrap_or(0) >= needed)
+}
+
+fn count_of(counts: &BTreeMap<char, usize>, ch: char) -> usize {
+    counts.get(&ch).copied().unwrap_or(0)
+}
+
+/// `after - before`, as a signed per-character map with the zeros dropped.
+fn delta(before: &BTreeMap<char, usize>, after: &BTreeMap<char, usize>) -> BTreeMap<char, i64> {
+    let mut out = BTreeMap::new();
+    for ch in before.keys().chain(after.keys()) {
+        let change = count_of(after, *ch) as i64 - count_of(before, *ch) as i64;
+        if change != 0 {
+            out.insert(*ch, change);
+        }
+    }
+    out
+}
+
+fn text_delta(from: &str, to: &str) -> BTreeMap<char, i64> {
+    delta(&word_counts(from), &word_counts(to))
+}
+
+/// Waits for the live instance count to settle at `expected`, up to a
+/// second of real time: an instance's epoch ticker exits on its next tick
+/// after the drop, not synchronously. Returns the last count seen, so a
+/// caller asserts on it and gets the real number in the failure message.
+fn await_instance_threads(expected: usize) -> usize {
+    for _ in 0..100 {
+        let live = live_instance_threads();
+        if live == expected {
+            return live;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    live_instance_threads()
+}
+
+/// One epoch ticker thread per live `PluginInstance`, so this counts live
+/// instances in this process.
+fn live_instance_threads() -> usize {
+    let Ok(entries) = std::fs::read_dir("/proc/self/task") else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .filter(|entry| {
+            std::fs::read_to_string(entry.path().join("comm"))
+                .is_ok_and(|comm| comm.trim().starts_with("embedded_gpui"))
+        })
+        .count()
+}
+
+/// A `[theme]` section with one distinctive accent.
+fn theme_with_accent(hex: &str) -> RawThemeConfig {
+    let mut theme = RawThemeConfig::default();
+    theme.colors.insert("accent".to_string(), hex.to_string());
+    theme
+}
+
+/// The text the sample preview paints for `theme`'s accent role, computed
+/// by running the same resolver the guest runs.
+fn expected_accent_text(theme: &RawThemeConfig) -> String {
+    crate::theme::reload_from(&RawConfig {
+        theme: theme.clone(),
+        ..RawConfig::default()
+    });
+    sample::accent_swatch_text()
+}
+
+// ---------------------------------------------------------------------------
+// The checks
+// ---------------------------------------------------------------------------
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact();
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    let baseline_threads = live_instance_threads();
+
+    // gpui-component's global theme is what `theme::live::apply_scheme`
+    // re-projects onto; the guest runs its own copy inside wasm.
+    cx.update(gpui_component::init);
+
+    let first_theme = theme_with_accent("#0055ff");
+    let first_accent = expected_accent_text(&first_theme);
+    cx.update(|cx| {
+        crate::theme::live::apply_scheme(
+            &RawConfig {
+                theme: first_theme.clone(),
+                ..RawConfig::default()
+            },
+            cx,
+        )
+    });
+
+    // --- the sample preview paints ---------------------------------------
+    let loaded = load(&live, cx).expect("the built artifact instantiates");
+    let surface = cx.new(Surface::new);
+    let surface_id = surface.entity_id();
+    mount(&loaded.host, &surface, cx);
+
+    let scene = summary(&surface, cx);
+    assert!(scene.quads > 0, "the preview painted no quads: {scene:?}");
+    assert!(scene.glyphs > 0, "the preview painted no glyphs: {scene:?}");
+    assert!(
+        scene.images > 0,
+        "the icon SVG did not reach the host as an image: {scene:?}"
+    );
+    let before = glyph_counts(&scene);
+    assert!(
+        painted(&before, sample::LABEL),
+        "painted glyphs cannot spell the sample's label: {before:?}"
+    );
+    assert!(
+        painted(&before, &first_accent),
+        "the guest did not resolve the host's accent: expected {first_accent:?} in {before:?}"
+    );
+
+    // --- a theme change from the host changes what the guest paints -------
+    let second_theme = theme_with_accent("#cc7700");
+    let second_accent = expected_accent_text(&second_theme);
+    cx.update(|cx| {
+        crate::theme::live::apply_scheme(
+            &RawConfig {
+                theme: second_theme.clone(),
+                ..RawConfig::default()
+            },
+            cx,
+        )
+    });
+    settle(cx);
+
+    let after = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&after, &second_accent),
+        "the theme change never reached the guest: expected {second_accent:?} in {after:?}"
+    );
+    assert_eq!(
+        delta(&before, &after),
+        text_delta(&first_accent, &second_accent),
+        "the painted text changed by something other than the accent swatch"
+    );
+
+    // --- swapping the artifact reloads in-process -------------------------
+    // The out-of-band rebuild: the same path gets a fresh copy of the
+    // artifact, the loaded plugin is dropped, and the file is loaded again
+    // onto the same surface entity.
+    std::fs::copy(&built, &live).expect("stage the rebuilt artifact");
+    let first_store = loaded.text_system.clone();
+    // Inside an app update: gpui flushes entity releases at the end of one,
+    // so a drop outside any update leaves the host entity queued and the
+    // store alive.
+    cx.update(|_| drop(loaded));
+    settle(cx);
+    assert!(
+        first_store.upgrade().is_none(),
+        "the old wasmtime store outlived its PluginHost"
+    );
+    assert_eq!(
+        await_instance_threads(baseline_threads),
+        baseline_threads,
+        "dropping the plugin left its instance running"
+    );
+
+    let reloaded = load(&live, cx).expect("the rebuilt artifact instantiates");
+    mount(&reloaded.host, &surface, cx);
+
+    let reloaded_counts = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&reloaded_counts, sample::LABEL),
+        "the reloaded preview painted nothing recognizable: {reloaded_counts:?}"
+    );
+    assert!(
+        painted(&reloaded_counts, &second_accent),
+        "the reloaded guest did not pick up the current theme: {reloaded_counts:?}"
+    );
+    assert_eq!(
+        surface.entity_id(),
+        surface_id,
+        "the host's surface entity did not survive the reload"
+    );
+    // One live instance, not two: the reload replaced the old one rather
+    // than stacking on it.
+    assert_eq!(
+        await_instance_threads(baseline_threads + 1),
+        baseline_threads + 1,
+        "reloading leaked a plugin instance"
+    );
+
+    let plugin = cx.update(|cx| reloaded.host.root::<PreviewPlugin>(cx));
+    let names = cx.update(|cx| plugin.preview_names(cx));
+    settle(cx);
+    assert_eq!(
+        names.await.expect("preview_names"),
+        vec![sample::NAME.to_string()],
+        "the plugin does not carry the registry's previews"
+    );
+
+    // --- a broken artifact fails the load, it does not load something -----
+    // Different bytes on the same path produce a different outcome, which
+    // is what says a load reads the file rather than reusing a module it
+    // already has; the error is the caller's to report (the pane turns it
+    // into its status line) and nothing else is disturbed.
+    std::fs::write(&live, b"not a wasm component").expect("stage a broken artifact");
+    assert!(
+        load(&live, cx).is_err(),
+        "a broken artifact must fail to load, not load something"
+    );
+    assert!(
+        summary(&surface, cx).glyphs > 0,
+        "the failed load disturbed the scene the loaded plugin had painted"
+    );
+
+    cx.update(|_| drop(reloaded));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}

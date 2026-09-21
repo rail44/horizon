@@ -152,6 +152,11 @@ enum PaneKindState {
 enum ViewKindState {
     ThemeSettings,
     Board,
+    /// A preview pane restores empty: the artifact path and preview name
+    /// live in the shell's pane map, which does not survive the process, so
+    /// a restored pane shows its "nothing loaded" state until `horizon
+    /// preview` points it at an artifact again.
+    Preview,
 }
 
 impl PaneKindState {
@@ -647,6 +652,7 @@ impl From<ViewKind> for ViewKindState {
         match kind {
             ViewKind::ThemeSettings => Self::ThemeSettings,
             ViewKind::Board => Self::Board,
+            ViewKind::Preview => Self::Preview,
         }
     }
 }
@@ -656,6 +662,7 @@ impl From<ViewKindState> for ViewKind {
         match kind {
             ViewKindState::ThemeSettings => Self::ThemeSettings,
             ViewKindState::Board => Self::Board,
+            ViewKindState::Preview => Self::Preview,
         }
     }
 }
@@ -836,6 +843,33 @@ mod tests {
         );
         assert_eq!(restored.session_count(), workspace.session_count());
         assert!(restored.all_pane_ids().contains(&terminal_pane));
+        assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
+    }
+
+    /// A preview pane's artifact path and preview name live in the shell's
+    /// pane map, not here, so what survives a restart is the pane itself in
+    /// its "nothing loaded" state.
+    #[test]
+    fn state_round_trip_preserves_a_preview_pane_without_a_session_or_an_artifact() {
+        let mut workspace = Workspace::mvp();
+        let view_pane =
+            workspace.split_active_tab_with_view(ViewKind::Preview, SplitAxis::Horizontal);
+
+        let json = workspace.to_persisted_json().expect("serialize");
+        let value: Value = serde_json::from_str(&json).expect("json");
+        let pane = &value["tabs"][0]["root"]["children"][1]["node"]["pane"];
+        assert_eq!(pane["kind"], json!({"view": "preview"}));
+        assert!(pane["session_id"].is_null());
+        // Nothing artifact-shaped is persisted alongside the kind.
+        assert!(pane.get("path").is_none());
+
+        let restored = Workspace::from_persisted_json(&json).expect("restore");
+
+        assert_eq!(
+            restored.pane_kind(view_pane),
+            Some(PaneKind::View(ViewKind::Preview))
+        );
+        assert_eq!(restored.session_count(), workspace.session_count());
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
     }
 

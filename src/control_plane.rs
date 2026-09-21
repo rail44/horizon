@@ -175,6 +175,28 @@ fn dispatch_invoke(
                 Err(message) => error_body(message),
             }
         }
+        "preview" => {
+            let path = match required_string_arg(args, "path") {
+                Ok(path) => std::path::PathBuf::from(path),
+                Err(message) => return error_body(message),
+            };
+            let name = match optional_string_arg(args, "name") {
+                Ok(name) => name,
+                Err(message) => return error_body(message),
+            };
+            let split = match optional_session_id_arg(args, "split") {
+                Ok(split) => split,
+                Err(message) => return error_body(message),
+            };
+            let activate = match activate_arg(args) {
+                Ok(activate) => activate,
+                Err(message) => return error_body(message),
+            };
+            match shell.control_plane_open_preview(path, name, split, activate, window, cx) {
+                Ok(()) => ok_body(),
+                Err(message) => error_body(message),
+            }
+        }
         "attach" => {
             let session_id = match session_id_arg(args, "session_id") {
                 Ok(id) => id,
