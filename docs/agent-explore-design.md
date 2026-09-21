@@ -60,10 +60,17 @@ the fragments stay behind and are discarded.
 4. **Read-only toolset, no recursion.** Allowed tools: `fs.read`,
    `fs.grep`, `fs.glob` only. `agent.explore` itself is excluded, so
    recursion is structurally impossible. Every allowed tool is
-   `AutoAllowRead`, so approvals are unreachable; if a
-   `WaitingForApproval` nevertheless surfaces, the tool call fails
-   immediately with an error result — it must never hang waiting for a
-   human. The existing built-in role mechanism (`roles::CONFIG_ROLE` is
+   `AutoAllowRead`, which is not the same as "no approval can occur": a
+   read whose path leaves the workspace root is routed to the approval
+   gate like any other boundary crossing. The session is therefore also
+   marked unattended (`ToolSessionState::is_unattended`, set from the
+   explore role id), and a call that would reach a human — the judge
+   escalating it, the judge being unavailable, or no judge configured —
+   resolves instead as an error tool result naming the root the session
+   may read, and the turn continues. A call the judge allows still runs
+   unchanged. `tools::explore::Terminal::Approval` remains as the safety
+   net for a prompt that reaches a child's event stream anyway. The
+   existing built-in role mechanism (`roles::CONFIG_ROLE` is
    precedent) is the likely seam for the restriction; the implementer may
    choose another if it fits better.
 

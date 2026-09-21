@@ -12,8 +12,8 @@ use horizon_agent::contract::{
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
-    resolve_approval, should_fold_completion, start_approval_gate, ApprovalCandidate,
-    ApprovalDecision, ApprovalGate, ApprovalOutcome,
+    resolve_approval, should_fold_completion, start_approval_gate, unattended_refusal_result,
+    ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome, ToolSessionState,
 };
 use horizon_agent::wire::AgentWireEvent;
 
@@ -24,14 +24,26 @@ use super::state::AgentdState;
 /// fully derived. The original tool request remains foldable immediately;
 /// only the prompt and waiting state are held while the asynchronous judge
 /// runs.
-pub(super) fn gate_processing_approval(session_id: SessionId, events: &mut Vec<ProviderEvent>) {
-    gate_processing_approval_with(events, |candidate| {
+///
+/// A session nobody can approve for (`ToolSessionState::is_unattended`)
+/// never reaches the prompt at all: once the judge has declined to decide
+/// on its own, the call resolves as a refused tool result the model can act
+/// on, and the turn continues.
+pub(super) fn gate_processing_approval(
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    events: &mut Vec<ProviderEvent>,
+    provider_commands: &mut Vec<Command>,
+) {
+    gate_processing_approval_with(tool_state, events, provider_commands, |candidate| {
         start_approval_gate(session_id, candidate)
     });
 }
 
 fn gate_processing_approval_with(
+    tool_state: &ToolSessionState,
     events: &mut Vec<ProviderEvent>,
+    provider_commands: &mut Vec<Command>,
     start_gate: impl FnOnce(ApprovalCandidate) -> ApprovalGate,
 ) {
     let request = events.iter().find_map(|event| match &event.event {
@@ -47,17 +59,31 @@ fn gate_processing_approval_with(
     };
     let call_id = approval.call_id.clone();
     let candidate = ApprovalCandidate { request, approval };
-    if matches!(start_gate(candidate), ApprovalGate::Pending) {
-        events.retain(|event| {
-            !matches!(
-                &event.event,
-                Event::ApprovalRequested(approval) if approval.call_id == call_id
-            ) && !matches!(
-                &event.event,
-                Event::StateChanged(SessionState::WaitingForApproval)
-            )
-        });
+    match start_gate(candidate) {
+        ApprovalGate::Pending => withhold_prompt(events, &call_id),
+        ApprovalGate::Human(candidate) => {
+            let Some(result) = unattended_refusal_result(tool_state, &candidate.request) else {
+                return;
+            };
+            withhold_prompt(events, &call_id);
+            events.push(ProviderEvent::from(Event::ToolCallFinished(result.clone())));
+            provider_commands.push(Command::ToolCallResult(result));
+        }
     }
+}
+
+/// Drops the prompt and the waiting state from this batch, leaving the tool
+/// request itself foldable.
+fn withhold_prompt(events: &mut Vec<ProviderEvent>, call_id: &ToolCallId) {
+    events.retain(|event| {
+        !matches!(
+            &event.event,
+            Event::ApprovalRequested(approval) if &approval.call_id == call_id
+        ) && !matches!(
+            &event.event,
+            Event::StateChanged(SessionState::WaitingForApproval)
+        )
+    });
 }
 
 pub(super) fn emit_human_approval(
@@ -355,8 +381,43 @@ mod tests {
     };
     use horizon_agent::live::LiveState;
 
+    /// A session state with a real, canonical workspace root — what the
+    /// out-of-root refusal needs in order to name anything.
+    fn rooted_tool_state(root: &std::path::Path, unattended: bool) -> ToolSessionState {
+        ToolSessionState::for_root(
+            root.to_path_buf(),
+            horizon_agent::config::AgentToolsConfig::default(),
+            horizon_agent::tools::RecallContext::default(),
+        )
+        .with_unattended(unattended)
+    }
+
+    fn out_of_root_read_events(
+        call_id: &str,
+        path: &std::path::Path,
+    ) -> (ToolCallRequest, Vec<ProviderEvent>) {
+        let request = ToolCallRequest {
+            call_id: ToolCallId(call_id.to_string()),
+            tool_id: "fs.read".to_string(),
+            input: serde_json::json!({ "path": path.display().to_string() }).into(),
+            occurrence_id: None,
+        };
+        let events = vec![
+            ProviderEvent::from(Event::ToolCallRequested(request.clone())),
+            ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
+                call_id: request.call_id.clone(),
+                occurrence_id: None,
+                reason: "outside the workspace root".to_string(),
+                kind: ApprovalKind::Standard,
+            })),
+            ProviderEvent::from(Event::StateChanged(SessionState::WaitingForApproval)),
+        ];
+        (request, events)
+    }
+
     #[test]
     fn gate_suppresses_prompt_while_pending_and_preserves_human_fallback() {
+        let tool_state = rooted_tool_state(&std::env::temp_dir(), false);
         let candidate = judge_candidate("gate-shape");
         let original = vec![
             ProviderEvent::from(Event::ToolCallRequested(candidate.request.clone())),
@@ -365,18 +426,82 @@ mod tests {
         ];
 
         let mut pending = original.clone();
-        gate_processing_approval_with(&mut pending, |observed| {
+        let mut commands = Vec::new();
+        gate_processing_approval_with(&tool_state, &mut pending, &mut commands, |observed| {
             assert_eq!(observed, candidate);
             ApprovalGate::Pending
         });
         assert_eq!(pending.len(), 1);
         assert!(matches!(pending[0].event, Event::ToolCallRequested(_)));
+        assert!(commands.is_empty());
 
         let mut human = original.clone();
-        gate_processing_approval_with(&mut human, |candidate| {
+        gate_processing_approval_with(&tool_state, &mut human, &mut commands, |candidate| {
             ApprovalGate::Human(Box::new(candidate))
         });
         assert_eq!(human, original);
+        assert!(commands.is_empty());
+    }
+
+    /// An unattended session (a `task` child or a Mixture-of-Agents
+    /// proposer) never parks: the prompt is withheld and the call resolves
+    /// as an error result the model can act on, so the turn continues. The
+    /// message names the root the session may read.
+    #[test]
+    fn an_unattended_session_is_refused_instead_of_prompted() {
+        let root = std::env::temp_dir().canonicalize().unwrap();
+        let tool_state = rooted_tool_state(&root, true);
+        let (request, mut events) =
+            out_of_root_read_events("unattended-read", std::path::Path::new("/etc/hostname"));
+        let mut commands = Vec::new();
+
+        gate_processing_approval_with(&tool_state, &mut events, &mut commands, |candidate| {
+            ApprovalGate::Human(Box::new(candidate))
+        });
+
+        assert!(
+            !events.iter().any(|event| matches!(
+                event.event,
+                Event::ApprovalRequested(_) | Event::StateChanged(SessionState::WaitingForApproval)
+            )),
+            "no prompt may survive for a session nobody watches: {events:?}"
+        );
+        let result = events
+            .iter()
+            .find_map(|event| match &event.event {
+                Event::ToolCallFinished(result) => Some(result.clone()),
+                _ => None,
+            })
+            .expect("the call resolves with a result of its own");
+        assert_eq!(result.call_id, request.call_id);
+        assert!(result.is_error);
+        let message = result.output["message"].as_str().unwrap().to_string();
+        assert!(message.contains(&root.display().to_string()), "{message}");
+        assert!(
+            matches!(commands.as_slice(), [Command::ToolCallResult(forwarded)] if forwarded.call_id == request.call_id),
+            "the model must receive the refusal as this call's result: {commands:?}"
+        );
+    }
+
+    /// The judge stays in the path for an unattended session: a candidate
+    /// it accepts is still pending its verdict, not refused here.
+    #[test]
+    fn a_judge_that_takes_the_call_refuses_nothing_in_an_unattended_session() {
+        let tool_state = rooted_tool_state(&std::env::temp_dir(), true);
+        let (_, mut events) =
+            out_of_root_read_events("unattended-judged", std::path::Path::new("/etc/hostname"));
+        let mut commands = Vec::new();
+
+        gate_processing_approval_with(&tool_state, &mut events, &mut commands, |_| {
+            ApprovalGate::Pending
+        });
+
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0].event, Event::ToolCallRequested(_)));
+        assert!(
+            commands.is_empty(),
+            "a call the judge took must wait for its verdict, not resolve here"
+        );
     }
 
     /// `SESSION_PROTOCOL_VERSION` v16's `Event::ContinueTurnRequested`: a

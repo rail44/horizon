@@ -257,6 +257,112 @@ mod tests {
         horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
     }
 
+    /// A real explore-role session whose read leaves the workspace root.
+    /// Nobody is watching it, so the call must resolve as an error result
+    /// the model can read rather than an approval prompt: the turn carries
+    /// on and the session still delivers a report.
+    ///
+    /// End to end on the deterministic fallback provider (no API key, so no
+    /// network): the `fs.read path:` line drives a genuine `fs.read`
+    /// through the tool pipeline, and the rig turn loop folds whatever
+    /// result comes back.
+    #[test]
+    fn an_unattended_out_of_root_read_is_refused_and_the_session_still_reports() {
+        let workspace = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "horizon-unattended-explore-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&workspace).unwrap();
+        let outside = workspace.parent().unwrap().join(format!(
+            "horizon-unattended-outside-{}",
+            uuid::Uuid::new_v4()
+        ));
+        std::fs::create_dir_all(&outside).unwrap();
+        let outside_file = outside.join("elsewhere.txt");
+        std::fs::write(&outside_file, "not yours\n").unwrap();
+
+        let state = crate::session::test_support::state_with_rig_config(false, "m-fallback");
+        let host = AgentdExplorationHost {
+            state: state.clone(),
+            requester_id: SessionId::new(),
+            provider_id: lock_unpoisoned(&state.providers).default_provider_id(),
+            workspace_root: Some(workspace.clone()),
+        };
+        let started = horizon_agent::tools::ExplorationHost::start(
+            &host,
+            horizon_agent::tools::ExplorationRequest::for_prompt(format!(
+                "fs.read path: {}",
+                outside_file.display()
+            )),
+        )
+        .expect("the explore session starts");
+
+        let mut collected = Vec::new();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while std::time::Instant::now() < deadline {
+            let Ok(event) = started.events.recv_timeout(Duration::from_millis(500)) else {
+                continue;
+            };
+            let done = matches!(event, Event::TurnEnded(_));
+            collected.push(event);
+            if done {
+                break;
+            }
+        }
+
+        assert!(
+            collected
+                .iter()
+                .any(|event| matches!(event, Event::ToolCallRequested(request) if request.tool_id == "fs.read")),
+            "the session must have attempted the read: {collected:?}"
+        );
+        assert!(
+            !collected
+                .iter()
+                .any(|event| matches!(event, Event::ApprovalRequested(_))),
+            "nobody could answer a prompt here: {collected:?}"
+        );
+        let refusal = collected
+            .iter()
+            .find_map(|event| match event {
+                Event::ToolCallFinished(result) => Some(result.clone()),
+                _ => None,
+            })
+            .expect("the read resolves with a result of its own");
+        assert!(refusal.is_error);
+        assert!(
+            refusal.output["message"]
+                .as_str()
+                .unwrap()
+                .contains(&workspace.display().to_string()),
+            "the refusal must name the root the session may read: {:?}",
+            refusal.output
+        );
+        assert!(
+            collected
+                .iter()
+                .any(|event| matches!(event, Event::TurnEnded(reason) if *reason == horizon_agent::contract::TurnEndReason::Completed)),
+            "the turn must finish rather than park: {collected:?}"
+        );
+        let report = collected
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                Event::MessageCommitted(message)
+                    if message.role == horizon_agent::contract::MessageRole::Assistant =>
+                {
+                    Some(message.text.clone())
+                }
+                _ => None,
+            })
+            .expect("the session still delivers a final message");
+        assert!(!report.trim().is_empty(), "{report}");
+
+        horizon_agent::tools::ExplorationHost::terminate(&host, started.session_id);
+        std::fs::remove_dir_all(workspace).unwrap();
+        std::fs::remove_dir_all(outside).unwrap();
+    }
+
     fn call(
         state: &Arc<crate::session::AgentdState>,
         tool_state: &ToolSessionState,

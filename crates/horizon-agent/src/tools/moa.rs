@@ -2,8 +2,9 @@
 //! pass (`docs/agent-moa-design.md`).
 //!
 //! A proposer is a `task` session in every structural respect: the same
-//! [`ExplorationHost`] seam, the same explore role (read-only allowlist, no
-//! reachable approvals, iteration cap with summarize-on-cap), and the same
+//! [`ExplorationHost`] seam, the same explore role (read-only allowlist, a
+//! call that would need a human refused rather than parked, iteration cap
+//! with summarize-on-cap), and the same
 //! event fold that decides when its answer is final
 //! (`super::explore::fold_until_terminal`). Three differences:
 //!

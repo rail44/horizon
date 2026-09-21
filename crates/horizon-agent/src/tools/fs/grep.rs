@@ -6,7 +6,7 @@ use regex::Regex;
 use serde_json::{json, Value};
 
 use super::error_output;
-use super::safety::resolve_path;
+use super::safety::resolve_read_path;
 use super::traverse;
 use crate::tools::state::ToolSessionState;
 
@@ -85,7 +85,7 @@ pub(super) fn execute(
         .unwrap_or(tool_state.tools_config().fs.grep_result_limit)
         .max(1);
 
-    let base = match resolve_path(tool_state, base_arg, allow_out_of_root) {
+    let base = match resolve_read_path(tool_state, base_arg, allow_out_of_root) {
         Ok(path) => path,
         Err(error) => return error,
     };

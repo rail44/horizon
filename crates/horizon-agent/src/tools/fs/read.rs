@@ -4,7 +4,7 @@ use std::time::UNIX_EPOCH;
 use serde_json::{json, Value};
 
 use super::error_output;
-use super::safety::resolve_path;
+use super::safety::resolve_read_path;
 use crate::tools::state::ToolSessionState;
 
 /// Per-line character cap, independent of `limit`, so one absurdly long
@@ -27,7 +27,7 @@ pub(super) fn execute(
         return error_output("fs.read requires a `path` string argument");
     };
 
-    let resolved = match resolve_path(tool_state, path_arg, allow_out_of_root) {
+    let resolved = match resolve_read_path(tool_state, path_arg, allow_out_of_root) {
         Ok(path) => path,
         Err(error) => return error,
     };

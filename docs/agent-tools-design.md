@@ -70,6 +70,15 @@ content is produced rather than after the fact.
 The measurement and prior-art basis for the read/grep bounds is recorded in
 `research/agent-tool-output-and-read-routing-2026-07-24.md`.
 
+`fs.read`/`fs.grep`/`fs.glob` reach two places without approval: the
+session's workspace root, and the session's own Git metadata — the gitdir a
+linked worktree's `.git` pointer file names, plus the repository's common
+dir, resolved by the same `tools::metadata_writable_roots` the Git-operation
+approval uses. Without the second, a session in a linked worktree could not
+read its own `.git/HEAD` while a session in an ordinary checkout reads it as
+an in-root file. Reads only: `fs.write`/`fs.edit` stay confined to the
+workspace root. Anything else goes through the approval gate.
+
 ## Edit Semantics
 
 The industry has converged on exact-string replacement with uniqueness

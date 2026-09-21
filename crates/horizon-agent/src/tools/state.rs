@@ -133,6 +133,17 @@ struct Inner {
     /// with_config_path`] are, rather than re-derived. `false` everywhere
     /// except the one production call site.
     isolated_worktree: bool,
+    /// Whether this session has no client that could answer an approval
+    /// prompt: the explore role's sessions (`task` children and
+    /// Mixture-of-Agents proposers), which are never attached to a pane and
+    /// whose only consumer is whoever is waiting for their final report. A
+    /// call that would otherwise wait for a human resolves as a refused
+    /// tool result instead, so the session keeps running
+    /// (`tools::approval::unattended_refusal_result`). Threaded in after
+    /// construction the same way [`Inner::isolated_worktree`] is: only
+    /// `horizon-agentd`'s `session::run_session` knows the session's role.
+    /// `false` everywhere except that call site.
+    unattended: bool,
     /// This session's own network-proxy pair (`docs/agent-approval-
     /// design.md`'s "Staging" leg 4b -- `tools::network::
     /// SessionNetworkProxy`), if one was started for it. `None` means
@@ -250,6 +261,7 @@ impl ToolSessionState {
                 skills: SkillRegistry::default(),
                 config_path: None,
                 isolated_worktree: false,
+                unattended: false,
                 network: None,
                 loopback_connect: Vec::new(),
                 domains: SessionDomainPolicy::default(),
@@ -305,6 +317,23 @@ impl ToolSessionState {
     /// at all).
     pub(crate) fn is_isolated_worktree(&self) -> bool {
         self.inner.isolated_worktree
+    }
+
+    /// Records whether this session has nobody who could answer an approval
+    /// prompt -- see [`Inner::unattended`]'s doc comment. Same
+    /// construction-time-only safety contract as
+    /// [`Self::with_isolated_worktree`].
+    pub fn with_unattended(mut self, unattended: bool) -> Self {
+        if let Some(inner) = Rc::get_mut(&mut self.inner) {
+            inner.unattended = unattended;
+        }
+        self
+    }
+
+    /// Whether an approval prompt raised for this session would reach
+    /// nobody -- see [`Inner::unattended`]'s doc comment.
+    pub(crate) fn is_unattended(&self) -> bool {
+        self.inner.unattended
     }
 
     /// This session's approved (or config-declared) macOS mach service

@@ -370,6 +370,42 @@ mod tests {
             let _ = tx.send(Event::TurnEnded(TurnEndReason::Completed));
         }
 
+        /// A proposer that strayed outside its workspace root: the read is
+        /// refused with an error result — never an approval prompt, which
+        /// this fold would treat as a dead end — and the session carries on
+        /// to its answer.
+        fn answer_after_a_refused_read(&self, index: usize, text: &str) {
+            let events = self.events.lock().unwrap();
+            let (_, tx) = &events[index];
+            let call_id = crate::contract::ToolCallId("proposer-read".to_string());
+            let _ = tx.send(Event::MessageCommitted(crate::contract::Message {
+                role: MessageRole::User,
+                text: "the question".to_string(),
+            }));
+            let _ = tx.send(Event::ToolCallRequested(crate::contract::ToolCallRequest {
+                call_id: call_id.clone(),
+                tool_id: "fs.read".to_string(),
+                input: serde_json::json!({ "path": "/elsewhere/lib.rs" }).into(),
+                occurrence_id: None,
+            }));
+            let _ = tx.send(Event::ToolCallFinished(
+                crate::contract::ToolCallResult::new(
+                    call_id,
+                    None,
+                    serde_json::json!({
+                        "is_error": true,
+                        "message": "`fs.read` cannot read `/elsewhere/lib.rs`: it is outside \
+                                    this session's workspace root.",
+                    }),
+                ),
+            ));
+            let _ = tx.send(Event::MessageCommitted(crate::contract::Message {
+                role: MessageRole::Assistant,
+                text: text.to_string(),
+            }));
+            let _ = tx.send(Event::TurnEnded(TurnEndReason::Completed));
+        }
+
         /// A proposer that dies without producing anything.
         fn fail(&self, index: usize) {
             let events = self.events.lock().unwrap();
@@ -534,6 +570,37 @@ mod tests {
             Some(&(index, message)),
         );
         assert_eq!(projected.len(), 1);
+        crate::tools::unregister_exploration_host(state.session_id);
+    }
+
+    /// A proposer that reaches outside the workspace root is refused the
+    /// read and keeps going, so its answer still reaches the aggregator —
+    /// the pass loses nothing to a stray path.
+    #[tokio::test]
+    async fn a_proposer_whose_read_was_refused_still_contributes_its_proposal() {
+        let host = Arc::new(ScriptedHost::default());
+        let (mut state, _commands, _events) = moa_state(host.clone());
+
+        let driver = tokio::spawn({
+            let host = host.clone();
+            async move {
+                loop {
+                    if host.events.lock().unwrap().len() == 2 {
+                        break;
+                    }
+                    tokio::task::yield_now().await;
+                }
+                host.answer_after_a_refused_read(0, "answer despite the refusal");
+                host.answer(1, "second answer");
+            }
+        });
+        let outcome = state.run_moa_pass("the question").await;
+        driver.await.unwrap();
+        assert!(matches!(outcome, PassOutcome::Proceed));
+
+        let block = &state.moa_turn.as_ref().expect("proposals installed").block;
+        assert!(block.contains("answer despite the refusal"), "{block}");
+        assert!(block.contains("second answer"), "{block}");
         crate::tools::unregister_exploration_host(state.session_id);
     }
 

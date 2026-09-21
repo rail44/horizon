@@ -382,6 +382,275 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
     assert_eq!(execution, Execution::RequiresApproval);
 }
 
+// --- Git metadata reads and the unattended refusal ----------------------
+
+/// A linked worktree laid out on disk the way `git worktree add` leaves
+/// one, built with plain file writes: nothing here invokes git, so no
+/// `GIT_*` variable and no global or system git config can reach the
+/// fixture.
+struct LinkedWorktreeLayout {
+    root: PathBuf,
+    main: PathBuf,
+    workspace: PathBuf,
+    worktree_git_dir: PathBuf,
+    common_git_dir: PathBuf,
+}
+
+fn linked_worktree_layout(label: &str) -> LinkedWorktreeLayout {
+    let root = temp_workspace(label);
+    let main = root.join("main");
+    let workspace = root.join("worktree");
+    let common_git_dir = main.join(".git");
+    let worktree_git_dir = common_git_dir.join("worktrees").join("agent");
+    fs::create_dir_all(&workspace).unwrap();
+    fs::create_dir_all(common_git_dir.join("objects")).unwrap();
+    fs::create_dir_all(common_git_dir.join("refs")).unwrap();
+    fs::create_dir_all(&worktree_git_dir).unwrap();
+    fs::write(common_git_dir.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    fs::write(
+        workspace.join(".git"),
+        format!("gitdir: {}\n", worktree_git_dir.display()),
+    )
+    .unwrap();
+    fs::write(
+        worktree_git_dir.join("gitdir"),
+        workspace.join(".git").display().to_string(),
+    )
+    .unwrap();
+    fs::write(worktree_git_dir.join("commondir"), "../..\n").unwrap();
+    fs::write(worktree_git_dir.join("HEAD"), "ref: refs/heads/agent\n").unwrap();
+    LinkedWorktreeLayout {
+        root,
+        main,
+        workspace,
+        worktree_git_dir,
+        common_git_dir,
+    }
+}
+
+fn read_request(call_id: &str, tool_id: &str, input: serde_json::Value) -> ToolCallRequest {
+    ToolCallRequest {
+        call_id: ToolCallId(call_id.to_string()),
+        tool_id: tool_id.to_string(),
+        input: input.into(),
+        occurrence_id: None,
+    }
+}
+
+/// A session in a linked worktree reads its own Git metadata — the gitdir
+/// its `.git` file points to and the repository's common dir — without an
+/// approval, the same way a session in an ordinary checkout reads the
+/// `.git/` directory sitting inside its root.
+#[test]
+fn reads_reach_a_linked_worktrees_own_git_metadata() {
+    let layout = linked_worktree_layout("metadata-reads");
+    let tool_state = ToolSessionState::new(layout.workspace.clone());
+
+    for path in [
+        layout.worktree_git_dir.join("HEAD"),
+        layout.common_git_dir.join("HEAD"),
+    ] {
+        let request = read_request(
+            "call-meta-read",
+            "fs.read",
+            json!({ "path": path.display().to_string() }),
+        );
+        let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
+        let output = tool_output(execution);
+        assert!(
+            !is_error(&output),
+            "{} must be readable from its own worktree: {output}",
+            path.display()
+        );
+        assert!(output["content"].as_str().unwrap().contains("ref: refs/"));
+    }
+
+    for (tool_id, input) in [
+        (
+            "fs.grep",
+            json!({
+                "base_path": layout.common_git_dir.display().to_string(),
+                "pattern": "refs",
+            }),
+        ),
+        (
+            "fs.glob",
+            json!({
+                "base_path": layout.worktree_git_dir.display().to_string(),
+                "pattern": "*",
+            }),
+        ),
+    ] {
+        let execution = execute_agent_tool(
+            &StubHostTools,
+            &tool_state,
+            SessionId::new(),
+            &read_request("call-meta-scan", tool_id, input),
+        );
+        assert!(
+            matches!(execution, Execution::Auto(_)),
+            "{tool_id} over this session's Git metadata must not need approval: {execution:?}"
+        );
+    }
+
+    fs::remove_dir_all(layout.root).unwrap();
+}
+
+/// Reads reaching the Git metadata buys writes nothing: `fs.write`/`fs.edit`
+/// stay confined to the workspace root, so even the post-approval execution
+/// path refuses them there.
+#[test]
+fn writes_never_reach_the_git_metadata_a_read_may() {
+    let layout = linked_worktree_layout("metadata-writes");
+    let tool_state = ToolSessionState::new(layout.workspace.clone());
+    let head = layout.worktree_git_dir.join("HEAD");
+    let before = fs::read_to_string(&head).unwrap();
+
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.write",
+        &json!({ "path": head.display().to_string(), "content": "ref: refs/heads/hijacked\n" }),
+    );
+    assert!(is_error(&output), "{output}");
+    assert!(output["message"].as_str().unwrap().contains("escapes"));
+
+    let output = fs_tools::execute_approved(
+        &tool_state,
+        "fs.edit",
+        &json!({
+            "edits": [{
+                "path": head.display().to_string(),
+                "old_text": "main",
+                "new_text": "hijacked",
+            }],
+        }),
+    );
+    assert!(is_error(&output), "{output}");
+
+    assert_eq!(fs::read_to_string(&head).unwrap(), before);
+    fs::remove_dir_all(layout.root).unwrap();
+}
+
+/// An out-of-root read in an ordinary (attended) session is unchanged: it
+/// routes to the approval gate and there is no refusal to substitute.
+#[test]
+fn an_attended_session_still_asks_for_an_out_of_root_read() {
+    let root = temp_workspace("attended-asks");
+    let outside = temp_workspace("attended-asks-outside");
+    let outside_file = outside.join("notes.txt");
+    fs::write(&outside_file, "elsewhere").unwrap();
+
+    let tool_state = ToolSessionState::new(root);
+    let request = read_request(
+        "call-attended",
+        "fs.read",
+        json!({ "path": outside_file.display().to_string() }),
+    );
+
+    assert_eq!(
+        execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request),
+        Execution::RequiresApproval
+    );
+    assert!(
+        crate::tools::unattended_refusal_result(&tool_state, &request).is_none(),
+        "an attended session has someone to ask"
+    );
+    let events = crate::policy::horizon_events_for_provider_event(
+        &Event::ToolCallRequested(request),
+        &tool_state,
+        SessionId::new(),
+    );
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, Event::ApprovalRequested(_))));
+
+    fs::remove_dir_all(outside).unwrap();
+}
+
+/// The refusal an unattended session gets names the root it may read.
+#[test]
+fn the_refusal_names_the_workspace_root() {
+    let root = temp_workspace("refusal-root");
+    let outside = temp_workspace("refusal-root-outside");
+    let outside_file = outside.join("Cargo.toml");
+    fs::write(&outside_file, "[package]\n").unwrap();
+
+    let tool_state = ToolSessionState::new(root.clone()).with_unattended(true);
+    let result = crate::tools::unattended_refusal_result(
+        &tool_state,
+        &read_request(
+            "call-refused",
+            "fs.read",
+            json!({ "path": outside_file.display().to_string() }),
+        ),
+    )
+    .expect("an unattended session refuses instead of asking");
+
+    assert!(result.is_error);
+    let message = result.output["message"].as_str().unwrap().to_string();
+    assert!(message.contains(&root.display().to_string()), "{message}");
+    assert!(
+        message.contains(&outside_file.display().to_string()),
+        "{message}"
+    );
+    assert!(message.contains("Work from paths under"), "{message}");
+
+    fs::remove_dir_all(root).unwrap();
+    fs::remove_dir_all(outside).unwrap();
+}
+
+/// A path inside another checkout of the same repository is answered with
+/// this session's own copy of it — the main worktree and a sibling linked
+/// worktree alike.
+#[test]
+fn the_refusal_points_at_this_workspaces_copy_of_another_checkouts_path() {
+    let layout = linked_worktree_layout("refusal-sibling");
+    let sibling = layout.root.join("sibling");
+    fs::create_dir_all(sibling.join("src")).unwrap();
+    fs::create_dir_all(layout.common_git_dir.join("worktrees").join("sibling")).unwrap();
+    fs::write(
+        layout
+            .common_git_dir
+            .join("worktrees")
+            .join("sibling")
+            .join("gitdir"),
+        sibling.join(".git").display().to_string(),
+    )
+    .unwrap();
+    for tree in [&layout.main, &sibling, &layout.workspace] {
+        fs::create_dir_all(tree.join("src")).unwrap();
+        fs::write(tree.join("src").join("lib.rs"), "fn main() {}\n").unwrap();
+    }
+
+    let tool_state = ToolSessionState::new(layout.workspace.clone()).with_unattended(true);
+    let expected = layout
+        .workspace
+        .join("src")
+        .join("lib.rs")
+        .display()
+        .to_string();
+
+    for other in [&layout.main, &sibling] {
+        let result = crate::tools::unattended_refusal_result(
+            &tool_state,
+            &read_request(
+                "call-other-checkout",
+                "fs.read",
+                json!({ "path": other.join("src").join("lib.rs").display().to_string() }),
+            ),
+        )
+        .expect("an unattended session refuses instead of asking");
+        let message = result.output["message"].as_str().unwrap().to_string();
+        assert!(
+            message.contains("another checkout of the same repository"),
+            "{message}"
+        );
+        assert!(message.contains(&expected), "{message}");
+    }
+
+    fs::remove_dir_all(layout.root).unwrap();
+}
+
 /// A path argument that is missing or non-string does not trigger the
 /// out-of-root routing — it falls through to auto-execute, which then
 /// returns an error (not a boundary crossing).
