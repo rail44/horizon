@@ -247,12 +247,22 @@ impl SessionHub for Hub {
         Ok(())
     }
 
-    /// Every configured provider with its model aliases and availability —
-    /// the model picker's data ([`Connection::list_providers`]). Reads the
-    /// agent config, the same table the registry was built from.
+    /// Every configured provider with its declared model ids and
+    /// availability — the model picker's data
+    /// ([`Connection::list_providers`]). Reads the agent config, the same
+    /// table the registry was built from.
     async fn list_providers(&self) -> Result<Vec<ProviderSummary>, HubError> {
         self.hello.require()?;
         Ok(self.connection.list_providers())
+    }
+
+    /// A provider's own live model-id listing for the picker's discovery —
+    /// see [`Connection::list_provider_models`]. Never an error: an
+    /// unavailable entry or an endpoint that answers nothing is an empty
+    /// list, so a pick is never blocked by discovery.
+    async fn list_provider_models(&self, provider: String) -> Result<Vec<String>, HubError> {
+        self.hello.require()?;
+        Ok(self.connection.list_provider_models(&provider).await)
     }
 
     /// Mid-session provider/model switch, latest turn wins — see

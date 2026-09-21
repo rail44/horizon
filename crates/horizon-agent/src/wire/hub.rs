@@ -119,6 +119,13 @@ use crate::contract::{Command, SessionId};
 ///   the honest restart — unlike a daemon→client event addition, where a
 ///   stale peer simply never sends it (the no-bump TaskProgress precedent
 ///   below).
+/// - **v22 — live model discovery, and the model-list reshape**:
+///   `list_provider_models` appended to [`SessionHub`] (a provider's own
+///   `/models` listing for the picker), and `ProviderSummary` reshaped —
+///   its `models` alias list replaced by `default_model`, since the
+///   picker's candidates now come from the provider itself. The reshape
+///   is why this is not a mere append: a stale peer must be drained and
+///   respawned rather than decode a shape it never had.
 ///
 /// Additive since v19, no bump (the v12 precedent): **live background-task
 /// progress** — `AgentWireEvent::TaskProgress` (`contract::TaskProgress`),
@@ -126,7 +133,7 @@ use crate::contract::{Command, SessionId};
 /// (current tool, reasoning vs tool-running) onto the requester's
 /// attachment channel. Ephemeral UI feedback: never persisted, dropped
 /// while no client is attached, not replayed on attach.
-pub const AGENT_PROTOCOL_VERSION: u32 = 21;
+pub const AGENT_PROTOCOL_VERSION: u32 = 22;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -136,7 +143,7 @@ pub const AGENT_PROTOCOL_VERSION: u32 = 21;
 /// interop, they need honest restart, so a mismatched `hello` is rejected
 /// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
 /// adoption-design.md` §3/§6) rather than bridged by gate constants.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 21;
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 22;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -268,29 +275,38 @@ pub trait SessionHub {
 
     // -- provider surface (v21, the multi-provider design's wire half) --
 
-    /// Every configured provider with its model aliases and availability —
-    /// the model picker's data. Entries run in the config file's order
-    /// (aliases in their own listing order; the first is each entry's
-    /// default model). `available` is build-time resolved: an entry whose
-    /// API-key variable was unset registers but is unavailable — grayed
-    /// out, never hidden.
+    /// Every configured provider with its default model and availability —
+    /// the model picker's data. Entries run in the config file's order.
+    /// `available` is build-time resolved: an entry whose API-key variable
+    /// was unset registers but is unavailable — grayed out, never hidden.
+    /// The entry's candidate models are its own live `/models` listing
+    /// ([`Self::list_provider_models`]), not the file.
     async fn list_providers(&self) -> Result<Vec<ProviderSummary>, HubError>;
 
     /// Mid-session provider/model switch, latest turn wins: the *next*
     /// turn runs on `provider`/`model`, whatever is in flight finishes on
     /// its own selection. `provider` names a configured entry (see
-    /// [`Self::list_providers`]); `model` is the entry's alias — or a raw
-    /// model id, the same pass-through `role.model` accepts. Validates the
-    /// pair, resolves the model id, re-announces it through the existing
-    /// `AgentWireEvent::SessionModel` announcement, and records it on the
-    /// session so a (re)attach reports the switched model. Unknown
-    /// provider, unknown session, or an empty model is a [`HubError`].
+    /// [`Self::list_providers`]); `model` is a model id — typically one the
+    /// provider's `/models` listed, the same pass-through `role.model`
+    /// accepts. Validates the pair, re-announces
+    /// the model through the existing `AgentWireEvent::SessionModel`
+    /// announcement, and records it on the session so a (re)attach reports
+    /// the switched model. Unknown provider, unknown session, or an empty
+    /// model is a [`HubError`].
     async fn set_session_model(
         &self,
         session_id: SessionId,
         provider: String,
         model: String,
     ) -> Result<(), HubError>;
+
+    /// A provider's own live model listing (`GET {base_url}/models`) — the
+    /// ids the model picker offers (v22). `provider` names a configured
+    /// entry. An entry with no usable key, a provider that answers no
+    /// listing, or a transport failure yields an empty list — discovery
+    /// never blocks a pick, so "nothing discovered" is not an error to the
+    /// caller.
+    async fn list_provider_models(&self, provider: String) -> Result<Vec<String>, HubError>;
 }
 
 #[cfg(test)]
@@ -309,7 +325,7 @@ mod tests {
     /// builds. The terminal protocol evolves independently.
     #[test]
     fn board_routing_requires_the_current_agent_protocol() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 21);
+        assert_eq!(AGENT_PROTOCOL_VERSION, 22);
         assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, AGENT_PROTOCOL_VERSION);
     }
 
@@ -332,7 +348,7 @@ mod tests {
             variants,
             "unknown variant `__bogus`, expected one of `Hello`, `ListAgents`, `WatchBoard`, `NewAgent`, \
              `AttachAgent`, `Drain`, `ReloadProviderConfig`, `EnsureBoardOrganizer`, `ListProviders`, \
-             `SetSessionModel` at line 1 column 10",
+             `SetSessionModel`, `ListProviderModels` at line 1 column 10",
         );
 
         // Argument names per method, from serde's missing-field errors.
@@ -381,6 +397,12 @@ mod tests {
             probe("SetSessionModel").starts_with("missing field `session_id`"),
             "{}",
             probe("SetSessionModel")
+        );
+        // v22's addition: list_provider_models carries the provider name.
+        assert!(
+            probe("ListProviderModels").starts_with("missing field `provider`"),
+            "{}",
+            probe("ListProviderModels")
         );
     }
 }

@@ -53,8 +53,9 @@ const MODELS_REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 /// Rig's own default when `RigAgentConfig::base_url` is `None` (see
 /// `providers::rig::completion::completion_client`). Named here so
 /// the cache key and the request URL agree on what "no base URL" resolves
-/// to.
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+/// to. The picker's discovery path passes a concrete URL (the kind's own
+/// default is resolved by the caller), so only [`model_limits`] reads this.
+const DEFAULT_OPENAI_BASE_URL: &str = crate::config::DEFAULT_OPENAI_BASE_URL;
 
 /// What a provider declares about one model's context budget. Both numbers
 /// are as-reported; the effective window is derived by the caller
@@ -86,6 +87,12 @@ impl ModelLimits {
 /// Keyed by `(base_url, api_key_env, model)`; the value is the *answer*, so
 /// a `None` (this provider declares no limits) is cached exactly like a hit.
 type LimitsCache = Mutex<HashMap<(String, String, String), Option<ModelLimits>>>;
+
+/// Keyed by base URL; the value is the ids a *successful* listing returned.
+/// Failures (transport, non-2xx, no ids) are deliberately not cached — a
+/// provider that was briefly unreachable must still answer a later picker
+/// open.
+type ListingCache = Mutex<HashMap<String, Vec<String>>>;
 
 /// Resolves this process's cached limits for this session's provider entry,
 /// fetching them on the first call and reusing the answer -- including a
@@ -170,6 +177,129 @@ pub(super) fn parse_model_limits(body: &serde_json::Value, model: &str) -> Optio
             .get("max_output_length")
             .and_then(serde_json::Value::as_u64),
     })
+}
+
+/// The provider's live model-id listing, for the picker's discovery: the
+/// provider's own listing request, keeping every `data[].id` rather than
+/// looking up one model's limits.
+///
+/// `kind` picks the request shape, not just the endpoint: openai-compatible
+/// takes `GET {base}/models` with `Authorization: Bearer`, while Anthropic
+/// takes `GET {host}/v1/models` with `x-api-key` and `anthropic-version`
+/// ([`models_url_for`]). `base_url` is already resolved to a concrete
+/// endpoint by the caller (the kind's env var > the entry's `base_url` >
+/// the kind's own default). A successful listing is cached process-lifetime,
+/// keyed by the request URL (discovery rarely changes mid-run, and a picker
+/// reopen must not re-ask); a failure is not cached. An empty key is
+/// treated as "no key" and returns nothing without a request.
+pub(crate) async fn list_model_ids(
+    kind: crate::config::ProviderKind,
+    base_url: &str,
+    api_key: &str,
+) -> Vec<String> {
+    if api_key.is_empty() {
+        return Vec::new();
+    }
+    let url = models_url_for(kind, base_url);
+    if let Some(cached) = cache_listings()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&url).cloned())
+    {
+        return cached;
+    }
+    let ids = fetch_model_ids(kind, &url, api_key).await;
+    if !ids.is_empty() {
+        if let Ok(mut map) = cache_listings().lock() {
+            map.insert(url, ids.clone());
+        }
+    }
+    ids
+}
+
+/// The listing URL for a kind. Openai-compatible is `{base}/models`
+/// (tolerating a trailing slash); Anthropic is `{host}/v1/models`, where rig
+/// stores the bare host and appends `/v1` per route, stripping a `/v1` the
+/// configured base already carries.
+pub(super) fn models_url_for(kind: crate::config::ProviderKind, base_url: &str) -> String {
+    match kind {
+        crate::config::ProviderKind::OpenAiCompatible => models_url(base_url),
+        crate::config::ProviderKind::Anthropic => anthropic_models_url(base_url),
+    }
+}
+
+/// Anthropic's model-listing path: `{host}/v1/models`.
+fn anthropic_models_url(base_url: &str) -> String {
+    let base = base_url.trim_end_matches('/');
+    let base = base.strip_suffix("/v1").unwrap_or(base);
+    format!("{base}/v1/models")
+}
+
+fn cache_listings() -> &'static ListingCache {
+    static CACHE: OnceLock<ListingCache> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Anthropic's required API-version header value on every request.
+const ANTHROPIC_VERSION: &str = "2023-06-01";
+
+/// One provider request in its kind's own shape, keeping only the ids. Every
+/// error path returns an empty list.
+async fn fetch_model_ids(
+    kind: crate::config::ProviderKind,
+    url: &str,
+    api_key: &str,
+) -> Vec<String> {
+    let client = match reqwest::Client::builder()
+        .timeout(MODELS_REQUEST_TIMEOUT)
+        .build()
+    {
+        Ok(client) => client,
+        Err(_) => return Vec::new(),
+    };
+    let request = match kind {
+        crate::config::ProviderKind::OpenAiCompatible => client.get(url).bearer_auth(api_key),
+        // Anthropic rejects a Bearer token and mandates the version header.
+        crate::config::ProviderKind::Anthropic => client
+            .get(url)
+            .header("x-api-key", api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION),
+    };
+    let response = match request.send().await {
+        Ok(response) => response,
+        Err(_) => return Vec::new(),
+    };
+    if !response.status().is_success() {
+        return Vec::new();
+    }
+    let body = match response.text().await {
+        Ok(body) => body,
+        Err(_) => return Vec::new(),
+    };
+    match serde_json::from_str::<serde_json::Value>(&body) {
+        Ok(body) => parse_model_ids(&body),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// Every `data[].id` of a `/models` listing, in listing order. Tolerant by
+/// design: both the OpenAI-compatible and the Anthropic listing put the ids
+/// under `data`, and anything malformed simply contributes no ids.
+pub(super) fn parse_model_ids(body: &serde_json::Value) -> Vec<String> {
+    body.get("data")
+        .and_then(serde_json::Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter_map(|entry| {
+                    entry
+                        .get("id")
+                        .and_then(serde_json::Value::as_str)
+                        .map(str::to_string)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -486,5 +616,59 @@ mod tests {
             models_url("https://api.synthetic.new/openai/v1/"),
             "https://api.synthetic.new/openai/v1/models"
         );
+    }
+
+    /// The listing request differs by kind: openai-compatible appends
+    /// `/models`; Anthropic appends `/v1/models` to the bare host (and
+    /// tolerates a base that already carries `/v1`).
+    #[test]
+    fn listing_urls_match_each_kinds_request_shape() {
+        use crate::config::ProviderKind;
+        assert_eq!(
+            models_url_for(ProviderKind::OpenAiCompatible, "https://api.openai.com/v1"),
+            "https://api.openai.com/v1/models"
+        );
+        assert_eq!(
+            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com"),
+            "https://api.anthropic.com/v1/models"
+        );
+        assert_eq!(
+            models_url_for(ProviderKind::Anthropic, "https://api.anthropic.com/v1"),
+            "https://api.anthropic.com/v1/models"
+        );
+    }
+
+    #[test]
+    fn parses_every_id_of_a_listing_in_order() {
+        assert_eq!(
+            parse_model_ids(&synthetic_listing()),
+            vec![
+                "hf:MiniMaxAI/MiniMax-M3".to_string(),
+                "hf:moonshotai/Kimi-K2.7-Code".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn parses_a_standard_openai_listing_too() {
+        // No limits, but the ids are exactly what the picker wants.
+        let body = serde_json::json!({
+            "object": "list",
+            "data": [
+                {"id": "gpt-4o-mini", "object": "model", "owned_by": "openai"},
+                {"id": "gpt-4o", "object": "model", "owned_by": "openai"}
+            ]
+        });
+        assert_eq!(
+            parse_model_ids(&body),
+            vec!["gpt-4o-mini".to_string(), "gpt-4o".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_malformed_listing_yields_no_ids() {
+        assert!(parse_model_ids(&serde_json::json!({"error": "unauthorized"})).is_empty());
+        assert!(parse_model_ids(&serde_json::json!({"data": "nope"})).is_empty());
+        assert!(parse_model_ids(&serde_json::json!({"data": [{"object": "model"}]})).is_empty());
     }
 }

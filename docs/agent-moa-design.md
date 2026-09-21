@@ -108,9 +108,8 @@ proposers = [
 `provider` names a `[[providers]]` entry (connection and key variable come
 from there); `model` is a model ID written directly. Members may sit on
 different entries. Listing a member twice samples that model twice. Several
-`[[moa]]` tables may coexist. The table does not use the `[[providers]]`
-alias map. `Reload Config` applies as it does for `[[providers]]`: new
-sessions see the change.
+`[[moa]]` tables may coexist. `Reload Config` applies as it does for
+`[[providers]]`: new sessions see the change.
 
 In model selection `moa` sits beside the provider entries, and its items
 are the `[[moa]]` names.
@@ -118,8 +117,9 @@ are the `[[moa]]` names.
 `moa` is a reserved group name: a `[[providers]]` entry called `moa` is
 warned about and cannot be selected. An entry whose aggregator's provider
 has no key is refused on selection with the reason; the `moa` group is
-marked unavailable only when none of its entries can run (`ModelAlias`
-carries no per-item availability).
+marked unavailable only when none of its entries can run (the group's one
+`ProviderSummary` carries one availability flag, and its items are plain
+names with no per-item availability).
 
 ## Where it lives
 
@@ -133,8 +133,10 @@ carries no per-item availability).
   entry, running the aggregator's `{provider, model}`.
   `session/state.rs::apply_set_session_model` handles `provider == "moa"`.
   `horizon-agentd/src/session/connection.rs` appends the `moa` group to
-  `list_providers` as one more `ProviderSummary`; the wire type is
-  unchanged and the shell needed no edit.
+  `list_providers` as one more `ProviderSummary` and answers
+  `list_provider_models("moa")` with the entry names from the config (no
+  request); the wire needs no MoA-specific surface and the shell needed no
+  edit.
 - **The pass.** `providers/rig/session/moa.rs`: the conversation proposers
   are given (kept for every session, so a mid-session switch into `moa`
   starts with context; rebuilt from persisted events on resume), the
@@ -184,10 +186,9 @@ carries no per-item availability).
   bump. A shell process started before the rebuild cannot decode
   `MoaPassStarted` (skipped per item); restarting the app avoids the
   noise.
-- **An entry with no `models` list has no default model** and falls back
+- **An entry with no `default_model` has no default model** and falls back
   to rig's built-in `gpt-4o-mini` for the construction-time window lookup
-  (one wasted `/models` request per key, cached). It matters once the
-  alias map is removed.
+  (one wasted `/models` request per key, cached).
 - **Echo trimming keys on `User:` at line start.** A legitimate answer
   containing that string on its own line is cut there.
 

@@ -78,9 +78,8 @@
 # [[providers]] — named rig-backed provider entries (the multi-provider
 # re-extension; see the header's re-extension note).
 #
-# - Entries run in the order listed; the picker shows them (and each entry's
-#   models) in that same file order, and an entry's FIRST model is its own
-#   default. Commented out below: both fall back per the rules noted.
+# - Entries run in the order listed; the picker shows them in that same
+#   file order. Commented out below: both fall back per the rules noted.
 # - kind: "openai-compatible" (default — any endpoint speaking OpenAI's
 #   chat-completions wire) or "anthropic". rig-core bundles both; no feature
 #   gates.
@@ -93,23 +92,28 @@
 # - base_url: unset means rig's own default endpoint for the kind
 #   (https://api.openai.com/v1 / https://api.anthropic.com); env
 #   OPENAI_BASE_URL / ANTHROPIC_BASE_URL win when set.
+# - default_model: the model this entry runs when nothing else selected one.
+#   Unset leaves the kind's built-in default (openai-compatible's
+#   gpt-4o-mini; an anthropic entry with neither has no Horizon-side
+#   default).
 # - default_provider: which entry runs when nothing else selected it; unset
 #   means the first entry. A name matching no entry falls back to the first
 #   entry (warned).
-# - An entry that lists no models has nothing to select on it (it can still
-#   be a default_provider target only if its kind has a built-in default:
-#   openai-compatible's stays gpt-4o-mini for the legacy implicit entry).
+# - There is no model list here: the picker's candidates are whatever the
+#   provider's own GET /models listing answers (fetched when you drill into
+#   the entry). An entry that serves no listing has nothing to select on it;
+#   HORIZON_RIG_MODEL overrides the default_model globally.
 #
 # [[providers]]
 # name = "synthetic"
-# models = { "strong" = "gpt-5.2", "fast" = "gpt-4o-mini" }
+# default_model = "gpt-5.2"
 # default_provider = "synthetic"
 #
 # [[providers]]
 # name = "claude"
 # kind = "anthropic"
 # api_key_env = "ANTHROPIC_API_KEY"
-# models = { "opus" = "claude-opus-4-6" }
+# default_model = "claude-opus-4-6"
 
 # ---------------------------------------------------------------------------
 # [[moa]] — Mixture-of-Agents entries (docs/agent-moa-design.md).
@@ -121,8 +125,7 @@
 # the question in its own read-only session, then the aggregator writes the
 # single answer the pane shows.
 #
-# - provider: a [[providers]] entry name. model: the model id, written out
-#   (a models alias is not resolved here).
+# - provider: a [[providers]] entry name. model: the model id, written out.
 # - Listing the same {provider, model} twice runs it twice.
 # - An entry whose aggregator names no [[providers]] entry is dropped and
 #   warned about; a proposer that does is dropped on its own, and a proposer

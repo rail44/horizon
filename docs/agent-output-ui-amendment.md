@@ -1086,8 +1086,10 @@ deviation rather than asking for a mock update):
     `CommandId::SwitchModel` through the same `RunCommand` gpui action the
     stop/continue buttons use, opening the provider→model two-stage picker
     (`src/model_picker.rs`: one searchable modal, Providers → Models, in
-    `list_providers` order — the `[[providers]]` file order, each entry's
-    first alias its default model). Key-unavailable providers stay listed
+    `list_providers` order — the `[[providers]]` file order; see the 2026-10
+    entry below, which drops the alias names (and the model list) for an
+    optional `default_model` plus live `/models` discovery).
+    Key-unavailable providers stay listed
     grayed with a reason composed from `api_key_env` (the daemon owns the
     availability verdict), and confirming one is a no-op. Esc walks back a
     stage before closing the modal. This supersedes the 2026-07-13
@@ -1133,3 +1135,32 @@ deviation rather than asking for a mock update):
   the test pinning the reversal is
   `composer_model_chip_prefers_the_session_model_when_the_turn_diverges`
   (`src/agent/turns/composer.rs`).
+
+- **No model list: an optional `default_model`, and the picker discovers
+  live models (wire v22, 2026-10, board task #55).** The `[[providers]]
+  models` map (`alias = "model-id"`) is gone entirely — the entry carries an
+  optional `default_model`, and nothing else names a model. The alias name
+  only ever bought the picker a friendlier label and a handle
+  `set_session_model` resolved — a raw model id already passed through,
+  `role.model` is `None` on every built-in role, and the candidate list is
+  better served by discovery:
+
+  - **Candidate list = the provider's own `/models`.** Drilling into an
+    available provider fires `SessionHub::list_provider_models` (`GET
+    {base_url}/models` with the entry's own key and base URL, run inside
+    `horizon-agentd`), and the model stage lists whatever ids it answers.
+    There is no file-declared fallback: an unavailable entry, a provider that
+    answers no listing, or a transport failure leaves the stage empty (the
+    empty-surface label distinguishes "Loading models…" from "No models
+    listed"). `default_model` decides what a session runs when nothing has
+    been selected; `HORIZON_RIG_MODEL` overrides it.
+  - **Wire shape.** `ProviderSummary::models` (the id array) is replaced by
+    `default_model: Option<String>`; `ModelAlias` and the alias resolution in
+    `set_session_model` are gone. `list_provider_models` is appended and the
+    reshape rides the same bump: v21 → v22, so the shell and both daemons
+    need a full restart, not a runtime reload (the standing lockstep rule).
+  - **Two `/models` callers, separate caches.** `horizon-agent`'s
+    `model_limits.rs` keeps doing its own per-model `context_length` lookup
+    for Tier 1 compaction; the discovery path shares the endpoint but not the
+    cache (limits are keyed per `(base_url, model)` and cache negatives, the
+    listing per base URL and caches successes only).

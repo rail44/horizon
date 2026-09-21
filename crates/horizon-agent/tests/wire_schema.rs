@@ -131,6 +131,18 @@ fn generate_wire_schema() -> Value {
             }),
             "reply": unit,
         },
+        // One argument: the provider name, documented minus the macro's
+        // reply-channel field.
+        "list_provider_models": {
+            "request": json!({
+                "type": "object",
+                "properties": {
+                    "provider": json!({"type": "string"}),
+                },
+                "required": ["provider"],
+            }),
+            "reply": generator.subschema_for::<Vec<String>>().to_value(),
+        },
     });
 
     let channels = json!({

@@ -612,10 +612,9 @@ impl SessionLoopState {
 /// `Command::SetSessionModel`'s whole effect, factored out pure so the
 /// switch's precedence rules are unit-testable without a session loop.
 ///
-/// `model` resolves against the target entry's alias map FIRST (the picker
-/// only offers aliases) and passes through as a raw model id otherwise —
-/// the same rule `role.model` follows, so a power user can name a model
-/// the entry doesn't alias. The owner-agreed priority is explicit
+/// `model` is a model id (a declared one or a live `/models` id): it swaps
+/// the session's per-turn config onto the target entry's kind/key/base URL
+/// and sets that id verbatim. The owner-agreed priority is explicit
 /// selection > `role.model` > config default: an explicit switch replaces
 /// the provider bits wholesale (kind, key variable, base URL, model),
 /// while the role's other overrides (tool restrictions, iteration cap)
@@ -668,13 +667,7 @@ pub(super) fn apply_set_session_model(
     let Some(entry) = table.entry(provider) else {
         return Err(format!("Unknown provider `{provider}`."));
     };
-    let resolved_model = entry
-        .models
-        .iter()
-        .find(|(alias, _)| alias == model)
-        .map(|(_, id)| id.clone())
-        .unwrap_or_else(|| model.to_string());
-    crate::config::apply_provider_entry(config, entry, &resolved_model);
+    crate::config::apply_provider_entry(config, entry, model);
     config.moa = None;
     Ok(())
 }
@@ -693,7 +686,7 @@ mod tests {
                     base_url: Some("https://openai.example.invalid".to_string()),
                     api_key_env: "OPENAI_API_KEY".to_string(),
                     api_key_present: true,
-                    models: vec![("fast".to_string(), "m-fast".to_string())],
+                    default_model: Some("m-fast".to_string()),
                 },
                 NamedProviderConfig {
                     name: "claude".to_string(),
@@ -701,7 +694,7 @@ mod tests {
                     base_url: None,
                     api_key_env: "ANTHROPIC_API_KEY".to_string(),
                     api_key_present: false,
-                    models: vec![("opus".to_string(), "m-opus".to_string())],
+                    default_model: Some("m-opus".to_string()),
                 },
             ],
             default_name: "openai".to_string(),
@@ -776,7 +769,7 @@ mod tests {
             vec!["m-fast", "m-opus"]
         );
 
-        apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "fast").unwrap();
+        apply_set_session_model(&mut config, &table(), &moa_table(), "openai", "m-fast").unwrap();
         assert_eq!(config.model, "m-fast");
         assert!(config.moa.is_none());
     }
@@ -793,7 +786,7 @@ mod tests {
     }
 
     #[test]
-    fn switch_resolves_the_alias_and_swaps_the_provider_bits() {
+    fn switch_sets_the_model_id_and_swaps_the_provider_bits() {
         // `role.model` (or the config default) is what the session was
         // resolved with at spawn; the explicit switch wins over it —
         // the owner-agreed priority: explicit selection > role.model >
@@ -803,7 +796,7 @@ mod tests {
             ..Default::default()
         };
 
-        apply_set_session_model(&mut config, &table(), &moa_table(), "claude", "opus").unwrap();
+        apply_set_session_model(&mut config, &table(), &moa_table(), "claude", "m-opus").unwrap();
         assert_eq!(config.kind, ProviderKind::Anthropic);
         assert_eq!(config.api_key_env, "ANTHROPIC_API_KEY");
         assert_eq!(config.model, "m-opus");
@@ -864,7 +857,7 @@ mod tests {
         };
         state.config.model = "role-model".to_string();
 
-        state.handle_set_session_model("claude", "opus").await;
+        state.handle_set_session_model("claude", "m-opus").await;
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
         assert!(events_rx.try_recv().is_err(), "no error event on success");
@@ -899,7 +892,7 @@ mod tests {
             .seed_cleared(vec![crate::contract::ToolCallId("call-0".to_string())]);
         state.clearing.record_input_tokens(400_000);
 
-        state.handle_set_session_model("claude", "opus").await;
+        state.handle_set_session_model("claude", "m-opus").await;
 
         assert_eq!(
             state.clearing.effective_window_tokens(),

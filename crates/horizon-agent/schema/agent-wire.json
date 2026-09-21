@@ -605,7 +605,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Mid-session provider/model switch, latest turn wins (owner-agreed\nmulti-provider design): `provider` names a resolved `[[providers]]`\nentry and `model` is the picker's alias (or a raw model id — the\nsame pass-through `role.model` accepts). Delivered on the\nattachment's commands channel by `horizon-agentd`'s\n`set_session_model` RPC handler, which owns validating the pair and\nre-announcing the resolved model (`AgentWireEvent::SessionModel`);\nthe session loop only swaps what the *next turn* builds with.\nNot persisted: the override lives in the daemon's session state, the\nsame \"running session keeps its spawn-time config\" philosophy\n`reload_provider_config` follows.",
+          "description": "Mid-session provider/model switch, latest turn wins: `provider` names\na resolved `[[providers]]` entry and `model` is a model id the\nprovider's `/models` listing answered (the same pass-through\n`role.model` accepts). Delivered on the\nattachment's commands channel by `horizon-agentd`'s\n`set_session_model` RPC handler, which owns validating the pair and\nre-announcing the model (`AgentWireEvent::SessionModel`);\nthe session loop only swaps what the *next turn* builds with.\nNot persisted: the override lives in the daemon's session state, the\nsame \"running session keeps its spawn-time config\" philosophy\n`reload_provider_config` follows.",
           "properties": {
             "SetSessionModel": {
               "properties": {
@@ -1555,24 +1555,6 @@
       ],
       "type": "object"
     },
-    "ModelAlias": {
-      "description": "One alias -> model id pair of [`ProviderSummary::models`].",
-      "properties": {
-        "alias": {
-          "description": "What the picker shows and `set_session_model`'s `model` argument\ncarries.",
-          "type": "string"
-        },
-        "model": {
-          "description": "The model id the provider is actually asked for.",
-          "type": "string"
-        }
-      },
-      "required": [
-        "alias",
-        "model"
-      ],
-      "type": "object"
-    },
     "OccurrenceId": {
       "description": "Per-occurrence identity for a tool call: a string Horizon mints on its own\nside of the boundary (the rig provider never sees it, satisfying the\nconstraint that a provider knows only its own `call_id`).\n\nA single provider `call_id` can be reused across two distinct shapes --\n\n* provider reuse: the rig provider (or a backend it fronts) emits a fresh\n  tool call with the same `call_id` as an earlier, fully resolved one\n  (`docs/tasks/backlog.md`'s item 42, recorded from the 2026-07-18\n  reused-call_id fix `1d86521`; the `functions.fs.edit:66` incident in\n  session 05254b6a). Without a second key, every consumer -- transcript,\n  approval, analytics -- collapses the two onto the same row.\n* denial retry: every sandbox-denial retry deliberately reissues\n  `ToolCallRequested` under the same `call_id`, so one conceptual bash\n  call renders as two transcript rows, the first stuck forever as\n  started-but-never-finished (a cosmetic defect the user sees daily).\n\n`OccurrenceId` is the second key. It is stamped on every\n`ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows\nout of Horizon. `#[serde(default)]` on the field sites means a peer (older\nagentd, replayed pre-feature log) that never minted one decodes cleanly\nwith `None`, and the consumers fall back to call_id + position scanning\n(`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is\nadditive and needs no `SESSION_PROTOCOL_VERSION` bump.\n\nThe string itself is a UUID v4 minted at the first emission point in\n`providers::rig::mapping::rig_tool_call_request` (and at\n`horizon_agentd::session::approval::begin_reissued_approval` for reissues) --\nnot the provider-supplied `call_id`, not a per-process counter, so a\nresumed session and a replayed log line up on the same value without any\nshared counter to coordinate.",
       "type": "string"
@@ -1657,7 +1639,7 @@
       "type": "object"
     },
     "ProviderSummary": {
-      "description": "One configured provider as `SessionHub::list_providers` reports it —\nthe model picker's per-provider data (owner-agreed multi-provider\ndesign). Additive to the wire: new definitions and new hub methods ride\nthe §4 additive-only rule, with the method additions' version bump\nrecorded on the artifact.",
+      "description": "One configured provider as `SessionHub::list_providers` reports it —\nthe model picker's per-provider data.",
       "properties": {
         "api_key_env": {
           "description": "The environment variable **name** the entry's API key is read from —\nrecorded so a picker can explain unavailability (\"ANTHROPIC_API_KEY\nis not set\"). Never a value (the secrets-stay-out rule).",
@@ -1678,12 +1660,12 @@
           "description": "Whether this is the surface's default entry (`default_provider`, or\nthe first entry when unset / the legacy fold-in).",
           "type": "boolean"
         },
-        "models": {
-          "description": "alias -> model id, in file listing order; the first is the entry's\nown default model — the same \"first\" the picker shows.",
-          "items": {
-            "$ref": "#/$defs/ModelAlias"
-          },
-          "type": "array"
+        "default_model": {
+          "description": "The model this entry runs when nothing has selected one, if the file\nnames it. `None` leaves the kind's own built-in default in place. The\npicker's candidate ids come from the provider's own `/models`\nlisting (`SessionHub::list_provider_models`), not from here.",
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "name": {
           "description": "The `[[providers]]` `name` — what `set_session_model`'s `provider`\nargument names. The legacy `[provider]` fold-in resolves as\n`default`.",
@@ -1693,7 +1675,6 @@
       "required": [
         "name",
         "api_key_env",
-        "models",
         "available",
         "default"
       ],
@@ -2177,6 +2158,25 @@
         "type": "null"
       }
     },
+    "list_provider_models": {
+      "reply": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "request": {
+        "properties": {
+          "provider": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "provider"
+        ],
+        "type": "object"
+      }
+    },
     "list_providers": {
       "reply": {
         "items": {
@@ -2230,5 +2230,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 21
+  "x-session-protocol-version": 22
 }

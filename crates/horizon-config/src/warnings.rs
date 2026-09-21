@@ -51,7 +51,7 @@ const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
 /// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
 /// tables.
-const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "models"];
+const PROVIDER_ENTRY_KEYS: &[&str] = &["name", "kind", "base_url", "api_key_env", "default_model"];
 
 /// Keys a single `[[moa]]` entry recognizes, and the keys of the inline
 /// member tables under `aggregator`/`proposers`. Checked the same way
@@ -223,6 +223,19 @@ mod tests {
         assert!(warnings
             .iter()
             .any(|warning| warning.contains("unrecognized key \"api_key\"")));
+    }
+
+    #[test]
+    fn providers_entry_default_model_is_known_but_models_is_not() {
+        // The v22 rename: `default_model` is the real field, so a config using
+        // it warns about nothing; a stale `models` key now warns as a probable
+        // typo instead of being silently dropped.
+        let known = collect_warnings("[[providers]]\nname = \"x\"\ndefault_model = \"m\"\n");
+        assert!(known.is_empty(), "warnings = {known:?}");
+        let stale = collect_warnings("[[providers]]\nname = \"x\"\nmodels = [\"m\"]\n");
+        assert!(stale
+            .iter()
+            .any(|warning| warning.contains("unrecognized key \"models\"")));
     }
 
     #[test]

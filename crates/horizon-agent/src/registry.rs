@@ -255,7 +255,7 @@ mod tests {
         kind: ProviderKind,
         api_key_env: &str,
         api_key_present: bool,
-        models: Vec<(&str, &str)>,
+        default_model: Option<&str>,
     ) -> NamedProviderConfig {
         NamedProviderConfig {
             name: name.to_string(),
@@ -263,10 +263,7 @@ mod tests {
             base_url: None,
             api_key_env: api_key_env.to_string(),
             api_key_present,
-            models: models
-                .into_iter()
-                .map(|(alias, id)| (alias.to_string(), id.to_string()))
-                .collect(),
+            default_model: default_model.map(str::to_string),
         }
     }
 
@@ -290,14 +287,14 @@ mod tests {
                         ProviderKind::OpenAiCompatible,
                         "OPENAI_API_KEY",
                         true,
-                        vec![("fast", "m-fast")],
+                        Some("m-fast"),
                     ),
                     named_entry(
                         "claude",
                         ProviderKind::Anthropic,
                         "ANTHROPIC_API_KEY",
                         false,
-                        vec![("opus", "m-opus")],
+                        Some("m-opus"),
                     ),
                 ],
                 default_name: "openai".to_string(),

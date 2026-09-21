@@ -55,6 +55,10 @@ pub(super) enum Op {
     ListProviders {
         reply: crossbeam_channel::Sender<Result<Vec<wire::ProviderSummary>, String>>,
     },
+    ListProviderModels {
+        provider: String,
+        reply: crossbeam_channel::Sender<Result<Vec<String>, String>>,
+    },
     SetSessionModel {
         session_id: contract::SessionId,
         provider: String,
@@ -537,6 +541,18 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             tokio::spawn(async move {
                 let result = with_deadline(OP_TIMEOUT, "provider list", hub.list_providers()).await;
+                let _ = reply.send(result);
+            });
+        }
+        Op::ListProviderModels { provider, reply } => {
+            let hub = live.hub.clone();
+            tokio::spawn(async move {
+                let result = with_deadline(
+                    OP_TIMEOUT,
+                    "provider model list",
+                    hub.list_provider_models(provider),
+                )
+                .await;
                 let _ = reply.send(result);
             });
         }
