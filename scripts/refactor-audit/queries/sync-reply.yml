@@ -1,0 +1,6 @@
+id: sync-reply
+language: Rust
+severity: hint
+message: Synchronous reply wait; compare send, timeout and error contracts with other matches.
+rule:
+  pattern: $RECEIVER.recv_timeout($TIMEOUT)

@@ -23,6 +23,12 @@ projection, and a receipt-based transcript UI.
 
 ## Open
 
+Refactoring discovery uses repository-local RCA, jscpd, and scoped ast-grep
+checks, followed by responsibility/contract review. History and dependency
+graphs are optional supporting evidence, not automatic refactoring decisions.
+See [the tool](../scripts/refactor-audit/README.md) and
+[review guide](refactoring-review.md).
+
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
 and terminal territory. Shipped in the wave 2026-07-18 (merges up to

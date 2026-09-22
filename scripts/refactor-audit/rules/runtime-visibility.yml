@@ -1,0 +1,12 @@
+id: runtime-visibility
+language: Rust
+severity: hint
+message: Review unrestricted visibility in the internal runtime; prefer pub(crate) or narrower.
+note: AGENTS.md keeps module internals crate-local. This scoped review hint does not restrict public APIs in other crates.
+files:
+  - src/runtime/**/*.rs
+  - src/runtime/*.rs
+rule:
+  all:
+    - kind: visibility_modifier
+    - regex: '^pub$'

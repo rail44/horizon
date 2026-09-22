@@ -121,6 +121,11 @@ setup per clone:
 git config core.hooksPath hooks
 ```
 
+For refactoring discovery, see [the audit tool](scripts/refactor-audit/README.md)
+and [the review guide](docs/refactoring-review.md). They cover reproducible
+whole-repository or scoped scans and interpretation of the results. The audit
+is an on-demand review aid, separate from the quality gate above.
+
 ## Build setup
 
 `crates/horizon-agent` links DuckDB dynamically by default (non-bundled):

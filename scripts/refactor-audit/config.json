@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "roots": ["src", "crates", "preview-plugin/src"],
+  "exclude": ["**/target/**", "**/vendor/**", "**/generated/**"],
+  "test_paths": ["**/tests/**", "**/tests.rs", "**/*_tests.rs", "**/test_*.rs", "**/e2e.rs"],
+  "test_attributes": ["test", "tokio::test", "gpui::test", "rstest", "test_case"],
+  "clones": {"min_tokens": 70, "min_lines": 5, "mode": "weak"},
+  "rules": ["rules/runtime-visibility.yml"],
+  "history": {"min_shared": 3, "max_commit_files": 50, "min_coupling": 30}
+}
