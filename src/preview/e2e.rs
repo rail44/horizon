@@ -17,6 +17,21 @@
 //!   the scene is serialized, so glyphs from different strings interleave.
 //!   Every assertion here is on the character multiset, never on order.
 //!
+//! What it cannot drive: a keystroke into a guest that renders a lot of
+//! wrapped text. Forwarding one through `ViewApi::key` and then running the
+//! executor to quiescence was measured on the board prototype, keeping
+//! everything but the thread column's contents fixed: with that column
+//! empty the run finished in about four seconds; with two of the thread's
+//! messages rendered it had not finished after ninety; with the whole
+//! thread it had not finished after ten minutes. The same keystroke into
+//! the sample preview, the board pane's list and detail previews, the
+//! prototype over an empty store, and the prototype with its thread column
+//! removed all settle in the same second, so the cost tracks that column's
+//! contents rather than the key path itself. Whether the text is markdown
+//! or plain makes no difference to it. Key-driven behaviour of a
+//! text-heavy view is therefore covered by unit tests on its own model
+//! rather than here.
+//!
 //! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
 //! counts primitives and reports glyph ids; the primitives' colors are not
 //! exposed. The sample preview paints its accent role's hex as text, so a
@@ -39,6 +54,7 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
+use crate::board_next::previews as board_next;
 use crate::board_pane::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
@@ -605,6 +621,84 @@ async fn preview_plugin_paints_the_board_over_its_sample_store(cx: &mut TestAppC
     );
 
     cx.update(|_| drop(detail));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-next");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    // The leading character of each title occurs in exactly one string the
+    // sample board can paint (held by that module's own tests), so counting
+    // it separates a list row from a row plus the thread header.
+    let first_marker = board_next::FIRST_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+    let second_marker = board_next::SECOND_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+
+    // --- list and thread are one view ------------------------------------
+    let prototype = load(&live, board_next::NEXT, cx).expect("the prototype instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&prototype.host, &surface, BOARD_SLOT, cx);
+    let master = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&master, first_marker),
+        2,
+        "the selected task is painted as a list row and as the thread header: {master:?}"
+    );
+    assert_eq!(
+        count_of(&master, second_marker),
+        1,
+        "an unselected task is painted as a list row only: {master:?}"
+    );
+    assert!(
+        painted(&master, board_next::THREAD_PROBE),
+        "the selected task's thread is not painted next to the list: {master:?}"
+    );
+    cx.update(|_| drop(prototype));
+    settle(cx);
+
+    // --- the same view over an empty store -------------------------------
+    let empty = load(&live, board_next::NEXT_EMPTY, cx).expect("the empty prototype instantiates");
+    let empty_surface = cx.new(Surface::new);
+    mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
+    let blank = glyph_counts(&summary(&empty_surface, cx));
+    assert!(!blank.is_empty(), "the empty prototype painted no chrome");
+    assert_eq!(
+        count_of(&blank, first_marker),
+        0,
+        "the empty prototype painted a sample row: {blank:?}"
+    );
+    cx.update(|_| drop(empty));
+    settle(cx);
+
+    // --- a long post is folded to its first lines ------------------------
+    let long = load(&live, board_next::NEXT_LONG_THREAD, cx)
+        .expect("the long-thread preview instantiates");
+    let long_surface = cx.new(Surface::new);
+    mount(&long.host, &long_surface, BOARD_SLOT, cx);
+    let folded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&folded, board_next::FOLDED_PROBE),
+        "the long post's first line is not painted: {folded:?}"
+    );
+    assert!(
+        !painted(&folded, board_next::DEEP_PROBE),
+        "the long post was not folded: {folded:?}"
+    );
+
+    cx.update(|_| drop(long));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }

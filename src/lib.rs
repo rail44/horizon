@@ -19,6 +19,9 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod agent;
+// A board prototype that exists only as named previews: it reads a store and
+// drives nothing, so it builds for both targets as it stands.
+mod board_next;
 // The shell drives a good part of this module: the subscriptions it installs
 // on the pane, the commands it executes, the accessors it reads. A plugin
 // build has no shell above the pane, so those have no caller there.
