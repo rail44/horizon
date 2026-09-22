@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use horizon_board::Item;
 
+use super::spec::Layout;
 use crate::board_pane::activity::BoardSessionActivity;
 
 // ---------------------------------------------------------------------------
@@ -25,6 +26,8 @@ pub(crate) enum Command {
     FocusComposer,
     FocusList,
     ToggleFinished,
+    /// Collapses the list to a counts-only rail, or opens it back out.
+    ToggleRail,
     /// Expands every folded message in the open thread, or folds them all
     /// back once none is folded.
     ToggleLongMessages,
@@ -37,13 +40,16 @@ pub(crate) enum Command {
 }
 
 /// The key map. `key` is a GPUI keystroke key name; a chord carrying any
-/// modifier other than shift never reaches this.
-pub(crate) fn command_for_key(key: &str) -> Option<Command> {
+/// modifier other than shift never reaches this. `layout` moves one key
+/// only: the rail direction has no finished band on screen while its list
+/// is collapsed, so `o` is the rail's own toggle there.
+pub(crate) fn command_for_key(key: &str, layout: Layout) -> Option<Command> {
     Some(match key {
         "j" | "down" => Command::SelectNext,
         "k" | "up" => Command::SelectPrevious,
         "enter" => Command::FocusComposer,
         "escape" => Command::FocusList,
+        "o" if layout == Layout::C => Command::ToggleRail,
         "o" => Command::ToggleFinished,
         "e" => Command::ToggleLongMessages,
         _ => return None,
@@ -75,15 +81,23 @@ pub(crate) struct Row {
     pub(crate) activity: Option<BoardSessionActivity>,
 }
 
-/// How many of `item`'s messages come after the reader's recorded position.
-/// A task with no position recorded has read nothing.
-pub(crate) fn unread_count(item: &Item, positions: &HashMap<u64, String>) -> usize {
-    let read = positions
+/// How many of `item`'s messages the reader has already seen: everything up
+/// to and including the recorded position. A task with no position
+/// recorded, or one whose position names a message the task no longer has,
+/// has read nothing.
+pub(crate) fn read_through(item: &Item, positions: &HashMap<u64, String>) -> usize {
+    positions
         .get(&item.id)
         .and_then(|id| item.comments.iter().position(|comment| &comment.id == id))
         .map(|index| index + 1)
-        .unwrap_or(0);
-    item.comments.len().saturating_sub(read)
+        .unwrap_or(0)
+}
+
+/// How many of `item`'s messages come after the reader's recorded position.
+pub(crate) fn unread_count(item: &Item, positions: &HashMap<u64, String>) -> usize {
+    item.comments
+        .len()
+        .saturating_sub(read_through(item, positions))
 }
 
 /// Finished work: explicitly closed, or carrying the status the board uses
@@ -240,6 +254,102 @@ pub(crate) fn fold(text: &str) -> Option<Fold> {
 }
 
 // ---------------------------------------------------------------------------
+// Folding by rendered length
+// ---------------------------------------------------------------------------
+
+/// A post taller than this many rendered lines is folded to a preview.
+pub(crate) const FOLD_RENDERED_LINES: usize = 40;
+
+/// How many of the post's own lines the preview keeps, on top of its first
+/// heading.
+pub(crate) const FOLD_PREVIEW_LINES: usize = 3;
+
+/// How many cells `ch` occupies: two for the full-width ranges Japanese is
+/// written in, one otherwise. The ranges are the East Asian Wide and
+/// Fullwidth blocks, which is what the measure's "one glyph is two cells"
+/// rests on.
+pub(crate) fn cell_width(ch: char) -> usize {
+    let code = ch as u32;
+    let wide = matches!(code,
+        0x1100..=0x115F      // Hangul Jamo
+        | 0x2E80..=0x303E    // CJK radicals, kangxi, CJK punctuation
+        | 0x3041..=0x33FF    // kana, bopomofo, compatibility
+        | 0x3400..=0x4DBF    // CJK extension A
+        | 0x4E00..=0x9FFF    // CJK unified
+        | 0xA000..=0xA4CF    // Yi
+        | 0xAC00..=0xD7A3    // Hangul syllables
+        | 0xF900..=0xFAFF    // CJK compatibility ideographs
+        | 0xFE10..=0xFE19
+        | 0xFE30..=0xFE6F
+        | 0xFF00..=0xFF60    // fullwidth forms
+        | 0xFFE0..=0xFFE6
+        | 0x1F300..=0x1F64F  // emoji
+        | 0x1F900..=0x1F9FF
+        | 0x20000..=0x3FFFD  // CJK extensions B and beyond
+    );
+    1 + usize::from(wide)
+}
+
+/// How many cells `line` occupies.
+pub(crate) fn display_width(line: &str) -> usize {
+    line.chars().map(cell_width).sum()
+}
+
+/// How many rows `text` takes in a column `cells` wide: each of its own
+/// lines wraps as often as its width needs, and an empty line still takes a
+/// row. A word-wrap boundary can move a character to the next row, so this
+/// is the length the fold decision is made on rather than a promise about
+/// the laid-out text.
+pub(crate) fn rendered_lines(text: &str, cells: usize) -> usize {
+    let cells = cells.max(1);
+    text.lines()
+        .map(|line| display_width(line).div_ceil(cells).max(1))
+        .sum()
+}
+
+/// The head of a folded post, and how many rendered lines it hides.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct FoldPreview {
+    pub(crate) head: String,
+    pub(crate) hidden_lines: usize,
+}
+
+/// The preview for `text` in a column `cells` wide, or `None` when the post
+/// is short enough to show whole. The preview is the post's first heading,
+/// if it has one, plus its first [`FOLD_PREVIEW_LINES`] non-empty lines.
+pub(crate) fn fold_preview(text: &str, cells: usize) -> Option<FoldPreview> {
+    let total = rendered_lines(text, cells);
+    if total <= FOLD_RENDERED_LINES {
+        return None;
+    }
+    let lines: Vec<&str> = text.lines().collect();
+    let heading = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with('#'));
+    let mut kept: Vec<usize> = heading.into_iter().collect();
+    for (index, line) in lines.iter().enumerate() {
+        if kept.len() >= FOLD_PREVIEW_LINES + usize::from(heading.is_some()) {
+            break;
+        }
+        if line.trim().is_empty() || kept.contains(&index) {
+            continue;
+        }
+        kept.push(index);
+    }
+    kept.sort_unstable();
+    let head = kept
+        .iter()
+        .filter_map(|index| lines.get(*index).copied())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let hidden = total.saturating_sub(rendered_lines(&head, cells)).max(1);
+    Some(FoldPreview {
+        head,
+        hidden_lines: hidden,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Presentation helpers
 // ---------------------------------------------------------------------------
 
@@ -268,6 +378,19 @@ pub(crate) fn relative_time(at_ms: u64, now_ms: u64) -> String {
         3_600..=86_399 => format!("{}h ago", seconds / 3_600),
         86_400..=604_799 => format!("{}d ago", seconds / 86_400),
         _ => format!("{}w ago", seconds / 604_800),
+    }
+}
+
+/// `at` as an age, in the chrome language the layout directions are written
+/// in. Both arguments are unix milliseconds.
+pub(crate) fn relative_time_ja(at_ms: u64, now_ms: u64) -> String {
+    let seconds = now_ms.saturating_sub(at_ms) / 1_000;
+    match seconds {
+        0..=59 => "たった今".to_string(),
+        60..=3_599 => format!("{}分前", seconds / 60),
+        3_600..=86_399 => format!("{}時間前", seconds / 3_600),
+        86_400..=604_799 => format!("{}日前", seconds / 86_400),
+        _ => format!("{}週間前", seconds / 604_800),
     }
 }
 
@@ -307,10 +430,12 @@ pub(crate) fn status_text(item: &Item) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        command_for_key, finished_summary, fold, is_active, is_finished, relative_time, rows,
-        status_text, step_selection, unread_count, visible_rows, Command, Group, Voice, FOLD_CHARS,
-        FOLD_LINES,
+        cell_width, command_for_key, display_width, finished_summary, fold, fold_preview,
+        is_active, is_finished, relative_time, relative_time_ja, rendered_lines, rows, status_text,
+        step_selection, unread_count, visible_rows, Command, Group, Voice, FOLD_CHARS, FOLD_LINES,
+        FOLD_RENDERED_LINES,
     };
+    use crate::board_next::spec::Layout;
     use crate::board_pane::activity::BoardSessionActivity;
     use horizon_board::{Comment, Item};
     use horizon_workspace::SessionId;
@@ -337,15 +462,97 @@ mod tests {
 
     #[test]
     fn keys_map_to_one_command_each() {
-        assert_eq!(command_for_key("j"), Some(Command::SelectNext));
-        assert_eq!(command_for_key("down"), Some(Command::SelectNext));
-        assert_eq!(command_for_key("k"), Some(Command::SelectPrevious));
-        assert_eq!(command_for_key("up"), Some(Command::SelectPrevious));
-        assert_eq!(command_for_key("enter"), Some(Command::FocusComposer));
-        assert_eq!(command_for_key("escape"), Some(Command::FocusList));
-        assert_eq!(command_for_key("o"), Some(Command::ToggleFinished));
-        assert_eq!(command_for_key("e"), Some(Command::ToggleLongMessages));
-        assert_eq!(command_for_key("x"), None);
+        let any = Layout::Prototype;
+        assert_eq!(command_for_key("j", any), Some(Command::SelectNext));
+        assert_eq!(command_for_key("down", any), Some(Command::SelectNext));
+        assert_eq!(command_for_key("k", any), Some(Command::SelectPrevious));
+        assert_eq!(command_for_key("up", any), Some(Command::SelectPrevious));
+        assert_eq!(command_for_key("enter", any), Some(Command::FocusComposer));
+        assert_eq!(command_for_key("escape", any), Some(Command::FocusList));
+        assert_eq!(command_for_key("o", any), Some(Command::ToggleFinished));
+        assert_eq!(command_for_key("e", any), Some(Command::ToggleLongMessages));
+        assert_eq!(command_for_key("x", any), None);
+        // Only the rail direction rebinds `o`.
+        assert_eq!(
+            command_for_key("o", Layout::A),
+            Some(Command::ToggleFinished)
+        );
+        assert_eq!(command_for_key("o", Layout::C), Some(Command::ToggleRail));
+        assert_eq!(command_for_key("j", Layout::C), Some(Command::SelectNext));
+    }
+
+    #[test]
+    fn a_japanese_glyph_is_two_cells_and_latin_is_one() {
+        assert_eq!(cell_width('あ'), 2);
+        assert_eq!(cell_width('録'), 2);
+        assert_eq!(cell_width('、'), 2);
+        assert_eq!(cell_width('a'), 1);
+        assert_eq!(cell_width(' '), 1);
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("あい"), 4);
+        assert_eq!(display_width("あa"), 3);
+    }
+
+    #[test]
+    fn a_line_wraps_as_often_as_the_column_needs() {
+        assert_eq!(rendered_lines("", 72), 0, "no lines at all");
+        assert_eq!(rendered_lines("short", 72), 1);
+        // 72 cells is 36 full-width glyphs, so 37 of them take two rows.
+        assert_eq!(rendered_lines(&"あ".repeat(36), 72), 1);
+        assert_eq!(rendered_lines(&"あ".repeat(37), 72), 2);
+        // An empty line between paragraphs still takes a row.
+        assert_eq!(rendered_lines("a\n\nb", 72), 3);
+    }
+
+    #[test]
+    fn a_folded_post_keeps_its_heading_and_first_lines() {
+        let short = "一行だけ";
+        assert_eq!(fold_preview(short, 72), None);
+
+        let body: String = (0..60)
+            .map(|index| format!("{index}行目の本文。\n\n"))
+            .collect();
+        let text = format!("## 見出し\n\n{body}");
+        assert!(rendered_lines(&text, 72) > FOLD_RENDERED_LINES);
+        let preview = fold_preview(&text, 72).expect("a long post folds");
+        assert!(preview.head.starts_with("## 見出し"));
+        assert!(preview.head.contains("0行目"));
+        assert!(preview.head.contains("2行目"));
+        assert!(
+            !preview.head.contains("3行目"),
+            "the preview keeps three lines under the heading: {:?}",
+            preview.head
+        );
+        assert!(preview.hidden_lines > 0);
+        assert_eq!(
+            preview.hidden_lines,
+            rendered_lines(&text, 72) - rendered_lines(&preview.head, 72)
+        );
+
+        // A post with no heading keeps its first lines only.
+        let plain = fold_preview(&body, 72).expect("a long post folds");
+        assert!(plain.head.starts_with("0行目"));
+        assert!(!plain.head.contains("3行目"));
+    }
+
+    #[test]
+    fn a_narrow_column_folds_a_post_a_wide_one_shows_whole() {
+        let text: String = (0..12)
+            .map(|index| format!("{index}行目、幅で折り返しの回数が変わる長さの段落。\n"))
+            .collect();
+        assert!(fold_preview(&text, 200).is_none());
+        assert!(fold_preview(&text, 8).is_some());
+    }
+
+    #[test]
+    fn japanese_ages_read_in_the_largest_unit_that_fits() {
+        let now = 10_000_000_000u64;
+        assert_eq!(relative_time_ja(now, now), "たった今");
+        assert_eq!(relative_time_ja(now - 120_000, now), "2分前");
+        assert_eq!(relative_time_ja(now - 3 * 3_600_000, now), "3時間前");
+        assert_eq!(relative_time_ja(now - 2 * 86_400_000, now), "2日前");
+        assert_eq!(relative_time_ja(now - 21 * 86_400_000, now), "3週間前");
+        assert_eq!(relative_time_ja(now + 1_000, now), "たった今");
     }
 
     #[test]

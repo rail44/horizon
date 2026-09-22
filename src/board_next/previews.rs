@@ -1,5 +1,6 @@
 //! The prototype's named previews, over a store whose events are held in
-//! memory.
+//! memory. Every arrangement opens on the same board with the same
+//! activity, so comparing two previews compares arrangements only.
 //!
 //! The sample board is shaped after the live event log the prototype is
 //! aimed at: twenty-five tasks of which most are finished, a handful open
@@ -16,6 +17,15 @@ use horizon_board::{sample_envelopes, BoardEvent, Envelope};
 pub(crate) const NEXT: &str = "board-next";
 pub(crate) const NEXT_EMPTY: &str = "board-next-empty";
 pub(crate) const NEXT_LONG_THREAD: &str = "board-next-long-thread";
+
+/// The three layout directions over the same sample board, and the
+/// long-thread opening of each so a folded post can be judged.
+pub(crate) const A: &str = "board-a";
+pub(crate) const B: &str = "board-b";
+pub(crate) const C: &str = "board-c";
+pub(crate) const A_LONG: &str = "board-a-long";
+pub(crate) const B_LONG: &str = "board-b-long";
+pub(crate) const C_LONG: &str = "board-c-long";
 
 /// The task the long-thread preview opens on.
 const LONG_THREAD_TASK: u64 = 12;
@@ -53,9 +63,15 @@ pub(crate) const DEEP_PROBE: &str = "縞模様の残像はスクロール補間�
 // The previews
 // ---------------------------------------------------------------------------
 
-pub(crate) fn build_next(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| BoardNextView::new(sample_store(), sample_activity(), None, window, cx))
+/// Every direction opens on the same board, with the same activity, so a
+/// comparison between them is a comparison of arrangement only.
+fn build(open: Option<u64>, layout: Layout, window: &mut Window, cx: &mut App) -> AnyView {
+    cx.new(|cx| BoardNextView::new(sample_store(), sample_activity(), open, layout, window, cx))
         .into()
+}
+
+pub(crate) fn build_next(window: &mut Window, cx: &mut App) -> AnyView {
+    build(None, Layout::Prototype, window, cx)
 }
 
 pub(crate) fn build_next_empty(window: &mut Window, cx: &mut App) -> AnyView {
@@ -64,6 +80,7 @@ pub(crate) fn build_next_empty(window: &mut Window, cx: &mut App) -> AnyView {
             Store::in_memory(Vec::new()),
             HashMap::new(),
             None,
+            Layout::Prototype,
             window,
             cx,
         )
@@ -72,16 +89,31 @@ pub(crate) fn build_next_empty(window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 pub(crate) fn build_next_long_thread(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| {
-        BoardNextView::new(
-            sample_store(),
-            sample_activity(),
-            Some(LONG_THREAD_TASK),
-            window,
-            cx,
-        )
-    })
-    .into()
+    build(Some(LONG_THREAD_TASK), Layout::Prototype, window, cx)
+}
+
+pub(crate) fn build_a(window: &mut Window, cx: &mut App) -> AnyView {
+    build(None, Layout::A, window, cx)
+}
+
+pub(crate) fn build_b(window: &mut Window, cx: &mut App) -> AnyView {
+    build(None, Layout::B, window, cx)
+}
+
+pub(crate) fn build_c(window: &mut Window, cx: &mut App) -> AnyView {
+    build(None, Layout::C, window, cx)
+}
+
+pub(crate) fn build_a_long(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Some(LONG_THREAD_TASK), Layout::A, window, cx)
+}
+
+pub(crate) fn build_b_long(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Some(LONG_THREAD_TASK), Layout::B, window, cx)
+}
+
+pub(crate) fn build_c_long(window: &mut Window, cx: &mut App) -> AnyView {
+    build(Some(LONG_THREAD_TASK), Layout::C, window, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +761,7 @@ mod tests {
         LONG_THREAD_TASK, SECOND_TASK_TITLE, THREAD_PROBE,
     };
     use crate::board_next::model;
+    use crate::board_next::spec::MEASURE_CELLS;
     use horizon_board::{BoardEvent, Store};
     use std::collections::HashMap;
 
@@ -896,6 +929,46 @@ mod tests {
         // The thread is two messages behind.
         let positions = store.read_positions("owner").expect("read positions");
         assert_eq!(model::unread_count(&task, &positions), 2);
+    }
+
+    /// What the layout directions fold at the body measure: the long
+    /// report, and nothing in the first task's thread -- so the thread
+    /// probe is on screen as soon as a direction opens, with no keystroke.
+    #[test]
+    fn the_directions_fold_the_long_report_and_nothing_in_the_first_thread() {
+        let cells = MEASURE_CELLS as usize;
+        let store = sample_store();
+        let first = store.show(1).expect("show").expect("the first task");
+        for comment in &first.comments {
+            assert_eq!(
+                model::fold_preview(&comment.text, cells),
+                None,
+                "the first task's thread is short enough to read whole: {}",
+                comment.id
+            );
+        }
+        let long = store
+            .show(LONG_THREAD_TASK)
+            .expect("show")
+            .expect("the long-thread task");
+        let report = long
+            .comments
+            .iter()
+            .find(|comment| comment.text.contains(DEEP_PROBE))
+            .expect("the long post");
+        let folded =
+            model::fold_preview(&report.text, cells).expect("the long report folds at the measure");
+        assert!(folded.head.contains(FOLDED_PROBE));
+        assert!(!folded.head.contains(DEEP_PROBE));
+        assert!(folded.hidden_lines > 40, "{}", folded.hidden_lines);
+        // Nothing else in that thread folds, so unfolding moves only it.
+        assert_eq!(
+            long.comments
+                .iter()
+                .filter(|comment| model::fold_preview(&comment.text, cells).is_some())
+                .count(),
+            1
+        );
     }
 
     #[test]

@@ -51,6 +51,30 @@ const PREVIEWS: &[Preview] = &[
         name: board_next::NEXT_LONG_THREAD,
         build: board_next::build_next_long_thread,
     },
+    Preview {
+        name: board_next::A,
+        build: board_next::build_a,
+    },
+    Preview {
+        name: board_next::B,
+        build: board_next::build_b,
+    },
+    Preview {
+        name: board_next::C,
+        build: board_next::build_c,
+    },
+    Preview {
+        name: board_next::A_LONG,
+        build: board_next::build_a_long,
+    },
+    Preview {
+        name: board_next::B_LONG,
+        build: board_next::build_b_long,
+    },
+    Preview {
+        name: board_next::C_LONG,
+        build: board_next::build_c_long,
+    },
 ];
 
 pub fn previews() -> &'static [Preview] {

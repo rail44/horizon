@@ -754,3 +754,105 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
     settle(cx);
     std::fs::remove_file(&live).ok();
 }
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_three_board_directions(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-directions");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    let first_marker = board_next::FIRST_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+    let second_marker = board_next::SECOND_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+
+    // --- each direction opens on the same task, and `j` carries the
+    //     header title to the next one ----------------------------------
+    // The count relation, not an absolute count: the two-column directions
+    // paint the selected title twice (a row and the header band) while the
+    // rail direction paints it once (the header band alone), so what every
+    // direction has to satisfy is that the selected title outnumbers an
+    // unselected one by exactly one, and that `j` moves that one.
+    for name in [board_next::A, board_next::B, board_next::C] {
+        let direction = load(&live, name, cx).unwrap_or_else(|error| {
+            panic!("the {name} preview does not instantiate: {error}");
+        });
+        let surface = cx.new(Surface::new);
+        mount(&direction.host, &surface, BOARD_SLOT, cx);
+
+        let open = glyph_counts(&summary(&surface, cx));
+        assert!(
+            painted(&open, board_next::FIRST_TASK_TITLE),
+            "{name} painted no selected task title: {open:?}"
+        );
+        assert!(
+            painted(&open, board_next::THREAD_PROBE),
+            "{name} painted no thread under that title: {open:?}"
+        );
+        let first = count_of(&open, first_marker);
+        let second = count_of(&open, second_marker);
+        assert_eq!(
+            first,
+            second + 1,
+            "{name} does not paint the selected task's title once more than an unselected one's: {open:?}"
+        );
+
+        // A keystroke has to settle: a guest paces no frames, so a view
+        // that asks for another frame from inside the one it is drawing
+        // never lets `settle` return (see the module doc).
+        press(&surface, "j", cx);
+        let moved = glyph_counts(&summary(&surface, cx));
+        assert!(
+            painted(&moved, board_next::SECOND_TASK_TITLE),
+            "{name}: `j` painted no next task title: {moved:?}"
+        );
+        assert!(
+            !painted(&moved, board_next::THREAD_PROBE),
+            "{name}: the previous task's thread is still painted after `j`: {moved:?}"
+        );
+        assert_eq!(
+            (
+                count_of(&moved, first_marker),
+                count_of(&moved, second_marker)
+            ),
+            (first - 1, second + 1),
+            "{name}: `j` did not carry the header title onto the next task: {moved:?}"
+        );
+
+        cx.update(|_| drop(direction));
+        settle(cx);
+    }
+
+    // --- folding in the card direction -----------------------------------
+    let long = load(&live, board_next::B_LONG, cx).expect("the card long-thread preview loads");
+    let long_surface = cx.new(Surface::new);
+    mount(&long.host, &long_surface, BOARD_SLOT, cx);
+    let folded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&folded, board_next::FOLDED_PROBE),
+        "the folded card does not show the post's first line: {folded:?}"
+    );
+    assert!(
+        !painted(&folded, board_next::DEEP_PROBE),
+        "the card direction did not fold the long post: {folded:?}"
+    );
+
+    press(&long_surface, "e", cx);
+    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&unfolded, board_next::DEEP_PROBE),
+        "`e` did not unfold the long post in the card direction: {unfolded:?}"
+    );
+
+    cx.update(|_| drop(long));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}

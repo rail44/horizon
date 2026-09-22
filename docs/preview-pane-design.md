@@ -88,6 +88,7 @@ The previews in this build:
 | `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
 | `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
 | `board-next`, `board-next-empty`, `board-next-long-thread` | A board prototype that exists only here: master–detail in one view, over the same kind of in-memory store (`src/board_next/`). The long-thread one opens on a forty-message thread whose third post is long enough to fold. |
+| `board-a`, `board-b`, `board-c` (and `-long` each) | Three layout directions of that same prototype over the same sample data: a list rail beside a capped body column, one bordered card per post, and one column with the list collapsed to a counts rail. One view renders all of them — `board_next::spec::Layout` is chosen at construction and only `Render` branches on it. The `-long` ones open on the forty-message thread. |
 
 `src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It
 reads a store and emits no commands, so it carries no shell wiring and the
@@ -195,7 +196,12 @@ primary entry point and the view chooser does not list the preview kind.
   prototype's: `board-next` paints the selected task as both a row and the
   thread header and `j` moves that pairing to the next task,
   `board-next-empty` paints chrome and no row, and `board-next-long-thread`
-  folds its long post until `e` unfolds it. A board
+  folds its long post until `e` unfolds it. The directions': each of
+  `board-a`/`board-b`/`board-c` paints the selected task's title once more
+  than an unselected one's — twice where a list column draws it too, once
+  where the rail does not — paints that task's thread, and moves that one
+  extra onto the next task on `j`; `board-b-long` shows the long post's
+  first line and not its deep probe until `e`. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.

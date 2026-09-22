@@ -2,7 +2,16 @@
 //!
 //! It is master–detail in one view: the task list on the left, the selected
 //! task's thread on the right, with no mode switch between reading the list
-//! and reading a thread. It reads a [`Store`] through the same
+//! and reading a thread.
+//!
+//! One view renders several arrangements of that: [`Layout`] is chosen at
+//! construction, the model, the state and the key map below are shared, and
+//! only [`Render`] branches on it. [`Layout::Prototype`] is the first
+//! arrangement ([`list`]/[`thread`]); the others are laid out in
+//! [`directions`] out of the pieces in [`parts`], to the measurements in
+//! [`spec`].
+//!
+//! It reads a [`Store`] through the same
 //! [`BoardStoreSource`]/[`run_store_job`] pair the shipped board pane uses,
 //! so a preview's in-memory store and a log-backed one look the same from
 //! here; on the former every write answers [`StoreError::ReadOnly`], which
@@ -16,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, TextareaState};
 use gpui_component::{h_flex, v_flex};
 use horizon_board::{Item, Store, StoreError};
 use horizon_workspace::SessionId;
@@ -25,15 +34,22 @@ use crate::board_pane::activity::BoardSessionActivity;
 use crate::board_pane::execute::{run_store_job, BoardStoreSource};
 use crate::theme;
 
+mod directions;
 mod list;
 mod model;
+mod parts;
 pub(crate) mod previews;
+mod spec;
 mod thread;
 
 use model::{Command, Row};
+use spec::Layout;
 
 /// The prototype's root view.
 pub(crate) struct BoardNextView {
+    /// Which arrangement this view renders. The model, the state, and the
+    /// key map below are shared by all of them.
+    layout: Layout,
     store: BoardStoreSource,
     /// The activity of every session the board binds, as the shell would
     /// report it.
@@ -51,21 +67,30 @@ pub(crate) struct BoardNextView {
     /// A task to select once the first read lands, for a preview that opens
     /// on a thread.
     open: Option<u64>,
+    /// Whether the rail direction shows the full list. The other
+    /// directions always do.
+    rail_expanded: bool,
     composer: Entity<InputState>,
+    /// The layout directions' composer: two lines by default, growing with
+    /// what is typed.
+    reply: Entity<TextareaState>,
     status_input: Entity<InputState>,
     list_scroll: ScrollHandle,
     focus_handle: FocusHandle,
     _composer_subscription: Subscription,
+    _reply_subscription: Subscription,
     _status_subscription: Subscription,
 }
 
 impl BoardNextView {
     /// `open` names the task the view selects once the first read lands;
     /// without it the first row of the steering order is selected.
+    /// `layout` picks the arrangement.
     pub(crate) fn new(
         store: Store,
         activity: HashMap<SessionId, BoardSessionActivity>,
         open: Option<u64>,
+        layout: Layout,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
@@ -76,6 +101,21 @@ impl BoardNextView {
         });
         let _composer_subscription = cx.subscribe_in(
             &composer,
+            window,
+            |view, _input, event: &InputEvent, window, cx| {
+                if let InputEvent::PressEnter { shift: false, .. } = event {
+                    view.execute(Command::PostMessage, window, cx);
+                }
+            },
+        );
+        let reply = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .placeholder("返信を書く")
+                .auto_grow(spec::COMPOSER_MIN_ROWS, spec::COMPOSER_MAX_ROWS)
+                .submit_on_enter(true)
+        });
+        let _reply_subscription = cx.subscribe_in(
+            &reply,
             window,
             |view, _input, event: &InputEvent, window, cx| {
                 if let InputEvent::PressEnter { shift: false, .. } = event {
@@ -100,6 +140,7 @@ impl BoardNextView {
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
         let view = Self {
+            layout,
             store: BoardStoreSource::Ready(store),
             activity,
             rows: Vec::new(),
@@ -110,11 +151,14 @@ impl BoardNextView {
             expanded_messages: HashSet::new(),
             notice: None,
             open,
+            rail_expanded: false,
             composer,
+            reply,
             status_input,
             list_scroll: ScrollHandle::new(),
             focus_handle,
             _composer_subscription,
+            _reply_subscription,
             _status_subscription,
         };
         view.load(cx);
@@ -181,7 +225,14 @@ impl BoardNextView {
                     view.notice = None;
                     view.load(cx);
                 }
-                Err(error) => view.set_notice(write_refusal(&error), cx),
+                Err(error) => {
+                    let notice = if view.layout == Layout::Prototype {
+                        write_refusal(&error)
+                    } else {
+                        write_refusal_ja(&error)
+                    };
+                    view.set_notice(notice, cx)
+                }
             });
         })
         .detach();
@@ -242,7 +293,11 @@ impl BoardNextView {
                 cx.notify();
             }
             Command::FocusComposer => {
-                let handle = self.composer.read(cx).focus_handle(cx);
+                let handle = if self.layout == Layout::Prototype {
+                    self.composer.read(cx).focus_handle(cx)
+                } else {
+                    self.reply.read(cx).focus_handle(cx)
+                };
                 window.focus(&handle, cx);
                 cx.notify();
             }
@@ -256,6 +311,10 @@ impl BoardNextView {
                 if !self.selected.is_some_and(|id| visible.contains(&id)) {
                     self.selected = visible.first().copied();
                 }
+                cx.notify();
+            }
+            Command::ToggleRail => {
+                self.rail_expanded = !self.rail_expanded;
                 cx.notify();
             }
             Command::ToggleLongMessages => self.toggle_long_messages(cx),
@@ -282,18 +341,32 @@ impl BoardNextView {
         }
     }
 
+    /// Whether a post is long enough to be folded in this direction. The
+    /// prototype folds on its own line/character budget; the layout
+    /// directions fold on rendered length at the post's own measure, and
+    /// never fold an unread post.
+    fn foldable(&self, comment: &horizon_board::Comment, unread: bool) -> bool {
+        if self.layout == Layout::Prototype {
+            return model::fold(&comment.text).is_some();
+        }
+        let cells = parts::post_cells(model::voice(&comment.author));
+        !unread && model::fold_preview(&comment.text, cells as usize).is_some()
+    }
+
     /// One key for the whole open thread: the first press opens every folded
     /// message in it, the next folds them all back.
     fn toggle_long_messages(&mut self, cx: &mut Context<Self>) {
         let Some(row) = self.selected_row() else {
             return;
         };
+        let read = model::read_through(&row.item, &self.positions);
         let foldable: Vec<String> = row
             .item
             .comments
             .iter()
-            .filter(|comment| model::fold(&comment.text).is_some())
-            .map(|comment| comment.id.clone())
+            .enumerate()
+            .filter(|(index, comment)| self.foldable(comment, *index >= read))
+            .map(|(_, comment)| comment.id.clone())
             .collect();
         let any_folded = foldable
             .iter()
@@ -312,12 +385,22 @@ impl BoardNextView {
         let Some(id) = self.selected else {
             return;
         };
-        let text = self.composer.read(cx).value().trim().to_string();
+        let prototype = self.layout == Layout::Prototype;
+        let text = if prototype {
+            self.composer.read(cx).value().trim().to_string()
+        } else {
+            self.reply.read(cx).value().trim().to_string()
+        };
         if text.is_empty() {
             return;
         }
-        self.composer
-            .update(cx, |input, cx| input.set_value("", window, cx));
+        if prototype {
+            self.composer
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        } else {
+            self.reply
+                .update(cx, |input, cx| input.set_value("", window, cx));
+        }
         self.mutate(cx, move |store| {
             Box::pin(async move { store.comment(id, "owner", &text).await })
         });
@@ -356,6 +439,7 @@ impl BoardNextView {
     /// bubble through the root handler on their way to the input.
     fn editing(&self, window: &Window, cx: &App) -> bool {
         self.composer.read(cx).focus_handle(cx).is_focused(window)
+            || self.reply.read(cx).focus_handle(cx).is_focused(window)
             || self
                 .status_input
                 .read(cx)
@@ -377,7 +461,7 @@ impl BoardNextView {
             }
             return;
         }
-        let Some(command) = model::command_for_key(&keystroke.key) else {
+        let Some(command) = model::command_for_key(&keystroke.key, self.layout) else {
             return;
         };
         self.execute(command, window, cx);
@@ -394,6 +478,16 @@ fn write_refusal(error: &StoreError) -> String {
     }
 }
 
+/// The same, in the chrome language the layout directions are written in.
+fn write_refusal_ja(error: &StoreError) -> String {
+    match error {
+        StoreError::ReadOnly => {
+            "このボードは読み取り専用です。書き込みは記録されませんでした。".to_string()
+        }
+        other => other.to_string(),
+    }
+}
+
 impl Focusable for BoardNextView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -401,7 +495,16 @@ impl Focusable for BoardNextView {
 }
 
 impl Render for BoardNextView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let list_focused = self.focus_handle.is_focused(window);
+        let body = match self.layout {
+            Layout::Prototype => h_flex()
+                .size_full()
+                .child(self.render_list(cx))
+                .child(self.render_thread(cx))
+                .into_any_element(),
+            layout => self.render_direction(layout, list_focused, cx),
+        };
         h_flex()
             .id("board-next")
             .track_focus(&self.focus_handle)
@@ -411,8 +514,7 @@ impl Render for BoardNextView {
             .size_full()
             .bg(rgb(theme::background()))
             .text_color(theme::text_primary())
-            .child(self.render_list(cx))
-            .child(self.render_thread(cx))
+            .child(body)
     }
 }
 
@@ -429,13 +531,15 @@ mod size {
 
 #[cfg(test)]
 mod tests {
-    use super::write_refusal;
+    use super::{write_refusal, write_refusal_ja};
     use horizon_board::StoreError;
 
     #[test]
     fn a_read_only_store_reads_as_a_state_not_a_failure() {
         assert!(write_refusal(&StoreError::ReadOnly).contains("read-only"));
+        assert!(write_refusal_ja(&StoreError::ReadOnly).contains("読み取り専用"));
         let other = StoreError::ItemNotFound(7);
         assert_eq!(write_refusal(&other), other.to_string());
+        assert_eq!(write_refusal_ja(&other), other.to_string());
     }
 }
