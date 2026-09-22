@@ -54,6 +54,15 @@ async fn connect_hub(socket_path: &std::path::Path) -> HubTestClient {
     }
 }
 
+/// Store can spawn a daemon on a failed connection. Wait for the child we
+/// own to accept connections first, so Store cannot race it with a second,
+/// unowned daemon that survives the fixture's cleanup.
+async fn spawn_logd_for_store() -> DaemonProcess {
+    let logd = spawn_logd();
+    drop(connect_hub(&logd.socket_path).await);
+    logd
+}
+
 /// `hello` negotiates the current version and reports the daemon's binary id.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hello_negotiates_and_reports_binary_id() {
@@ -229,10 +238,7 @@ async fn board_store_client_round_trip_through_real_logd() {
     use horizon_board::{Position, Store};
 
     // Point the store at this daemon's socket (not the default path).
-    let socket_path = scratch_socket("logd-board-rt");
-    let mut command = Command::new(resolve_logd_binary());
-    command.arg("--socket").arg(&socket_path);
-    let logd = DaemonProcess::spawn(&mut command, socket_path.clone());
+    let logd = spawn_logd_for_store().await;
 
     // Inject the binary path so `connect_or_spawn_logd_retrying` (inside
     // the Store's `ingest`) finds this exact binary instead of searching
@@ -251,7 +257,7 @@ async fn board_store_client_round_trip_through_real_logd() {
             .unwrap()
             .as_nanos()
     ));
-    let store = Store::at_with_socket(dir.join("events.jsonl"), socket_path);
+    let store = Store::at_with_socket(dir.join("events.jsonl"), logd.socket_path.clone());
 
     // add → set_status → comment → show, all through the socket.
     let item = store
@@ -294,10 +300,7 @@ async fn board_store_client_round_trip_through_real_logd() {
 async fn edit_updates_title_and_body_through_logd() {
     use horizon_board::{Position, Store};
 
-    let socket_path = scratch_socket("logd-board-edit");
-    let mut command = Command::new(resolve_logd_binary());
-    command.arg("--socket").arg(&socket_path);
-    let logd = DaemonProcess::spawn(&mut command, socket_path.clone());
+    let logd = spawn_logd_for_store().await;
 
     std::env::set_var(
         "HORIZON_LOGD_BINARY",
@@ -311,7 +314,7 @@ async fn edit_updates_title_and_body_through_logd() {
             .unwrap()
             .as_nanos()
     ));
-    let store = Store::at_with_socket(dir.join("events.jsonl"), socket_path);
+    let store = Store::at_with_socket(dir.join("events.jsonl"), logd.socket_path.clone());
 
     let item = store
         .add("Old Title", "old body", None, Position::Bottom)
