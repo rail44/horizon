@@ -1,0 +1,441 @@
+//! Snapshot thread-safe job inputs, enqueue them, and annotate their completion.
+
+use super::{
+    exec, git, registry, ApprovalSource, BashCompletion, HostExecutionApproval,
+    SandboxedApprovalOrigin,
+};
+use crate::config::BashToolConfig;
+use crate::contract::{SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::policy::{
+    annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
+    annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
+};
+use crate::tools::network::SessionNetworkProxy;
+use crate::tools::{error_output, ToolSessionState};
+use crossbeam_channel::Sender;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+
+/// Values that can cross from the session thread into its bash FIFO. The cwd
+/// handle stays shared so a queued command observes earlier commands' `cd`.
+pub(crate) struct BashJob {
+    session_id: SessionId,
+    call_id: ToolCallId,
+    input: Value,
+    cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
+    result_tx: Sender<BashCompletion>,
+}
+
+impl BashJob {
+    pub(crate) fn new(
+        session_id: SessionId,
+        request: &ToolCallRequest,
+        tools: &ToolSessionState,
+        result_tx: Sender<BashCompletion>,
+    ) -> Self {
+        Self {
+            session_id,
+            call_id: request.call_id.clone(),
+            input: request.input.0.clone(),
+            cwd: tools.bash_cwd_handle(),
+            config: tools.bash_config(),
+            result_tx,
+        }
+    }
+    /// Count queued work before enqueueing and hold it through result delivery.
+    /// Both execution modes use this same FIFO and panic/completion boundary.
+    fn enqueue(
+        self,
+        work: impl FnOnce(&Self) -> BashCompletion + Send + std::panic::UnwindSafe + 'static,
+    ) {
+        let work_guard = crate::tools::work_boundary::begin(self.session_id);
+        registry::enqueue(
+            self.session_id,
+            Box::new(move || {
+                let _work_guard = work_guard;
+                run_job_body(
+                    self.session_id,
+                    self.call_id.clone(),
+                    &self.result_tx,
+                    || work(&self),
+                );
+            }),
+        );
+    }
+}
+
+/// Per-run confinement captured after approval has updated session grants.
+/// Git metadata is revalidated when the FIFO actually starts this job.
+pub(crate) struct SandboxedRun {
+    workspace_root: PathBuf,
+    network: Option<Arc<SessionNetworkProxy>>,
+    loopback_connect: Vec<std::net::SocketAddr>,
+    filesystem_grants: Vec<horizon_sandbox::FilesystemGrant>,
+    origin: SandboxedApprovalOrigin,
+    git_metadata_roots: Option<Vec<PathBuf>>,
+}
+
+impl SandboxedRun {
+    pub(crate) fn new(
+        tools: &ToolSessionState,
+        workspace_root: &Path,
+        origin: SandboxedApprovalOrigin,
+        git_metadata_roots: Option<Vec<PathBuf>>,
+    ) -> Self {
+        Self {
+            workspace_root: workspace_root.to_path_buf(),
+            network: tools.network_proxy(),
+            loopback_connect: tools.loopback_connect(),
+            filesystem_grants: tools.effective_sandbox_grants(),
+            origin,
+            git_metadata_roots,
+        }
+    }
+
+    fn validated_grants(&self) -> Result<Vec<horizon_sandbox::FilesystemGrant>, String> {
+        let mut grants = self.filesystem_grants.clone();
+        if let Some(roots) = &self.git_metadata_roots {
+            for grant in git::validated_metadata_grants(&self.workspace_root, roots)? {
+                if !grants.contains(&grant) {
+                    grants.push(grant);
+                }
+            }
+        }
+        Ok(grants)
+    }
+}
+
+fn run_sandboxed_job(job: &BashJob, sandbox: SandboxedRun) -> BashCompletion {
+    let mut completion = match sandbox.validated_grants() {
+        Ok(grants) => exec::run_sandboxed(
+            &job.call_id,
+            &job.input,
+            &job.cwd,
+            &sandbox.workspace_root,
+            sandbox.network.as_deref(),
+            &sandbox.loopback_connect,
+            &grants,
+            &job.config,
+        ),
+        Err(error) => {
+            let mut output = error_output(format!(
+                "Git metadata grant validation failed before execution: {error}"
+            ));
+            annotate_sandboxed(&mut output, false);
+            BashCompletion::Finished(ToolCallResult::new(job.call_id.clone(), None, output))
+        }
+    };
+    if let (Some(roots), Some(result)) = (
+        sandbox.git_metadata_roots.as_deref(),
+        completion_result_mut(&mut completion),
+    ) {
+        annotate_git_operation_approval(&mut result.output, roots);
+        result.is_error = result
+            .output
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+    }
+    // Denial variants already carry their evidence; origin markers apply only
+    // to Finished, matching the approval audit contract.
+    if let BashCompletion::Finished(result) = &mut completion {
+        sandbox.origin.annotate(&mut result.output);
+    }
+    completion
+}
+
+impl SandboxedApprovalOrigin {
+    fn annotate(&self, output: &mut Value) {
+        match self {
+            SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
+                output,
+                "contained",
+                "isolated worktree session with an engaged sandbox",
+            ),
+            SandboxedApprovalOrigin::ManualDomainRetry { domains } => {
+                annotate_domain_approval(output, domains)
+            }
+            SandboxedApprovalOrigin::ManualGitOperation => {}
+            SandboxedApprovalOrigin::FilesystemGrant {
+                source,
+                grants,
+                trigger_paths,
+            } => {
+                annotate_filesystem_grant_approval(output, source.label(), grants, trigger_paths);
+                if *source == ApprovalSource::Judge {
+                    annotate_auto_approval(
+                        output,
+                        "judge",
+                        "judge approved a scoped filesystem grant for a \
+                                     sandboxed retry",
+                    );
+                }
+            }
+            SandboxedApprovalOrigin::MachServiceGrant { services } => {
+                crate::policy::annotate_mach_service_grant_approval(output, services);
+            }
+        }
+    }
+}
+
+/// Kicks off a bash call and returns immediately; the UI thread must not
+/// block waiting on this. `cwd` is the session's shared, tracked bash
+/// working directory (`ToolSessionState::bash_cwd_handle`) — read at the
+/// start of the call and updated in place if the command `cd`s, so the next
+/// call in this session picks it up. `result_tx` delivers the finished
+/// `BashCompletion` back to the UI thread; see the module doc for the full
+/// round trip. `config` carries the timeout/output-cap/drain-grace knobs
+/// (`agent::config::BashToolConfig`, `[agent]` in the config file) — a
+/// plain `Copy` value rather than the `Rc`-based `ToolSessionState` it was
+/// read from, since it has to cross onto the background thread this
+/// eventually runs on.
+///
+/// Bash containment (`docs/agent-tools-design.md`, "Bash Containment"):
+/// rather than spawning a fresh thread unconditionally, this hands the call
+/// to `registry::enqueue`, which runs it immediately if `session_id` has no
+/// other bash call in flight, or queues it (FIFO) behind whatever is
+/// already running for that session — a session's bash calls never run
+/// concurrently with each other.
+#[cfg(test)]
+pub(super) fn spawn(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    input: Value,
+    cwd: Arc<Mutex<PathBuf>>,
+    config: BashToolConfig,
+    result_tx: Sender<BashCompletion>,
+) {
+    spawn_host(
+        BashJob {
+            session_id,
+            call_id,
+            input,
+            cwd,
+            config,
+            result_tx,
+        },
+        None,
+    );
+}
+
+/// Runs one explicitly approved call with the host process's ordinary
+/// authority. The elevation is call-scoped: the next bash call starts from
+/// the normal sandbox policy again.
+pub(crate) fn spawn_approved_host(job: BashJob, approval: HostExecutionApproval) {
+    spawn_host(job, Some(approval));
+}
+
+fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
+    job.enqueue(move |job| {
+        let mut output = exec::run(&job.call_id, &job.input, &job.cwd, &job.config);
+        // Honest either way (`docs/agent-approval-design.md`'s
+        // "Audit"): this path never engages the sandbox. Host
+        // execution is not represented as sandboxed merely because
+        // it followed an approval. Explicitly mediated calls receive
+        // additional scope and source markers below.
+        annotate_sandboxed(&mut output, false);
+        if let Some(approval) = &approval {
+            annotate_host_execution_approval(&mut output, approval.source.label());
+            if approval.source == ApprovalSource::Judge {
+                annotate_auto_approval(
+                    &mut output,
+                    "judge",
+                    "judge approved one call with host execution authority",
+                );
+            }
+        }
+        // `occurrence_id` is `None` at every construction site in
+        // this module: an enqueued bash job is handed a `call_id`
+        // and nothing else. The agentd's fold sites
+        // (`fold_finished_bash_result` and the two denial folds)
+        // stamp the originating request's occurrence on the way
+        // out -- see `exec::run_sandboxed`'s comment on the same
+        // seam.
+        BashCompletion::Finished(ToolCallResult::new(job.call_id.clone(), None, output))
+    });
+}
+
+/// Kicks off a *sandboxed* bash call (`docs/agent-approval-design.md`'s tier
+/// 1: auto-approved `bash` in an isolated, sandbox-engaged session) and
+/// returns immediately. The sandbox workspace root is
+/// `horizon_sandbox`'s only writable root. The host's real temp dir is
+/// deliberately *not* added as a writable root here -- a 2026-07 dogfooding
+/// incident found that doing so made the whole shared host `/tmp` writable
+/// from inside every sandboxed call (see `exec::run_sandboxed`'s doc comment
+/// for the containment story). `output::spill`'s own write happens
+/// host-side, after this call's output has already been captured over a
+/// pipe, never from inside the sandboxed child -- it needs no writable-root
+/// grant at all. Still goes through the same per-session FIFO
+/// (`registry::enqueue`) as host execution -- a session's bash calls never run
+/// concurrently with each other regardless of which path started them.
+/// Structured network/filesystem denials are returned as their dedicated
+/// completion variants while containment remains enabled.
+///
+/// `network` (`docs/agent-approval-design.md` leg 4b) is this session's own
+/// `SessionNetworkProxy`, if one is running -- `Some` gives the sandbox its
+/// exact loopback TCP proxy endpoint, `None` falls back to
+/// `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
+/// says whether this run is a tier-1 auto-approval, a domain-denial retry,
+/// or a Git operation approval -- see [`SandboxedApprovalOrigin`] -- so the
+/// eventual `Finished` result is annotated honestly.
+pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
+    // The proxy's accessors synchronize internally; no proxy lock is held
+    // across a caught panic. The following job can safely reuse the proxy.
+    let sandbox = std::panic::AssertUnwindSafe(sandbox);
+    job.enqueue(move |job| {
+        let sandbox = sandbox;
+        run_sandboxed_job(job, sandbox.0)
+    });
+}
+
+fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCallResult> {
+    match completion {
+        BashCompletion::ApprovalJudged(_) => None,
+        BashCompletion::Finished(result)
+        | BashCompletion::DomainDenied { result, .. }
+        | BashCompletion::FilesystemDenied { result, .. }
+        | BashCompletion::MachServiceDenied { result, .. } => Some(result),
+        BashCompletion::DomainGrantRequired { .. } => None,
+    }
+}
+
+/// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*
+/// sends a `BashCompletion` on `result_tx` -- even if `work` panics. This is
+/// the fix for the "answered -- running..." wedge a bare panic used to
+/// cause: without catching it here, a panic on this job's thread would skip
+/// the `result_tx.send` below entirely, so the approved tool call never gets
+/// a `ToolCallFinished` and stays stuck forever. Catching also means this
+/// function itself returns normally, so the job closure `registry::run_job`
+/// spawned returns normally too and `advance` still fires on schedule --
+/// the FIFO doesn't wedge on the *next* call either.
+///
+/// `work` must be `UnwindSafe`: both `spawn`'s and `spawn_sandboxed`'s call
+/// sites wrap a plain `FnOnce` closure (no shared/interior-mutable state
+/// visible to the closure that catching a panic mid-mutation could leave
+/// inconsistent), so this is a real guarantee, not an assertion papered
+/// over. A panic always resolves to `BashCompletion::Finished` (never a
+/// retry-without-sandbox prompt) -- a harness panic isn't a sandbox denial.
+pub(super) fn run_job_body(
+    session_id: SessionId,
+    call_id: ToolCallId,
+    result_tx: &Sender<BashCompletion>,
+    work: impl FnOnce() -> BashCompletion + std::panic::UnwindSafe,
+) {
+    let completion = match std::panic::catch_unwind(work) {
+        Ok(completion) => completion,
+        Err(payload) => {
+            // `&*payload`, not `&payload`: `payload` is a `Box<dyn Any +
+            // Send>`, and coercing `&Box<dyn Any + Send>` straight to
+            // `&(dyn Any + Send)` unsizes the *Box* itself into the trait
+            // object (its own, distinct `Any` impl) rather than derefing
+            // through to the payload inside -- every `downcast_ref` would
+            // silently miss. Deref first so the trait object is built from
+            // the actual payload.
+            let message = panic_payload_message(&*payload);
+            eprintln!("bash worker panicked (session {session_id:?}, call {call_id:?}): {message}");
+            BashCompletion::Finished(ToolCallResult::new(
+                call_id,
+                None,
+                exec::panic_output(&format!("bash worker panicked: {message}")),
+            ))
+        }
+    };
+    let _ = result_tx.send(completion);
+}
+
+/// Extracts a human-readable message from a caught panic's payload. Panic
+/// payloads are almost always `&'static str` (a string-literal panic
+/// message) or `String` (a formatted one, e.g. from `panic!("{x}")`) --
+/// anything else is an unusual payload type (`panic_any` with a custom
+/// type), which this reports generically rather than failing to build a
+/// completion at all.
+fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "<non-string panic payload>".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::AgentToolsConfig;
+    use crate::tools::{session_tool_work_settled, RecallContext};
+    use crossbeam_channel::unbounded;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn queued_jobs_retain_work_and_observe_cwd_changes_even_after_a_panic() {
+        let dir = std::env::temp_dir().join(format!("horizon-bash-job-{}", uuid::Uuid::new_v4()));
+        let next = dir.as_path().join("next");
+        std::fs::create_dir_all(&next).unwrap();
+        let tools = ToolSessionState::for_root(
+            dir.as_path().to_path_buf(),
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        );
+        let session_id = SessionId::new();
+        let request = |id: &str| ToolCallRequest {
+            call_id: ToolCallId(id.into()),
+            occurrence_id: None,
+            tool_id: "bash".into(),
+            input: serde_json::json!({"command": "pwd"}).into(),
+        };
+        let (results, completed) = unbounded();
+        let (started, running) = unbounded();
+        let (release, blocked) = unbounded();
+        let first = BashJob::new(session_id, &request("first"), &tools, results.clone());
+        first.enqueue(move |job| {
+            started.send(()).unwrap();
+            blocked.recv().unwrap();
+            *job.cwd.lock().unwrap() = next;
+            panic!("first job failed after changing cwd");
+        });
+        running.recv_timeout(Duration::from_secs(2)).unwrap();
+        let second = BashJob::new(session_id, &request("second"), &tools, results);
+        spawn_approved_host(second, HostExecutionApproval::new(ApprovalSource::Human));
+        assert!(!session_tool_work_settled(session_id));
+        assert!(completed.try_recv().is_err());
+        release.send(()).unwrap();
+        let BashCompletion::Finished(first) =
+            completed.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("panic must produce a finished result");
+        };
+        assert_eq!(first.call_id.0, "first");
+        assert!(first.is_error);
+        let BashCompletion::Finished(second) =
+            completed.recv_timeout(Duration::from_secs(5)).unwrap()
+        else {
+            panic!("second job must still run");
+        };
+        assert_eq!(second.call_id.0, "second");
+        assert_eq!(second.output["exit_code"], 0);
+        assert_eq!(
+            second.output["output"].as_str().unwrap().trim(),
+            dir.as_path()
+                .join("next")
+                .canonicalize()
+                .unwrap()
+                .to_str()
+                .unwrap()
+        );
+        assert_eq!(second.output["sandboxed"], false);
+        assert_eq!(second.output["host_execution_approved"], true);
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !session_tool_work_settled(session_id) {
+            assert!(
+                Instant::now() < deadline,
+                "work guard survived job completion"
+            );
+            std::thread::yield_now();
+        }
+        assert!(completed.try_recv().is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}

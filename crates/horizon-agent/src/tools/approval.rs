@@ -335,13 +335,7 @@ fn resolve_web_fetch(
     let approved_domains =
         crate::tools::web::record_approved_domains(session_id, &request.call_id, &validated);
 
-    let events = vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
-    ];
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    let outcome = begin_execution(runtime, request, None);
     crate::tools::web::spawn(
         session_id,
         request.call_id.clone(),
@@ -353,7 +347,7 @@ fn resolve_web_fetch(
         },
         runtime.async_results.clone(),
     );
-    ApprovalOutcome::Started { events, frame }
+    outcome
 }
 
 /// `fs.write`/`fs.edit`/`config.write` and the approved-out-of-root read
@@ -496,29 +490,22 @@ fn resolve_git_operation(
         }
     }
 
-    let call_id = request.call_id.clone();
-    let events = vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(call_id.clone()),
-    ];
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
+    let outcome = begin_execution(runtime, request, None);
     bash::spawn_sandboxed(
-        session_id,
-        call_id,
-        request.input.0.clone(),
-        runtime.tool_state.bash_cwd_handle(),
-        runtime.tool_state.bash_config(),
-        workspace_root.to_path_buf(),
-        runtime.tool_state.network_proxy(),
-        runtime.tool_state.loopback_connect(),
-        SandboxedApprovalOrigin::ManualGitOperation,
-        runtime.tool_state.effective_sandbox_grants(),
-        Some(writable_roots),
-        runtime.async_results.clone(),
+        bash::BashJob::new(
+            session_id,
+            request,
+            &runtime.tool_state,
+            runtime.async_results.clone(),
+        ),
+        bash::SandboxedRun::new(
+            &runtime.tool_state,
+            workspace_root,
+            SandboxedApprovalOrigin::ManualGitOperation,
+            Some(writable_roots),
+        ),
     );
-    ApprovalOutcome::Started { events, frame }
+    outcome
 }
 
 fn resolve_standard_bash(
@@ -530,26 +517,19 @@ fn resolve_standard_bash(
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
-            let call_id = request.call_id.clone();
-            let events = vec![
-                Event::StateChanged(SessionState::ToolRunning),
-                Event::ToolCallStarted(call_id.clone()),
-            ];
-            let frame = runtime
-                .live_state
-                .extend_provider_events(events.clone().into_iter().map(Into::into));
+            let outcome = begin_execution(runtime, request, None);
 
             bash::spawn_approved_host(
-                session_id,
-                call_id,
-                request.input.0.clone(),
-                runtime.tool_state.bash_cwd_handle(),
-                runtime.tool_state.bash_config(),
+                bash::BashJob::new(
+                    session_id,
+                    request,
+                    &runtime.tool_state,
+                    runtime.async_results.clone(),
+                ),
                 HostExecutionApproval::new(approval_source),
-                runtime.async_results.clone(),
             );
 
-            ApprovalOutcome::Started { events, frame }
+            outcome
         }
         ApprovalDecision::Deny { .. } => {
             synchronous_result(runtime, &request.call_id, denied_output(), false)
@@ -615,41 +595,50 @@ fn resolve_filesystem_denial_retry(
         .live_state
         .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
 
-    let call_id = request.call_id.clone();
-    let events = vec![
-        // The abandoned attempt closes here, before the retry starts --
-        // see `superseded_by_retry_result`.
-        Event::ToolCallFinished(superseded_by_retry_result(
-            &prior_result,
+    let outcome = begin_execution(runtime, request, Some(&prior_result));
+    bash::spawn_sandboxed(
+        bash::BashJob::new(
+            session_id,
+            request,
+            &runtime.tool_state,
+            runtime.async_results.clone(),
+        ),
+        bash::SandboxedRun::new(
+            &runtime.tool_state,
+            workspace_root,
+            SandboxedApprovalOrigin::FilesystemGrant {
+                source: approval_source,
+                grants,
+                trigger_paths: denials
+                    .iter()
+                    .map(|denial| denial.attempted_path.clone())
+                    .collect(),
+            },
+            None,
+        ),
+    );
+    outcome
+}
+
+/// Fold the start before enqueueing a job. A retry closes its abandoned
+/// attempt first, preserving the old and new occurrence identities.
+fn begin_execution(
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    prior_result: Option<&ToolCallResult>,
+) -> ApprovalOutcome {
+    let mut events = Vec::new();
+    if let Some(prior) = prior_result {
+        events.push(Event::ToolCallFinished(superseded_by_retry_result(
+            prior,
             request.occurrence_id.as_ref(),
-        )),
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(call_id.clone()),
-    ];
+        )));
+    }
+    events.push(Event::StateChanged(SessionState::ToolRunning));
+    events.push(Event::ToolCallStarted(request.call_id.clone()));
     let frame = runtime
         .live_state
         .extend_provider_events(events.clone().into_iter().map(Into::into));
-    bash::spawn_sandboxed(
-        session_id,
-        call_id,
-        request.input.0.clone(),
-        runtime.tool_state.bash_cwd_handle(),
-        runtime.tool_state.bash_config(),
-        workspace_root.to_path_buf(),
-        runtime.tool_state.network_proxy(),
-        runtime.tool_state.loopback_connect(),
-        SandboxedApprovalOrigin::FilesystemGrant {
-            source: approval_source,
-            grants,
-            trigger_paths: denials
-                .iter()
-                .map(|denial| denial.attempted_path.clone())
-                .collect(),
-        },
-        runtime.tool_state.effective_sandbox_grants(),
-        None,
-        runtime.async_results.clone(),
-    );
     ApprovalOutcome::Started { events, frame }
 }
 
@@ -738,17 +727,7 @@ fn resolve_domain_denial_retry(
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
-        ApprovalDecision::Deny { .. } => {
-            let events = vec![Event::ToolCallFinished(prior_result.clone())];
-            let frame = runtime
-                .live_state
-                .extend_provider_events(events.clone().into_iter().map(Into::into));
-            ApprovalOutcome::Executed {
-                events,
-                frame,
-                command: Command::ToolCallResult(prior_result),
-            }
-        }
+        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
         ApprovalDecision::Approve => {
             // Both should be impossible here -- a `DomainDenialRetry` is
             // only ever produced by a tier-1 sandboxed call, which requires
@@ -759,51 +738,30 @@ fn resolve_domain_denial_retry(
                 runtime.tool_state.network_proxy(),
                 runtime.tool_state.workspace_root(),
             ) else {
-                let events = vec![Event::ToolCallFinished(prior_result.clone())];
-                let frame = runtime
-                    .live_state
-                    .extend_provider_events(events.clone().into_iter().map(Into::into));
-                return ApprovalOutcome::Executed {
-                    events,
-                    frame,
-                    command: Command::ToolCallResult(prior_result),
-                };
+                return forward_prior_result(runtime, prior_result);
             };
             for domain in &domains {
                 network.allow_domain(domain.clone());
             }
 
-            let call_id = request.call_id.clone();
-            let events = vec![
-                // The abandoned attempt closes here, before the retry
-                // starts -- see `superseded_by_retry_result`.
-                Event::ToolCallFinished(superseded_by_retry_result(
-                    &prior_result,
-                    request.occurrence_id.as_ref(),
-                )),
-                Event::StateChanged(SessionState::ToolRunning),
-                Event::ToolCallStarted(call_id.clone()),
-            ];
-            let frame = runtime
-                .live_state
-                .extend_provider_events(events.clone().into_iter().map(Into::into));
+            let outcome = begin_execution(runtime, request, Some(&prior_result));
 
             bash::spawn_sandboxed(
-                session_id,
-                call_id,
-                request.input.0.clone(),
-                runtime.tool_state.bash_cwd_handle(),
-                runtime.tool_state.bash_config(),
-                workspace_root.to_path_buf(),
-                Some(network),
-                runtime.tool_state.loopback_connect(),
-                SandboxedApprovalOrigin::ManualDomainRetry { domains },
-                runtime.tool_state.effective_sandbox_grants(),
-                git_metadata_roots,
-                runtime.async_results.clone(),
+                bash::BashJob::new(
+                    session_id,
+                    request,
+                    &runtime.tool_state,
+                    runtime.async_results.clone(),
+                ),
+                bash::SandboxedRun::new(
+                    &runtime.tool_state,
+                    workspace_root,
+                    SandboxedApprovalOrigin::ManualDomainRetry { domains },
+                    git_metadata_roots,
+                ),
             );
 
-            ApprovalOutcome::Started { events, frame }
+            outcome
         }
     }
 }
@@ -827,17 +785,7 @@ fn resolve_mach_service_grant(
 ) -> ApprovalOutcome {
     let git_metadata_roots = bash::approved_metadata_roots(&prior_result.output);
     match decision {
-        ApprovalDecision::Deny { .. } => {
-            let events = vec![Event::ToolCallFinished(prior_result.clone())];
-            let frame = runtime
-                .live_state
-                .extend_provider_events(events.clone().into_iter().map(Into::into));
-            ApprovalOutcome::Executed {
-                events,
-                frame,
-                command: Command::ToolCallResult(prior_result),
-            }
-        }
+        ApprovalDecision::Deny { .. } => forward_prior_result(runtime, prior_result),
         ApprovalDecision::Approve => {
             // Both should be impossible here -- a mach service grant is
             // only ever produced by a tier-1 sandboxed call, which requires
@@ -845,49 +793,28 @@ fn resolve_mach_service_grant(
             // prior, already-computed result), mirroring
             // [`resolve_domain_denial_retry`].
             let Some(workspace_root) = runtime.tool_state.workspace_root() else {
-                let events = vec![Event::ToolCallFinished(prior_result.clone())];
-                let frame = runtime
-                    .live_state
-                    .extend_provider_events(events.clone().into_iter().map(Into::into));
-                return ApprovalOutcome::Executed {
-                    events,
-                    frame,
-                    command: Command::ToolCallResult(prior_result),
-                };
+                return forward_prior_result(runtime, prior_result);
             };
             runtime.tool_state.approve_mach_services(&services);
 
-            let call_id = request.call_id.clone();
-            let events = vec![
-                // The abandoned attempt closes here, before the retry
-                // starts -- see `superseded_by_retry_result`.
-                Event::ToolCallFinished(superseded_by_retry_result(
-                    &prior_result,
-                    request.occurrence_id.as_ref(),
-                )),
-                Event::StateChanged(SessionState::ToolRunning),
-                Event::ToolCallStarted(call_id.clone()),
-            ];
-            let frame = runtime
-                .live_state
-                .extend_provider_events(events.clone().into_iter().map(Into::into));
+            let outcome = begin_execution(runtime, request, Some(&prior_result));
 
             bash::spawn_sandboxed(
-                session_id,
-                call_id,
-                request.input.0.clone(),
-                runtime.tool_state.bash_cwd_handle(),
-                runtime.tool_state.bash_config(),
-                workspace_root.to_path_buf(),
-                runtime.tool_state.network_proxy(),
-                runtime.tool_state.loopback_connect(),
-                SandboxedApprovalOrigin::MachServiceGrant { services },
-                runtime.tool_state.effective_sandbox_grants(),
-                git_metadata_roots,
-                runtime.async_results.clone(),
+                bash::BashJob::new(
+                    session_id,
+                    request,
+                    &runtime.tool_state,
+                    runtime.async_results.clone(),
+                ),
+                bash::SandboxedRun::new(
+                    &runtime.tool_state,
+                    workspace_root,
+                    SandboxedApprovalOrigin::MachServiceGrant { services },
+                    git_metadata_roots,
+                ),
             );
 
-            ApprovalOutcome::Started { events, frame }
+            outcome
         }
     }
 }
@@ -910,15 +837,7 @@ fn unstarted_error(
         .tool_call_request(call_id)
         .and_then(|request| request.occurrence_id.clone());
     let result = ToolCallResult::new(call_id.clone(), occurrence_id, error_output(message));
-    let events = vec![Event::ToolCallFinished(result.clone())];
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
-    ApprovalOutcome::Executed {
-        events,
-        frame,
-        command: Command::ToolCallResult(result),
-    }
+    forward_prior_result(runtime, result)
 }
 
 fn denied_output() -> Value {

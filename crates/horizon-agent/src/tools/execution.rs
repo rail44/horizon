@@ -1,3 +1,4 @@
+use crate::tools::bash;
 use serde_json::{json, Value};
 
 use crate::contract::{
@@ -251,7 +252,6 @@ fn execute_tier1_bash(
     let Some(workspace_root) = tool_state.workspace_root() else {
         return Execution::RequiresApproval;
     };
-    let network = tool_state.network_proxy();
 
     let call_id = request.call_id.clone();
 
@@ -294,19 +294,19 @@ fn execute_tier1_bash(
         Event::ToolCallStarted(call_id.clone()),
     ];
 
-    crate::tools::bash::spawn_sandboxed(
-        session_id,
-        call_id,
-        request.input.0.clone(),
-        tool_state.bash_cwd_handle(),
-        tool_state.bash_config(),
-        workspace_root.to_path_buf(),
-        network,
-        tool_state.loopback_connect(),
-        crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
-        tool_state.effective_sandbox_grants(),
-        None,
-        runtime.async_results.clone(),
+    bash::spawn_sandboxed(
+        bash::BashJob::new(
+            session_id,
+            request,
+            tool_state,
+            runtime.async_results.clone(),
+        ),
+        bash::SandboxedRun::new(
+            tool_state,
+            workspace_root,
+            crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
+            None,
+        ),
     );
 
     Execution::Started(events)
