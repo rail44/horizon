@@ -75,10 +75,11 @@ replicate them.
 
 ## What the pane shows
 
-The aggregator's output only. While proposers run the pane shows the
-ordinary in-progress state; proposer activity and proposals are not
-rendered, and the live task-progress rows are not used. Every proposer
-session persists in the event log and DuckDB like any other session.
+The aggregator's output, plus one error item per proposer that contributed
+nothing. While proposers run the pane shows the ordinary in-progress state;
+proposer activity and proposals are not rendered, and the live
+task-progress rows are not used. Every proposer session persists in the
+event log and DuckDB like any other session.
 
 ## Cancelling
 
@@ -91,8 +92,12 @@ itself keep the `task` rule.
 
 A failed, capped, or unavailable (missing key) proposer does not fail the
 pass. It contributes whatever report it has, under `task`'s empty-report
-rule, and the pass proceeds with the rest. With no usable proposal the
-aggregator answers alone; the log says so, the pane does not.
+rule, and the pass proceeds with the rest. Each proposer that contributed
+nothing is sent as an `Event::Error` on the aggregator's event channel,
+naming the entry, the member's provider/model, and the reason, so it
+renders as an error item in the pane and persists like any other event.
+With no usable proposal the aggregator answers alone, reported the same
+way.
 
 A proposer that reads outside the workspace root is not one of these cases:
 the read is refused with an error result and the proposer keeps working, so

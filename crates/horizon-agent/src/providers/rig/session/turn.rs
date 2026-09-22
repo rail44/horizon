@@ -110,11 +110,13 @@ impl SessionLoopState {
     ) -> (Message, Option<String>) {
         self.collect_inputs();
         let mut additions = Vec::new();
+        let mut failures = Vec::new();
         if let Some(text) = self.inputs.take_additions() {
             additions.push(text);
         }
-        if let Some(text) = crate::tools::take_notification(self.session_id) {
-            additions.push(text);
+        if let Some(notification) = crate::tools::take_notification(self.session_id) {
+            additions.push(notification.text);
+            failures = notification.failures;
         }
         let Some(text) = (!additions.is_empty()).then(|| additions.join("\n\n")) else {
             return (prompt, None);
@@ -123,7 +125,18 @@ impl SessionLoopState {
         let _ = self
             .events_tx
             .send(crate::tools::notification_event(text.clone()).into());
+        self.report_task_failures(failures);
         (Message::user(text.clone()), Some(text))
+    }
+
+    /// Records each child that produced no usable report as an error item in
+    /// the requester's pane. A `task` child is never attached to a pane, so
+    /// the notification the model reads is otherwise the only trace of its
+    /// failure.
+    pub(crate) fn report_task_failures(&self, failures: Vec<String>) {
+        for message in failures {
+            let _ = self.events_tx.send(Event::Error(Error { message }).into());
+        }
     }
 
     /// Runs a single rig turn to completion while concurrently listening for

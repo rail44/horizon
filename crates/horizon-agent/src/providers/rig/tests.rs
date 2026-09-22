@@ -3748,6 +3748,86 @@ fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
     );
 }
 
+/// A child that produced no usable report is reported on the requester's
+/// own event stream as well, as an `Event::Error`. The child's session is
+/// attached to no pane, so without it the failure reaches the human only if
+/// the requester's model chooses to mention it.
+#[test]
+fn a_task_child_with_no_usable_report_is_reported_as_an_error() {
+    let session_id = SessionId::new();
+    let (tx, rx) = start_fallback_rig_session_as(
+        RigAgentConfig {
+            api_key_present: false,
+            model: "unused-in-fallback-mode".to_string(),
+            ..Default::default()
+        },
+        None,
+        session_id,
+    );
+
+    let _ = tx.send(Command::UserMessage {
+        text: "hello".to_string(),
+    });
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            ..
+        })
+    ));
+    assert!(matches!(
+        recv(&rx).event,
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            ..
+        })
+    ));
+    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(
+        recv(&rx).event,
+        Event::StateChanged(SessionState::WaitingForUser)
+    );
+
+    let child = SessionId::new();
+    crate::tools::explore::deliver_test_completion(
+        session_id,
+        child,
+        "map the emit sites",
+        serde_json::json!({
+            "session_id": child.as_uuid().to_string(),
+            "description": "map the emit sites",
+            "is_error": true,
+            "message": "the task session terminated before finishing",
+        }),
+    );
+
+    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    let notification = match recv(&rx).event {
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::TaskNotification,
+            text,
+        }) => text,
+        other => panic!("expected a task notification message, got {other:?}"),
+    };
+    assert!(
+        notification.contains("produced no usable report"),
+        "{notification}"
+    );
+    let error = match recv(&rx).event {
+        Event::Error(error) => error.message,
+        other => panic!("expected the failure to be reported as an error, got {other:?}"),
+    };
+    assert_eq!(
+        error,
+        format!(
+            "task \"map the emit sites\" (session_id: {}) failed: the task session terminated \
+             before finishing — no usable report",
+            child.as_uuid()
+        )
+    );
+}
+
 /// Delivery waits while a tool call is still outstanding. This is exactly
 /// the `WaitingForApproval` case the design doc's turn-semantics notes call
 /// out: a requester parked on an approval has its batch outstanding until

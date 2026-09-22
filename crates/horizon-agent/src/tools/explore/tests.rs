@@ -192,10 +192,16 @@ impl Requester {
     /// Blocks until this session has a notification queued, or `WAIT`
     /// elapses -- the waiter thread queues asynchronously.
     fn await_notification(&self) -> String {
+        self.await_drain().text
+    }
+
+    /// The same wait, keeping the whole drain so a test can also inspect the
+    /// pane-facing failure lines.
+    fn await_drain(&self) -> super::TaskNotification {
         let deadline = std::time::Instant::now() + WAIT;
         loop {
-            if let Some(text) = take_notification(self.session_id) {
-                return text;
+            if let Some(notification) = take_notification(self.session_id) {
+                return notification;
             }
             assert!(
                 std::time::Instant::now() < deadline,
@@ -298,8 +304,14 @@ fn several_completions_coalesce_into_one_notification() {
         || super::children::pending_count(requester.session_id) >= 2,
         "both completions to be queued",
     );
-    let text = requester.await_notification();
+    let drain = requester.await_drain();
+    let text = drain.text;
 
+    assert!(
+        drain.failures.is_empty(),
+        "a child that reported is not a failure: {:?}",
+        drain.failures
+    );
     assert_eq!(
         text.matches("session_id:").count(),
         2,
@@ -529,10 +541,21 @@ fn a_failed_child_is_reported_as_a_failure_notification() {
         .send(Event::StateChanged(SessionState::Terminated))
         .unwrap();
 
-    let text = requester.await_notification();
+    let drain = requester.await_drain();
+    let text = drain.text;
     assert!(text.contains("map the module"), "{text}");
     assert!(text.contains("failed"), "{text}");
     assert!(text.contains("context window exceeded"), "{text}");
+    // The same facts also leave as a pane-facing line: the child's own
+    // session is attached to no pane.
+    assert_eq!(
+        drain.failures,
+        vec![format!(
+            "task \"map the module\" (session_id: {}) failed: the task session terminated before \
+             finishing (context window exceeded) — no usable report",
+            child_id.as_uuid()
+        )]
+    );
     assert_eq!(
         *terminated.lock().unwrap(),
         vec![child_id],
