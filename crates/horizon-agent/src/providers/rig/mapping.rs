@@ -132,8 +132,13 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
                     .map(String::as_str)
                     .unwrap_or(""),
             )),
-            Event::Error(error) => Some(Message::assistant(format!("error: {}", error.message))),
-            Event::StateChanged(_)
+            // A harness-detected fault (stream timeout, truncated response,
+            // HTTP error) is an audit record for the event log. The model
+            // is not shown one live, so a rebuilt history must not carry
+            // one either -- a resumed session's provider view is the same
+            // as a continuously-running one's.
+            Event::Error(_)
+            | Event::StateChanged(_)
             | Event::ReasoningDelta(_)
             | Event::AssistantTextDelta(_)
             | Event::ToolCallStarted(_)

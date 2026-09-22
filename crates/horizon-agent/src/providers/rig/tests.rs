@@ -1117,6 +1117,51 @@ fn a_task_notification_replays_to_the_provider_as_a_user_message() {
     );
 }
 
+/// A harness-detected fault is recorded as `Event::Error` and is never
+/// shown to the model live. A resume must rebuild the same provider
+/// history a continuously-running session holds, so the error contributes
+/// no message and the messages around it survive unchanged.
+#[test]
+fn a_persisted_error_contributes_no_message_when_history_is_rebuilt() {
+    let session_id = crate::contract::SessionId::new();
+    let events = vec![
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::User,
+            text: "what is 2+2?".to_string(),
+        }),
+        Event::Error(crate::contract::Error {
+            message: "Provider stream timed out".to_string(),
+        }),
+        Event::MessageCommitted(AgentMessage {
+            role: MessageRole::Assistant,
+            text: "4".to_string(),
+        }),
+    ];
+
+    let persisted = load_rig_session_history(None, session_id, &events);
+
+    assert_eq!(persisted.messages.len(), 2, "{:?}", persisted.messages);
+    assert!(
+        matches!(&persisted.messages[0], RigMessage::User { content }
+            if matches!(content.first(), Some(UserContent::Text(text))
+                if text.text == "what is 2+2?")),
+        "got {:?}",
+        persisted.messages[0]
+    );
+    assert!(
+        matches!(&persisted.messages[1], RigMessage::Assistant { content, .. }
+            if matches!(content.first(), Some(AssistantContent::Text(text))
+                if text.text == "4")),
+        "got {:?}",
+        persisted.messages[1]
+    );
+    assert!(
+        !format!("{:?}", persisted.messages).contains("Provider stream timed out"),
+        "the fault's text must not reach the provider: {:?}",
+        persisted.messages
+    );
+}
+
 // --- Rebuilt-history tool-call pairing --------------------------------
 //
 // The 2026-07-28 session death (session `b182c25b`): the runtime was
