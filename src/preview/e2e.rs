@@ -39,9 +39,10 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
+use crate::board_pane::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
-use crate::preview::sample;
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
+use crate::preview::{registry, sample};
 
 // ---------------------------------------------------------------------------
 // A text system that makes rendered text visible to assertions
@@ -193,14 +194,27 @@ fn built_artifact() -> PathBuf {
 }
 
 /// A scratch copy the test overwrites, so the built artifact is never
-/// touched and parallel runs do not collide.
-fn live_artifact() -> PathBuf {
-    std::env::temp_dir().join(format!("horizon-preview-e2e-{}.wasm", std::process::id()))
+/// touched and neither parallel runs nor two tests in one process collide.
+fn live_artifact(tag: &str) -> PathBuf {
+    std::env::temp_dir().join(format!(
+        "horizon-preview-e2e-{tag}-{}.wasm",
+        std::process::id()
+    ))
 }
 
 const SLOT: Geometry = Geometry {
     width: 480.,
     height: 360.,
+    scale_factor: 1.,
+};
+
+/// The board previews get a tall slot: gpui culls primitives outside the
+/// content mask, so a scroll region only paints what fits. The detail
+/// preview's thread sits below a multi-paragraph body, and an assertion on
+/// text that scrolled out of view would be an assertion on nothing.
+const BOARD_SLOT: Geometry = Geometry {
+    width: 900.,
+    height: 1600.,
     scale_factor: 1.,
 };
 
@@ -216,7 +230,7 @@ struct Loaded {
     text_system: Weak<ProbeTextSystem>,
 }
 
-fn load(path: &std::path::Path, cx: &mut TestAppContext) -> anyhow::Result<Loaded> {
+fn load(path: &std::path::Path, preview: &str, cx: &mut TestAppContext) -> anyhow::Result<Loaded> {
     let text_system = Arc::new(ProbeTextSystem);
     let weak = Arc::downgrade(&text_system);
     let options = PluginOptions::new(text_system);
@@ -225,9 +239,8 @@ fn load(path: &std::path::Path, cx: &mut TestAppContext) -> anyhow::Result<Loade
     let (root, theme_source) = cx.update(|cx| {
         let theme_source = cx.new(PreviewThemeSource::new);
         let theme_ref = host.share(&theme_source, cx);
-        let root = cx.new(|_| {
-            PreviewHostRoot::new(theme_source.clone(), theme_ref, sample::NAME.to_string())
-        });
+        let root =
+            cx.new(|_| PreviewHostRoot::new(theme_source.clone(), theme_ref, preview.to_string()));
         host.share_root(&root, cx);
         (root, theme_source)
     });
@@ -247,8 +260,13 @@ fn settle(cx: &mut TestAppContext) {
     cx.executor().run_until_parked();
 }
 
-/// Hand the guest a surface and drive one frame on it.
-fn mount(host: &Entity<PluginHost>, surface: &Entity<Surface>, cx: &mut TestAppContext) {
+/// Hand the guest a surface of `slot` and drive one frame on it.
+fn mount(
+    host: &Entity<PluginHost>,
+    surface: &Entity<Surface>,
+    slot: Geometry,
+    cx: &mut TestAppContext,
+) {
     let surface_ref = cx.update(|cx| host.share(surface, cx));
     let plugin = cx.update(|cx| host.root::<PreviewPlugin>(cx));
     cx.update(|cx| plugin.mount(surface_ref, cx));
@@ -258,7 +276,7 @@ fn mount(host: &Entity<PluginHost>, surface: &Entity<Surface>, cx: &mut TestAppC
         .expect("the guest attached a view");
     cx.update(|cx| {
         use embedded_gpui::surface::ViewApiCaller as _;
-        view.resize(SLOT, cx);
+        view.resize(slot, cx);
     });
     settle(cx);
 }
@@ -372,7 +390,7 @@ fn expected_accent_text(theme: &RawThemeConfig) -> String {
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
 async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppContext) {
     let built = built_artifact();
-    let live = live_artifact();
+    let live = live_artifact("sample");
     std::fs::copy(&built, &live).expect("stage the built artifact");
 
     let baseline_threads = live_instance_threads();
@@ -394,10 +412,10 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
     });
 
     // --- the sample preview paints ---------------------------------------
-    let loaded = load(&live, cx).expect("the built artifact instantiates");
+    let loaded = load(&live, sample::NAME, cx).expect("the built artifact instantiates");
     let surface = cx.new(Surface::new);
     let surface_id = surface.entity_id();
-    mount(&loaded.host, &surface, cx);
+    mount(&loaded.host, &surface, SLOT, cx);
 
     let scene = summary(&surface, cx);
     assert!(scene.quads > 0, "the preview painted no quads: {scene:?}");
@@ -462,8 +480,8 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
         "dropping the plugin left its instance running"
     );
 
-    let reloaded = load(&live, cx).expect("the rebuilt artifact instantiates");
-    mount(&reloaded.host, &surface, cx);
+    let reloaded = load(&live, sample::NAME, cx).expect("the rebuilt artifact instantiates");
+    mount(&reloaded.host, &surface, SLOT, cx);
 
     let reloaded_counts = glyph_counts(&summary(&surface, cx));
     assert!(
@@ -492,7 +510,10 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
     settle(cx);
     assert_eq!(
         names.await.expect("preview_names"),
-        vec![sample::NAME.to_string()],
+        registry::previews()
+            .iter()
+            .map(|preview| preview.name.to_string())
+            .collect::<Vec<_>>(),
         "the plugin does not carry the registry's previews"
     );
 
@@ -503,7 +524,7 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
     // into its status line) and nothing else is disturbed.
     std::fs::write(&live, b"not a wasm component").expect("stage a broken artifact");
     assert!(
-        load(&live, cx).is_err(),
+        load(&live, sample::NAME, cx).is_err(),
         "a broken artifact must fail to load, not load something"
     );
     assert!(
@@ -512,6 +533,78 @@ async fn preview_plugin_paints_reacts_to_the_theme_and_reloads(cx: &mut TestAppC
     );
 
     cx.update(|_| drop(reloaded));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_board_over_its_sample_store(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    // --- the list shows rows folded out of the sample events -------------
+    let list = load(&live, board::LIST, cx).expect("the board list preview instantiates");
+    let list_surface = cx.new(Surface::new);
+    mount(&list.host, &list_surface, BOARD_SLOT, cx);
+    let list_scene = summary(&list_surface, cx);
+    assert!(
+        list_scene.images > 0,
+        "no session-activity icon reached the host: {list_scene:?}"
+    );
+    let rows = glyph_counts(&list_scene);
+    assert!(
+        painted(&rows, board::LIST_PROBE_LATIN),
+        "the board list painted no row carrying a Latin sample title: {rows:?}"
+    );
+    assert!(
+        painted(&rows, board::LIST_PROBE_JAPANESE),
+        "the board list painted no row carrying a Japanese sample title: {rows:?}"
+    );
+    cx.update(|_| drop(list));
+    settle(cx);
+
+    // --- the same view over an empty store -------------------------------
+    // The Japanese probe is the discriminator in both directions: its
+    // katakana appear in no other string any board preview paints.
+    let empty = load(&live, board::LIST_EMPTY, cx).expect("the empty board preview instantiates");
+    let empty_surface = cx.new(Surface::new);
+    mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
+    let blank = glyph_counts(&summary(&empty_surface, cx));
+    assert!(
+        !blank.is_empty(),
+        "the empty board painted no chrome at all"
+    );
+    assert!(
+        !painted(&blank, board::LIST_PROBE_JAPANESE),
+        "the empty board painted a sample row: {blank:?}"
+    );
+    cx.update(|_| drop(empty));
+    settle(cx);
+
+    // --- the detail view, reached by confirming the row ------------------
+    let detail = load(&live, board::DETAIL, cx).expect("the board detail preview instantiates");
+    let detail_surface = cx.new(Surface::new);
+    mount(&detail.host, &detail_surface, BOARD_SLOT, cx);
+    let open = glyph_counts(&summary(&detail_surface, cx));
+    assert!(
+        painted(&open, board::DETAIL_BODY_PROBE),
+        "the detail view painted no item body: {open:?}"
+    );
+    assert!(
+        painted(&open, board::DETAIL_COMMENT_PROBE),
+        "the detail view painted no comment thread: {open:?}"
+    );
+    assert!(
+        !painted(&open, board::LIST_PROBE_JAPANESE),
+        "the detail view never replaced the list: {open:?}"
+    );
+
+    cx.update(|_| drop(detail));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }

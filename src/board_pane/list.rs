@@ -2,8 +2,8 @@ use super::*;
 pub(super) struct BoardListDelegate {
     pub(super) all: Vec<Item>,
     pub(super) unread: std::collections::HashSet<u64>,
-    pub(super) session_states:
-        std::collections::HashMap<horizon_workspace::SessionId, BoardSessionState>,
+    pub(super) session_activity:
+        std::collections::HashMap<horizon_workspace::SessionId, BoardSessionActivity>,
     pub(super) filtered: Vec<Item>,
     /// Display depth per row in `filtered`, parallel to it. 0 for top-level
     /// items, incremented for each level of nesting under a parent. Rebuilt
@@ -38,7 +38,7 @@ impl BoardListDelegate {
         Self {
             all: Vec::new(),
             unread: Default::default(),
-            session_states: Default::default(),
+            session_activity: Default::default(),
             filtered: Vec::new(),
             depths: Vec::new(),
             top_level_only: false,
@@ -78,8 +78,8 @@ impl BoardListDelegate {
         self.drop_indicator = None;
     }
 
-    /// Replaces the loaded items (after the off-thread read returns) and
-    /// clears the loading state. Re-derives `filtered` and `depths`.
+    /// Replaces the loaded items (after the store read returns) and clears
+    /// the loading state. Re-derives `filtered` and `depths`.
     pub(super) fn set_loaded(&mut self, items: Vec<Item>) {
         self.all = items;
         self.loading = false;
@@ -88,6 +88,11 @@ impl BoardListDelegate {
 
     pub(super) fn item_at(&self, index: IndexPath) -> Option<&Item> {
         self.filtered.get(index.row)
+    }
+
+    /// The display row item `id` occupies in the current derivation.
+    pub(super) fn row_of(&self, id: u64) -> Option<usize> {
+        self.filtered.iter().position(|item| item.id == id)
     }
 }
 
@@ -238,7 +243,7 @@ impl ListDelegate for BoardListDelegate {
                             .child(format!("#{} {}", item.id, item.title)),
                     )
                     .when_some(
-                        task_session_state(item, &self.session_states),
+                        task_session_state(item, &self.session_activity),
                         |row, state| {
                             row.child(state.indicator(item.id, self.selected == Some(index)))
                         },

@@ -19,8 +19,22 @@ use gpui_component::{h_flex, v_flex, Icon, IconName, IndexPath, Sizable as _};
 // Bundles the icon SVGs into the plugin. `gpui-kit-assets`' default
 // `AssetSource` fetches them over HTTP on `target_family = "wasm"`, which a
 // WASI guest cannot do; this macro embeds them instead. The guest hands the
-// generated type to its runtime as the plugin's `AssetSource`.
-gpui_kit_assets::icon_assets!(pub PreviewIcons, [Search, Check, Inbox]);
+// generated type to its runtime as the plugin's `AssetSource`, so this one
+// list has to cover every icon any registered preview draws -- an icon a
+// preview names but this list omits resolves to nothing at runtime. The
+// four after `Inbox` are the board row's session-activity indicator.
+gpui_kit_assets::icon_assets!(
+    pub PreviewIcons,
+    [
+        Search,
+        Check,
+        Inbox,
+        TriangleAlert,
+        Pause,
+        CircleX,
+        CircleCheck
+    ]
+);
 
 /// The name the host selects this preview by.
 pub const NAME: &str = "sample";

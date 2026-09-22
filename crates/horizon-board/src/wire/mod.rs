@@ -1,15 +1,21 @@
-//! The log daemon's hub — `horizon-logd`'s whole rtc surface — and the
-//! version pair it negotiates.
+//! The log daemon's wire vocabulary — what a board write says and what
+//! comes back — plus the version pair it negotiates.
 //!
 //! This module lives in `horizon-board` (not in `horizon-logd`) to break what
 //! would otherwise be a circular package dependency: `horizon-logd` depends on
 //! `horizon-board` (it reuses `BoardEvent`/`Envelope` for the JSONL append),
 //! and the board library's write path is the logd *client* — so it needs the
-//! `LogHubClient` type the `#[rtc::remote]` macro generates here. Keeping the
-//! trait in `horizon-board` lets both sides name it without a cycle.
+//! `LogHubClient` type the `#[rtc::remote]` macro generates in [`hub`].
+//! Keeping the trait in `horizon-board` lets both sides name it without a
+//! cycle.
 //!
 //! The daemon crate (`crates/horizon-logd`) supplies the `Hub` implementation
 //! and the `main.rs` entry point; this module owns only the wire contract.
+//!
+//! The operation vocabulary here is plain serde/schemars data, so it
+//! compiles wherever the board queries do. The rtc trait, the error type it
+//! answers with, and the version handshake need the transport, and live in
+//! the native-only [`hub`] submodule.
 //!
 //! **Stage A** was `ingest` only. **Stage B** adds the subscribe stream — a
 //! raw NDJSON line protocol multiplexed onto the same socket via first-byte
@@ -17,14 +23,16 @@
 //! handshake for `ingest`). The subscribe types below are plain serde structs,
 //! not remoc rtc types — the `LogHub` trait itself is unchanged.
 
-use remoc::prelude::*;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use horizon_wire::{ClientHello, HubError, VersionRange};
-
-use crate::model::Item;
 use crate::store::Position;
+
+#[cfg(not(target_family = "wasm"))]
+mod hub;
+
+#[cfg(not(target_family = "wasm"))]
+pub use hub::*;
 
 /// The log-daemon protocol version this build speaks.
 ///
@@ -36,19 +44,9 @@ use crate::store::Position;
 pub const LOG_PROTOCOL_VERSION: u32 = 6;
 
 /// The oldest log-wire version this build is still willing to negotiate down
-/// to in [`LogHub::hello`]. Equal to [`LOG_PROTOCOL_VERSION`] under the
+/// to in `LogHub::hello`. Equal to [`LOG_PROTOCOL_VERSION`] under the
 /// lockstep, no-per-feature-gates policy.
 pub const MIN_SUPPORTED_LOG_PROTOCOL_VERSION: u32 = 6;
-
-/// The version range this build advertises in every `hello` to `horizon-logd`.
-pub fn log_version_range() -> VersionRange {
-    VersionRange::new(MIN_SUPPORTED_LOG_PROTOCOL_VERSION, LOG_PROTOCOL_VERSION)
-}
-
-/// A [`ClientHello`] advertising [`log_version_range`] under `binary_id`.
-pub fn log_client_hello(binary_id: impl Into<String>) -> ClientHello {
-    ClientHello::new(log_version_range(), binary_id)
-}
 
 /// `horizon-logd`'s `hello` reply. Channel-free, like terminald's: logd has
 /// no connection-global channels in stage A.
@@ -141,39 +139,11 @@ pub enum IngestRequest {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum IngestReply {
     /// The created task or atomically bound task session.
-    Item(Item),
+    Item(crate::Item),
     /// Successful mutation with no returned data.
     Done,
     /// `move_item`: the new rank string.
     Rank(String),
-}
-
-/// The domain error `ingest` returns. Distinct from [`HubError`] (which is
-/// `horizon-wire`'s shared protocol-level vocabulary) because the board
-/// domain has its own error shape (`ItemNotFound`, `RankExhausted`) that
-/// should survive the wire round-trip as typed data, not be stringified into
-/// `HubError::Call`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, thiserror::Error)]
-pub enum LogError {
-    #[error("{0}")]
-    InvalidOperation(String),
-    #[error("item {0} not found")]
-    ItemNotFound(u64),
-    #[error("rank space exhausted (rebalance needed)")]
-    RankExhausted,
-    #[error("{0}")]
-    Io(String),
-    /// Transport failure of the rtc call itself, carried as its rendered
-    /// message (constructed client-side by the `From<rtc::CallError>` impl —
-    /// a server never sends it).
-    #[error("hub call failed: {0}")]
-    Call(String),
-}
-
-impl From<remoc::rtc::CallError> for LogError {
-    fn from(err: remoc::rtc::CallError) -> Self {
-        Self::Call(err.to_string())
-    }
 }
 
 /// The subscribe request a consumer sends on connect, as one NDJSON line.
@@ -207,41 +177,9 @@ pub struct SubscribePoke {
     pub seq: u64,
 }
 
-/// The log hub — `horizon-logd`'s remoc rtc surface (`docs/logd-design.md`).
-///
-/// `hello` and `drain` return [`HubError`] (the shared protocol vocabulary);
-/// `ingest` returns [`LogError`] (the board domain vocabulary). The subscribe
-/// stream is **not** an rtc method — it rides a raw NDJSON line on the same
-/// socket, sniffed apart from chmux by the first byte.
-#[rtc::remote]
-pub trait LogHub {
-    /// Version negotiation — the first call on every connection.
-    async fn hello(&self, client: ClientHello) -> Result<LogHubHello, HubError>;
-
-    /// Performs one board write operation against the project whose
-    /// `events.jsonl` lives at `path`. The path is resolved client-side
-    /// (via `Store::from_cwd`/`from_dir`, which collapse worktree → main git
-    /// root) and sent as a string; logd opens, flocks, reads-folds, computes,
-    /// appends, and flushes before replying, so the file is durable when the
-    /// reply arrives.
-    async fn ingest(&self, path: String, request: IngestRequest) -> Result<IngestReply, LogError>;
-
-    /// Flush-and-exit. Like the other daemons' `drain`, the call itself
-    /// typically errors because the process is gone before a reply travels.
-    async fn drain(&self) -> Result<(), HubError>;
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn our_range_negotiates_with_itself_at_the_current_version() {
-        assert_eq!(
-            log_version_range().negotiate(log_version_range()),
-            Some(LOG_PROTOCOL_VERSION)
-        );
-    }
 
     #[test]
     fn the_lockstep_pair_is_equal() {

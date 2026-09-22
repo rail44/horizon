@@ -3,17 +3,25 @@ name = "horizon-board"
 version = "0.1.0"
 edition = "2021"
 
+# The queries, the event vocabulary, and the in-memory store source build for
+# `wasm32-wasip2` too, so a preview-pane plugin can show a board from sample
+# events. Only these dependencies are available there.
 [dependencies]
-horizon-wire = { path = "../horizon-wire" }
-libc = "0.2"
-remoc = { workspace = true }
 schemars = { version = "1", features = ["uuid1"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Native-only: reaching the event file, the git root, and the daemon socket.
+# The modules that need them are gated `#[cfg(not(target_family = "wasm"))]`
+# at their declaration.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+horizon-wire = { path = "../horizon-wire" }
+libc = "0.2"
+remoc = { workspace = true }
 thiserror = "2.0"
-# The write path is now a socket client of `horizon-logd`: each write method
-# spins up a current-thread runtime, connect-or-spawns the daemon, and makes
-# one `ingest` rtc call. Reads stay synchronous file folds.
+# The write path is a socket client of `horizon-logd`: each write method
+# connect-or-spawns the daemon and makes one `ingest` rtc call. Reads stay
+# synchronous file folds.
 tokio = { version = "1.52", features = ["rt", "net", "time", "macros", "io-util"] }
 
 [lints.clippy]

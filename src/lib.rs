@@ -11,12 +11,18 @@
 //! for that target and are gated at their declaration here rather than
 //! inside each file. `scripts/check-preview-wasm.sh` is what holds the
 //! split.
+//!
+//! A module that carries previews of its own view ([`board_pane`]) is not
+//! gated here; its native-only halves are gated inside it instead.
 
 #![recursion_limit = "256"]
 
 #[cfg(not(target_family = "wasm"))]
 mod agent;
-#[cfg(not(target_family = "wasm"))]
+// The shell drives a good part of this module: the subscriptions it installs
+// on the pane, the commands it executes, the accessors it reads. A plugin
+// build has no shell above the pane, so those have no caller there.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod board_pane;
 #[cfg(not(target_family = "wasm"))]
 mod control_plane;

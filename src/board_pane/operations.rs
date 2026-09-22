@@ -1,5 +1,8 @@
 use super::*;
 
+/// What the shell asks the pane about. None of it is reachable from a
+/// preview, which has no shell above it.
+#[cfg(not(target_family = "wasm"))]
 impl BoardPaneView {
     pub(crate) fn finish_inventory_refresh(&mut self, sessions: &[horizon_workspace::SessionId]) {
         for id in sessions {
@@ -11,10 +14,26 @@ impl BoardPaneView {
         self.navigation_epoch
     }
 
+    /// The project directory the shell watches for this pane. Only a
+    /// root-resolved store has one.
     pub(crate) fn root(&self) -> Option<PathBuf> {
-        self.root.clone()
+        self.store
+            .as_ref()
+            .and_then(BoardStoreSource::root)
+            .map(std::path::Path::to_path_buf)
     }
 
+    pub(crate) fn task_session(&self) -> Option<horizon_workspace::SessionId> {
+        let BoardPaneMode::Detail { item, .. } = &self.mode else {
+            return None;
+        };
+        uuid::Uuid::parse_str(item.session_id.as_deref()?)
+            .ok()
+            .map(horizon_workspace::SessionId::from_uuid)
+    }
+}
+
+impl BoardPaneView {
     pub(crate) fn set_error(&mut self, error: String, cx: &mut Context<Self>) {
         self.error = Some(error);
         cx.notify();
@@ -25,15 +44,6 @@ impl BoardPaneView {
             BoardPaneMode::List => None,
             BoardPaneMode::Detail { item, .. } => Some(item.id),
         }
-    }
-
-    pub(crate) fn task_session(&self) -> Option<horizon_workspace::SessionId> {
-        let BoardPaneMode::Detail { item, .. } = &self.mode else {
-            return None;
-        };
-        uuid::Uuid::parse_str(item.session_id.as_deref()?)
-            .ok()
-            .map(horizon_workspace::SessionId::from_uuid)
     }
 
     pub(crate) fn board_command(
@@ -123,27 +133,19 @@ impl BoardPaneView {
         }
     }
 
+    /// Runs one write against the pane's store, then reloads what is showing.
+    /// A store that accepts no writes fails the operation immediately and the
+    /// refusal lands in the pane's error line like any other store error.
     pub(super) fn mutate<F>(&self, cx: &mut Context<Self>, operation: F)
     where
-        F: FnOnce(Store) -> Pin<Box<dyn Future<Output = Result<(), StoreError>> + Send>>
-            + Send
-            + 'static,
+        F: FnOnce(Store) -> StoreJob<()> + Send + 'static,
     {
-        let Some(root) = self.root.clone() else {
+        let Some(source) = self.store.clone() else {
             return;
         };
         let epoch = self.navigation_epoch;
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let runtime = tokio::runtime::Builder::new_current_thread()
-                        .enable_all()
-                        .build()
-                        .map_err(StoreError::Io)?;
-                    runtime.block_on(operation(Store::from_dir(&root)?))
-                })
-                .await;
+            let result = run_store_job(cx, source, operation).await;
             let _ = this.update(cx, |view, cx| {
                 view.spawn_load(cx);
                 if epoch != view.navigation_epoch {
