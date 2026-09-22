@@ -90,6 +90,19 @@
             "TaskProgress"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The session's last applied *selection* — the `(provider, model)` pair\na `set_session_model` call named (an echo of\n`contract::Command::SetSessionModel`), where `model` is the value the\ncaller asked for: a `[[moa]]` entry name for the reserved `moa` group,\na model id otherwise. Display-only and ephemeral like\n`ToolCallProgress`: the composer's model chip renders `provider ·\nmodel` (`moa · mix`) instead of the aggregator's resolved model id\nthat [`Self::SessionModel`] carries. An appended variant, so the wire\nstays additive (no protocol bump — the `TaskProgress` precedent).",
+          "properties": {
+            "SessionSelection": {
+              "$ref": "#/$defs/ModelSelection"
+            }
+          },
+          "required": [
+            "SessionSelection"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1550,6 +1563,24 @@
       },
       "required": [
         "session_id",
+        "provider",
+        "model"
+      ],
+      "type": "object"
+    },
+    "ModelSelection": {
+      "description": "[`AgentWireEvent::SessionSelection`]'s payload — the `(provider, model)`\npair a switch named, echoing `contract::Command::SetSessionModel`.",
+      "properties": {
+        "model": {
+          "description": "The model the caller asked for: a `[[moa]]` entry name for the\nreserved `moa` provider, a model id otherwise.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The `[[providers]]` / `[[moa]]` entry name the picker or CLI named\n(the legacy `[provider]` fold-in resolves as `default`).",
+          "type": "string"
+        }
+      },
+      "required": [
         "provider",
         "model"
       ],

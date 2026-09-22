@@ -8,6 +8,7 @@
 //! (see `turns/mod.rs`'s doc comment).
 
 use horizon_agent::contract::ToolCallId;
+use horizon_agent::wire::ModelSelection;
 
 /// The approval keyboard-capture state (`docs/agent-output-ui-
 /// amendment.md` decision 4, stage E; re-scoped to row-centric v2):
@@ -131,6 +132,22 @@ pub(crate) fn composer_model_chip<'a>(
     }
 }
 
+/// The chip's display label, the selection-aware wrapper over
+/// [`composer_model_chip`]: when the session's last applied selection is
+/// known it reads `provider · model` (so a MoA session shows `moa · mix`
+/// instead of the aggregator's resolved model id), otherwise it falls back
+/// to the resolved/turn model id unchanged.
+pub(crate) fn composer_model_label(
+    selection: Option<&ModelSelection>,
+    session_model: Option<&str>,
+    turn_model: Option<&str>,
+) -> Option<String> {
+    if let Some(selection) = selection {
+        return Some(format!("{} · {}", selection.provider, selection.model));
+    }
+    composer_model_chip(session_model, turn_model).map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_support::*;
@@ -187,6 +204,33 @@ mod tests {
     #[test]
     fn composer_model_chip_is_none_when_neither_is_known() {
         assert_eq!(composer_model_chip(None, None), None);
+    }
+
+    #[test]
+    fn composer_model_label_shows_the_selection_pair_when_known() {
+        // A MoA switch: the chip reads `moa · mix`, not the aggregator's
+        // resolved model id the `SessionModel` announcement carries.
+        let selection = ModelSelection {
+            provider: "moa".to_string(),
+            model: "mix".to_string(),
+        };
+        assert_eq!(
+            composer_model_label(Some(&selection), Some("hf:deepseek-ai/x"), None),
+            Some("moa · mix".to_string())
+        );
+    }
+
+    #[test]
+    fn composer_model_label_falls_back_to_resolved_or_turn_model_without_a_selection() {
+        assert_eq!(
+            composer_model_label(None, Some("gpt-5"), None),
+            Some("gpt-5".to_string())
+        );
+        assert_eq!(
+            composer_model_label(None, None, Some("gpt-5")),
+            Some("gpt-5".to_string())
+        );
+        assert_eq!(composer_model_label(None, None, None), None);
     }
 
     #[test]

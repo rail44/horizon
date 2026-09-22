@@ -30,6 +30,13 @@ pub(crate) struct State {
     /// session's model is re-sent fresh at attach time instead, see
     /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum).
     session_model: Option<String>,
+    /// The session's last applied selection (provider name + the model the
+    /// caller asked for) -- the display label the composer's model chip
+    /// prefers over `session_model` when present, so a MoA session shows
+    /// `moa · mix` rather than the aggregator's resolved model id. Same
+    /// sidecar rules as `session_model`: never replayed from persisted
+    /// history, re-sent fresh at attach time.
+    session_selection: Option<crate::wire::ModelSelection>,
 }
 
 impl State {
@@ -50,6 +57,7 @@ impl State {
             frame,
             turn,
             session_model: None,
+            session_selection: None,
         }
     }
 
@@ -77,6 +85,10 @@ impl State {
                 self.session_model = Some(model);
                 continue;
             }
+            if let Some(selection) = event.session_selection {
+                self.session_selection = Some(selection);
+                continue;
+            }
             apply_agent_event_to_frame(&mut self.frame, &event.event, &mut self.turn);
             self.events.push(event.event);
         }
@@ -89,6 +101,10 @@ impl State {
 
     pub(crate) fn session_model(&self) -> Option<&str> {
         self.session_model.as_deref()
+    }
+
+    pub(crate) fn session_selection(&self) -> Option<&crate::wire::ModelSelection> {
+        self.session_selection.as_ref()
     }
 }
 
@@ -129,7 +145,11 @@ impl LiveState {
             // `State::extend_provider_events`.
             let persistable = events
                 .iter()
-                .filter(|event| event.tool_call_progress.is_none() && event.session_model.is_none())
+                .filter(|event| {
+                    event.tool_call_progress.is_none()
+                        && event.session_model.is_none()
+                        && event.session_selection.is_none()
+                })
                 .cloned()
                 .collect::<Vec<_>>();
             if !persistable.is_empty() {
@@ -270,6 +290,14 @@ impl LiveState {
     /// see [`State::session_model`]'s doc comment.
     pub fn session_model(&self) -> Option<String> {
         self.inner.borrow().session_model().map(str::to_string)
+    }
+
+    /// The session's last applied selection (provider name + the model the
+    /// caller asked for), if a [`ProviderEvent::session_selection`]-carrying
+    /// event has folded in yet -- see [`State::session_selection`]'s doc
+    /// comment.
+    pub fn session_selection(&self) -> Option<crate::wire::ModelSelection> {
+        self.inner.borrow().session_selection().cloned()
     }
 
     /// Every fold-relevant event this session has accumulated so far

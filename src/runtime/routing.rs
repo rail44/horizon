@@ -126,6 +126,12 @@ impl AgentRoutes {
             AgentWireEvent::SessionModel(model) => {
                 self.send_agent(session_id, ProviderEvent::session_model(model));
             }
+            AgentWireEvent::SessionSelection(selection) => {
+                self.send_agent(
+                    session_id,
+                    ProviderEvent::session_selection(selection.provider, selection.model),
+                );
+            }
             AgentWireEvent::WorkspaceRootResolved(resolved) => {
                 let _ = self.workspace_roots.send((session_id, resolved));
             }

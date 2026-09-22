@@ -64,6 +64,7 @@ pub fn process_agent_provider_event(
                     tool_call_progress: None,
                     session_model: None,
                     task_progress: None,
+                    session_selection: None,
                 }
             } else {
                 event.into()

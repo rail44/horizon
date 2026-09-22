@@ -23,6 +23,13 @@ use crate::workspace::WorkspaceShell;
 
 const EXECUTE_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The accept-thread wait for a *deferred* invoke. The reply arrives from a
+/// background task after a daemon round-trip whose own budget is
+/// `SYNC_REPLY_TIMEOUT` (60 s) plus the runtime's internal `OP_TIMEOUT`
+/// (30 s), so the ordinary 5 s would report a spurious UI-thread timeout
+/// while the switch actually lands.
+const DEFERRED_EXECUTE_TIMEOUT: Duration = Duration::from_secs(70);
+
 fn ok_body() -> EnvelopeBody {
     EnvelopeBody::Ok { session_id: None }
 }
@@ -39,6 +46,16 @@ struct ChannelExecutor {
 
 impl ControlExecutor for ChannelExecutor {
     fn execute(&self, request: ControlRequest) -> EnvelopeBody {
+        let (timeout, timeout_message) = match &request {
+            ControlRequest::Invoke(invoke) if invoke.command == "set-model" => (
+                DEFERRED_EXECUTE_TIMEOUT,
+                "timed out waiting for the agent runtime to answer the model switch",
+            ),
+            _ => (
+                EXECUTE_TIMEOUT,
+                "timed out waiting for the UI thread to answer",
+            ),
+        };
         let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
         if self
             .sender
@@ -51,8 +68,8 @@ impl ControlExecutor for ChannelExecutor {
             return error_body("control plane UI bridge is no longer running");
         }
         reply_rx
-            .recv_timeout(EXECUTE_TIMEOUT)
-            .unwrap_or_else(|_| error_body("timed out waiting for the UI thread to answer"))
+            .recv_timeout(timeout)
+            .unwrap_or_else(|_| error_body(timeout_message))
     }
 }
 
@@ -90,22 +107,64 @@ fn wire(
     cx.spawn(async move |cx| {
         while let Some(pending) = async_rx.next().await {
             let shell = shell.clone();
+            // `None` means the invoke handed its reply to a background task
+            // (only `set-model` does) -- sending here would race that task
+            // into the single reply slot and block.
             let body = window
                 .update(cx, |_, window, cx| {
                     shell
                         .update(cx, |shell, cx| match &pending.request {
-                            ControlRequest::Invoke(invoke) => {
-                                dispatch_invoke(shell, invoke, window, cx)
-                            }
-                            ControlRequest::Query(query) => dispatch_query(shell, query, cx),
+                            ControlRequest::Invoke(invoke) => dispatch_invoke_or_defer(
+                                shell,
+                                invoke,
+                                window,
+                                cx,
+                                pending.reply.clone(),
+                            ),
+                            ControlRequest::Query(query) => Some(dispatch_query(shell, query, cx)),
                         })
-                        .unwrap_or_else(|_| error_body("the workspace shell is gone"))
+                        .unwrap_or_else(|_| Some(error_body("the workspace shell is gone")))
                 })
-                .unwrap_or_else(|_| error_body("the window is gone"));
-            let _ = pending.reply.send(body);
+                .unwrap_or_else(|_| Some(error_body("the window is gone")));
+            if let Some(body) = body {
+                let _ = pending.reply.send(body);
+            }
         }
     })
     .detach();
+}
+
+/// Dispatches one invoke, returning `Some(body)` when it was answered on this
+/// thread and `None` when the reply was handed to a background task. Only
+/// `set-model` defers: its answer is a daemon round-trip
+/// (`AgentdRuntime::set_session_model`, which must not run on the UI thread),
+/// so the shell method owns the reply. Every other command is a synchronous
+/// local operation and keeps [`dispatch_invoke`].
+fn dispatch_invoke_or_defer(
+    shell: &mut WorkspaceShell,
+    invoke: &Invoke,
+    window: &mut Window,
+    cx: &mut Context<WorkspaceShell>,
+    reply: Sender<EnvelopeBody>,
+) -> Option<EnvelopeBody> {
+    if invoke.command != "set-model" {
+        return Some(dispatch_invoke(shell, invoke, window, cx));
+    }
+    let session_id = match session_id_arg(&invoke.args, "session_id") {
+        Ok(id) => id,
+        Err(message) => return Some(error_body(message)),
+    };
+    let provider = match required_string_arg(&invoke.args, "provider") {
+        Ok(value) if !value.is_empty() => value,
+        Ok(_) => return Some(error_body("`provider` must not be empty")),
+        Err(message) => return Some(error_body(message)),
+    };
+    let model = match required_string_arg(&invoke.args, "model") {
+        Ok(value) if !value.is_empty() => value,
+        Ok(_) => return Some(error_body("`model` must not be empty")),
+        Err(message) => return Some(error_body(message)),
+    };
+    shell.control_plane_set_model(session_id, provider, model, reply, cx)
 }
 
 fn dispatch_invoke(

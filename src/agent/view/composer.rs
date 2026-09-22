@@ -103,11 +103,11 @@ impl AgentComposer {
     ) -> (bool, Option<String>, turns::ComposerMode) {
         let session = session.read(cx);
         let turn_in_flight = state_indicates_turn_in_flight(session.frame.state);
-        let model = turns::composer_model_chip(
+        let model = turns::composer_model_label(
+            session.selection.as_ref(),
             session.model.as_deref(),
             turns::latest_turn_model(&session.frame.items),
-        )
-        .map(str::to_string);
+        );
         let mode = turns::next_composer_mode(&session.pending_approval_call_ids(), None);
         (turn_in_flight, model, mode)
     }
@@ -116,11 +116,11 @@ impl AgentComposer {
         let (turn_in_flight, model, queue) = {
             let session = self.session.read(cx);
             let turn_in_flight = state_indicates_turn_in_flight(session.frame.state);
-            let model = turns::composer_model_chip(
+            let model = turns::composer_model_label(
+                session.selection.as_ref(),
                 session.model.as_deref(),
                 turns::latest_turn_model(&session.frame.items),
-            )
-            .map(str::to_string);
+            );
             (turn_in_flight, model, session.pending_approval_call_ids())
         };
 

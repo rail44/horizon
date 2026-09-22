@@ -162,6 +162,15 @@ max-threads = 1
 # sandbox denies loopback binds. No real provider call -- a localhost mock
 # stopped at `TcpListener::bind`. The module's parsing tests are pure logic
 # and stay in.
+#
+# `horizon`'s `runtime::tests::` -- the root package's test binary has the
+# bare id `horizon` (its lib and bin share the name), NOT
+# `horizon::bin/horizon`. That term matched no tests at all, so these
+# socket-binding tests were never actually skipped and failed under
+# containment with the SUN_LEN `InvalidInput` bind error at the
+# $TMPDIR-under-the-worktree path (the same mechanism as
+# `host::listener::tests` above). Corrected 2026-09-21 -- AGENTS.md's
+# "the skip set is not self-maintaining".
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -169,7 +178,7 @@ default-filter = '''
         + binary_id(horizon-agentd::e2e)
         + binary_id(horizon-terminald::e2e)
         + binary_id(horizon-logd::e2e)
-        + (binary_id(horizon::bin/horizon) & test(/^runtime::tests::/))
+        + (binary_id(horizon) & test(/^runtime::tests::/))
         + test(/^tools::network::/)
         + test(/^tools::tests::bash_auto_executes_sandboxed/)
         + test(/^tools::tests::tier1_sandboxed_bash/)

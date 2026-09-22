@@ -567,6 +567,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: None,
+                selection: None,
                 inbound,
                 replay,
                 parent_session_id: None,

@@ -216,6 +216,10 @@ impl SessionHub for Hub {
             self.connection
                 .send_session_event(session_id, AgentWireEvent::SessionModel(model));
         }
+        if let Some(selection) = self.connection.session_selection(session_id) {
+            self.connection
+                .send_session_event(session_id, AgentWireEvent::SessionSelection(selection));
+        }
         Ok(self.agent_attachment(session_id, local_events))
     }
 

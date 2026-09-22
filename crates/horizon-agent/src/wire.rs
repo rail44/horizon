@@ -81,6 +81,28 @@ pub enum AgentWireEvent {
     /// no client is attached, and not replayed on attach — a re-attached
     /// client sees a child's row again at its next activity.
     TaskProgress(TaskProgress),
+    /// The session's last applied *selection* — the `(provider, model)` pair
+    /// a `set_session_model` call named (an echo of
+    /// `contract::Command::SetSessionModel`), where `model` is the value the
+    /// caller asked for: a `[[moa]]` entry name for the reserved `moa` group,
+    /// a model id otherwise. Display-only and ephemeral like
+    /// `ToolCallProgress`: the composer's model chip renders `provider ·
+    /// model` (`moa · mix`) instead of the aggregator's resolved model id
+    /// that [`Self::SessionModel`] carries. An appended variant, so the wire
+    /// stays additive (no protocol bump — the `TaskProgress` precedent).
+    SessionSelection(ModelSelection),
+}
+
+/// [`AgentWireEvent::SessionSelection`]'s payload — the `(provider, model)`
+/// pair a switch named, echoing `contract::Command::SetSessionModel`.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelSelection {
+    /// The `[[providers]]` / `[[moa]]` entry name the picker or CLI named
+    /// (the legacy `[provider]` fold-in resolves as `default`).
+    pub provider: String,
+    /// The model the caller asked for: a `[[moa]]` entry name for the
+    /// reserved `moa` provider, a model id otherwise.
+    pub model: String,
 }
 
 /// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.
@@ -254,6 +276,10 @@ mod tests {
             AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
                 workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),
                 parent_session_id: Some(SessionId::new()),
+            }),
+            AgentWireEvent::SessionSelection(ModelSelection {
+                provider: "moa".to_string(),
+                model: "mix".to_string(),
             }),
         ];
         for event in events {

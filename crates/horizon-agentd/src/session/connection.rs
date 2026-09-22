@@ -186,12 +186,17 @@ impl Connection {
                 model.clone()
             }
         };
+        let selection = horizon_agent::wire::ModelSelection {
+            provider: provider.clone(),
+            model: model.clone(),
+        };
         let inbound = {
             let mut sessions = self.state.sessions.lock().unwrap();
             let Some(entry) = sessions.get_mut(&session_id) else {
                 return Err(format!("Unknown session {session_id:?}."));
             };
             entry.model = Some(resolved.clone());
+            entry.selection = Some(selection.clone());
             entry.inbound.clone()
         };
         let _ = inbound.send(Command::SetSessionModel {
@@ -202,6 +207,13 @@ impl Connection {
             &self.state,
             session_id,
             AgentWireEvent::SessionModel(resolved),
+        );
+        // The display label alongside the resolved id: the chip reads
+        // `provider · model` (`moa · mix`) rather than the aggregator's id.
+        send_session_event(
+            &self.state,
+            session_id,
+            AgentWireEvent::SessionSelection(selection),
         );
         Ok(())
     }
@@ -361,6 +373,21 @@ impl Connection {
             .and_then(|entry| entry.model.clone())
     }
 
+    /// This session's last applied selection, if any -- see
+    /// [`super::state::SessionEntry::selection`]'s doc comment. `None` for an
+    /// unknown `session_id` too, the same shape [`Self::session_model`] uses.
+    pub(crate) fn session_selection(
+        &self,
+        session_id: SessionId,
+    ) -> Option<horizon_agent::wire::ModelSelection> {
+        self.state
+            .sessions
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .and_then(|entry| entry.selection.clone())
+    }
+
     /// Delegates to [`AgentdState::writer`] -- the hub's `drain` uses this
     /// to flush the event log's writer channel to disk before the process
     /// exits (`crate::run`'s SIGTERM arm does the same, straight off
@@ -491,6 +518,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: Some("stored-model".to_string()),
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -529,6 +557,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: None,
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: Some(parent_id),
@@ -652,6 +681,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: Some("test-model".to_string()),
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -765,6 +795,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: Some("test-model".to_string()),
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
