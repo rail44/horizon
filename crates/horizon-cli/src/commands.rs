@@ -34,6 +34,7 @@ pub fn external_name(subcommand: &Subcommand) -> &'static str {
         Subcommand::CancelTurn { .. } => "cancel-turn",
         Subcommand::ContinueTurn { .. } => "continue-turn",
         Subcommand::Send { .. } => "send",
+        Subcommand::SetModel { .. } => "set-model",
         Subcommand::ReloadAgentRuntime => "reload-agent-runtime",
         Subcommand::ReloadTerminalRuntime => "reload-terminal-runtime",
         Subcommand::ReloadConfig => "reload-config",
@@ -162,6 +163,18 @@ pub fn to_request(
             // `required_string_arg`).
             None => invoke("send", serde_json::json!({ "session_id": session_id })),
         },
+        Subcommand::SetModel {
+            session_id,
+            provider,
+            model,
+        } => invoke(
+            "set-model",
+            serde_json::json!({
+                "session_id": session_id,
+                "provider": provider,
+                "model": model
+            }),
+        ),
         Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
         Subcommand::ReloadTerminalRuntime => {
             invoke("reload-terminal-runtime", serde_json::json!({}))
@@ -357,6 +370,32 @@ mod tests {
                 text: None
             }),
             "send"
+        );
+        assert_eq!(
+            external_name(&Subcommand::SetModel {
+                session_id: "s-1".to_string(),
+                provider: "moa".to_string(),
+                model: "mix".to_string(),
+            }),
+            "set-model"
+        );
+    }
+
+    #[test]
+    fn set_model_carries_the_session_provider_and_model_and_is_not_destructive() {
+        let subcommand = Subcommand::SetModel {
+            session_id: "s-1".to_string(),
+            provider: "moa".to_string(),
+            model: "mix".to_string(),
+        };
+        assert!(!is_destructive(&subcommand));
+        let Request::Invoke(invoke) = to_request(&subcommand, None, None) else {
+            panic!("expected an Invoke request");
+        };
+        assert_eq!(invoke.command, "set-model");
+        assert_eq!(
+            invoke.args,
+            serde_json::json!({ "session_id": "s-1", "provider": "moa", "model": "mix" })
         );
     }
 

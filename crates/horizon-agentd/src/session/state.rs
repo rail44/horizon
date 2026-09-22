@@ -335,6 +335,7 @@ impl AgentdState {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: None,
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -378,6 +379,13 @@ pub(super) struct SessionEntry {
     /// client -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum.
     pub(super) model: Option<String>,
+    /// The last applied selection (provider name + the model the caller
+    /// asked for), if any -- the display label `AgentWireEvent::
+    /// SessionSelection` re-announces on a (re)attach, so the composer model
+    /// chip keeps reading `moa · mix` instead of the resolved aggregator id
+    /// `model` above carries. `None` until the first switch, or when the
+    /// spawn-time provider has no config entry (e.g. the mock provider).
+    pub(super) selection: Option<horizon_agent::wire::ModelSelection>,
     pub(super) inbound: Sender<Command>,
     /// Answers a `session_load` for this session: the session's own thread
     /// receives a one-shot reply channel here and sends back everything its
@@ -437,6 +445,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: None,
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,
@@ -465,6 +474,7 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.rig".to_string()),
                 role_id: None,
                 model: None,
+                selection: None,
                 inbound: inbound_tx,
                 replay: replay_tx,
                 parent_session_id: None,

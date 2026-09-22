@@ -33,6 +33,12 @@ pub(crate) struct AgentSession {
     /// -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum for the precedence between the two.
     pub(crate) model: Option<String>,
+    /// The session's last applied selection (provider name + the model the
+    /// caller asked for), if known -- the composer model chip's preferred
+    /// label source (so a MoA session reads `moa · mix`). Folded from
+    /// `horizon_agent::wire::AgentWireEvent::SessionSelection` via
+    /// `LiveState::session_selection`; `None` until the daemon announces one.
+    pub(crate) selection: Option<horizon_agent::wire::ModelSelection>,
     /// Live background-`task` rows, in launch order: one entry per child
     /// still running, as last observed via `ProviderEvent::task_progress`
     /// (`wire::AgentWireEvent::TaskProgress`). Ephemeral by design — never
@@ -111,6 +117,7 @@ impl AgentSession {
                     } else {
                         session.frame = live.extend_provider_events(std::iter::once(event));
                         session.model = live.session_model();
+                        session.selection = live.session_selection();
                     }
                     // Title derivation runs only until it produces one: the
                     // first user message fixes "what this session is about",
@@ -139,6 +146,7 @@ impl AgentSession {
         Self {
             frame: AgentFrame::empty(),
             model: None,
+            selection: None,
             tasks: Vec::new(),
             session_id,
             derived_title: None,

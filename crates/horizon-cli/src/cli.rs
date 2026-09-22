@@ -111,6 +111,18 @@ pub enum Subcommand {
         session_id: String,
         text: Option<String>,
     },
+    /// Switches an already-running agent session's model -- the CLI
+    /// counterpart of the model picker's `set_session_model` call.
+    /// `provider`/`model` are the same pair the picker sends: a
+    /// `[[providers]]`/`[[moa]]` entry name plus a model id (or, for the
+    /// reserved `moa` group, a `[[moa]]` entry name). Non-destructive, so no
+    /// `--yes`; the daemon's own validation (unknown provider/entry, missing
+    /// key, unknown session) is what the caller sees on failure.
+    SetModel {
+        session_id: String,
+        provider: String,
+        model: String,
+    },
     ReloadAgentRuntime,
     /// `reload-agent-runtime`'s terminal-daemon counterpart
     /// (`docs/terminald-split-design.md` decision 3). Destructive: it
@@ -159,6 +171,7 @@ Subcommands:\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
   send <session-id> [text]\n  \
+  set-model <session-id> <provider> <model>\n  \
   reload-agent-runtime\n  \
   reload-terminal-runtime\n  \
   reload-config\n  \
@@ -353,6 +366,17 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             let text = positionals.next();
             reject_extra(&mut positionals, "send")?;
             Subcommand::Send { session_id, text }
+        }
+        "set-model" => {
+            let session_id = next_required(&mut positionals, "set-model", "session-id")?;
+            let provider = next_required(&mut positionals, "set-model", "provider")?;
+            let model = next_required(&mut positionals, "set-model", "model")?;
+            reject_extra(&mut positionals, "set-model")?;
+            Subcommand::SetModel {
+                session_id,
+                provider,
+                model,
+            }
         }
         "reload-agent-runtime" | "reload-session-runtime" => {
             reject_extra(&mut positionals, "reload-agent-runtime")?;

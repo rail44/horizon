@@ -642,6 +642,15 @@ pub struct ProviderEvent {
     /// task watcher (`wire::AgentWireEvent::TaskProgress`), never by a
     /// provider.
     pub task_progress: Option<TaskProgress>,
+    /// The session's last applied selection (the provider name plus the model
+    /// the caller asked for), set only via [`ProviderEvent::session_selection`]
+    /// -- the same ephemeral sidecar shape as `session_model` above: an unused
+    /// `event` placeholder, folded as sidecar state
+    /// (`live::State::session_selection`), never persisted. Distinct from
+    /// `session_model`: this is the display label (e.g. `moa` + `mix`), while
+    /// `session_model` is the aggregator's resolved model id. Sent by
+    /// `horizon-agentd` as `wire::AgentWireEvent::SessionSelection`.
+    pub session_selection: Option<crate::wire::ModelSelection>,
 }
 
 /// Live progress of one background `task` child, observed by the daemon and
@@ -707,6 +716,7 @@ impl ProviderEvent {
             tool_call_progress: None,
             session_model: None,
             task_progress: None,
+            session_selection: None,
         }
     }
 
@@ -717,6 +727,7 @@ impl ProviderEvent {
             tool_call_progress: None,
             session_model: None,
             task_progress: None,
+            session_selection: None,
         }
     }
 
@@ -731,6 +742,7 @@ impl ProviderEvent {
             tool_call_progress: Some(progress),
             session_model: None,
             task_progress: None,
+            session_selection: None,
         }
     }
 
@@ -744,6 +756,7 @@ impl ProviderEvent {
             tool_call_progress: None,
             session_model: Some(model),
             task_progress: None,
+            session_selection: None,
         }
     }
 
@@ -758,6 +771,21 @@ impl ProviderEvent {
             tool_call_progress: None,
             session_model: None,
             task_progress: Some(progress),
+            session_selection: None,
+        }
+    }
+
+    /// Wraps a session's applied selection (provider name + the model the
+    /// caller asked for) for delivery over the same channel -- see
+    /// [`Self::session_selection`]'s field doc comment.
+    pub fn session_selection(provider: String, model: String) -> Self {
+        Self {
+            event: Event::StateChanged(SessionState::Running),
+            provider_payload: None,
+            tool_call_progress: None,
+            session_model: None,
+            task_progress: None,
+            session_selection: Some(crate::wire::ModelSelection { provider, model }),
         }
     }
 }

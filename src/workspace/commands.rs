@@ -4,7 +4,10 @@
 //! with `create_session` in `session_lifecycle` instead -- see that
 //! module's doc comment).
 
+use crossbeam_channel::Sender;
 use gpui::*;
+use horizon_control::contract::EnvelopeBody;
+use horizon_control::host::executor::error_body;
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
@@ -868,6 +871,55 @@ impl WorkspaceShell {
             .ok_or_else(|| "unknown session".to_string())?;
         session.read(cx).send_user_message(text);
         Ok(())
+    }
+
+    /// Switches a session's model through the agent runtime, replying to the
+    /// control-plane caller from a background task rather than on the UI
+    /// thread: the daemon round-trip waits on `SYNC_REPLY_TIMEOUT`, so the
+    /// dispatch that called this must not block (`AgentdRuntime::
+    /// set_session_model`'s own "call from a background task" rule). Returns
+    /// `None` to the dispatcher -- the reply is deferred, and this task sends
+    /// exactly one body on `reply` on every path.
+    ///
+    /// The session is resolved by the *daemon*, not from `self.agent_sessions`
+    /// (unlike [`Self::control_plane_send`]): a session the shell holds no
+    /// `AgentSession` for -- a detached or board session -- can still be
+    /// switched.
+    pub(crate) fn control_plane_set_model(
+        &mut self,
+        session_id: SessionId,
+        provider: String,
+        model: String,
+        reply: Sender<EnvelopeBody>,
+        cx: &mut Context<Self>,
+    ) -> Option<EnvelopeBody> {
+        if self.restoring_workspace {
+            let _ = reply.send(error_body("workspace restore is still in progress"));
+            return None;
+        }
+        let Some(handle) = self.agentd.clone() else {
+            let _ = reply.send(error_body("the agent runtime is not running"));
+            return None;
+        };
+        cx.spawn(async move |_this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    handle.set_session_model(
+                        horizon_agent::contract::SessionId::from_uuid(session_id.as_uuid()),
+                        provider,
+                        model,
+                    )
+                })
+                .await;
+            let body = match result {
+                Ok(()) => EnvelopeBody::Ok { session_id: None },
+                Err(error) => error_body(format!("model switch failed: {error}")),
+            };
+            let _ = reply.send(body);
+        })
+        .detach();
+        None
     }
 
     pub(crate) fn control_plane_terminate_all_detached(

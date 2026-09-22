@@ -42,8 +42,11 @@ fn resolve_and_announce_session_model(
     session_id: SessionId,
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,
-) -> Option<String> {
+) -> (Option<String>, Option<horizon_agent::wire::ModelSelection>) {
     let model = lock_unpoisoned(&state.providers).resolved_model(provider_id, role_id);
+    let selection = model
+        .as_deref()
+        .and_then(|model| selection_for_provider_id(state, provider_id, model));
     if let Some(model) = &model {
         send_session_event(
             state,
@@ -51,7 +54,50 @@ fn resolve_and_announce_session_model(
             AgentWireEvent::SessionModel(model.clone()),
         );
     }
-    model
+    if let Some(selection) = &selection {
+        send_session_event(
+            state,
+            session_id,
+            AgentWireEvent::SessionSelection(selection.clone()),
+        );
+    }
+    (model, selection)
+}
+
+/// The `(provider, model)` display selection for a session spawned directly on
+/// `provider_id`, in the vocabulary the picker and `set_session_model` use: the
+/// config entry name (the legacy `[provider]` fold-in resolves as `default`)
+/// plus the model the session runs. `None` for an id with no config entry (e.g.
+/// the mock provider), where the chip falls back to the resolved model id.
+fn selection_for_provider_id(
+    state: &Arc<AgentdState>,
+    provider_id: &ProviderId,
+    model: &str,
+) -> Option<horizon_agent::wire::ModelSelection> {
+    let id = provider_id.0.as_str();
+    let config = lock_unpoisoned(&state.agent_config);
+    if id == "builtin.agent.rig" {
+        return Some(horizon_agent::wire::ModelSelection {
+            provider: config.providers.default_name.clone(),
+            model: model.to_string(),
+        });
+    }
+    if let Some(name) = id.strip_prefix("builtin.agent.rig.") {
+        if config.providers.entry(name).is_some() {
+            return Some(horizon_agent::wire::ModelSelection {
+                provider: name.to_string(),
+                model: model.to_string(),
+            });
+        }
+        return None;
+    }
+    if let Some(name) = id.strip_prefix("builtin.agent.moa.") {
+        return Some(horizon_agent::wire::ModelSelection {
+            provider: horizon_agent::config::MOA_PROVIDER_NAME.to_string(),
+            model: name.to_string(),
+        });
+    }
+    None
 }
 
 /// Spawns the dedicated thread for one session — the shared spawn path for
@@ -103,7 +149,7 @@ pub(super) fn spawn_session_thread_with_context(
 ) {
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
-    let model =
+    let (model, selection) =
         resolve_and_announce_session_model(&state, session_id, &provider_id, role_id.as_ref());
     let restored_root = restored_worktree
         .as_ref()
@@ -115,6 +161,7 @@ pub(super) fn spawn_session_thread_with_context(
             provider_id: provider_id.clone(),
             role_id: role_id.clone(),
             model,
+            selection,
             inbound: inbound_tx,
             replay: replay_tx,
             parent_session_id: restored_worktree.as_ref().and(spawn_source_session_id),
@@ -222,7 +269,8 @@ mod tests {
         let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
         let provider_id = ProviderId("builtin.agent.rig".to_string());
 
-        let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
+        let (model, _selection) =
+            resolve_and_announce_session_model(&state, session_id, &provider_id, None);
 
         assert_eq!(model.as_deref(), Some("test-model"));
         let sent = outgoing_rx
@@ -245,7 +293,8 @@ mod tests {
         let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
         let provider_id = ProviderId("builtin.agent.rig".to_string());
 
-        let model = resolve_and_announce_session_model(&state, session_id, &provider_id, None);
+        let (model, _selection) =
+            resolve_and_announce_session_model(&state, session_id, &provider_id, None);
 
         assert_eq!(model, None);
         assert!(
