@@ -34,8 +34,9 @@ The first full sweep completed its seven selected refactors on main
 (2026-09-22). Coverage, validation, before/after evidence, and remaining work
 are in [the sweep record](research/refactoring-sweep-2026-09-22.md).
 The terminal frame-publication state was consolidated in a follow-up (2026-09-23).
-The next bounded sweep covers helper discovery, bash execution, and agent
-environment setup; see [its record](research/refactoring-runtime-second-sweep-2026-09-23.md).
+The second sweep completed helper discovery, bash execution, and agent
+environment setup on main (2026-09-23); see
+[its record](research/refactoring-runtime-second-sweep-2026-09-23.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 

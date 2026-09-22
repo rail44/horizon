@@ -23,6 +23,8 @@ pub(super) fn complete(
     cwd_handle: &Arc<Mutex<PathBuf>>,
     config: &BashToolConfig,
 ) -> BashCompletion {
+    #[cfg(target_os = "macos")]
+    let denial_collection_error = captured.denial_collection_error;
     let Captured {
         status,
         killed,
@@ -30,8 +32,7 @@ pub(super) fn complete(
         raw_stdout,
         raw_stderr,
         denials,
-        #[cfg(target_os = "macos")]
-        denial_collection_error,
+        ..
     } = captured;
     if killed {
         let mut value = timeout_output(timeout, raw_stdout, config);
