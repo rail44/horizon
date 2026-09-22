@@ -33,7 +33,7 @@ pub(crate) enum BoardSessionActivity {
 }
 
 impl BoardSessionActivity {
-    fn is_running(self) -> bool {
+    pub(crate) fn is_running(self) -> bool {
         matches!(self, Self::Running | Self::ToolRunning)
     }
 

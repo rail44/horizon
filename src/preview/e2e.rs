@@ -17,20 +17,18 @@
 //!   the scene is serialized, so glyphs from different strings interleave.
 //!   Every assertion here is on the character multiset, never on order.
 //!
-//! What it cannot drive: a keystroke into a guest that renders a lot of
-//! wrapped text. Forwarding one through `ViewApi::key` and then running the
-//! executor to quiescence was measured on the board prototype, keeping
-//! everything but the thread column's contents fixed: with that column
-//! empty the run finished in about four seconds; with two of the thread's
-//! messages rendered it had not finished after ninety; with the whole
-//! thread it had not finished after ten minutes. The same keystroke into
-//! the sample preview, the board pane's list and detail previews, the
-//! prototype over an empty store, and the prototype with its thread column
-//! removed all settle in the same second, so the cost tracks that column's
-//! contents rather than the key path itself. Whether the text is markdown
-//! or plain makes no difference to it. Key-driven behaviour of a
-//! text-heavy view is therefore covered by unit tests on its own model
-//! rather than here.
+//! What driving input asserts beyond the keystroke itself: that the guest
+//! settles at all. A guest paces no frames of its own — the host runs one
+//! turn per exchange with it, and a turn that draws leads to the next one —
+//! so a view that asks for another frame from inside the frame it is
+//! drawing (any repeating `gpui::Animation`, e.g. gpui-component's
+//! `Spinner`) keeps handing itself work and `settle` never returns. Nothing
+//! turns a quiet guest, so such a view looks idle until the first input
+//! event arrives. A test that hangs here after a `press` is reporting that,
+//! not a slow guest; `.config/nextest.toml` turns the hang into a failure.
+//! The board pane's `board-list` is in that state today — its rows draw the
+//! shipped animated activity indicator — so it is driven with no input
+//! here. See `docs/preview-pane-design.md`, "Frame pacing".
 //!
 //! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
 //! counts primitives and reports glyph ids; the primitives' colors are not
@@ -274,6 +272,34 @@ fn settle(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(100));
     }
     cx.executor().run_until_parked();
+}
+
+/// Send one keystroke to the guest's view and let it settle.
+///
+/// A guest paces no frames of its own, so a view that asks for another
+/// frame from inside the frame it is drawing never lets [`settle`] return
+/// (see the module doc). Driving a keystroke is therefore also the check
+/// that the view under test does not.
+fn press(surface: &Entity<Surface>, key: &str, cx: &mut TestAppContext) {
+    use embedded_gpui::surface::{KeyEvent, Keystroke, ViewApiCaller as _};
+
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| {
+        view.key(
+            KeyEvent::Down {
+                keystroke: Keystroke {
+                    modifiers: Default::default(),
+                    key: key.to_string(),
+                    key_char: Some(key.to_string()),
+                },
+                is_held: false,
+            },
+            cx,
+        )
+    });
+    settle(cx);
 }
 
 /// Hand the guest a surface of `slot` and drive one frame on it.
@@ -666,6 +692,24 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
         painted(&master, board_next::THREAD_PROBE),
         "the selected task's thread is not painted next to the list: {master:?}"
     );
+
+    // --- `j` moves the selection, and the thread follows it --------------
+    press(&surface, "j", cx);
+    let moved = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&moved, second_marker),
+        2,
+        "`j` did not carry the thread header onto the next task: {moved:?}"
+    );
+    assert_eq!(
+        count_of(&moved, first_marker),
+        1,
+        "the task `j` left is still painted as the thread header: {moved:?}"
+    );
+    assert!(
+        !painted(&moved, board_next::THREAD_PROBE),
+        "the previous task's thread is still painted: {moved:?}"
+    );
     cx.update(|_| drop(prototype));
     settle(cx);
 
@@ -696,6 +740,14 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
     assert!(
         !painted(&folded, board_next::DEEP_PROBE),
         "the long post was not folded: {folded:?}"
+    );
+
+    // --- `e` unfolds every folded post in the open thread ----------------
+    press(&long_surface, "e", cx);
+    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&unfolded, board_next::DEEP_PROBE),
+        "`e` did not unfold the long post: {unfolded:?}"
     );
 
     cx.update(|_| drop(long));

@@ -1,10 +1,23 @@
 //! The left column: one line per task, ordered for steering.
 
 use super::*;
+use gpui_component::tooltip::Tooltip;
+use gpui_component::{Icon, IconName, Sizable as _};
 
 /// The list column's width. Wide enough for a median title (34 characters
 /// in the log this prototype is shaped against) next to its markers.
 const LIST_WIDTH: Pixels = px(320.0);
+
+/// The color the shipped indicator would draw this activity in: on a
+/// selected row the marker sits on the selection fill, so it is lifted off
+/// it rather than left at its own hue.
+fn marker_color(activity: BoardSessionActivity, selected: bool) -> Hsla {
+    if selected {
+        theme::readable_on(activity.color(), theme::surface_selected())
+    } else {
+        activity.color()
+    }
+}
 
 impl BoardNextView {
     pub(super) fn render_list(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -119,10 +132,32 @@ impl BoardNextView {
     /// otherwise, so every title starts on the same column.
     fn render_marker(&self, row: &Row, selected: bool) -> AnyElement {
         if let Some(activity) = row.activity {
-            return div()
-                .flex_none()
-                .child(activity.indicator(row.item.id, selected))
-                .into_any_element();
+            // A running session's shipped indicator is a spinner, and a
+            // repeating animation asks for the next frame from inside the
+            // frame it is drawn in. A preview guest paces no frames: a turn
+            // that draws leads to the next turn, so that request runs at
+            // whatever rate the host can turn one around and the pane never
+            // goes idle again (docs/preview-pane-design.md, "Frame
+            // pacing"). This prototype only ever runs as a preview, so it
+            // draws that state as a still glyph.
+            let marker = if activity.is_running() {
+                div()
+                    .id(("board-next-activity", row.item.id))
+                    .size(px(12.0))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        Icon::new(IconName::Loader)
+                            .with_size(px(12.0))
+                            .text_color(marker_color(activity, selected)),
+                    )
+                    .tooltip(move |window, cx| Tooltip::new(activity.label()).build(window, cx))
+                    .into_any_element()
+            } else {
+                activity.indicator(row.item.id, selected).into_any_element()
+            };
+            return div().flex_none().child(marker).into_any_element();
         }
         let slot = div().flex_none().size(px(12.0)).flex().items_center();
         if row.unread > 0 {

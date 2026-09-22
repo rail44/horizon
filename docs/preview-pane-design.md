@@ -191,7 +191,11 @@ primary entry point and the view chooser does not list the preview kind.
   load without disturbing the pane. The board's: `board-list` paints row
   titles from its sample store and the rows' activity icons reach the host
   as images, `board-list-empty` paints its chrome and no row, and
-  `board-detail` paints the item's body and its comment thread. A board
+  `board-detail` paints the item's body and its comment thread. The
+  prototype's: `board-next` paints the selected task as both a row and the
+  thread header and `j` moves that pairing to the next task,
+  `board-next-empty` paints chrome and no row, and `board-next-long-thread`
+  folds its long post until `e` unfolds it. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.
@@ -233,3 +237,31 @@ own fallback, not to the configured chain.
 compiles the component, and the thread is not stopped when compilation
 fails, so each failed load leaves one idle thread behind until the app
 exits.
+
+## Frame pacing
+
+A guest window has none. Nothing inside the guest drives frames: the host
+runs one guest turn per exchange with it, and a turn draws a dirty window
+once and reports the delay until the guest's earliest pending timer. A
+quiet guest therefore costs nothing — the pane sits at 0% CPU with the
+window's frame request pending and no turn to service it.
+
+The consequence is that `window.request_animation_frame` has no rate. A
+turn that draws leads to the next turn, so a view that requests an
+animation frame from inside the frame it draws (every repeating
+`gpui::Animation`, including gpui-component's `Spinner`) keeps handing
+itself another one, as fast as the host can turn one around: measured at
+about 500 guest frames a second on a 900×1600 surface, with the host
+repainting each. Nothing starts that exchange while the guest is quiet, so
+such a view idles until the first input event and then never goes idle
+again. Which frame of the exchange carries the next turn was not traced;
+what was measured is that the requests are unpaced, that the executor call
+driving the guest never returns, and that removing the animation returns
+both to idle.
+
+`src/preview/e2e.rs` drives a keystroke into the prototype's previews partly
+for this: the run to quiescence after it does not return when the view
+paints a repeating animation. The board pane's own `board-list` preview is
+in that state — the row indicator for a running session is a spinner — and
+is therefore driven with no input; an arrow key into it does not return, and
+on a real display the pane burns whole cores from the first click onwards.

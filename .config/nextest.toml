@@ -30,6 +30,17 @@ test-group = 'daemon-e2e'
 [test-groups.daemon-e2e]
 max-threads = 1
 
+# The preview pane's windowless checks (`src/preview/e2e.rs`, `#[ignore]`d and
+# run by `scripts/check-preview-plugin.sh`) drive a guest that is ticked by
+# the frames it exchanges with the host. A guest view that requests another
+# frame from inside the frame it draws feeds itself turns without end, and
+# the executor call driving it never returns -- one host task spins, so no
+# in-test budget can catch it. A wall-clock kill is what turns that into a
+# red test instead of a run that never finishes.
+[[profile.default.overrides]]
+filter = 'test(preview_plugin_)'
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # `sandboxed` -- the profile an agent session running inside Horizon's own
 # sandbox can honestly run (`cargo nextest run --profile sandboxed
 # --workspace --locked`). It excludes exactly the tests whose *subject
