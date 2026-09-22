@@ -61,6 +61,10 @@
 //! allowed to name and the path the sandbox will actually accept can never
 //! drift apart.
 
+mod resolution;
+
+pub use resolution::resolve;
+
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
@@ -125,136 +129,13 @@ pub struct ProjectGrant {
     pub mach_services: Vec<String>,
 }
 
-/// Expands and validates every `[[grants.project]]` entry, returning the
-/// usable ones plus one warning string per refusal.
-///
-/// Pure in `home` so it can be tested without touching the process
-/// environment (and so validating a config file that names another
-/// account's paths stays predictable). `None` means no `$HOME` is
-/// available: a `~` path cannot be expanded and is refused, but everything
-/// absolute still validates.
-pub fn resolve(
-    entries: &[RawProjectGrant],
-    home: Option<&Path>,
-) -> (Vec<ProjectGrant>, Vec<String>) {
-    let mut resolved = Vec::new();
-    let mut warnings = Vec::new();
-
-    for entry in entries {
-        let Some(root) = expand(&entry.root, home) else {
-            warnings.push(format!(
-                "[[grants.project]]: root {:?} is not an absolute path (and no $HOME is set to \
-                 expand a leading \"~/\" against), ignoring this entry",
-                entry.root
-            ));
-            continue;
-        };
-        let mut trees = Vec::new();
-        for tree in &entry.trees {
-            let Some(tree_path) = expand(tree, home) else {
-                warnings.push(format!(
-                    "[[grants.project]] root {:?}: tree {tree:?} is not an absolute path (and no \
-                     $HOME is set to expand a leading \"~/\" against), ignoring it",
-                    entry.root
-                ));
-                continue;
-            };
-            if horizon_sandbox::is_overbroad_tree(&tree_path, home) {
-                warnings.push(format!(
-                    "[[grants.project]] root {:?}: tree {tree:?} resolves to {}, which is the \
-                     filesystem root, your home directory, or a system directory -- refusing to \
-                     grant it, ignoring it",
-                    entry.root,
-                    tree_path.display()
-                ));
-                continue;
-            }
-            if !trees.contains(&tree_path) {
-                trees.push(tree_path);
-            }
-        }
-        let mut loopback_connect = Vec::new();
-        let mut domains = Vec::new();
-        for value in &entry.network {
-            let trimmed = value.trim();
-            if trimmed.parse::<SocketAddr>().is_ok() {
-                match validate_loopback_endpoint(trimmed) {
-                    Ok(addr) => {
-                        if !loopback_connect.contains(&addr) {
-                            loopback_connect.push(addr);
-                        }
-                    }
-                    Err(reason) => {
-                        warnings.push(format!(
-                            "[[grants.project]] root {:?}: network entry {value:?} -- {reason}; an \
-                             external host should be written as a bare domain name instead, which \
-                             is routed through the session's network proxy, ignoring it",
-                            entry.root
-                        ));
-                    }
-                }
-            } else {
-                match validate_domain_entry(trimmed) {
-                    Ok(domain) => {
-                        if !domains.contains(&domain) {
-                            domains.push(domain);
-                        }
-                    }
-                    Err(reason) => {
-                        warnings.push(format!(
-                            "[[grants.project]] root {:?}: network entry {value:?} -- {reason}, \
-                             ignoring it",
-                            entry.root
-                        ));
-                    }
-                }
-            }
-        }
-        let mut mach_services = Vec::new();
-        for service in &entry.mach_services {
-            if !horizon_sandbox::KNOWN_SECURITY_SERVICES.contains(&service.as_str()) {
-                warnings.push(format!(
-                    "[[grants.project]] root {:?}: mach_services entry {service:?} is not one \
-                     of the macOS security services the sandbox knows about ({}), ignoring it",
-                    entry.root,
-                    horizon_sandbox::KNOWN_SECURITY_SERVICES.join(", ")
-                ));
-                continue;
-            }
-            if !mach_services.contains(service) {
-                mach_services.push(service.clone());
-            }
-        }
-        resolved.push(ProjectGrant {
-            root,
-            trees,
-            loopback_connect,
-            domains,
-            mach_services,
-        });
-    }
-
-    (resolved, warnings)
-}
-
 /// The trees granted to a session whose project root is `project_root`.
 /// Entries are matched by exact root path (both sides already canonical in
 /// production: the config's own expansion here, and the git-resolved
 /// repository toplevel on the session side). Several entries naming the
 /// same root contribute all of their trees.
 pub fn trees_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<PathBuf> {
-    let mut trees = Vec::new();
-    for entry in entries {
-        if entry.root != project_root {
-            continue;
-        }
-        for tree in &entry.trees {
-            if !trees.contains(tree) {
-                trees.push(tree.clone());
-            }
-        }
-    }
-    trees
+    collect_for_project(entries, project_root, |entry| &entry.trees)
 }
 
 /// The loopback endpoints granted to a session whose project root is
@@ -265,18 +146,7 @@ pub fn loopback_connect_for_project(
     entries: &[ProjectGrant],
     project_root: &Path,
 ) -> Vec<SocketAddr> {
-    let mut endpoints = Vec::new();
-    for entry in entries {
-        if entry.root != project_root {
-            continue;
-        }
-        for addr in &entry.loopback_connect {
-            if !endpoints.contains(addr) {
-                endpoints.push(*addr);
-            }
-        }
-    }
-    endpoints
+    collect_for_project(entries, project_root, |entry| &entry.loopback_connect)
 }
 
 /// The macOS security services granted to a session whose project root is
@@ -288,18 +158,7 @@ pub fn loopback_connect_for_project(
 /// `session::setup::configured_mach_services` calls this at session spawn
 /// to pre-record the session's mach-service grant set.
 pub fn mach_services_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
-    let mut services = Vec::new();
-    for entry in entries {
-        if entry.root != project_root {
-            continue;
-        }
-        for service in &entry.mach_services {
-            if !services.contains(service) {
-                services.push(service.clone());
-            }
-        }
-    }
-    services
+    collect_for_project(entries, project_root, |entry| &entry.mach_services)
 }
 
 /// The domain names granted to a session whose project root is
@@ -310,18 +169,24 @@ pub fn mach_services_for_project(entries: &[ProjectGrant], project_root: &Path) 
 /// `horizon-agentd`'s `session::setup::configured_domains` calls this at
 /// session spawn to pre-seed the session's `SessionDomainPolicy`.
 pub fn domains_for_project(entries: &[ProjectGrant], project_root: &Path) -> Vec<String> {
-    let mut domains = Vec::new();
-    for entry in entries {
-        if entry.root != project_root {
-            continue;
-        }
-        for domain in &entry.domains {
-            if !domains.contains(domain) {
-                domains.push(domain.clone());
+    collect_for_project(entries, project_root, |entry| &entry.domains)
+}
+
+/// Exact-root union shared by every authority category, in first-seen order.
+fn collect_for_project<T: Clone + PartialEq>(
+    entries: &[ProjectGrant],
+    project_root: &Path,
+    values: impl Fn(&ProjectGrant) -> &[T],
+) -> Vec<T> {
+    let mut collected = Vec::new();
+    for entry in entries.iter().filter(|entry| entry.root == project_root) {
+        for value in values(entry) {
+            if !collected.contains(value) {
+                collected.push(value.clone());
             }
         }
     }
-    domains
+    collected
 }
 
 /// Expands a leading `~`/`~/` against `home` and requires the result to be
@@ -762,6 +627,68 @@ mod tests {
         assert_eq!(
             resolved[0].domains,
             vec!["build-cache.internal".to_string()]
+        );
+    }
+
+    #[test]
+    fn invalid_root_stops_entry_validation_and_warning_order_follows_categories() {
+        let invalid = RawProjectGrant {
+            root: "relative".into(),
+            trees: vec!["relative".into()],
+            network: vec!["https://bad".into()],
+            mach_services: vec!["unknown.service".into()],
+        };
+        let (resolved, warnings) = resolve(std::slice::from_ref(&invalid), None);
+        assert!(resolved.is_empty());
+        assert_eq!(warnings.len(), 1);
+        assert!(warnings[0].contains("ignoring this entry"));
+        let (_, warnings) = resolve(
+            &[RawProjectGrant {
+                root: "/src/project".into(),
+                ..invalid
+            }],
+            None,
+        );
+        assert_eq!(warnings.len(), 3);
+        assert!(warnings[0].contains("tree"));
+        assert!(warnings[1].contains("network entry"));
+        assert!(warnings[2].contains("mach_services entry"));
+    }
+
+    #[test]
+    fn every_grant_collection_matches_exact_roots_and_keeps_first_seen_order() {
+        let grant = |root: &str, number: u16| ProjectGrant {
+            root: root.into(),
+            trees: vec![format!("/cache/{number}").into()],
+            loopback_connect: vec![format!("127.0.0.1:{number}").parse().unwrap()],
+            domains: vec![format!("{number}.example")],
+            mach_services: vec![format!("service.{number}")],
+        };
+        let entries = [
+            grant("/project", 2),
+            grant("/project/child", 9),
+            grant("/project", 1),
+            grant("/project", 2),
+        ];
+        let root = Path::new("/project");
+        assert_eq!(
+            trees_for_project(&entries, root),
+            [PathBuf::from("/cache/2"), PathBuf::from("/cache/1")]
+        );
+        assert_eq!(
+            loopback_connect_for_project(&entries, root),
+            [
+                "127.0.0.1:2".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:1".parse().unwrap()
+            ]
+        );
+        assert_eq!(
+            domains_for_project(&entries, root),
+            ["2.example", "1.example"]
+        );
+        assert_eq!(
+            mach_services_for_project(&entries, root),
+            ["service.2", "service.1"]
         );
     }
 }

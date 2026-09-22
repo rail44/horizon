@@ -11,9 +11,9 @@
 | --- | --- | --- | --- |
 | `src/control_plane.rs` | 引数検証と画面操作が同じ分岐内に混在 → 型付き要求の解析と実行 | 検証順・エラー文・既定値・遅延応答 | main反映済み |
 | `horizon-cli/src/board.rs` | オプション追加が多数の引数と同型のエラー処理に波及 → オプション解析の所有者 | フラグの解釈・出力・終了コード | main反映済み |
-| `horizon-workspace/src/persistence.rs` | セッション、レイアウト、参照整合性が多重ループに混在 → 検証単位 | 保存形式・最初のエラー・空workspace | 実装済み |
-| `src/workspace/session_lifecycle.rs` | 復元の非同期処理に在庫照合が埋没 → 復元候補の選定 | 両runtimeの世代確認・ID競合除外・メタデータ | 実装済み |
-| `horizon-config/src/grants.rs` | 権限種別の検証が一関数、同じroot選択が4箇所 → 種別検証と共通の集約 | 拒否基準・警告順・重複排除と入力順 | 未着手 |
+| `horizon-workspace/src/persistence.rs` | セッション、レイアウト、参照整合性が多重ループに混在 → 検証単位 | 保存形式・最初のエラー・空workspace | main反映済み |
+| `src/workspace/session_lifecycle.rs` | 復元の非同期処理に在庫照合が埋没 → 復元候補の選定 | 両runtimeの世代確認・ID競合除外・メタデータ | main反映済み |
+| `horizon-config/src/grants.rs` | 権限種別の検証が一関数、同じroot選択が4箇所 → 種別検証と共通の集約 | 拒否基準・警告順・重複排除と入力順 | 実装済み |
 | `horizon-agent/.../session/state.rs` | 制御要求の優先処理と新規入力開始が実行ループ内に埋没 → 入力の準備と開始 | cancel/shutdown優先・入力受理・MoAとイベント順 | 未着手 |
 | `horizon-agentd/src/session/resume.rs` | 復帰可否・環境復元・中断補正・thread起動が混在 → 復帰準備 | 既存の拒否条件・権限・turn履歴・追記順 | 未着手 |
 
