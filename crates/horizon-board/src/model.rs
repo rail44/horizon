@@ -112,19 +112,7 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
     let mut result: Vec<(&Item, usize)> = Vec::new();
     let mut visited: HashSet<u64> = HashSet::new();
 
-    // Iterative DFS: push roots in reverse so the first root pops first.
-    let mut stack: Vec<(&Item, usize)> = roots.into_iter().rev().map(|r| (r, 0)).collect();
-    while let Some((item, depth)) = stack.pop() {
-        if !visited.insert(item.id) {
-            continue;
-        }
-        result.push((item, depth));
-        if let Some(kids) = children.get(&item.id) {
-            for kid in kids.iter().rev() {
-                stack.push((kid, depth + 1));
-            }
-        }
-    }
+    append_subtrees(roots, &children, &mut visited, &mut result);
 
     // Cycle members: items whose parent chain forms a cycle, so none were
     // roots and the DFS never reached them. Emit as additional top-level
@@ -134,7 +122,19 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
         .filter(|item| !visited.contains(&item.id))
         .collect();
     cycle_roots.sort_by(|a, b| a.rank.cmp(&b.rank));
-    stack.extend(cycle_roots.into_iter().rev().map(|r| (r, 0)));
+    append_subtrees(cycle_roots, &children, &mut visited, &mut result);
+
+    result
+}
+
+fn append_subtrees<'a>(
+    roots: Vec<&'a Item>,
+    children: &HashMap<u64, Vec<&'a Item>>,
+    visited: &mut HashSet<u64>,
+    result: &mut Vec<(&'a Item, usize)>,
+) {
+    // Iterative DFS: push roots in reverse so the first root pops first.
+    let mut stack: Vec<_> = roots.into_iter().rev().map(|root| (root, 0)).collect();
     while let Some((item, depth)) = stack.pop() {
         if !visited.insert(item.id) {
             continue;
@@ -146,13 +146,73 @@ pub fn tree_order(items: &[Item], top_level_only: bool) -> Vec<(&Item, usize)> {
             }
         }
     }
-
-    result
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn imported_cycles_follow_visible_roots_and_preserve_rank_ties() {
+        let items: Vec<_> = [
+            (5, Some(4), "b"),
+            (8, Some(2), "b"),
+            (7, Some(7), "a"),
+            (1, None, "z"),
+            (3, Some(2), "b"),
+            (6, Some(5), "c"),
+            (2, Some(99), "y"),
+            (4, Some(5), "b"),
+        ]
+        .into_iter()
+        .map(|(id, parent, rank)| Item {
+            id,
+            parent,
+            rank: rank.into(),
+            ..Item::default()
+        })
+        .collect();
+        let order = |top| {
+            tree_order(&items, top)
+                .into_iter()
+                .map(|(item, depth)| (item.id, depth))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            order(false),
+            [
+                (2, 0),
+                (8, 1),
+                (3, 1),
+                (1, 0),
+                (7, 0),
+                (5, 0),
+                (4, 1),
+                (6, 1)
+            ]
+        );
+        assert_eq!(order(true), [(1, 0)]);
+    }
+
+    #[test]
+    fn deep_hierarchy_is_traversed_without_recursive_calls() {
+        let items: Vec<_> = (1..=10_000)
+            .rev()
+            .map(|id| Item {
+                id,
+                parent: (id > 1).then_some(id - 1),
+                rank: "a".into(),
+                ..Item::default()
+            })
+            .collect();
+        let ordered = tree_order(&items, false);
+        assert_eq!(ordered.len(), items.len());
+        for (depth, (item, actual_depth)) in ordered.into_iter().enumerate() {
+            assert_eq!(item.id, depth as u64 + 1);
+            assert_eq!(actual_depth, depth);
+        }
+    }
+
     #[test]
     fn filtered_children_are_not_top_level_tasks() {
         let items = vec![Item {
