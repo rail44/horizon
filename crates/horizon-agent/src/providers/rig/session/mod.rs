@@ -4,6 +4,7 @@
 //! - [`mod@state`] — [`SessionLoopState`] (the mutable loop state bundled into
 //!   a struct) and the loop body (`run`).
 //! - [`mod@input`] — input routing and lifecycle-control priority.
+//! - [`mod@tool_results`] — result acceptance, batch completion, and halt continuation.
 //! - [`mod@interaction`] — fresh user/background interaction preparation.
 //! - [`mod@turn`] — the turn-execution pipeline methods (`run_turn`,
 //!   `run_cancellable_turn`, `handle_truncation_recovery`,
@@ -46,6 +47,7 @@ mod input;
 mod interaction;
 pub(crate) mod moa;
 mod state;
+mod tool_results;
 mod turn;
 
 // Re-export the public surface the parent `rig` module and tests depend on.
