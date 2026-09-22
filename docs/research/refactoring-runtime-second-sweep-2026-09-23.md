@@ -6,8 +6,8 @@
 | 対象 | 整理する責務 | 状態 |
 | --- | --- | --- |
 | sandbox helper | 実行環境の取得、探索の優先順位、Cargo成果物の選別 | main反映済み (`689e2ae8`) |
-| bash実行 | 起動準備、待機と出力回収、結果判定と共通情報の付与 | 実装済み |
-| agent実行環境 | セッション情報、環境構築、環境切り替え | 未着手 |
+| bash実行 | 起動準備、待機と出力回収、結果判定と共通情報の付与 | main反映済み (`34ec49fb`) |
+| agent実行環境 | セッション情報、環境構築、環境切り替え | 実装済み |
 
 helperの探索順は、明示指定→隣接ファイル→Cargoのprofile直下→workspaceの
 uplift先→protocol markerを持つ最新のhashed成果物→PATH。存在しない候補は飛ばす。
@@ -20,3 +20,9 @@ bashは`exec/plain.rs`に通常実行、`exec/sandboxed/`に起動準備・出�
 filesystem→macOS mach service→domainの再試行優先順位、タイムアウト時の扱い、
 子孫プロセスの停止と回収中のキャンセル登録を維持。拒否と終了状態の組合せを
 3テスト追加し、bash関連のsandboxed profile対象71テストが通過。
+
+agentは`session/environment.rs`に環境構築と切り替えを集約。セッション識別情報と
+起動時設定は`SessionEnvironment`、配置・信頼状態は`EnvironmentLocation`、
+構築結果は実行環境と保存用contextの組として渡す。イベント処理の順序は維持する。
+実Git・イベントログを使うテストで、保存後の応答、保存不能時の環境維持とworktree回収、
+二重切り替えの拒否を確認。既存の追加grant保持テストに重複除去も加え、関連33テストが通過。

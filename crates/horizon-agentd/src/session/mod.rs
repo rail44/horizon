@@ -37,8 +37,8 @@
 //!
 //! **Where things live.** [`state`] holds the process-lifetime registry every
 //! other module works through; [`connection`] is one connection's view of it.
-//! A session is created by [`spawn`], built by [`setup`], and lived by
-//! [`run`]; [`resume`] is the startup path that recreates one from the log.
+//! A session is created by [`spawn`], configured through [`setup`] and
+//! [`environment`], and lived by [`run`]; [`resume`] recreates one from the log.
 //! [`events`] fans a session's output out to the attached client and to
 //! in-process subscribers, [`host_tools`] runs the host round trip,
 //! [`approval`] and [`completion`] own the approval seam and the
@@ -51,6 +51,7 @@ mod approval;
 mod board;
 mod completion;
 mod connection;
+mod environment;
 mod events;
 mod exploration;
 mod host_tools;
