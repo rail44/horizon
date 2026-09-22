@@ -474,33 +474,12 @@ pub(crate) fn definitions() -> Vec<Definition> {
         // returning only a launch receipt; the report arrives later as a
         // notification injected into a later provider round.
         //
-        // The description is in the register the two production models were
-        // measured against (`docs/research/agent-delegation-and-batching-
-        // probes-2026-07-27.md`, cells C3 and C5): the generic task-tool
-        // wording plus the self-orientation clause. Its routing counterpart
-        // is `prompt::DELEGATION_ROUTING_SECTION`; both were measured
-        // together, so change them together.
-        //
-        // The read-only sentence is a later, additive amendment (2026-07-27)
-        // that leaves the measured wording intact: a dogfooded session
-        // delegated the *implementation* to task children twice, which the
-        // read-only whitelist turns into another exploration that burns the
-        // child's turn budget. The generic `task` name reads as
-        // write-capable in these models' training distribution, so the
-        // constraint has to be stated rather than implied.
-        //
-        // The asynchronous register (2026-07-28) replaces only the
-        // return-shape sentence: "runs in the background, you will be
-        // notified, keep working, up to 3 at once" is the wording
-        // mainstream harnesses use, which is the whole reason the design
-        // chose this shape over a join-first one
-        // (`docs/agent-async-task-design.md`'s "Why", third bullet).
-        //
-        // The decomposition sentence (2026-07-28, later the same day)
-        // matches the routing section's third amendment: the first
-        // validation run of the async loop launched one monolithic task,
-        // so both surfaces now ask for several narrowly scoped launches in
-        // one response. To be measured on the next dogfood run.
+        // This description and `prompt::DELEGATION_ROUTING_SECTION` state
+        // the same constraints from two surfaces; change them together.
+        // The read-only sentence is stated rather than implied because the
+        // generic `task` name reads as write-capable in these models'
+        // training distribution, and a child asked to implement can only
+        // explore again.
         Definition {
             id: "task".to_string(),
             title: "Delegate a Task".to_string(),
@@ -509,13 +488,13 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 exploration or multi-file search, prefer task instead of running searches \
                 yourself — this keeps intermediate output out of your context. Describe the \
                 question and the exact deliverable (paths, line numbers, facts, a step plan) in \
-                the prompt. The task agent does its own orientation inside its own session; do \
-                not orient with bash/ls first. For one to three known files, read them directly \
+                the prompt. The task agent does its own orientation inside its own session. For \
+                one to three known files, read them directly \
                 instead. Task agents are read-only — they investigate, locate, and plan, but \
                 cannot write files or run commands that modify state; implementation happens in \
                 this session after the report returns. Runs in the background — you will be \
-                notified when it completes; keep working in the meantime; up to 2 may run \
-                concurrently. Prefer several narrowly scoped tasks launched in parallel in one \
+                notified when it completes; keep working in the meantime. \
+                Prefer several narrowly scoped tasks launched in parallel in one \
                 response over a single broad one. Returns immediately with the task session's \
                 id, which is also how you re-read its report later with task_output."
                 .to_string(),
@@ -883,9 +862,9 @@ mod tests {
         );
     }
 
-    /// The description carries the self-orientation clause the probe's C5
-    /// cell measured, and `fs.grep`'s routing tail names the tool by its
-    /// current id rather than a stale one.
+    /// The description says the task session orients itself, and
+    /// `fs.grep`'s routing tail names the tool by its current id rather
+    /// than a stale one.
     #[test]
     fn task_and_grep_descriptions_route_consistently() {
         let task = definition("task");
@@ -895,16 +874,16 @@ mod tests {
             "{}",
             task.description
         );
+        // The delegation-routing section bans nothing the requester may do
+        // before delegating, so neither does this description.
         assert!(
-            task.description
-                .contains("do not orient with bash/ls first"),
+            !task.description.contains("do not orient"),
             "{}",
             task.description
         );
 
-        // The 2026-07-27 amendment: the generic `task` name reads as
-        // write-capable, so the read-only constraint and where
-        // implementation happens are stated outright.
+        // The generic `task` name reads as write-capable, so the read-only
+        // constraint and where implementation happens are stated outright.
         assert!(
             task.description.contains("Task agents are read-only"),
             "{}",
@@ -917,8 +896,7 @@ mod tests {
             task.description
         );
 
-        // The 2026-07-28 decomposition amendment, matching the routing
-        // section's third amendment (`prompt::DELEGATION_ROUTING_SECTION`).
+        // Several narrow launches rather than one broad one.
         assert!(
             task.description.contains(
                 "Prefer several narrowly scoped tasks launched in parallel in one response over \

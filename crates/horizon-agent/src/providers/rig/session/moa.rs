@@ -108,14 +108,11 @@ impl MoaConversation {
 /// proposer outright.
 pub(crate) fn proposer_prompt(conversation: &MoaConversation, message: &str) -> String {
     let mut prompt = String::from(
-        "You are one of several assistants answering the same question independently. Another \
-         model will read every answer and write the reply the user actually sees, so write a \
-         complete, self-contained answer rather than a note to a colleague.\n\n\
-         Investigate first with the read-only tools you have, then answer. Ground every claim \
-         you can in what you read, naming files and line numbers. Say plainly what you could not \
-         determine.\n\n\
-         Output your answer and nothing else: no transcript headers, no continuation of the \
-         conversation below, and no invented tool calls or tool results.\n\n",
+        "You are one of several assistants answering the user's message below, independently. \
+         Another model reads every answer and writes the reply the user sees, so make yours \
+         complete on its own. Name the files you relied on.\n\n\
+         Reply with the answer only, as your own words: the conversation below is context, not \
+         something to continue.\n\n",
     );
     let history = conversation.render();
     if !history.is_empty() {
@@ -153,18 +150,12 @@ pub(crate) fn sanitize_proposal(text: &str) -> Option<String> {
 /// do with them and how to look further into any of them.
 pub(crate) fn proposal_block(proposals: &[(usize, String, String)]) -> String {
     let mut block = String::from(
-        "Several assistants were asked the user's latest message independently. Their answers \
-         follow. Synthesize a single reply to the user from them.\n\n\
-         Evaluate them critically: some may be biased, incomplete, or wrong, and agreement \
-         between them is not evidence. Do not replicate any one of them and do not summarize \
-         them as a set — write the answer you judge correct, using them as reference. Resolve \
-         disagreements by checking the claim yourself.\n\n\
-         Each answer names the session that produced it. To go further than the answer itself, \
-         call recall.search with that session_id to search its record (its tool calls and their \
-         results are in there), recall.read to read a stretch of it, or task_output with that \
-         session_id for the full answer text.\n\n\
-         The answers are reference material shown only to you. Do not mention them, the session \
-         ids, or that several assistants were asked.\n",
+        "Several assistants answered the user's latest message independently; their answers \
+         follow. Synthesize them into a single reply. Evaluate them critically — some may be \
+         biased or incorrect — and write a refined, accurate answer rather than replicating any \
+         one of them.\n\n\
+         Each answer names its session; `recall.search` / `recall.read` with that session_id \
+         reach the tool calls and results behind it.\n\n",
     );
     for (position, session_id, text) in proposals {
         block.push_str(&format!(

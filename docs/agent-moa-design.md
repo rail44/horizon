@@ -36,6 +36,18 @@ the event log and the DuckDB projection, never attached to a pane. Unlike a
 `task` child it runs on its member's own `{provider, model}` rather than
 the requester's.
 
+It runs on its own role id, `moa-proposer` (`roles::MOA_PROPOSER_ROLE`):
+the explore role's definition field for field, with an empty prompt
+section. `roles::is_exploration` matches both ids, so the four things it
+decides — no `task` host, unattended tool state, absence from the
+client-visible session list, termination rather than resumption at daemon
+startup — apply to a proposer exactly as to a `task` child. The pass's
+request prompt is therefore a proposer's only instruction; it says that
+several assistants answer independently, that another model reads every
+answer and writes the reply the user sees, to make the answer complete on
+its own and name the files relied on, and to reply with the answer alone
+rather than continuing the conversation it is shown.
+
 Input is the conversation written out as plain text — the user's messages
 and the aggregator's answers so far — followed by the new user message.
 Nothing else: no tool calls, no tool results, no earlier proposals. A
@@ -69,9 +81,13 @@ Proposals never enter `rig_history`. Canonical history holds user messages
 and aggregator output only, which is also exactly what the next pass's
 proposers are given.
 
-The instruction starts from the Mixture-of-Agents paper's
-Aggregate-and-Synthesize prompt: evaluate the proposals critically, do not
-replicate them.
+The block's instruction, in the Mixture-of-Agents paper's
+Aggregate-and-Synthesize register: synthesize the answers into a single
+reply, evaluate them critically because some may be biased or incorrect,
+and write a refined, accurate answer rather than replicating any one of
+them. It also states that each answer names its session and that
+`recall.search` / `recall.read` with that session_id reach the tool calls
+and results behind it.
 
 ## What the pane shows
 
@@ -152,8 +168,10 @@ names with no per-item availability).
   the turn; tool-result, continue-turn, and task-notification rounds do
   not.
 - **Spawning on a named entry and model.** `ExplorationRequest { prompt,
-  provider, model }` replaces `ExplorationHost::start(prompt)`. The daemon
-  spawns the proposer on `builtin.agent.rig.<provider>` and sends
+  provider, model, role }` replaces `ExplorationHost::start(prompt)`;
+  `ExplorationRequest::for_proposer` fills in the `moa-proposer` role and
+  `for_prompt` the `explore` one. The daemon spawns the proposer on
+  `builtin.agent.rig.<provider>` with the request's role and sends
   `SetSessionModel` ahead of the prompt on the same ordered channel.
 - **Record linkage.** `Event::MoaPassStarted { entry, proposers:
   [{session_id, provider, model}] }`, emitted at launch with the sessions

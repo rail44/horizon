@@ -82,6 +82,7 @@ use crate::contract::{
     Event, MessageRole, SessionId, SessionState, TaskProgress, TaskProgressState, ToolCallRequest,
     ToolCallResult, TurnEndReason,
 };
+use crate::roles::RoleId;
 use crate::tools::state::ToolSessionState;
 use crate::tools::Execution;
 
@@ -134,15 +135,34 @@ pub struct ExplorationRequest {
     /// The model id to pin, written out (never an alias). `None` means the
     /// entry's own default model.
     pub model: Option<String>,
+    /// The role the spawned session runs with: `roles::EXPLORE_ROLE_ID` for
+    /// a `task` child, `roles::MOA_PROPOSER_ROLE_ID` for a proposer. Both
+    /// satisfy `roles::is_exploration`, so the host treats them identically
+    /// everywhere else; they differ only in the prompt section the session
+    /// is given.
+    pub role: RoleId,
 }
 
 impl ExplorationRequest {
-    /// A prompt answered by the requesting session's own provider.
+    /// A prompt answered by the requesting session's own provider, in a
+    /// `task` child.
     pub fn for_prompt(prompt: String) -> Self {
         Self {
             prompt,
             provider: None,
             model: None,
+            role: RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()),
+        }
+    }
+
+    /// One Mixture-of-Agents proposer, pinned to its member's entry and
+    /// model (`docs/agent-moa-design.md`).
+    pub fn for_proposer(prompt: String, provider: String, model: String) -> Self {
+        Self {
+            prompt,
+            provider: Some(provider),
+            model: Some(model),
+            role: RoleId(crate::roles::MOA_PROPOSER_ROLE_ID.to_string()),
         }
     }
 }

@@ -161,11 +161,11 @@ pub(crate) fn launch(
             });
             continue;
         }
-        let request = ExplorationRequest {
-            prompt: prompt.to_string(),
-            provider: Some(member.provider.clone()),
-            model: Some(member.model.clone()),
-        };
+        let request = ExplorationRequest::for_proposer(
+            prompt.to_string(),
+            member.provider.clone(),
+            member.model.clone(),
+        );
         let started = match host.start(request) {
             Ok(started) => started,
             Err(message) => {
