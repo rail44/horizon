@@ -3,6 +3,8 @@
 //!
 //! - [`mod@state`] — [`SessionLoopState`] (the mutable loop state bundled into
 //!   a struct) and the loop body (`run`).
+//! - [`mod@input`] — input routing and lifecycle-control priority.
+//! - [`mod@interaction`] — fresh user/background interaction preparation.
 //! - [`mod@turn`] — the turn-execution pipeline methods (`run_turn`,
 //!   `run_cancellable_turn`, `handle_truncation_recovery`,
 //!   `apply_turn_outcome`, `halt_turn_loop`) and the pure helpers
@@ -41,6 +43,7 @@ use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 
 mod environment;
 mod input;
+mod interaction;
 pub(crate) mod moa;
 mod state;
 mod turn;

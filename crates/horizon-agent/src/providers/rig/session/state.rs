@@ -214,40 +214,7 @@ impl SessionLoopState {
     /// only its own arm-specific setup before calling it.
     pub(super) async fn run(&mut self) {
         loop {
-            while let Ok(command) = self.commands.try_recv() {
-                self.inbox.push_back(command);
-            }
-            // Lifecycle controls must run before starting queued work, including
-            // controls observed while the provider awaited an environment swap.
-            if let Some(index) = self
-                .inbox
-                .iter()
-                .position(|command| matches!(command, Command::Shutdown | Command::Cancel { .. }))
-            {
-                let mut preceding = VecDeque::new();
-                for _ in 0..index {
-                    match self.inbox.pop_front().unwrap() {
-                        Command::SessionInput(input) => self
-                            .inputs
-                            .accept(input, !self.pending_tool_calls.is_empty()),
-                        command => preceding.push_back(command),
-                    }
-                }
-                let control = self.inbox.pop_front().unwrap();
-                preceding.append(&mut self.inbox);
-                self.inbox = preceding;
-                self.record_active_input();
-                self.inbox.push_front(control);
-            }
-            if self.inbox.is_empty() && self.pending_tool_calls.is_empty() {
-                self.activate_environment().await;
-                if !self.inputs_paused && !self.has_pending_stop() {
-                    if let Some(text) = self.inputs.start_next() {
-                        self.record_active_input();
-                        self.inbox.push_front(Command::UserMessage { text });
-                    }
-                }
-            }
+            self.prepare_next_input().await;
             let next = match self.inbox.pop_front() {
                 Some(command) => Next::Command(command),
                 None => tokio::select! {
@@ -263,52 +230,7 @@ impl SessionLoopState {
                 Next::Closed => break,
                 Next::Command(command) => command,
                 Next::TaskWake => {
-                    if self.inputs_paused {
-                        continue;
-                    }
-                    // A background `task` child finished. If a tool batch is
-                    // still outstanding -- which includes a call parked on an
-                    // approval -- a provider round is still coming, and the
-                    // drain that runs before it will carry the notification
-                    // instead; nothing to do here. Otherwise the turn has
-                    // already ended, so the notification becomes a new turn's
-                    // synthetic input. That turn is an ordinary one:
-                    // `Event::TurnEnded` remains the only turn boundary
-                    // external monitors need to trust.
-                    if !self.pending_tool_calls.is_empty() {
-                        continue;
-                    }
-                    let Some(notification) = crate::tools::take_notification(self.session_id)
-                    else {
-                        continue;
-                    };
-                    let text = notification.text;
-                    // The same flush `Command::UserMessage` performs: a result
-                    // a guard halt stashed still has to land in `rig_history`
-                    // before the next request, or the API rejects an assistant
-                    // `tool_calls` message with no matching result.
-                    if let Some((result, tool_id)) = self.pending_halt_result.take() {
-                        self.rig_history
-                            .push(rig_tool_result_message(&result, &tool_id));
-                    }
-                    self.guard.reset();
-                    self.memory_satisfied = false;
-                    self.memory_reminded = false;
-                    let _ = self.events_tx.send(
-                        crate::contract::Event::StateChanged(
-                            crate::contract::SessionState::Running,
-                        )
-                        .into(),
-                    );
-                    let _ = self
-                        .events_tx
-                        .send(crate::tools::notification_event(text.clone()).into());
-                    self.report_task_failures(notification.failures);
-                    let fallback_text = text.clone();
-                    self.run_turn(Message::user(text), move || {
-                        deterministic_rig_response(&fallback_text)
-                    })
-                    .await;
+                    self.handle_task_wake().await;
                     continue;
                 }
             };
@@ -353,62 +275,7 @@ impl SessionLoopState {
                     );
                 }
                 crate::contract::Command::UserMessage { text } => {
-                    self.pause_inputs(false);
-                    // A user message starts a new interaction rather than
-                    // joining the previous turn's tool batch. This command can
-                    // arrive while any kind of tool is still running or
-                    // awaiting approval, so retire the whole old batch before
-                    // asking the provider to handle the new message. Otherwise
-                    // those old call ids remain in `pending_tool_calls` and a
-                    // result from the new turn is mistaken for a non-final
-                    // member of the old batch, leaving the session waiting
-                    // forever.
-                    if self.cancel_outstanding_tool_calls() {
-                        self.emit_cancelled_turn();
-                    }
-                    // Typing past a halt instead of clicking Continue: the
-                    // real result a guard halt stashed still has to land in
-                    // `rig_history` before the next request, or the API
-                    // rejects it (an assistant `tool_calls` message with no
-                    // matching result). A no-op when there's nothing pending.
-                    if let Some((result, tool_id)) = self.pending_halt_result.take() {
-                        self.rig_history
-                            .push(rig_tool_result_message(&result, &tool_id));
-                    }
-                    // A fresh user message starts a new interaction: both loop
-                    // guards below count/track only *tool-driven* turns since
-                    // the last user message.
-                    self.guard.reset();
-                    self.memory_satisfied = false;
-                    self.memory_reminded = false;
-                    let _ = self.events_tx.send(
-                        crate::contract::Event::StateChanged(
-                            crate::contract::SessionState::Running,
-                        )
-                        .into(),
-                    );
-                    let _ = self.events_tx.send(
-                        crate::contract::Event::MessageCommitted(crate::contract::Message {
-                            role: crate::contract::MessageRole::User,
-                            text: text.clone(),
-                        })
-                        .into(),
-                    );
-                    // An owner message opens a Mixture-of-Agents pass; the
-                    // aggregator's turn runs once every proposer has
-                    // answered. The message joins the conversation only
-                    // after the pass, which carries it separately from the
-                    // conversation so far.
-                    let pass = self.run_moa_pass(&text).await;
-                    self.moa_conversation.record_owner(text.clone());
-                    if let super::moa::PassOutcome::Cancelled = pass {
-                        continue;
-                    }
-                    let (prompt, injected) =
-                        self.inject_task_notification(Message::user(text.clone()));
-                    let fallback_text = injected.unwrap_or(text);
-                    self.run_turn(prompt, move || deterministic_rig_response(&fallback_text))
-                        .await;
+                    self.handle_user_message(text).await;
                 }
                 crate::contract::Command::ToolCallResult(result) => {
                     if self.cancelled_call_ids.remove(&result.call_id) {

@@ -118,6 +118,49 @@ impl Inputs {
 }
 
 impl SessionLoopState {
+    /// Collect commands and select queued work only after lifecycle controls
+    /// and any environment handoff have had a chance to stop it.
+    pub(super) async fn prepare_next_input(&mut self) {
+        while let Ok(command) = self.commands.try_recv() {
+            self.inbox.push_back(command);
+        }
+        self.prioritize_lifecycle_control();
+        if self.inbox.is_empty() && self.pending_tool_calls.is_empty() {
+            self.activate_environment().await;
+            if !self.inputs_paused && !self.has_pending_stop() {
+                if let Some(text) = self.inputs.start_next() {
+                    self.record_active_input();
+                    self.inbox.push_front(Command::UserMessage { text });
+                }
+            }
+        }
+    }
+
+    fn prioritize_lifecycle_control(&mut self) {
+        // Lifecycle controls must run before starting queued work, including
+        // controls observed while the provider awaited an environment swap.
+        if let Some(index) = self
+            .inbox
+            .iter()
+            .position(|command| matches!(command, Command::Shutdown | Command::Cancel { .. }))
+        {
+            let mut preceding = VecDeque::new();
+            for _ in 0..index {
+                match self.inbox.pop_front().unwrap() {
+                    Command::SessionInput(input) => self
+                        .inputs
+                        .accept(input, !self.pending_tool_calls.is_empty()),
+                    command => preceding.push_back(command),
+                }
+            }
+            let control = self.inbox.pop_front().unwrap();
+            preceding.append(&mut self.inbox);
+            self.inbox = preceding;
+            self.record_active_input();
+            self.inbox.push_front(control);
+        }
+    }
+
     pub(super) fn pause_inputs(&mut self, paused: bool) {
         self.inputs_paused = paused;
         if self.inputs.has_requests() {
@@ -177,6 +220,35 @@ mod tests {
             reply_to: destination.map(str::to_string),
         }
     }
+
+    #[tokio::test]
+    async fn lifecycle_control_accepts_preceding_inputs_without_starting_queued_work() {
+        for control in [Command::Cancel { request_id: None }, Command::Shutdown] {
+            let (send, receive) = tokio::sync::mpsc::unbounded_channel();
+            let mut state = SessionLoopState {
+                commands: receive,
+                ..Default::default()
+            };
+            state.inbox.push_back(Command::ContinueTurn);
+            send.send(Command::SessionInput(input("before", Some("first"))))
+                .unwrap();
+            send.send(control.clone()).unwrap();
+            let later = Command::SessionInput(input("after", Some("second")));
+            send.send(later.clone()).unwrap();
+
+            state.prepare_next_input().await;
+
+            assert_eq!(state.inbox, [control, Command::ContinueTurn, later]);
+            assert!(state.inputs.active_ids().is_empty());
+            assert_eq!(
+                state.inputs.start_next(),
+                Some(present_input(&input("before", Some("first"))))
+            );
+            state.inputs.finish(InputResult::Interrupted);
+            assert!(state.inputs.start_next().is_none());
+        }
+    }
+
     #[test]
     fn additions_merge_but_other_destinations_queue_and_passive_input_never_retargets() {
         let mut inputs = Inputs::default();
