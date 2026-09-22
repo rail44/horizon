@@ -33,6 +33,7 @@ The first reviewed changes and deliberate exclusions are recorded in
 The first full sweep completed its seven selected refactors on main
 (2026-09-22). Coverage, validation, before/after evidence, and remaining work
 are in [the sweep record](research/refactoring-sweep-2026-09-22.md).
+The terminal frame-publication state was consolidated in a follow-up (2026-09-23).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 

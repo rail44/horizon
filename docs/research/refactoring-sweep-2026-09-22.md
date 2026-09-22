@@ -40,7 +40,7 @@
 | horizon-sandbox | `helper::resolve`、能力構築 | 探索順とOS境界を維持。古いbuild構成向けfallbackは別途必要性を検証 |
 | horizon-sandbox-runtime | `linux/network`、open時の能力照合 | syscall別の検証と許可判定を維持。単純な分岐数では共通化しない |
 | horizon-sandbox-proxy | `handler::{target_host,forbidden}`、allowlist | 宛先取得・許可判定・TLS非介入が分離。維持 |
-| horizon-terminal-core | `session_loop`、kitty `legacy_bytes` | プロトコルの対応表を維持。frame送信制御の引数集中は次段階 |
+| horizon-terminal-core | `session_loop`、kitty `legacy_bytes` | プロトコルの対応表を維持。frame送信制御は下記の続行で対応 |
 | horizon-terminald | `terminal::{spawn_terminal,run_writer}` | PTYの所有権とcoreへの入力転送を維持 |
 | horizon-wire | `daemon::{bind_listener,run}`、spawn | 共通transportとruntime別終了処理の分離を維持 |
 | horizon-workspace | `persistence::validate`、command catalog | 保存データの検証を対象化。コマンドの宣言的な列挙は維持 |
@@ -84,6 +84,14 @@ workspace復元の非同期接続・世代確認とproviderのtool結果処理�
 wire schema、preview wasmが成功。実デーモン再起動によるturn ID・履歴・隔離worktreeの
 復元を含む。専用環境のUI再起動でも2タブ・2ペイン分割・同じ3端末セッションの復元を確認した。
 
-残件は、terminal-coreのframe送信制御、
-古いbuild構成向けsandbox helper fallbackの必要性確認。小さなtext/markdown描画重複は低優先。
+残件は、古いbuild構成向けsandbox helper fallbackの必要性確認。
+小さなtext/markdown描画重複は低優先。
 対応表・宣言的列挙・runtime固有の復旧処理は、上表の理由で維持する。
+
+## 続行: 端末のframe送信制御（2026-09-23）
+
+`session_loop/frames.rs` の `FramePublisher` に送信先・最終送信時刻・未送信状態・
+タイマーを集約。PTY出力処理の引数は10→6、優先読み取り処理は11→7となった。
+初回の即時送信、16msの集約、最新画面の送信、古いタイマーの無効化を維持する。
+同期更新のfailsafeとPTYの優先処理は元の所有者・順序を維持。
+追加3件を含むsession loopの14テストで送信と処理順序を確認し、変更前後の範囲解析も完了。

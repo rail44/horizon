@@ -16,7 +16,13 @@
 //! frame *transport* changed — full frames on a snapshot-valued signal, no
 //! wire diffing.
 
-use std::time::{Duration, Instant};
+#[cfg(test)]
+use std::time::Duration;
+use std::time::Instant;
+
+mod frames;
+
+use frames::FramePublisher;
 
 use crossbeam_channel::{Receiver, Sender};
 use termwiz::input::{KeyCode, Modifiers};
@@ -87,52 +93,6 @@ pub struct CoreSenders {
     pub window_tx: Sender<ScrollWindowRequest>,
 }
 
-/// How long the session runtime waits before flushing a burst of core
-/// mutations as a single `Snapshot`, ~60Hz. A lone keystroke on an idle
-/// terminal still echoes immediately (see [`notify_snapshot`]); a PTY flood
-/// collapses to one snapshot per window instead of one per chunk.
-const COALESCE_WINDOW: Duration = Duration::from_millis(16);
-
-/// Send a fresh snapshot immediately if the coalescing window has elapsed
-/// since the last send (keystroke latency must not wait); otherwise mark
-/// the core dirty and arm a one-shot timer (`flush_rx`) that flushes the
-/// latest state when the window closes. Mirrors alacritty's
-/// frame-scheduling: the timer exists only while there is unflushed
-/// damage, so an idle terminal causes no extra wakeups.
-///
-/// This is session-loop-local by design: it is the shape a future
-/// `terminald` would use to decide what to stream over a socket, so it must
-/// not leak into the UI layer.
-fn notify_snapshot(
-    core: &TerminalCore,
-    frame_tx: &Sender<TerminalFrame>,
-    last_sent: &mut Instant,
-    dirty: &mut bool,
-    flush_armed: &mut bool,
-    flush_rx: &mut Receiver<Instant>,
-) {
-    let now = Instant::now();
-    let elapsed = now.saturating_duration_since(*last_sent);
-    if elapsed >= COALESCE_WINDOW {
-        let _ = frame_tx.send(core.snapshot_frame());
-        *last_sent = now;
-        *dirty = false;
-        // A timer armed against the old `last_sent` is now stale (its
-        // deadline no longer corresponds to the new window) — drop it so
-        // the next dirty event arms a fresh one instead of an already-due
-        // timer firing independently later and causing an extra send.
-        *flush_armed = false;
-        *flush_rx = crossbeam_channel::never();
-        return;
-    }
-
-    *dirty = true;
-    if !*flush_armed {
-        *flush_rx = crossbeam_channel::after(COALESCE_WINDOW - elapsed);
-        *flush_armed = true;
-    }
-}
-
 /// Re-arm (or disarm) the synchronized-update failsafe timer against the
 /// core's current window state. Called after every core mutation that can
 /// open, extend, or close a sync window — i.e. every `write_vt` and every
@@ -141,7 +101,7 @@ fn notify_snapshot(
 /// alacritty's own event loop, which polls with this same deadline as its
 /// timeout — see `TerminalCore::sync_flush_deadline`'s doc comment); `None`
 /// (no window open) parks it on a channel that never fires, so an idle
-/// terminal causes no extra wakeups, matching `notify_snapshot`'s own
+/// terminal causes no extra wakeups, matching `FramePublisher::notify`'s own
 /// coalescing-timer discipline.
 fn rearm_sync_flush(core: &TerminalCore, sync_flush_rx: &mut Receiver<Instant>) {
     *sync_flush_rx = match core.sync_flush_deadline() {
@@ -182,41 +142,18 @@ fn drain_to_latest<T>(first: T, rx: &Receiver<T>) -> T {
     latest
 }
 
-/// Flush the latest dirty state once the coalescing timer fires.
-fn flush_snapshot(
-    core: &TerminalCore,
-    frame_tx: &Sender<TerminalFrame>,
-    last_sent: &mut Instant,
-    dirty: &mut bool,
-    flush_armed: &mut bool,
-    flush_rx: &mut Receiver<Instant>,
-) {
-    *flush_armed = false;
-    *flush_rx = crossbeam_channel::never();
-    if *dirty {
-        let _ = frame_tx.send(core.snapshot_frame());
-        *last_sent = Instant::now();
-        *dirty = false;
-    }
-}
-
 /// Parse one PTY-output chunk and emit everything it produced: query/DA/DSR
 /// replies back into the PTY input (`TerminalCommand::Input`), bell/title/
 /// clipboard updates to the client, and -- when the grid actually changed --
 /// a rate-controlled snapshot. Shared by [`drain_pty_output`]'s priority
 /// drain and the `pty_rx` `select!` arm.
-#[allow(clippy::too_many_arguments)]
 fn process_pty_chunk(
     core: &mut TerminalCore,
     bytes: &[u8],
     command_tx: &Sender<TerminalCommand>,
     update_tx: &Sender<TerminalUpdate>,
-    frame_tx: &Sender<TerminalFrame>,
+    frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
-    last_sent: &mut Instant,
-    dirty: &mut bool,
-    flush_armed: &mut bool,
-    flush_rx: &mut Receiver<Instant>,
 ) {
     let mut events = core.write_vt(bytes);
     tracing::debug!(
@@ -244,12 +181,12 @@ fn process_pty_chunk(
     }
     rearm_sync_flush(core, sync_flush_rx);
     // Only a chunk that actually reached the grid deserves
-    // `notify_snapshot`'s immediate slot -- a chunk that landed entirely
+    // `FramePublisher::notify`'s immediate slot -- a chunk that landed entirely
     // inside an already-open BSU/ESU window (buffered, nothing flushed yet)
     // must not steal it from the real content that flushes later. See
     // `TerminalCore::write_vt`.
     if events.visible_dirty {
-        notify_snapshot(core, frame_tx, last_sent, dirty, flush_armed, flush_rx);
+        frames.notify(core);
         tracing::debug!(
             target: "horizon_terminal_core::session_loop",
             "notify_snapshot"
@@ -289,35 +226,19 @@ const PTY_DRAIN_BUDGET: usize = 8;
 /// Returns `false` once `pty_rx` is disconnected (the session is tearing
 /// down) so the caller can return; otherwise drains at most
 /// [`PTY_DRAIN_BUDGET`] chunks and returns `true`.
-#[allow(clippy::too_many_arguments)]
 fn drain_pty_output(
     core: &mut TerminalCore,
     pty_rx: &Receiver<Vec<u8>>,
     command_tx: &Sender<TerminalCommand>,
     update_tx: &Sender<TerminalUpdate>,
-    frame_tx: &Sender<TerminalFrame>,
+    frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
-    last_sent: &mut Instant,
-    dirty: &mut bool,
-    flush_armed: &mut bool,
-    flush_rx: &mut Receiver<Instant>,
     mut budget: usize,
 ) -> bool {
     while budget > 0 {
         match pty_rx.try_recv() {
             Ok(bytes) => {
-                process_pty_chunk(
-                    core,
-                    &bytes,
-                    command_tx,
-                    update_tx,
-                    frame_tx,
-                    sync_flush_rx,
-                    last_sent,
-                    dirty,
-                    flush_armed,
-                    flush_rx,
-                );
+                process_pty_chunk(core, &bytes, command_tx, update_tx, frames, sync_flush_rx);
                 budget -= 1;
             }
             Err(crossbeam_channel::TryRecvError::Empty) => return true,
@@ -352,12 +273,7 @@ pub fn run_terminal_core(
     core.set_color_scheme(options.color_scheme);
     let _ = frame_tx.send(core.snapshot_frame());
 
-    // Session-side frame coalescing state (see `notify_snapshot`). Backdate
-    // `last_sent` so the very first mutation always sends immediately.
-    let mut last_sent = Instant::now() - COALESCE_WINDOW;
-    let mut dirty = false;
-    let mut flush_armed = false;
-    let mut flush_rx: Receiver<Instant> = crossbeam_channel::never();
+    let mut frames = FramePublisher::new(frame_tx);
 
     // Failsafe for a synchronized-update window (BSU/ESU, private mode 2026)
     // left open by a PTY chunk that never delivers its closing ESU — see
@@ -374,12 +290,8 @@ pub fn run_terminal_core(
             &pty_rx,
             &command_tx,
             &update_tx,
-            &frame_tx,
+            &mut frames,
             &mut sync_flush_rx,
-            &mut last_sent,
-            &mut dirty,
-            &mut flush_armed,
-            &mut flush_rx,
             PTY_DRAIN_BUDGET,
         ) {
             return;
@@ -391,7 +303,7 @@ pub fn run_terminal_core(
                     return;
                 };
                 core.resize(size);
-                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                frames.notify(&core);
             }
             recv(scroll_rx) -> scroll => {
                 let Ok(scroll) = scroll else {
@@ -400,7 +312,7 @@ pub fn run_terminal_core(
                 if let Some(input) = core.handle_scroll(scroll) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                frames.notify(&core);
             }
             recv(mouse_rx) -> report => {
                 let Ok(report) = report else {
@@ -409,7 +321,7 @@ pub fn run_terminal_core(
                 if let Some(input) = core.handle_mouse_report(report) {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                frames.notify(&core);
             }
             recv(paste_rx) -> text => {
                 let Ok(text) = text else {
@@ -423,18 +335,14 @@ pub fn run_terminal_core(
                     &pty_rx,
                     &command_tx,
                     &update_tx,
-                    &frame_tx,
+                    &mut frames,
                     &mut sync_flush_rx,
-                    &mut last_sent,
-                    &mut dirty,
-                    &mut flush_armed,
-                    &mut flush_rx,
                     PTY_DRAIN_BUDGET,
                 ) {
                     return;
                 }
                 let _ = command_tx.send(TerminalCommand::Input(core.paste_input(&text)));
-                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                frames.notify(&core);
             }
             recv(key_rx) -> key => {
                 let Ok((key, modifiers, event, text)) = key else {
@@ -448,12 +356,8 @@ pub fn run_terminal_core(
                     &pty_rx,
                     &command_tx,
                     &update_tx,
-                    &frame_tx,
+                    &mut frames,
                     &mut sync_flush_rx,
-                    &mut last_sent,
-                    &mut dirty,
-                    &mut flush_armed,
-                    &mut flush_rx,
                     PTY_DRAIN_BUDGET,
                 ) {
                     return;
@@ -462,7 +366,7 @@ pub fn run_terminal_core(
                 // touches `core`'s visible state, so there is nothing to
                 // notify here. The real echo arrives back through `pty_rx`
                 // (below), which is what actually mutates the grid and
-                // takes `notify_snapshot`'s immediate slot.
+                // takes `FramePublisher::notify`'s immediate slot.
                 let input = core.key_input(key, modifiers, event, text.as_deref());
                 if !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
@@ -480,12 +384,8 @@ pub fn run_terminal_core(
                     &pty_rx,
                     &command_tx,
                     &update_tx,
-                    &frame_tx,
+                    &mut frames,
                     &mut sync_flush_rx,
-                    &mut last_sent,
-                    &mut dirty,
-                    &mut flush_armed,
-                    &mut flush_rx,
                     PTY_DRAIN_BUDGET,
                 ) {
                     return;
@@ -506,12 +406,12 @@ pub fn run_terminal_core(
                     SelectionCommand::Start { point, kind } => {
                         core.start_selection(point, kind);
                         send_selection_to_primary(&core, &update_tx);
-                        notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                        frames.notify(&core);
                     }
                     SelectionCommand::Update(point) => {
                         core.update_selection(point);
                         send_selection_to_primary(&core, &update_tx);
-                        notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                        frames.notify(&core);
                     }
                     SelectionCommand::Copy => {
                         if let Some(text) = core.selected_text() {
@@ -554,7 +454,7 @@ pub fn run_terminal_core(
                     drain_to_latest(request, &window_rx);
                 // A pure read: `snapshot_window` walks `iter_from` and never
                 // moves the live `display_offset`, so there is no visible
-                // grid state to `notify_snapshot` for -- the live-frame watch
+                // grid state to `FramePublisher::notify` for -- the live-frame watch
                 // keeps showing the tail. The window rides the events mpsc
                 // back to the client (`docs/terminal-scrollback-design.md`
                 // §9 option ii), reusing the same `update_tx` plumbing every
@@ -571,16 +471,12 @@ pub fn run_terminal_core(
                     &bytes,
                     &command_tx,
                     &update_tx,
-                    &frame_tx,
+                    &mut frames,
                     &mut sync_flush_rx,
-                    &mut last_sent,
-                    &mut dirty,
-                    &mut flush_armed,
-                    &mut flush_rx,
                 );
             }
-            recv(flush_rx) -> _ => {
-                flush_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+            recv(frames.flush_timer()) -> _ => {
+                frames.flush(&core);
             }
             recv(sync_flush_rx) -> _ => {
                 let mut events = core.flush_sync_update();
@@ -607,7 +503,7 @@ pub fn run_terminal_core(
                     let _ = update_tx.send(TerminalUpdate::Notification(notification));
                 }
                 rearm_sync_flush(&core, &mut sync_flush_rx);
-                notify_snapshot(&core, &frame_tx, &mut last_sent, &mut dirty, &mut flush_armed, &mut flush_rx);
+                frames.notify(&core);
             }
         }
     }
