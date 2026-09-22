@@ -53,6 +53,113 @@ impl Drop for Board {
 }
 
 #[test]
+fn rejected_and_duplicate_writes_leave_bytes_and_sequence_unchanged() {
+    let b = Board::new();
+    let id = b.add(None);
+    let message = Comment {
+        id: "delivery:1".into(),
+        author: "agent".into(),
+        text: "result".into(),
+        at: Some(1),
+        source: None,
+    };
+    let (_, sequences) = b
+        .write(Request::PostMessage {
+            id,
+            message: message.clone(),
+        })
+        .unwrap();
+    assert_eq!(sequences, [2]);
+    let before = std::fs::read(&b.0).unwrap();
+    assert!(b
+        .write(Request::SetParent {
+            id,
+            parent: Some(id),
+            position: Position::Bottom,
+        })
+        .is_err());
+    assert!(b
+        .write(Request::PostMessage { id, message })
+        .unwrap()
+        .1
+        .is_empty());
+    assert_eq!(std::fs::read(&b.0).unwrap(), before);
+    let (_, sequences) = b
+        .write(Request::Comment {
+            id,
+            author: "human".into(),
+            text: "next".into(),
+        })
+        .unwrap();
+    assert_eq!(sequences, [3]);
+    assert_eq!(b.item(id).comments[1].id, "message:3");
+}
+
+#[test]
+fn concurrent_writes_preserve_ids_partial_edits_and_message_identity() {
+    let b = Board::new();
+    let id = b.add(None);
+    let barrier = std::sync::Barrier::new(8);
+    let results = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..8)
+            .map(|n| {
+                let board = &b;
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    let added = board.add(None);
+                    board
+                        .write(if n % 2 == 0 {
+                            Request::Edit {
+                                id,
+                                title: Some("new title".into()),
+                                body: None,
+                            }
+                        } else {
+                            Request::Edit {
+                                id,
+                                title: None,
+                                body: Some("new body".into()),
+                            }
+                        })
+                        .unwrap();
+                    let (_, sequences) = board
+                        .write(Request::PostMessage {
+                            id,
+                            message: Comment {
+                                id: "delivery:1".into(),
+                                author: "agent".into(),
+                                text: "result".into(),
+                                at: Some(1),
+                                source: None,
+                            },
+                        })
+                        .unwrap();
+                    (added, sequences.len())
+                })
+            })
+            .collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let mut ids: Vec<_> = results.iter().map(|(id, _)| *id).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, (2..=9).collect::<Vec<_>>());
+    assert_eq!(results.iter().map(|(_, count)| count).sum::<usize>(), 1);
+    let item = b.item(id);
+    assert_eq!(item.title, "new title");
+    assert_eq!(item.body, "new body");
+    assert_eq!(item.comments.len(), 1);
+    let report = horizon_board::read_events(&b.0).unwrap();
+    assert_eq!(report.line_count, 18);
+    assert_eq!(report.envelopes.len(), 18);
+    assert_eq!(report.corrupt_count, 0);
+    assert!(!report.torn_trailing);
+}
+
+#[test]
 fn closing_and_reopening_update_status_atomically_without_interpreting_it() {
     let b = Board::new();
     let id = b.add(None);

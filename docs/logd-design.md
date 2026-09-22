@@ -122,6 +122,16 @@ defers the agentd extraction surgery. v1 scope:
 - agent-events migration and recall's query path are explicitly
   later phases.
 
+## Board write boundary
+
+The board writer keeps the exclusive file lock across reading, folding,
+request validation, and appending. Its private preparation module selects
+an event and reply from that locked snapshot; message identity/read-prefix
+rules and relationship/rank rules live in separate modules. An unchanged
+request produces a reply without an event, so it neither appends a line nor
+publishes a sequence number. The writer alone performs the append, after
+preparation succeeds; ID and rank assignment remain inside the same lock.
+
 ## Subscription shape (owner-settled 2026-08-06)
 
 - **One multiplexed NDJSON stream**, not per-log streams: a consumer
