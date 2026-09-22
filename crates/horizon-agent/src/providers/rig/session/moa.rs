@@ -15,7 +15,7 @@
 
 use rig_core::completion::Message;
 
-use crate::contract::{Command, Event, MessageRole, MoaPassStarted, MoaProposer};
+use crate::contract::{Command, Error, Event, MessageRole, MoaPassStarted, MoaProposer};
 use crate::tools::moa::Proposal;
 
 use super::state::SessionLoopState;
@@ -198,12 +198,10 @@ impl SessionLoopState {
             return PassOutcome::Proceed;
         }
         let Some(host) = crate::tools::moa::exploration_host(self.session_id) else {
-            eprintln!(
-                "horizon-agent: session {} cannot spawn proposer sessions; the `{}` aggregator \
-                 answers alone",
-                self.session_id.as_uuid(),
+            self.report_pass_failure(format!(
+                "cannot spawn proposer sessions; the `{}` aggregator answers alone",
                 pass.name
-            );
+            ));
             return PassOutcome::Proceed;
         };
 
@@ -264,8 +262,9 @@ impl SessionLoopState {
     }
 
     /// Renders whatever the pass collected into the turn's injected block.
-    /// With nothing usable the turn runs as an ordinary single-model turn
-    /// and the reason is reported on stderr, not in the transcript.
+    /// With nothing usable the turn runs as an ordinary single-model turn.
+    /// A proposer runs in no pane, so each one that contributed nothing is
+    /// reported through [`Self::report_pass_failure`].
     fn install_proposals(&mut self, entry: &str, proposals: Vec<Proposal>) {
         let mut usable = Vec::new();
         for proposal in &proposals {
@@ -275,28 +274,34 @@ impl SessionLoopState {
                     proposal.member.session_id.as_uuid().to_string(),
                     text,
                 )),
-                None => eprintln!(
-                    "horizon-agent: moa `{entry}` proposer {}/{} contributed nothing ({})",
+                None => self.report_pass_failure(format!(
+                    "moa `{entry}` proposer {}/{} contributed nothing ({})",
                     proposal.member.provider,
                     proposal.member.model,
                     proposal
                         .failure
                         .as_deref()
                         .unwrap_or("its answer was not usable")
-                ),
+                )),
             }
         }
         if usable.is_empty() {
-            eprintln!(
-                "horizon-agent: moa `{entry}` got no usable proposals; the aggregator answers \
-                 alone"
-            );
+            self.report_pass_failure(format!(
+                "moa `{entry}` got no usable proposals; the aggregator answers alone"
+            ));
             return;
         }
         self.moa_turn = Some(MoaTurn {
             block: proposal_block(&usable),
             index: None,
         });
+    }
+
+    /// Records a pass failure as an error item in the aggregator's pane: a
+    /// proposer session is never attached to a pane, so nothing else the
+    /// user can see says the pass lost one.
+    fn report_pass_failure(&self, message: String) {
+        let _ = self.events_tx.send(Event::Error(Error { message }).into());
     }
 
     /// The message the block is injected as, plus the index to insert it at,
@@ -475,6 +480,18 @@ mod tests {
         })
     }
 
+    /// Every error the pass put on the session's own event channel, in
+    /// order -- what the aggregator's pane renders as error items.
+    fn errors(events: &crossbeam_channel::Receiver<crate::contract::ProviderEvent>) -> Vec<String> {
+        events
+            .try_iter()
+            .filter_map(|event| match event.event {
+                Event::Error(error) => Some(error.message),
+                _ => None,
+            })
+            .collect()
+    }
+
     /// The message being answered is carried once, as the message, and the
     /// conversation the prompt renders is what came before it.
     #[tokio::test]
@@ -570,6 +587,10 @@ mod tests {
             Some(&(index, message)),
         );
         assert_eq!(projected.len(), 1);
+        assert!(
+            errors(&events).is_empty(),
+            "a pass every proposer contributed to reports no failure"
+        );
         crate::tools::unregister_exploration_host(state.session_id);
     }
 
@@ -607,7 +628,7 @@ mod tests {
     #[tokio::test]
     async fn a_proposer_that_produces_nothing_does_not_fail_the_pass() {
         let host = Arc::new(ScriptedHost::default());
-        let (mut state, _commands, _events) = moa_state(host.clone());
+        let (mut state, _commands, events) = moa_state(host.clone());
 
         let driver = tokio::spawn({
             let host = host.clone();
@@ -633,13 +654,22 @@ mod tests {
             "only usable answers are numbered: {}",
             block.block
         );
+        assert_eq!(
+            errors(&events),
+            vec![
+                "moa `mix` proposer synthetic/hf:b/B contributed nothing (the task session \
+                 terminated before finishing)"
+                    .to_string()
+            ],
+            "the proposer that contributed nothing is reported in the aggregator's pane"
+        );
         crate::tools::unregister_exploration_host(state.session_id);
     }
 
     #[tokio::test]
     async fn no_usable_proposal_leaves_the_aggregator_to_answer_alone() {
         let host = Arc::new(ScriptedHost::default());
-        let (mut state, _commands, _events) = moa_state(host.clone());
+        let (mut state, _commands, events) = moa_state(host.clone());
 
         let driver = tokio::spawn({
             let host = host.clone();
@@ -659,6 +689,23 @@ mod tests {
 
         assert!(matches!(outcome, PassOutcome::Proceed));
         assert!(state.moa_turn.is_none(), "nothing is injected");
+
+        let reported = errors(&events);
+        assert_eq!(reported.len(), 3, "{reported:?}");
+        assert_eq!(
+            reported
+                .iter()
+                .filter(|message| message
+                    .contains("contributed nothing (the task session terminated before finishing)"))
+                .count(),
+            2,
+            "each proposer that contributed nothing is reported: {reported:?}"
+        );
+        assert_eq!(
+            reported.last().map(String::as_str),
+            Some("moa `mix` got no usable proposals; the aggregator answers alone"),
+            "and the pass says the aggregator is answering alone: {reported:?}"
+        );
         crate::tools::unregister_exploration_host(state.session_id);
     }
 

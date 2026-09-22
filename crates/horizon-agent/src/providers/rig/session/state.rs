@@ -278,9 +278,11 @@ impl SessionLoopState {
                     if !self.pending_tool_calls.is_empty() {
                         continue;
                     }
-                    let Some(text) = crate::tools::take_notification(self.session_id) else {
+                    let Some(notification) = crate::tools::take_notification(self.session_id)
+                    else {
                         continue;
                     };
+                    let text = notification.text;
                     // The same flush `Command::UserMessage` performs: a result
                     // a guard halt stashed still has to land in `rig_history`
                     // before the next request, or the API rejects an assistant
@@ -301,6 +303,7 @@ impl SessionLoopState {
                     let _ = self
                         .events_tx
                         .send(crate::tools::notification_event(text.clone()).into());
+                    self.report_task_failures(notification.failures);
                     let fallback_text = text.clone();
                     self.run_turn(Message::user(text), move || {
                         deterministic_rig_response(&fallback_text)

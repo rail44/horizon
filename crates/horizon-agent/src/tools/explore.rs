@@ -373,13 +373,25 @@ pub(crate) fn cancel_session(session_id: SessionId) {
     notify::unregister_wake(session_id);
 }
 
+/// One drain of a requester's finished-task queue.
+pub(crate) struct TaskNotification {
+    /// The single notification message the next provider round carries.
+    pub(crate) text: String,
+    /// One line per child that produced no usable report, for the
+    /// requester's pane (`notify::failure_lines`).
+    pub(crate) failures: Vec<String>,
+}
+
 /// Drains `session_id`'s finished-task queue into the single notification
 /// message its next provider round should carry, or `None` when nothing is
 /// waiting. Called by the rig session loop -- before each round, and again
 /// when a wake signal arrives with the turn already ended.
-pub(crate) fn take_notification(session_id: SessionId) -> Option<String> {
+pub(crate) fn take_notification(session_id: SessionId) -> Option<TaskNotification> {
     let completions = children::take_pending(session_id);
-    (!completions.is_empty()).then(|| notify::notification_text(&completions))
+    (!completions.is_empty()).then(|| TaskNotification {
+        text: notify::notification_text(&completions),
+        failures: notify::failure_lines(&completions),
+    })
 }
 
 /// The `contract::Event` a delivered notification is recorded as. The role
