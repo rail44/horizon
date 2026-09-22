@@ -33,6 +33,8 @@ The first reviewed changes and deliberate exclusions are recorded in
 The first full sweep completed its seven selected refactors on main
 (2026-09-22). Coverage, validation, before/after evidence, and remaining work
 are in [the sweep record](research/refactoring-sweep-2026-09-22.md).
+Further work in this refactoring effort excludes board UI, board CLI,
+horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

@@ -5,6 +5,10 @@
 全関数の精査ではなく、全領域の境界と代表例を確認する第一巡である。
 解析値は選定の入口とし、変更の波及・重複修正・状態遷移の追いにくさを優先した。
 
+2026-09-22の対象範囲更新: board関連（画面・CLI・horizon-board・horizon-logd）は
+別作業で進めるため、以後のこのリファクタリングの候補選定・変更対象から除外する。
+以下の実施済みの記録は維持する。
+
 ## 今回の対象と完了条件
 
 | 対象 | 保守上の負担 → 分離する責務 | 維持する契約 | 状態 |
@@ -42,7 +46,7 @@
 | horizon-workspace | `persistence::validate`、command catalog | 保存データの検証を対象化。コマンドの宣言的な列挙は維持 |
 | src直下 | `control_plane`、palette delegate | 外部要求の解析を対象化。paletteは既存のcommand modelに委譲 |
 | src/agent | sessionのLiveState/RuntimeLink、transcript描画 | 接続・投影・描画の所有者を維持。text/markdown行の小さな重複は低優先 |
-| src/board_pane | detail、execute、model、command button | store実行とnative/wasm分岐は集約済み。detail内の表示用選択処理は次段階 |
+| src/board_pane | detail、execute、model、command button | store実行とnative/wasm分岐は集約済み。以後の対応は別作業のため対象外 |
 | src/preview | guest、watch、registry | guest/host、購読寿命、artifact監視が分離。維持 |
 | src/runtime | request、link、agent/terminal復旧 | 前段の共通化を維持。異なるdrain・復旧予算を持つループは個別に保つ |
 | src/terminal | sessionのRowGenerations、glyph geometry | 行世代と描画を分離済み。文字別の幾何・プロトコル仕様を維持 |
@@ -80,6 +84,6 @@ workspace復元の非同期接続・世代確認とproviderのtool結果処理�
 wire schema、preview wasmが成功。実デーモン再起動によるturn ID・履歴・隔離worktreeの
 復元を含む。専用環境のUI再起動でも2タブ・2ペイン分割・同じ3端末セッションの復元を確認した。
 
-残件は、terminal-coreのframe送信制御、board detailの表示用選択処理、
+残件は、terminal-coreのframe送信制御、
 古いbuild構成向けsandbox helper fallbackの必要性確認。小さなtext/markdown描画重複は低優先。
 対応表・宣言的列挙・runtime固有の復旧処理は、上表の理由で維持する。
