@@ -30,8 +30,9 @@ See [the tool](../scripts/refactor-audit/README.md) and
 [review guide](refactoring-review.md).
 The first reviewed changes and deliberate exclusions are recorded in
 [the initial audit](research/refactoring-first-pass-2026-09-22.md).
-The first full sweep's selected work, coverage, and completion criteria are in
-[the sweep record](research/refactoring-sweep-2026-09-22.md).
+The first full sweep completed its seven selected refactors on main
+(2026-09-22). Coverage, validation, before/after evidence, and remaining work
+are in [the sweep record](research/refactoring-sweep-2026-09-22.md).
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

@@ -15,10 +15,9 @@
 | `src/workspace/session_lifecycle.rs` | 復元の非同期処理に在庫照合が埋没 → 復元候補の選定 | 両runtimeの世代確認・ID競合除外・メタデータ | main反映済み |
 | `horizon-config/src/grants.rs` | 権限種別の検証が一関数、同じroot選択が4箇所 → 種別検証と共通の集約 | 拒否基準・警告順・重複排除と入力順 | main反映済み |
 | `horizon-agent/.../session/state.rs` | 制御要求の優先処理と新規入力開始が実行ループ内に埋没 → 入力の準備と開始 | cancel/shutdown優先・入力受理・MoAとイベント順 | main反映済み |
-| `horizon-agentd/src/session/resume.rs` | 復帰可否・環境復元・中断補正・thread起動が混在 → 復帰準備 | 既存の拒否条件・権限・turn履歴・追記順 | 実装済み |
+| `horizon-agentd/src/session/resume.rs` | 復帰可否・環境復元・中断補正・thread起動が混在 → 復帰準備 | 既存の拒否条件・権限・turn履歴・追記順 | main反映済み |
 
-上記を実装・検証してmainへ反映し、再解析の結果と残件を追記して完了とする。
-仕様や責務の所有者を変える判断が必要になった場合は、その対象について相談する。
+上記7対象を実装・検証してmainへ反映し、全体の再解析まで完了。仕様や責務の所有者は維持した。
 
 ## 領域ごとの確認
 
@@ -55,4 +54,32 @@
 
 ## 結果
 
-対象確定時点。各対象の完了時に上表と検証結果を更新する。
+実装完了: `0c158076`。mainを再解析し、通常実装346ファイル・2,567関数の解析が
+欠落エラーなしで完了した。生データはローカルの
+[report.json](../../target/refactor-audit/0c1580766cae-20260922T094946Z-41f3bb01/report.json)。
+再実行は `uv run --locked --script scripts/refactor-audit/run.py scan`。
+
+以下はRCAの認知的複雑度。入口関数から処理を分離した結果なので、値の減少だけで
+品質向上とは判断しない。改善の根拠は上表の責務分離と、既存契約を保つ検証である。
+
+| 入口関数 | 前 → 後 | 分離先の最大値 |
+| --- | ---: | ---: |
+| control plane `dispatch_invoke` | 74 → 1 | 5 |
+| board CLI `run_board` | 31 → 5 | 3 |
+| `WorkspaceState::validate` | 45 → 3 | 13 |
+| `spawn_workspace_restore` | 65 → 54 | 5 |
+| grants `resolve` | 43 → 2 | 18 |
+| provider `SessionLoopState::run` | 64 → 36 | 9 |
+| `resume_persisted_sessions` | 36 → 15 | 7 |
+
+board CLIのdispatchは15引数から4引数へ集約。権限4種の同一root選択と
+重複排除、新規interactionの初期化をそれぞれ一箇所にまとめた。
+workspace復元の非同期接続・世代確認とproviderのtool結果処理は、元の順序を保っている。
+
+検証: workspace build、fmt、Clippy、全体nextest **2,135件成功・14件skip**、
+wire schema、preview wasmが成功。実デーモン再起動によるturn ID・履歴・隔離worktreeの
+復元を含む。専用環境のUI再起動でも2タブ・2ペイン分割・同じ3端末セッションの復元を確認した。
+
+残件は、terminal-coreのframe送信制御、board detailの表示用選択処理、
+古いbuild構成向けsandbox helper fallbackの必要性確認。小さなtext/markdown描画重複は低優先。
+対応表・宣言的列挙・runtime固有の復旧処理は、上表の理由で維持する。
