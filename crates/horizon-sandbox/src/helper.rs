@@ -10,63 +10,65 @@ pub(crate) const HELPER_BIN_NAME: &str = "horizon-sandbox-helper";
 // under test for the unit tests below.
 #[cfg_attr(test, allow(dead_code))]
 pub(crate) fn resolve() -> Result<PathBuf, SandboxError> {
-    let cargo_var = "CARGO_BIN_EXE_horizon-sandbox-helper";
-    if let Some(candidate) = std::env::var_os(cargo_var).map(PathBuf::from) {
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    resolve_from(
+        std::env::var_os("CARGO_BIN_EXE_horizon-sandbox-helper").map(PathBuf::from),
+        std::env::current_exe().ok(),
+        std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from),
+        std::env::var_os("PATH"),
+    )
+}
+
+/// Environment capture is separate so precedence can be checked without
+/// changing process-global variables. Probes stay lazy, especially the
+/// cached scan of Cargo's hashed artifacts.
+fn resolve_from(
+    cargo_binary: Option<PathBuf>,
+    executable: Option<PathBuf>,
+    manifest_dir: Option<PathBuf>,
+    search_path: Option<std::ffi::OsString>,
+) -> Result<PathBuf, SandboxError> {
+    cargo_binary
+        .filter(|path| path.is_file())
+        .or_else(|| adjacent_helper(executable.as_deref()?, manifest_dir.as_deref()))
+        .or_else(|| {
+            std::env::split_paths(search_path.as_ref()?)
+                .map(|dir| dir.join(HELPER_BIN_NAME))
+                .find(|path| path.is_file())
+        })
+        .ok_or(SandboxError::HelperNotFound)
+}
+
+fn adjacent_helper(
+    executable: &std::path::Path,
+    manifest_dir: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    let dir = executable.parent()?;
+    let adjacent = dir.join(HELPER_BIN_NAME);
+    if adjacent.is_file() {
+        return Some(adjacent);
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let adjacent = dir.join(HELPER_BIN_NAME);
-            if adjacent.is_file() {
-                return Ok(adjacent);
-            }
-            // Cargo integration-test executables live in target/<profile>/deps,
-            // while ordinary bin targets live one directory above.
-            if dir.file_name().is_some_and(|name| name == "deps") {
-                if let Some(profile_dir) = dir.parent() {
-                    let cargo_adjacent = profile_dir.join(HELPER_BIN_NAME);
-                    if cargo_adjacent.is_file() {
-                        return Ok(cargo_adjacent);
-                    }
-                    // Deterministic fallback before the mtime-scan heuristic.
-                    // When a unit-test process's `current_exe()` lives in the
-                    // shared build-dir's `deps/` (because `.cargo/config.toml`
-                    // redirects `build.build-dir` away from the worktree's own
-                    // `target/`), the adjacency probes above miss: cargo uplifts
-                    // the real bin into `<workspace>/target/<profile>/`, not the
-                    // shared build-dir. Cargo sets `CARGO_MANIFEST_DIR` at
-                    // runtime for test processes; walking up from it reaches the
-                    // workspace root, where the uplifted copy lives. The
-                    // `<profile>` is taken from `current_exe()`'s path (the
-                    // component immediately above `deps`), so this stays correct
-                    // for `debug`, `release`, and any custom profile.
-                    if let Some(profile) = profile_dir.file_name() {
-                        if let Some(manifest_dir) = std::env::var_os("CARGO_MANIFEST_DIR") {
-                            if let Some(candidate) =
-                                workspace_uplifted_helper(&PathBuf::from(manifest_dir), profile)
-                            {
-                                return Ok(candidate);
-                            }
-                        }
-                    }
-                }
-                if let Some(candidate) = cargo_test_artifact(dir) {
-                    return Ok(candidate);
-                }
-            }
-        }
+    // Only Cargo's deps layout permits searching a parent profile directory
+    // or scanning hashed artifacts. Installed binaries use adjacency/PATH.
+    if dir.file_name().is_none_or(|name| name != "deps") {
+        return None;
     }
-    if let Some(path_var) = std::env::var_os("PATH") {
-        for dir in std::env::split_paths(&path_var) {
-            let candidate = dir.join(HELPER_BIN_NAME);
-            if candidate.is_file() {
-                return Ok(candidate);
-            }
-        }
+    cargo_profile_helper(dir, manifest_dir).or_else(|| cargo_test_artifact(dir))
+}
+
+fn cargo_profile_helper(
+    deps_dir: &std::path::Path,
+    manifest_dir: Option<&std::path::Path>,
+) -> Option<PathBuf> {
+    let profile_dir = deps_dir.parent()?;
+    let adjacent = profile_dir.join(HELPER_BIN_NAME);
+    if adjacent.is_file() {
+        return Some(adjacent);
     }
-    Err(SandboxError::HelperNotFound)
+    // The repository no longer splits build/target directories, but an
+    // externally configured Cargo build-dir can still put the test binary
+    // away from the workspace's uplifted helper. Keep this before the
+    // artifact scan, and use the executable's profile (including custom ones).
+    workspace_uplifted_helper(manifest_dir?, profile_dir.file_name()?)
 }
 
 /// Walks up from `manifest_dir` looking for the workspace's uplifted helper
@@ -98,38 +100,42 @@ fn workspace_uplifted_helper(
 fn cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
     static CACHED: OnceLock<Option<PathBuf>> = OnceLock::new();
     CACHED
-        .get_or_init(|| {
-            let prefix = HELPER_BIN_NAME.replace('-', "_") + "-";
-            let mut candidates = std::fs::read_dir(deps_dir)
-                .ok()?
-                .filter_map(Result::ok)
-                .filter_map(|entry| {
-                    let path = entry.path();
-                    let name = path.file_name()?.to_str()?;
-                    if !name.starts_with(&prefix) || !path.is_file() {
-                        return None;
-                    }
-                    let modified = entry.metadata().ok()?.modified().ok()?;
-                    Some((modified, path))
-                })
-                .collect::<Vec<_>>();
-            candidates.sort_unstable_by_key(|candidate| std::cmp::Reverse(candidate.0));
-            let marker = crate::HELPER_PROTOCOL_MARKER.as_bytes();
-            candidates.into_iter().find_map(|(_, path)| {
-                let bytes = std::fs::read(&path).ok()?;
-                bytes
-                    .windows(marker.len())
-                    .any(|window| window == marker)
-                    .then_some(path)
-            })
-        })
+        .get_or_init(|| find_cargo_test_artifact(deps_dir))
         .clone()
+}
+
+fn find_cargo_test_artifact(deps_dir: &std::path::Path) -> Option<PathBuf> {
+    let prefix = HELPER_BIN_NAME.replace('-', "_") + "-";
+    let mut candidates = std::fs::read_dir(deps_dir)
+        .ok()?
+        .filter_map(Result::ok)
+        .filter_map(|entry| {
+            let path = entry.path();
+            let name = path.file_name()?.to_str()?;
+            if !name.starts_with(&prefix) || !path.is_file() {
+                return None;
+            }
+            let modified = entry.metadata().ok()?.modified().ok()?;
+            Some((modified, path))
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_unstable_by_key(|candidate| std::cmp::Reverse(candidate.0));
+    let marker = crate::HELPER_PROTOCOL_MARKER.as_bytes();
+    candidates.into_iter().find_map(|(_, path)| {
+        let bytes = std::fs::read(&path).ok()?;
+        bytes
+            .windows(marker.len())
+            .any(|window| window == marker)
+            .then_some(path)
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::workspace_uplifted_helper;
     use super::HELPER_BIN_NAME;
+    use super::{
+        adjacent_helper, find_cargo_test_artifact, resolve_from, workspace_uplifted_helper,
+    };
     use std::fs;
     use std::path::PathBuf;
 
@@ -155,6 +161,101 @@ mod tests {
             fs::create_dir_all(parent).expect("create parent");
         }
         fs::write(path, b"fake").expect("write fake binary");
+    }
+
+    #[test]
+    fn override_then_adjacent_then_path_and_missing_candidates_are_skipped() {
+        let root = test_dir("precedence");
+        let override_binary = root.join("override");
+        let executable = root.join("bin/application");
+        let adjacent = root.join("bin").join(HELPER_BIN_NAME);
+        let path_binary = root.join("path").join(HELPER_BIN_NAME);
+        for path in [&override_binary, &adjacent, &path_binary] {
+            touch(path);
+        }
+        let resolve = || {
+            resolve_from(
+                Some(override_binary.clone()),
+                Some(executable.clone()),
+                None,
+                Some(std::env::join_paths([root.join("missing"), root.join("path")]).unwrap()),
+            )
+        };
+        for expected in [&override_binary, &adjacent, &path_binary] {
+            assert_eq!(&resolve().unwrap(), expected);
+            fs::remove_file(expected).unwrap();
+        }
+        assert!(matches!(
+            resolve(),
+            Err(crate::SandboxError::HelperNotFound)
+        ));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cargo_profile_precedes_uplifted_helper_and_only_deps_enables_that_search() {
+        let root = test_dir("cargo-layout");
+        let manifest = root.join("workspace/crates/pkg");
+        fs::create_dir_all(&manifest).unwrap();
+        let executable = root.join("build/custom-profile/deps/test");
+        let adjacent = root.join("build/custom-profile").join(HELPER_BIN_NAME);
+        let uplifted = root
+            .join("workspace/target/custom-profile")
+            .join(HELPER_BIN_NAME);
+        touch(&adjacent);
+        touch(&uplifted);
+        assert_eq!(
+            adjacent_helper(&executable, Some(&manifest)),
+            Some(adjacent.clone())
+        );
+        fs::remove_file(adjacent).unwrap();
+        assert_eq!(
+            adjacent_helper(&executable, Some(&manifest)),
+            Some(uplifted)
+        );
+        assert!(adjacent_helper(&root.join("bin/application"), Some(&manifest)).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn artifact_scan_selects_newest_protocol_match_and_skips_test_harnesses() {
+        let root = test_dir("artifacts");
+        for (name, seconds, bytes) in [
+            (
+                "horizon_sandbox_helper-old",
+                1,
+                crate::HELPER_PROTOCOL_MARKER.as_bytes(),
+            ),
+            (
+                "horizon_sandbox_helper-new",
+                2,
+                crate::HELPER_PROTOCOL_MARKER.as_bytes(),
+            ),
+            (
+                "horizon_sandbox_helper-harness",
+                3,
+                b"test harness".as_slice(),
+            ),
+            ("other_binary", 4, crate::HELPER_PROTOCOL_MARKER.as_bytes()),
+        ] {
+            let path = root.join(name);
+            fs::write(&path, bytes).unwrap();
+            fs::File::options()
+                .write(true)
+                .open(path)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new().set_modified(
+                        std::time::UNIX_EPOCH + std::time::Duration::from_secs(seconds),
+                    ),
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            find_cargo_test_artifact(&root),
+            Some(root.join("horizon_sandbox_helper-new"))
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
