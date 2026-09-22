@@ -81,6 +81,18 @@ pub struct Preview {
 shows, the way a story sits next to a component. One plugin contains every
 registered preview; the host selects one by name.
 
+The previews in this build:
+
+| Name | Shows |
+| --- | --- |
+| `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
+| `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
+| `board-next`, `board-next-empty`, `board-next-long-thread` | A board prototype that exists only here: master–detail in one view, over the same kind of in-memory store (`src/board_next/`). The long-thread one opens on a forty-message thread whose third post is long enough to fold. |
+
+`src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It
+reads a store and emits no commands, so it carries no shell wiring and the
+shipped board pane is untouched by it.
+
 For a view to be previewable, the code that goes into the plugin must not
 reach sockets, subprocesses, or the filesystem directly — a wasm32-wasip2
 guest has none of them. Whatever the view uses to reach the outside world
