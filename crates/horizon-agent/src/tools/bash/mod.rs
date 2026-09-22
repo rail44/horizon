@@ -1,26 +1,13 @@
-//! The `bash` tool (`docs/agent-tools-design.md`, "Bash Semantics"): a fresh
-//! `bash -c` process per call, with the working directory tracked by the
-//! harness across calls (not a persistent shell). Unlike `fs.write`/
-//! `fs.edit` — the other `RequireApproval` tools Horizon executes app-side —
-//! a bash command can run for up to its timeout (300s default, 1800s hard
-//! cap), so it can never run synchronously on the UI thread the way those
-//! do. See `agent::tools::approval::ApprovalOutcome::Started` for the split
-//! this forces: approval folds a "running" frame immediately and kicks off
-//! this module's `spawn`, whose eventual result is delivered back to the
-//! session loop over a channel (`crates/horizon-agentd/src/session.rs`
-//! wires it up) rather than being returned synchronously.
+//! The `bash` tool starts a fresh process per call and tracks cwd across
+//! calls. [`BashJob`] captures thread-safe inputs; [`SandboxedRun`] captures
+//! the grants and approval origin for sandboxed execution. Both execution
+//! modes enqueue work through one per-session FIFO and deliver completions
+//! to the daemon session loop without blocking it.
 //!
-//! Panic safety: a job's work function running to completion without
-//! panicking is not something the rest of this module can assume. If it
-//! panicked uncaught, two things would break at once -- the approved tool
-//! call would never get a `ToolCallFinished` (nothing left to send the
-//! `BashCompletion` that would produce one), and `registry`'s per-session
-//! FIFO would never `advance` past it (see that module's own panic-safety
-//! notes), wedging every later bash call for the session behind it forever.
-//! `spawn` catches a panic from its work function (`run_job_body`, below)
-//! specifically to prevent the first; `registry::run_job`'s advance-on-drop
-//! guard prevents the second independently, as defense in depth for any
-//! future job that doesn't route through `run_job_body`.
+//! Job panic handling sends a failure completion, while the registry's
+//! advance-on-drop guard independently keeps later jobs from getting stuck.
+//! The daemon folds each completion into live state and resolves retries
+//! (`crates/horizon-agentd/src/session/completion.rs`).
 
 mod cargo;
 mod exec;
@@ -45,7 +32,7 @@ pub(crate) use git::{
 pub(crate) use recent::{find_reusable_output, guidance_output};
 
 /// A bash call's outcome, delivered from the background thread that ran it
-/// back to the session loop. `crates/horizon-agentd/src/session.rs`
+/// back to the session loop. `crates/horizon-agentd/src/session/setup.rs`
 /// registers an unbounded `crossbeam_channel` per session (see
 /// `register_session_runtime`) and selects on it alongside provider events,
 /// folding a received completion into the session's `LiveState`/`Frames`

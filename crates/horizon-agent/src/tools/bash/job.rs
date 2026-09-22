@@ -44,6 +44,7 @@ impl BashJob {
             result_tx,
         }
     }
+
     /// Count queued work before enqueueing and hold it through result delivery.
     /// Both execution modes use this same FIFO and panic/completion boundary.
     fn enqueue(
@@ -180,24 +181,8 @@ impl SandboxedApprovalOrigin {
     }
 }
 
-/// Kicks off a bash call and returns immediately; the UI thread must not
-/// block waiting on this. `cwd` is the session's shared, tracked bash
-/// working directory (`ToolSessionState::bash_cwd_handle`) — read at the
-/// start of the call and updated in place if the command `cd`s, so the next
-/// call in this session picks it up. `result_tx` delivers the finished
-/// `BashCompletion` back to the UI thread; see the module doc for the full
-/// round trip. `config` carries the timeout/output-cap/drain-grace knobs
-/// (`agent::config::BashToolConfig`, `[agent]` in the config file) — a
-/// plain `Copy` value rather than the `Rc`-based `ToolSessionState` it was
-/// read from, since it has to cross onto the background thread this
-/// eventually runs on.
-///
-/// Bash containment (`docs/agent-tools-design.md`, "Bash Containment"):
-/// rather than spawning a fresh thread unconditionally, this hands the call
-/// to `registry::enqueue`, which runs it immediately if `session_id` has no
-/// other bash call in flight, or queues it (FIFO) behind whatever is
-/// already running for that session — a session's bash calls never run
-/// concurrently with each other.
+/// Test entry point for a host job without a session's approval machinery.
+/// Uses the same FIFO, cwd tracking, and completion boundary as approved jobs.
 #[cfg(test)]
 pub(super) fn spawn(
     session_id: SessionId,
@@ -249,7 +234,7 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
         // `occurrence_id` is `None` at every construction site in
         // this module: an enqueued bash job is handed a `call_id`
         // and nothing else. The agentd's fold sites
-        // (`fold_finished_bash_result` and the two denial folds)
+        // (`fold_finished_bash_result` and the denial folds)
         // stamp the originating request's occurrence on the way
         // out -- see `exec::run_sandboxed`'s comment on the same
         // seam.
@@ -257,29 +242,11 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
     });
 }
 
-/// Kicks off a *sandboxed* bash call (`docs/agent-approval-design.md`'s tier
-/// 1: auto-approved `bash` in an isolated, sandbox-engaged session) and
-/// returns immediately. The sandbox workspace root is
-/// `horizon_sandbox`'s only writable root. The host's real temp dir is
-/// deliberately *not* added as a writable root here -- a 2026-07 dogfooding
-/// incident found that doing so made the whole shared host `/tmp` writable
-/// from inside every sandboxed call (see `exec::run_sandboxed`'s doc comment
-/// for the containment story). `output::spill`'s own write happens
-/// host-side, after this call's output has already been captured over a
-/// pipe, never from inside the sandboxed child -- it needs no writable-root
-/// grant at all. Still goes through the same per-session FIFO
-/// (`registry::enqueue`) as host execution -- a session's bash calls never run
-/// concurrently with each other regardless of which path started them.
-/// Structured network/filesystem denials are returned as their dedicated
-/// completion variants while containment remains enabled.
-///
-/// `network` (`docs/agent-approval-design.md` leg 4b) is this session's own
-/// `SessionNetworkProxy`, if one is running -- `Some` gives the sandbox its
-/// exact loopback TCP proxy endpoint, `None` falls back to
-/// `NetworkPolicy::Disabled` (see `exec::run_sandboxed`). `origin`
-/// says whether this run is a tier-1 auto-approval, a domain-denial retry,
-/// or a Git operation approval -- see [`SandboxedApprovalOrigin`] -- so the
-/// eventual `Finished` result is annotated honestly.
+/// Enqueue a sandboxed run with its captured session grants and approval origin.
+/// The child receives the workspace root and explicitly granted paths; host
+/// output spilling does not grant the child access to the host's temp dir.
+/// `SandboxedRun::network` selects the session proxy or disabled networking.
+/// Denials retain their evidence; only Finished receives origin annotations.
 pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
     // The proxy's accessors synchronize internally; no proxy lock is held
     // across a caught panic. The following job can safely reuse the proxy.

@@ -73,7 +73,7 @@ pub(super) fn fold_mach_service_denied(
         original_request.clone(),
         ApprovalRequest {
             call_id,
-            // See the matching site in `fold_domain_denied` above --
+            // See the matching site in `fold_domain_denied` --
             // `begin_reissued_approval` mints the fresh `OccurrenceId` for
             // the reissued request; the `prior_result` is the *first*
             // attempt's outcome, stamped with the original request's
@@ -173,7 +173,7 @@ pub(super) fn fold_domain_grant_required(
         original_request,
         ApprovalRequest {
             call_id,
-            // See the matching site in `fold_domain_denied` above --
+            // See the matching site in `fold_domain_denied` --
             // `begin_reissued_approval` overwrites this with the fresh
             // `OccurrenceId` it mints for the reissued request, so we
             // leave it as `None` here.
