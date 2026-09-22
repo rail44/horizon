@@ -1,6 +1,8 @@
 //! Startup resume: turning the persisted event log back into live session
 //! threads, and the fixups a restart owes the sessions it finds there.
 
+mod environment;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -87,71 +89,24 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .iter()
             .map(|record| record.event.clone())
             .collect();
-        if session_is_dead(&agent_frame_from_events(&recorded_events)) {
-            skipped_terminated += 1;
-            continue;
-        }
-        let retained_environment = recorded_events.iter().rev().find_map(|event| match event {
-            Event::EnvironmentActivated(identity) => Some(identity),
-            _ => None,
-        });
-        let persisted_context = session_records
-            .iter()
-            .rev()
-            .find_map(|record| record.session_context.clone());
-        if persisted_context.as_ref().is_some_and(|context| {
-            context
-                .filesystem_grants
-                .iter()
-                .any(|grant| horizon_sandbox::revalidate_grant(grant).is_err())
-        }) {
-            eprintln!(
-                "horizon-agentd: retained filesystem authority is unavailable for {session_id:?}"
-            );
-            continue;
-        }
-        let (workspace_root, parent_session_id, restored_worktree) =
-            match persisted_context.as_ref() {
-                Some(context) if context.isolated_worktree => {
-                    let Some(root) = context.workspace_root.as_deref() else {
-                        eprintln!(
-                            "horizon-agentd: refusing to resume isolated session {session_id:?}: \
-                             persisted context has no workspace root"
-                        );
-                        continue;
-                    };
-                    match retained_environment.map_or_else(
-                        || worktree::adopt_isolated_worktree(root, session_id.as_uuid()),
-                        |identity| worktree::restore_worktree(identity, session_id.as_uuid()),
-                    ) {
-                        Ok(worktree) => (
-                            Some(worktree.path.clone()),
-                            context.parent_session_id,
-                            Some(worktree),
-                        ),
-                        Err(error) => {
-                            eprintln!(
-                                "horizon-agentd: refusing to resume isolated session \
-                                 {session_id:?}: {error}"
-                            );
-                            continue;
-                        }
-                    }
-                }
-                Some(context) => (context.workspace_root.clone(), None, None),
-                // Compatibility for records written before `session_context`
-                // existed. They retain the old process-cwd, non-isolated
-                // resume behavior; the first new record upgrades them with
-                // an explicit context for the following restart.
-                None => (None, None, None),
-            };
-        let mut events = recorded_events;
-
-        let frame = agent_frame_from_events(&events);
+        let frame = agent_frame_from_events(&recorded_events);
         if session_is_dead(&frame) {
             skipped_terminated += 1;
             continue;
         }
+        let persisted_context = session_records
+            .iter()
+            .rev()
+            .find_map(|record| record.session_context.clone());
+        let restored =
+            match environment::restore(session_id, &recorded_events, persisted_context.as_ref()) {
+                Ok(restored) => restored,
+                Err(error) => {
+                    eprintln!("horizon-agentd: {error}");
+                    continue;
+                }
+            };
+        let mut events = recorded_events;
 
         let mut appender = Appender::new(
             writer.clone(),
@@ -173,32 +128,7 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             continue;
         }
 
-        if frame.is_turn_in_flight() || !interrupted_input_outcomes(&events).is_empty() {
-            // Mirrors what a live `Command::Cancel` does (`providers::rig::
-            // session`, `providers::mock`): finish every still-outstanding
-            // tool call as cancelled *before* the turn-end/state-change
-            // pair, so e.g. a call parked in `WaitingForApproval` doesn't
-            // keep reading as pending in the resumed frame -- there is no
-            // live provider left to eventually answer it.
-            let mut closing: Vec<Event> = outstanding_tool_call_ids(&frame)
-                .into_iter()
-                .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
-                .collect();
-            closing.extend(interrupted_input_outcomes(&events));
-            if frame.is_turn_in_flight() && appender.has_open_turn() {
-                closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
-            }
-            closing.push(Event::StateChanged(SessionState::WaitingForUser));
-            match appender
-                .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
-            {
-                Ok(()) => events.extend(closing),
-                Err(error) => eprintln!(
-                    "horizon-agentd: failed to commit interrupted turn as cancelled for \
-                     {session_id:?}: {error}"
-                ),
-            }
-        }
+        settle_interrupted_turn(&mut appender, session_id, &frame, &mut events);
 
         eprintln!(
             "horizon-agentd: resumed session {session_id:?} ({} event(s))",
@@ -209,10 +139,10 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             session_id,
             provider_id,
             role_id,
-            workspace_root,
-            parent_session_id,
+            restored.workspace_root,
+            restored.parent_session_id,
             false,
-            restored_worktree,
+            restored.worktree,
             events,
             persisted_context,
         );
@@ -230,6 +160,43 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             "horizon-agentd: terminated {terminated_explorations} orphaned exploration \
              session(s) instead of resuming them"
         );
+    }
+}
+
+/// Commit interrupted work before a provider receives the restored history.
+/// The appender must already carry the original turn history and context.
+fn settle_interrupted_turn(
+    appender: &mut Appender,
+    session_id: SessionId,
+    frame: &AgentFrame,
+    events: &mut Vec<Event>,
+) {
+    let outcomes = interrupted_input_outcomes(events);
+    if frame.is_turn_in_flight() || !outcomes.is_empty() {
+        // Mirrors what a live `Command::Cancel` does (`providers::rig::
+        // session`, `providers::mock`): finish every still-outstanding
+        // tool call as cancelled *before* the turn-end/state-change
+        // pair, so e.g. a call parked in `WaitingForApproval` doesn't
+        // keep reading as pending in the resumed frame -- there is no
+        // live provider left to eventually answer it.
+        let mut closing: Vec<Event> = outstanding_tool_call_ids(frame)
+            .into_iter()
+            .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
+            .collect();
+        closing.extend(outcomes);
+        if frame.is_turn_in_flight() && appender.has_open_turn() {
+            closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
+        }
+        closing.push(Event::StateChanged(SessionState::WaitingForUser));
+        match appender
+            .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
+        {
+            Ok(()) => events.extend(closing),
+            Err(error) => eprintln!(
+                "horizon-agentd: failed to commit interrupted turn as cancelled for \
+                 {session_id:?}: {error}"
+            ),
+        }
     }
 }
 
@@ -843,6 +810,57 @@ mod tests {
             before,
             "a second restart must add nothing for an already-terminated exploration"
         );
+    }
+
+    #[test]
+    fn startup_refuses_unrestorable_context_before_writing_or_spawning() {
+        for missing_root in [false, true] {
+            let (_dir, path, writer) = open_test_event_log("unrestorable-context");
+            let state = judge_test_state();
+            state.set_writer(Some(writer.clone()));
+            let session_id = SessionId::new();
+            let context = PersistedSessionContext {
+                workspace_root: None,
+                isolated_worktree: missing_root,
+                parent_session_id: None,
+                filesystem_grants: if missing_root {
+                    vec![]
+                } else {
+                    vec![horizon_sandbox::FilesystemGrant {
+                        path: "relative-authority".into(),
+                        access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+                        scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+                        excluded_subpaths: vec![],
+                    }]
+                },
+            };
+            let mut appender = Appender::new(
+                writer.clone(),
+                session_id,
+                Some(ProviderId("builtin.agent.mock".into())),
+                None,
+            )
+            .with_session_context(context);
+            appender
+                .append_provider_events(vec![Event::StateChanged(SessionState::Running).into()])
+                .unwrap();
+            writer.flush().unwrap();
+            let records = horizon_agent::persistence::event_log::read(&path)
+                .unwrap()
+                .records;
+            let before = records.clone();
+
+            resume_persisted_sessions(&state, records);
+            writer.flush().unwrap();
+
+            assert!(!state.session_exists(session_id));
+            assert_eq!(
+                horizon_agent::persistence::event_log::read(&path)
+                    .unwrap()
+                    .records,
+                before
+            );
+        }
     }
 
     /// A session whose log ends in `SessionState::Terminated` (the state
