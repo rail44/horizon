@@ -326,6 +326,34 @@ where
     })
 }
 
+/// Connects only far enough to receive a hub for a recovery drain. There
+/// is no `hello`: this path is used because negotiation already failed.
+/// The single deadline and failure-path task cleanup are shared by both
+/// daemon clients; whether to drain remains each client's decision.
+pub(super) async fn establish_for_drain<C>(
+    stream: tokio::net::UnixStream,
+) -> Result<(C, ConnTask), String>
+where
+    C: RemoteSend + std::fmt::Debug,
+{
+    let deadline = tokio::time::Instant::now() + establish_timeout();
+    let (read_half, write_half) = stream.into_split();
+    let connect =
+        remoc::Connect::io::<_, _, (), C, WireCodec>(remoc::Cfg::default(), read_half, write_half);
+    let (conn, _base_tx, mut base_rx) = tokio::time::timeout_at(deadline, connect)
+        .await
+        .map_err(|_| "timed out".to_string())?
+        .map_err(|error| error.to_string())?;
+    let conn_task = tokio::spawn(conn);
+    match tokio::time::timeout_at(deadline, base_rx.recv()).await {
+        Ok(Ok(Some(hub))) => Ok((hub, conn_task)),
+        other => {
+            conn_task.abort();
+            Err(format!("no hub client handed over: {other:?}"))
+        }
+    }
+}
+
 /// Bounds one established-phase rtc call. A deadline expiry fails only
 /// that call (the reply channel gets an error, or the routes get a
 /// per-session failure) — the runtime and the connection stay up, because

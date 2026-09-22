@@ -189,6 +189,13 @@ eager non-blocking start, one dedicated runtime thread); internally the
 envelope FIFO and `Routes` registry become rtc calls and per-attachment
 channel bridges. The sync-world ⇄ tokio boundary does not move.
 
+Blocking single-request calls share the reply-channel boundary in
+`src/runtime/request.rs`: one reply channel per call, bounded waiting, and
+distinct send/timeout/disconnection failures. A local timeout does not cancel
+the queued operation. Batch terminal attach still queues all requests before
+waiting. Both clients also share the minimal drain connection in `common.rs`;
+their recovery decisions and destructive effects remain domain-owned.
+
 ## 3. Version negotiation
 
 The exact-match handshake is replaced by range negotiation, carried as

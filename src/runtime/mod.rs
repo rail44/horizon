@@ -26,6 +26,7 @@ mod common;
 mod connection;
 mod link;
 mod notify;
+mod request;
 mod routing;
 mod terminal;
 
@@ -43,11 +44,12 @@ use routing::{AgentRoutes, TerminalRoutes};
 use uuid::Uuid;
 
 use common::RuntimeControl;
+use request::{request, RequestError};
 
 pub(crate) use link::{event_stream, RuntimeLink};
 pub(crate) use notify::{NotifyCoalescer, NotifyDecision};
 
-/// The sync world's overall budget for one queued list request: the op may
+/// The sync world's overall budget for one queued request: the op may
 /// legitimately wait out connection establishment (retries with backoff)
 /// plus the runtime's own per-call deadline (`common::OP_TIMEOUT`, 30 s), so
 /// this sits above both. The old JSONL shape blocked forever here; a bounded
@@ -355,47 +357,25 @@ impl AgentdHandle {
     }
 
     pub(crate) fn session_list(&self) -> Result<Vec<wire::SessionSummary>, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .ops
-            .send(agent::Op::SessionList { reply: reply_tx })
-            .is_err()
-        {
-            return Err("session runtime stopped before the agent list was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the agent list did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the agent list completed".to_string()
-                }
-            })?
+        request(&self.ops, |reply| agent::Op::SessionList { reply }).map_err(|error| {
+            error.describe(
+                "session runtime stopped before the agent list was sent",
+                "the agent list did not complete in time",
+                "session runtime stopped before the agent list completed",
+            )
+        })?
     }
 
     /// Call from a background task: the model picker fetches it on open
     /// (parent task #1's Phase 2). Same shape as [`Self::session_list`].
     pub(crate) fn list_providers(&self) -> Result<Vec<wire::ProviderSummary>, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .ops
-            .send(agent::Op::ListProviders { reply: reply_tx })
-            .is_err()
-        {
-            return Err("session runtime stopped before the provider list was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the provider list did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the provider list completed".to_string()
-                }
-            })?
+        request(&self.ops, |reply| agent::Op::ListProviders { reply }).map_err(|error| {
+            error.describe(
+                "session runtime stopped before the provider list was sent",
+                "the provider list did not complete in time",
+                "session runtime stopped before the provider list completed",
+            )
+        })?
     }
 
     /// Call from a background task: the model picker fetches a provider's
@@ -403,27 +383,17 @@ impl AgentdHandle {
     /// shape as [`Self::list_providers`]; an empty list (unavailable entry,
     /// no listing, transport failure) is a normal answer, not an error.
     pub(crate) fn list_provider_models(&self, provider: String) -> Result<Vec<String>, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .ops
-            .send(agent::Op::ListProviderModels {
-                provider,
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            return Err("session runtime stopped before the model list was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the model list did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the model list completed".to_string()
-                }
-            })?
+        request(&self.ops, |reply| agent::Op::ListProviderModels {
+            provider,
+            reply,
+        })
+        .map_err(|error| {
+            error.describe(
+                "session runtime stopped before the model list was sent",
+                "the model list did not complete in time",
+                "session runtime stopped before the model list completed",
+            )
+        })?
     }
 
     /// Call from a background task: the model picker's confirm path. The
@@ -437,40 +407,33 @@ impl AgentdHandle {
         provider: String,
         model: String,
     ) -> Result<(), String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .ops
-            .send(agent::Op::SetSessionModel {
-                session_id,
-                provider,
-                model,
-                reply: reply_tx,
-            })
-            .is_err()
-        {
-            return Err("session runtime stopped before the model switch was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the model switch did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "session runtime stopped before the model switch completed".to_string()
-                }
-            })?
+        request(&self.ops, |reply| agent::Op::SetSessionModel {
+            session_id,
+            provider,
+            model,
+            reply,
+        })
+        .map_err(|error| {
+            error.describe(
+                "session runtime stopped before the model switch was sent",
+                "the model switch did not complete in time",
+                "session runtime stopped before the model switch completed",
+            )
+        })?
     }
 
     /// Register from a background task; the reply can wait for daemon startup.
     pub(crate) fn watch_board(&self, root: std::path::PathBuf) -> Result<(), String> {
-        let (reply, receive) = crossbeam_channel::bounded(1);
-        self.ops
-            .send(agent::Op::WatchBoard { root, reply })
-            .map_err(|_| "Agent runtime stopped before board registration".to_string())?;
-        receive
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|error| format!("Board registration did not complete: {error}"))?
+        request(&self.ops, |reply| agent::Op::WatchBoard { root, reply }).map_err(|error| {
+            match error {
+                RequestError::NotSent => {
+                    "Agent runtime stopped before board registration".to_string()
+                }
+                RequestError::NoReply(error) => {
+                    format!("Board registration did not complete: {error}")
+                }
+            }
+        })?
     }
 
     /// Call from a background task: organizer restoration may read persisted history.
@@ -478,13 +441,14 @@ impl AgentdHandle {
         &self,
         root: std::path::PathBuf,
     ) -> Result<contract::SessionId, String> {
-        let (reply, receive) = crossbeam_channel::bounded(1);
-        self.ops
-            .send(agent::Op::EnsureBoardOrganizer { root, reply })
-            .map_err(|_| "Agent runtime stopped before organizer creation".to_string())?;
-        receive
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|error| format!("Organizer creation did not complete: {error}"))?
+        request(&self.ops, |reply| agent::Op::EnsureBoardOrganizer {
+            root,
+            reply,
+        })
+        .map_err(|error| match error {
+            RequestError::NotSent => "Agent runtime stopped before organizer creation".to_string(),
+            RequestError::NoReply(error) => format!("Organizer creation did not complete: {error}"),
+        })?
     }
 
     fn drain(&self) {
@@ -638,24 +602,13 @@ impl TerminaldHandle {
     }
 
     pub(crate) fn terminal_list(&self) -> Result<Vec<TerminalSummary>, String> {
-        let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-        if self
-            .ops
-            .send(terminal::Op::TerminalList { reply: reply_tx })
-            .is_err()
-        {
-            return Err("terminal runtime stopped before terminal list was sent".to_string());
-        }
-        reply_rx
-            .recv_timeout(SYNC_REPLY_TIMEOUT)
-            .map_err(|err| match err {
-                crossbeam_channel::RecvTimeoutError::Timeout => {
-                    "the terminal list did not complete in time".to_string()
-                }
-                crossbeam_channel::RecvTimeoutError::Disconnected => {
-                    "terminal runtime stopped before the terminal list completed".to_string()
-                }
-            })?
+        request(&self.ops, |reply| terminal::Op::TerminalList { reply }).map_err(|error| {
+            error.describe(
+                "terminal runtime stopped before terminal list was sent",
+                "the terminal list did not complete in time",
+                "terminal runtime stopped before the terminal list completed",
+            )
+        })?
     }
 
     pub(crate) fn attach_terminals(

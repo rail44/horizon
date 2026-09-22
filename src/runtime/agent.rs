@@ -27,8 +27,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::common::{
-    connect_hub, establish_timeout, wait_until_refusing, with_deadline, ConnTask, Connected,
-    EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT, SILENCE_MISMATCH_THRESHOLD,
+    connect_hub, establish_for_drain, establish_timeout, wait_until_refusing, with_deadline,
+    ConnTask, Connected, EstablishError, RuntimeControl, StreamEnd, OP_TIMEOUT,
+    SILENCE_MISMATCH_THRESHOLD,
 };
 use super::connection::connect_or_spawn_agentd_retrying;
 use super::routing::AgentRoutes;
@@ -686,7 +687,7 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
         Ok(stream) => stream,
         Err(_) => return Ok(()),
     };
-    match establish_for_drain(stream).await {
+    match establish_for_drain::<SessionHubClient<WireCodec>>(stream).await {
         Ok((hub, conn_task)) => {
             // Bounded like every establish leg: an incompatible daemon that
             // accepts the connection but never answers must not pin the
@@ -706,31 +707,5 @@ async fn drain_stale_agentd(socket_path: &Path) -> Result<(), String> {
              stop it manually"
                 .to_string(),
         )
-    }
-}
-
-/// A minimal establish for the drain path: connect + base handover only —
-/// no `hello`, since the whole point is that `hello` already failed.
-async fn establish_for_drain(
-    stream: tokio::net::UnixStream,
-) -> Result<(SessionHubClient<WireCodec>, ConnTask), String> {
-    let deadline = tokio::time::Instant::now() + establish_timeout();
-    let (read_half, write_half) = stream.into_split();
-    let connect = remoc::Connect::io::<_, _, (), SessionHubClient<WireCodec>, WireCodec>(
-        remoc::Cfg::default(),
-        read_half,
-        write_half,
-    );
-    let (conn, _base_tx, mut base_rx) = tokio::time::timeout_at(deadline, connect)
-        .await
-        .map_err(|_| "timed out".to_string())?
-        .map_err(|error| error.to_string())?;
-    let conn_task = tokio::spawn(conn);
-    match tokio::time::timeout_at(deadline, base_rx.recv()).await {
-        Ok(Ok(Some(hub))) => Ok((hub, conn_task)),
-        other => {
-            conn_task.abort();
-            Err(format!("no hub client handed over: {other:?}"))
-        }
     }
 }
