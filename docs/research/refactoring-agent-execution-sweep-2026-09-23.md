@@ -9,8 +9,8 @@
 | 実行開始 | `tools/bash`の起動引数・キュー登録・結果注記が混在 | `BashJob`と`SandboxedRun`を導入し、キュー登録を集約。main反映済み (`beaa9d6b`) |
 | 承認・再試行 | `tools/approval`で開始・旧試行の終了・結果返却が重複 | 開始6箇所と拒否・fallbackの結果返却を集約。同上 |
 | 非同期結果 | agentdの`completion`と`approval`で実行識別・通知・再承認を受け渡す | 再承認への変換を分離し、未完了要求の選定と旧試行への帰属を集約。main反映済み (`345662b3`) |
-| ターン進行・中断 | providerの`session/state`に結果の受理・batch待ち・guard・次turn起動が集中 | `tool_results`へ分離し、batch完了とhalt再開の次turn起動を集約。実装済み |
-| 保存・復元 | `mapping`の履歴補正とevent log、daemon復元の分担 | 次に確認 |
+| ターン進行・中断 | providerの`session/state`に結果の受理・batch待ち・guard・次turn起動が集中 | `tool_results`へ分離し、batch完了とhalt再開の次turn起動を集約。main反映済み (`11819a25`) |
+| 保存・復元 | `mapping`の履歴補正とevent log、daemon復元の分担 | `mapping/replay`に履歴補正を分離し、全履歴の索引と順序に沿う補正状態を明示。実装済み |
 
 入口の解析は90ファイル・683関数で完了。複雑度・重複は読む場所の選定に用い、
 呼び出し元・状態の所有者・テストで変更の要否を判断する。
@@ -32,3 +32,13 @@ webの未実行domain要求を再承認へ変換する。通常完了時の既�
 順序を維持。haltからのContinueも同じ次turn起動を通る。入力の優先処理、provider実行中の
 中断、新規入力による旧batchの退役は条件が異なるため、それぞれの既存の所有者に残す。
 provider/rigの177テストが通過し、batch待ち・遅延結果・新規入力・中断・Continueを検証。
+
+保存・復元: provider履歴の補正を`ReplayIndex`（全履歴の応答有無・tool名）と
+`PairingRepair`（前方走査中の未応答・補正結果）に分けた。隣接assistantの結合、
+未要求resultの除外、未応答callのcancel補完と警告を維持。message ID・内容順・補完する
+tool名、要求より前のresultを扱う回帰テストを追加し、provider/rigの179テストが通過。
+
+イベントのturn識別は`Appender/TurnTracker`、連番・JSONL書き込みとDuckDBへの反映は
+単一writer、再起動時に中断したturnを閉じる責務はdaemonに維持。daemonの補正が
+非同期のDuckDB投影へ到達する前にも履歴を読めるため、provider側の補正も必要。
+保存形式と再起動時の意味を変更せず、これらを共通化する変更は行わない。
