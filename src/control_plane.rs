@@ -8,6 +8,8 @@
 //! (the agentd drain/respawn/resume sequence,
 //! `WorkspaceShell::reload_agent_runtime`).
 
+mod invoke;
+
 use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
@@ -17,7 +19,6 @@ use horizon_control::contract::{EnvelopeBody, Invoke, Query, SessionEntry, Sessi
 use horizon_control::host::executor::{error_body, ControlExecutor, ControlRequest};
 use horizon_control::host::listener;
 use horizon_workspace::commands::{core_commands, CommandId};
-use horizon_workspace::{PaneKind, SessionId, SplitAxis};
 
 use crate::workspace::WorkspaceShell;
 
@@ -134,12 +135,7 @@ fn wire(
     .detach();
 }
 
-/// Dispatches one invoke, returning `Some(body)` when it was answered on this
-/// thread and `None` when the reply was handed to a background task. Only
-/// `set-model` defers: its answer is a daemon round-trip
-/// (`AgentdRuntime::set_session_model`, which must not run on the UI thread),
-/// so the shell method owns the reply. Every other command is a synchronous
-/// local operation and keeps [`dispatch_invoke`].
+/// Parse before executing; `None` transfers the reply to the model-switch task.
 fn dispatch_invoke_or_defer(
     shell: &mut WorkspaceShell,
     invoke: &Invoke,
@@ -147,230 +143,74 @@ fn dispatch_invoke_or_defer(
     cx: &mut Context<WorkspaceShell>,
     reply: Sender<EnvelopeBody>,
 ) -> Option<EnvelopeBody> {
-    if invoke.command != "set-model" {
-        return Some(dispatch_invoke(shell, invoke, window, cx));
-    }
-    let session_id = match session_id_arg(&invoke.args, "session_id") {
-        Ok(id) => id,
-        Err(message) => return Some(error_body(message)),
-    };
-    let provider = match required_string_arg(&invoke.args, "provider") {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => return Some(error_body("`provider` must not be empty")),
-        Err(message) => return Some(error_body(message)),
-    };
-    let model = match required_string_arg(&invoke.args, "model") {
-        Ok(value) if !value.is_empty() => value,
-        Ok(_) => return Some(error_body("`model` must not be empty")),
-        Err(message) => return Some(error_body(message)),
-    };
-    shell.control_plane_set_model(session_id, provider, model, reply, cx)
+    invoke::parse(invoke)
+        .and_then(|command| dispatch_invoke(shell, command, window, cx, reply))
+        .unwrap_or_else(|message| Some(error_body(message)))
 }
 
 fn dispatch_invoke(
     shell: &mut WorkspaceShell,
-    invoke: &Invoke,
+    command: invoke::Command,
     window: &mut Window,
     cx: &mut Context<WorkspaceShell>,
-) -> EnvelopeBody {
-    let args = &invoke.args;
-    match invoke.command.as_str() {
-        "new-terminal" | "new-agent" => {
-            let kind = if invoke.command == "new-terminal" {
-                PaneKind::Terminal
-            } else {
-                PaneKind::Agent
-            };
-            let role_id = match optional_string_arg(args, "role") {
-                Ok(Some(role)) => {
-                    let known = horizon_agent::roles::user_launchable();
-                    if !known.iter().any(|r| r.id == role) {
-                        let available =
-                            known.iter().map(|r| r.title).collect::<Vec<_>>().join(", ");
-                        return error_body(format!(
-                            "unknown role: {role} (available: {available})"
-                        ));
-                    }
-                    Some(horizon_agent::roles::RoleId(role))
-                }
-                Ok(None) => None,
-                Err(message) => return error_body(message),
-            };
-            let split = match optional_session_id_arg(args, "split") {
-                Ok(split) => split,
-                Err(message) => return error_body(message),
-            };
-            let issuer = match optional_plain_session_id_arg(args, "issuer") {
-                Ok(issuer) => issuer,
-                Err(message) => return error_body(message),
-            };
-            let activate = match activate_arg(args) {
-                Ok(activate) => activate,
-                Err(message) => return error_body(message),
-            };
-            let prompt = match args.get("prompt") {
-                None | Some(serde_json::Value::Null) => None,
-                Some(serde_json::Value::String(prompt)) if kind == PaneKind::Agent => {
-                    Some(prompt.clone())
-                }
-                Some(serde_json::Value::String(_)) => {
-                    return error_body("`prompt` is only accepted for agent sessions")
-                }
-                Some(_) => return error_body("`prompt` must be a string"),
-            };
-            let isolate = match isolate_arg(args) {
-                Ok(isolate) => isolate,
-                Err(message) => return error_body(message),
-            };
-            if isolate.is_some() && kind != PaneKind::Agent {
-                return error_body("`isolate` is only accepted for agent sessions");
-            }
-            match shell.control_plane_new_session(
+    reply: Sender<EnvelopeBody>,
+) -> Result<Option<EnvelopeBody>, String> {
+    use invoke::Command;
+    match command {
+        Command::NewSession {
+            kind,
+            role_id,
+            split,
+            issuer,
+            activate,
+            prompt,
+            isolate,
+        } => {
+            let session_id = shell.control_plane_new_session(
                 kind, role_id, split, issuer, activate, prompt, isolate, window, cx,
-            ) {
-                Ok(session_id) => EnvelopeBody::Ok {
-                    session_id: Some(session_id),
-                },
-                Err(message) => error_body(message),
-            }
+            )?;
+            return Ok(Some(EnvelopeBody::Ok {
+                session_id: Some(session_id),
+            }));
         }
-        "preview" => {
-            let path = match required_string_arg(args, "path") {
-                Ok(path) => std::path::PathBuf::from(path),
-                Err(message) => return error_body(message),
-            };
-            let name = match optional_string_arg(args, "name") {
-                Ok(name) => name,
-                Err(message) => return error_body(message),
-            };
-            let split = match optional_session_id_arg(args, "split") {
-                Ok(split) => split,
-                Err(message) => return error_body(message),
-            };
-            let activate = match activate_arg(args) {
-                Ok(activate) => activate,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_open_preview(path, name, split, activate, window, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
+        Command::Preview {
+            path,
+            name,
+            split,
+            activate,
+        } => {
+            shell.control_plane_open_preview(path, name, split, activate, window, cx)?;
         }
-        "attach" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            let activate = match activate_arg(args) {
-                Ok(activate) => activate,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_attach_session(session_id, activate, window, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
+        Command::Attach {
+            session_id,
+            activate,
+        } => {
+            shell.control_plane_attach_session(session_id, activate, window, cx)?;
         }
-        "terminate-session" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_terminate(session_id, window, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
+        Command::Terminate(session_id) => shell.control_plane_terminate(session_id, window, cx)?,
+        Command::TerminateAllDetached => shell.control_plane_terminate_all_detached(window, cx),
+        Command::Execute(id) => shell.execute_control_plane(id, window, cx),
+        Command::Approve {
+            session_id,
+            call_id,
+        } => shell.control_plane_approve(session_id, call_id, cx)?,
+        Command::Deny {
+            session_id,
+            call_id,
+            reason,
+        } => shell.control_plane_deny(session_id, call_id, reason, cx)?,
+        Command::CancelTurn(session_id) => shell.control_plane_cancel(session_id, cx)?,
+        Command::ContinueTurn(session_id) => shell.control_plane_continue_turn(session_id, cx)?,
+        Command::Send { session_id, text } => shell.control_plane_send(session_id, text, cx)?,
+        Command::SetModel {
+            session_id,
+            provider,
+            model,
+        } => {
+            return Ok(shell.control_plane_set_model(session_id, provider, model, reply, cx));
         }
-        "terminate-all-detached" => {
-            shell.control_plane_terminate_all_detached(window, cx);
-            ok_body()
-        }
-        "reload-config" => {
-            shell.execute_control_plane(CommandId::ReloadConfig, window, cx);
-            ok_body()
-        }
-        "open-terminal-in-session-directory" => {
-            shell.execute_control_plane(CommandId::OpenTerminalInSessionDirectory, window, cx);
-            ok_body()
-        }
-        "approve" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            let call_id = match call_id_arg(args, "call_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_approve(session_id, call_id, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
-        }
-        "deny" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            let call_id = match call_id_arg(args, "call_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            let reason = match optional_string_arg(args, "reason") {
-                Ok(reason) => reason,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_deny(session_id, call_id, reason, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
-        }
-        "cancel-turn" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_cancel(session_id, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
-        }
-        "continue-turn" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            match shell.control_plane_continue_turn(session_id, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
-        }
-        "send" => {
-            let session_id = match session_id_arg(args, "session_id") {
-                Ok(id) => id,
-                Err(message) => return error_body(message),
-            };
-            let text = match required_string_arg(args, "text") {
-                Ok(text) => text,
-                Err(message) => return error_body(message),
-            };
-            if text.is_empty() {
-                return error_body("`text` must not be empty");
-            }
-            match shell.control_plane_send(session_id, text, cx) {
-                Ok(()) => ok_body(),
-                Err(message) => error_body(message),
-            }
-        }
-        "reload-agent-runtime" | "reload-session-runtime" => {
-            shell.execute_control_plane(CommandId::ReloadAgentRuntime, window, cx);
-            ok_body()
-        }
-        "reload-terminal-runtime" => {
-            shell.execute_control_plane(CommandId::ReloadTerminalRuntime, window, cx);
-            ok_body()
-        }
-        other => error_body(format!("unknown external command `{other}`")),
     }
+    Ok(Some(ok_body()))
 }
 
 fn dispatch_query(
@@ -421,187 +261,4 @@ fn destructive_commands() -> Vec<String> {
         })
         .chain(std::iter::once("terminate-session".to_string()))
         .collect()
-}
-
-fn session_id_arg(args: &serde_json::Value, key: &str) -> Result<SessionId, String> {
-    match args.get(key) {
-        Some(serde_json::Value::String(raw)) => raw
-            .parse::<uuid::Uuid>()
-            .map(SessionId::from_uuid)
-            .map_err(|_| format!("`{key}` must be a UUID string")),
-        Some(_) => Err(format!("`{key}` must be a string")),
-        None => Err(format!("`{key}` is required")),
-    }
-}
-
-fn optional_session_id_arg(
-    args: &serde_json::Value,
-    key: &str,
-) -> Result<Option<(SessionId, SplitAxis)>, String> {
-    match args.get(key) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(raw)) => raw
-            .parse::<uuid::Uuid>()
-            .map(|uuid| Some((SessionId::from_uuid(uuid), SplitAxis::Horizontal)))
-            .map_err(|_| format!("`{key}` must be a UUID string")),
-        Some(_) => Err(format!("`{key}` must be a string")),
-    }
-}
-
-/// Parses an optional session-id argument that is *not* a split target --
-/// the `"issuer"` key (issue 013): the session that dispatched the CLI
-/// request. Mirrors [`optional_session_id_arg`]'s shape but returns a bare
-/// `SessionId` without the `SplitAxis` pairing the split path needs.
-fn optional_plain_session_id_arg(
-    args: &serde_json::Value,
-    key: &str,
-) -> Result<Option<SessionId>, String> {
-    match args.get(key) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(raw)) => raw
-            .parse::<uuid::Uuid>()
-            .map(|uuid| Some(SessionId::from_uuid(uuid)))
-            .map_err(|_| format!("`{key}` must be a UUID string")),
-        Some(_) => Err(format!("`{key}` must be a string")),
-    }
-}
-
-fn activate_arg(args: &serde_json::Value) -> Result<bool, String> {
-    match args.get("activate") {
-        None | Some(serde_json::Value::Null) => Ok(false),
-        Some(serde_json::Value::Bool(activate)) => Ok(*activate),
-        Some(_) => Err("`activate` must be a boolean".to_string()),
-    }
-}
-
-/// Parses an optional plain-string argument -- `deny`'s `reason`, when the
-/// CLI supplied `--reason`. `None` (the key omitted, or explicit `null`) means
-/// "no reason supplied"; a string is taken verbatim. Mirrors [`isolate_arg`]'s
-/// omitted-means-default shape.
-fn optional_string_arg(args: &serde_json::Value, key: &str) -> Result<Option<String>, String> {
-    match args.get(key) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(raw)) => Ok(Some(raw.clone())),
-        Some(_) => Err(format!("`{key}` must be a string")),
-    }
-}
-
-/// `docs/session-relationship-design.md` decision 3's per-spawn isolation
-/// override: `None` (the key omitted, or explicit `null`) means "apply the
-/// origin default" (control-plane origin: isolated -- see
-/// `WorkspaceShell::control_plane_new_session`), mirroring `activate_arg`'s own
-/// omitted-means-apply-the-surface-default shape.
-fn isolate_arg(args: &serde_json::Value) -> Result<Option<bool>, String> {
-    match args.get("isolate") {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::Bool(isolate)) => Ok(Some(*isolate)),
-        Some(_) => Err("`isolate` must be a boolean".to_string()),
-    }
-}
-
-fn call_id_arg(
-    args: &serde_json::Value,
-    key: &str,
-) -> Result<horizon_agent::contract::ToolCallId, String> {
-    match args.get(key) {
-        Some(serde_json::Value::String(raw)) => {
-            Ok(horizon_agent::contract::ToolCallId(raw.clone()))
-        }
-        Some(_) => Err(format!("`{key}` must be a string")),
-        None => Err(format!("`{key}` is required")),
-    }
-}
-
-/// Parses a required plain-string argument -- the `send` command's `text`
-/// payload. Mirrors [`call_id_arg`]'s shape but returns a bare `String`
-/// rather than a typed wrapper. The `send` arm enforces non-emptiness
-/// separately (empty input is rejected at the CLI layer already; this is
-/// defensive).
-fn required_string_arg(args: &serde_json::Value, key: &str) -> Result<String, String> {
-    match args.get(key) {
-        Some(serde_json::Value::String(raw)) => Ok(raw.clone()),
-        Some(_) => Err(format!("`{key}` must be a string")),
-        None => Err(format!("`{key}` is required")),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    // Import only the helpers under test -- `use super::*` pulls in every
-    // item from the parent module, and the crate's `recursion_limit`
-    // (raised for `theme.rs`'s large `json!` macro) then can't absorb the
-    // `#[test]` expansion on top, hitting the limit before the test body
-    // even compiles. Narrowing the import sidesteps that.
-    use super::{optional_string_arg, required_string_arg, session_id_arg};
-
-    fn json_object(pairs: &[(&str, serde_json::Value)]) -> serde_json::Value {
-        let mut map = serde_json::Map::new();
-        for (key, value) in pairs {
-            map.insert((*key).to_string(), value.clone());
-        }
-        serde_json::Value::Object(map)
-    }
-
-    #[test]
-    fn required_string_arg_returns_the_string_when_present() {
-        let args = json_object(&[("text", serde_json::Value::String("hello".to_string()))]);
-        assert_eq!(required_string_arg(&args, "text"), Ok("hello".to_string()));
-    }
-
-    #[test]
-    fn required_string_arg_rejects_a_missing_key() {
-        let args = json_object(&[]);
-        assert_eq!(
-            required_string_arg(&args, "text").unwrap_err(),
-            "`text` is required".to_string()
-        );
-    }
-
-    #[test]
-    fn required_string_arg_rejects_a_non_string_value() {
-        let args = json_object(&[("text", serde_json::Value::Number(42.into()))]);
-        assert_eq!(
-            required_string_arg(&args, "text").unwrap_err(),
-            "`text` must be a string".to_string()
-        );
-    }
-
-    #[test]
-    fn session_id_arg_rejects_a_missing_key() {
-        let args = json_object(&[]);
-        assert_eq!(
-            session_id_arg(&args, "session_id").unwrap_err(),
-            "`session_id` is required".to_string()
-        );
-    }
-
-    #[test]
-    fn optional_string_arg_returns_none_when_omitted() {
-        let args = json_object(&[]);
-        assert_eq!(optional_string_arg(&args, "reason"), Ok(None));
-    }
-
-    #[test]
-    fn optional_string_arg_returns_none_for_explicit_null() {
-        let args = json_object(&[("reason", serde_json::Value::Null)]);
-        assert_eq!(optional_string_arg(&args, "reason"), Ok(None));
-    }
-
-    #[test]
-    fn optional_string_arg_returns_the_string_when_present() {
-        let args = json_object(&[("reason", serde_json::Value::String("too risky".to_string()))]);
-        assert_eq!(
-            optional_string_arg(&args, "reason"),
-            Ok(Some("too risky".to_string()))
-        );
-    }
-
-    #[test]
-    fn optional_string_arg_rejects_a_non_string_value() {
-        let args = json_object(&[("reason", serde_json::Value::Number(42.into()))]);
-        assert_eq!(
-            optional_string_arg(&args, "reason").unwrap_err(),
-            "`reason` must be a string".to_string()
-        );
-    }
 }

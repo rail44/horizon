@@ -1,13 +1,17 @@
 //! The `horizon board ...` subcommand family — calls `horizon-board`
-//! directly, bypassing the control-plane socket entirely (the board is a
-//! local file store, not a daemon-mediated resource).
+//! directly, bypassing the shell control-plane socket. Reads fold the local
+//! event log; writes go through the board store's logd client.
 //!
 //! Intercepted in [`crate::run`] *before* [`crate::cli::parse`] because the
 //! board's own flags (`--body`, `--after`, `--before`, `--top`, `--status`,
 //! `--author`, `--as`) would be rejected by the global flag parser's
 //! "unrecognized flag" guard.
 
+mod options;
+
 use std::io::Write;
+
+use options::Options;
 
 use horizon_board::{tree_order, Item, ListResult, Position, Store, StoreError};
 
@@ -37,97 +41,17 @@ const BOARD_USAGE: &str = "Usage: horizon board <command> [options]
 ";
 
 fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) -> u8 {
-    let mut iter = args.iter().peekable();
-    let command = match iter.next() {
-        Some(c) => c.as_str(),
-        None => {
-            let _ = writeln!(stdout, "{BOARD_USAGE}");
-            return 0;
+    let Some(command) = args.first() else {
+        let _ = writeln!(stdout, "{BOARD_USAGE}");
+        return 0;
+    };
+    let options = match Options::parse(&args[1..]) {
+        Ok(options) => options,
+        Err(message) => {
+            let _ = writeln!(stderr, "error: {message}");
+            return 2;
         }
     };
-
-    // Collect positionals and flags for the subcommand.
-    let mut positionals: Vec<String> = Vec::new();
-    let mut body: Option<String> = None;
-    let mut title: Option<String> = None;
-    let mut parent: Option<String> = None;
-    let mut after: Option<String> = None;
-    let mut before: Option<String> = None;
-    let mut top = false;
-    let mut status: Option<String> = None;
-    let mut author: Option<String> = None;
-    let mut since: Option<String> = None;
-    let mut json = false;
-    let mut all = false;
-
-    while let Some(arg) = iter.next() {
-        match arg.as_str() {
-            "--body" => match iter.next() {
-                Some(v) => body = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --body requires a value");
-                    return 2;
-                }
-            },
-            "--title" => match iter.next() {
-                Some(v) => title = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --title requires a value");
-                    return 2;
-                }
-            },
-            "--parent" => match iter.next() {
-                Some(v) => parent = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --parent requires a value");
-                    return 2;
-                }
-            },
-            "--after" => match iter.next() {
-                Some(v) => after = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --after requires a value");
-                    return 2;
-                }
-            },
-            "--before" => match iter.next() {
-                Some(v) => before = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --before requires a value");
-                    return 2;
-                }
-            },
-            "--top" => top = true,
-            "--status" => match iter.next() {
-                Some(v) => status = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --status requires a value");
-                    return 2;
-                }
-            },
-            "--author" => match iter.next() {
-                Some(v) => author = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --author requires a value");
-                    return 2;
-                }
-            },
-            "--since" => match iter.next() {
-                Some(v) => since = Some(v.clone()),
-                None => {
-                    let _ = writeln!(stderr, "error: --since requires a value");
-                    return 2;
-                }
-            },
-            "--json" => json = true,
-            "--all" => all = true,
-            s if s.starts_with("--") => {
-                let _ = writeln!(stderr, "error: unrecognized flag: {s}");
-                return 2;
-            }
-            _ => positionals.push(arg.clone()),
-        }
-    }
 
     let store = match Store::from_cwd() {
         Ok(s) => s,
@@ -151,23 +75,7 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
             return 1;
         }
     };
-    let result = runtime.block_on(dispatch(
-        command,
-        &positionals,
-        &body,
-        &title,
-        &parent,
-        &after,
-        &before,
-        top,
-        &status,
-        &author,
-        &since,
-        json,
-        all,
-        &store,
-        stdout,
-    ));
+    let result = runtime.block_on(dispatch(command, &options, &store, stdout));
 
     if let Err(e) = result {
         let _ = writeln!(stderr, "error: {e}");
@@ -176,24 +84,27 @@ fn run_board(args: &[String], stdout: &mut impl Write, stderr: &mut impl Write) 
     0
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn dispatch(
     command: &str,
-    positionals: &[String],
-    body: &Option<String>,
-    title: &Option<String>,
-    parent: &Option<String>,
-    after: &Option<String>,
-    before: &Option<String>,
-    top: bool,
-    status: &Option<String>,
-    author: &Option<String>,
-    since: &Option<String>,
-    json: bool,
-    all: bool,
+    options: &Options,
     store: &Store,
     stdout: &mut impl Write,
 ) -> Result<(), String> {
+    let Options {
+        positionals,
+        body,
+        title,
+        parent,
+        after,
+        before,
+        top,
+        status,
+        author,
+        since,
+        json,
+        all,
+    } = options;
+    let (top, json, all) = (*top, *json, *all);
     match command {
         "add" => {
             let title = positionals
