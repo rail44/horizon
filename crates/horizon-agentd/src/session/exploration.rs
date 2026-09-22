@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use horizon_agent::contract::{Command, ProviderId, SessionId, TaskProgress};
-use horizon_agent::roles::RoleId;
 use horizon_agent::wire::AgentWireEvent;
 
 use super::events::send_session_event;
@@ -67,7 +66,7 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
             self.state.clone(),
             session_id,
             provider_id,
-            Some(RoleId(horizon_agent::roles::EXPLORE_ROLE_ID.to_string())),
+            Some(request.role.clone()),
             self.workspace_root.clone(),
             None,
             false,
@@ -195,11 +194,11 @@ mod tests {
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
-            horizon_agent::tools::ExplorationRequest {
-                prompt: "anything".to_string(),
-                provider: Some("not-configured".to_string()),
-                model: Some("m".to_string()),
-            },
+            horizon_agent::tools::ExplorationRequest::for_proposer(
+                "anything".to_string(),
+                "not-configured".to_string(),
+                "m".to_string(),
+            ),
         );
         let Err(error) = started else {
             panic!("an unconfigured provider must not start a session");
@@ -221,11 +220,11 @@ mod tests {
         };
         let started = horizon_agent::tools::ExplorationHost::start(
             &host,
-            horizon_agent::tools::ExplorationRequest {
-                prompt: "which provider answered?".to_string(),
-                provider: Some("solo".to_string()),
-                model: Some("m-solo".to_string()),
-            },
+            horizon_agent::tools::ExplorationRequest::for_proposer(
+                "which provider answered?".to_string(),
+                "solo".to_string(),
+                "m-solo".to_string(),
+            ),
         )
         .expect("the configured entry starts");
 

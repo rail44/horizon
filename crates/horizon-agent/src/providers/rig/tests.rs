@@ -3444,11 +3444,9 @@ fn session_extra_sections_loads_repository_content_for_a_trusted_project() {
     let _ = std::fs::remove_dir_all(&cwd);
 }
 
-/// The delegation-routing block (`prompt::DELEGATION_ROUTING_SECTION`,
-/// measured as cells C5/C7b in `docs/research/agent-delegation-and-
-/// batching-probes-2026-07-27.md`) is worded unconditionally -- "your FIRST
-/// action must be task" -- so the *inclusion* has to carry the
-/// conditionality. An ordinary session gets it; an exploration session,
+/// The delegation-routing block (`prompt::DELEGATION_ROUTING_SECTION`)
+/// carries no "when it is available" hedge, so the *inclusion* has to carry
+/// the conditionality. An ordinary session gets it; an exploration session,
 /// whose role allows three read-only tools and deliberately not `task`,
 /// must never be told to make a call it cannot make.
 #[test]
@@ -3470,9 +3468,51 @@ fn session_extra_sections_includes_the_delegation_block_only_when_task_is_advert
     assert!(
         !explore_sections
             .iter()
-            .any(|section| section.contains("FIRST action")),
-        "an exploration session has no `task` tool and must not be told to delegate first: \
+            .any(|section| section.contains("task agents cannot write files")),
+        "an exploration session has no `task` tool and must not be routed to it: \
          {explore_sections:?}"
+    );
+
+    let _ = std::fs::remove_dir_all(&cwd);
+}
+
+/// A `task` child is told what an exploration session is; a
+/// Mixture-of-Agents proposer is not -- the pass's own request prompt is
+/// its whole instruction (`docs/agent-moa-design.md`). The two roles are
+/// otherwise the same definition, so everything else the explore role gives
+/// a session a proposer keeps.
+#[test]
+fn a_proposer_system_prompt_omits_the_exploration_section_a_task_child_gets() {
+    let cwd = git_repo_with_agents_md("moa-proposer-section");
+    let environment = test_environment(cwd.clone());
+
+    let prompt_for = |role| {
+        let config = role_adjusted_config(&RigAgentConfig::default(), Some(role));
+        crate::prompt::system_prompt(
+            &environment,
+            &session_extra_sections(&environment, &config, Some(role), true),
+        )
+    };
+
+    let explore_role = resolve(&RoleId(crate::roles::EXPLORE_ROLE_ID.to_string()))
+        .expect("the explore role must resolve");
+    let proposer_role = resolve(&RoleId(crate::roles::MOA_PROPOSER_ROLE_ID.to_string()))
+        .expect("the proposer role must resolve");
+
+    let child = prompt_for(explore_role);
+    let proposer = prompt_for(proposer_role);
+
+    assert!(
+        child.contains("You are an exploration session"),
+        "a task child keeps the exploration section: {child}"
+    );
+    assert!(
+        !proposer.contains("You are an exploration session"),
+        "a proposer receives no role prompt section: {proposer}"
+    );
+    assert!(
+        !proposer.contains("\n\n\n"),
+        "an empty role section must not land as a blank paragraph: {proposer}"
     );
 
     let _ = std::fs::remove_dir_all(&cwd);

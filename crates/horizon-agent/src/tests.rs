@@ -1203,11 +1203,10 @@ fn system_prompt_stays_within_line_budget() {
 }
 
 #[test]
-fn system_prompt_carries_communication_and_verification_norms() {
-    // Model-agnostic behavior norms only
-    // (conciseness, faithful reporting, verify-after-change, session
-    // persistence) -- see prompt.rs's module doc. This pins their presence
-    // without pinning wording.
+fn system_prompt_carries_communication_norms() {
+    // Model-agnostic behavior norms only (conciseness, faithful reporting,
+    // session persistence) -- see prompt.rs's module doc. This pins their
+    // presence without pinning wording.
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
@@ -1220,13 +1219,15 @@ fn system_prompt_carries_communication_and_verification_norms() {
     let lower = prompt.to_ascii_lowercase();
     assert!(lower.contains("be concise"));
     assert!(lower.contains("report outcomes faithfully"));
-    assert!(lower.contains("after modifying code or files, verify"));
-    assert!(lower.contains("read-only investigation does not require a build or test"));
     assert!(lower.contains("survives application restarts"));
+    assert!(
+        !lower.contains("build or test"),
+        "the verify-after-change norm is not part of the prompt: {prompt}"
+    );
 }
 
 #[test]
-fn system_prompt_carries_tool_policy_and_retry_nudge() {
+fn system_prompt_carries_tool_policy() {
     let prompt = system_prompt(
         &SessionEnvironment {
             cwd: std::path::PathBuf::from("/repo"),
@@ -1240,7 +1241,10 @@ fn system_prompt_carries_tool_policy_and_retry_nudge() {
     assert!(lower.contains("absolute path"));
     assert!(prompt.contains("$TMPDIR"));
     assert!(prompt.contains("sandboxed calls do not rely on literal /tmp being writable"));
-    assert!(lower.contains("retry"));
+    assert!(
+        !lower.contains("retry"),
+        "the retry nudge is not part of the prompt: {prompt}"
+    );
 }
 
 /// The base prompt must not route to the delegation tool at all: that
@@ -1265,105 +1269,43 @@ fn base_prompt_carries_no_delegation_routing() {
     assert!(!lower.contains("task"), "{prompt}");
 }
 
-/// The two clauses transplanted verbatim from
-/// `docs/research/agent-delegation-and-batching-probes-2026-07-27.md`
-/// (cells C5 and C7b). This pins the properties the probe showed were
-/// load-bearing -- both entries name `task` as the FIRST action, both ban
-/// orienting first, and the implementation clause stays unconditional --
-/// rather than the exact prose.
+/// The section describes what `task` is for and leaves the ordering of a
+/// session's own actions to the session: it names the tool, states that the
+/// spawned session is read-only, and says implementation happens here. It
+/// prescribes no first action and forbids nothing.
 #[test]
-fn delegation_routing_section_bans_orienting_before_delegating() {
+fn delegation_routing_section_describes_task_without_prescribing_an_order() {
     let section = crate::prompt::DELEGATION_ROUTING_SECTION;
 
-    assert_eq!(
-        section.matches("FIRST action").count(),
-        2,
-        "both the exploration and the implementation entry must claim the first action: {section}"
-    );
-    assert!(section.contains("do not run bash/ls or read files to orient yourself first"));
-    assert!(section.contains("Do not grep/read/bash to orient yourself first"));
+    assert!(section.contains("task"), "{section}");
+    assert!(section.contains("read-only"), "{section}");
     assert!(
-        section.contains("even when the change targets look already known"),
-        "cell C7b: the implementation clause must stay unconditional -- a conditional one \
-         (\"in an unfamiliar area\") was measurably used as an escape hatch: {section}"
+        section.contains("You implement the changes in this session"),
+        "{section}"
     );
-    assert!(
-        !section.contains("when it is available"),
-        "conditionality lives in whether this section is included, not in its wording: {section}"
-    );
+    for banned in ["FIRST", "MUST", "Do not", "do not"] {
+        assert!(
+            !section.contains(banned),
+            "`{banned}` must stay out of the section: {section}"
+        );
+    }
 }
 
-/// The two amendments to the implementation clause's final sentence, both
-/// of which must hold at once (`prompt::DELEGATION_ROUTING_SECTION`'s doc
-/// comment records both):
-///
-/// - 2026-07-27: a dogfooded session delegated the implementation itself to
-///   `task` children, which are read-only by construction and so could only
-///   explore again until their budget ran out. The clause says where
-///   implementation happens and that delegating it is not an option.
-/// - 2026-07-28: `task` became asynchronous, so "only after its report
-///   returns" stopped describing anything real. The clause now states the
-///   async contract instead: keep working, the report arrives as a
-///   notification.
+/// A dogfooded session delegated the implementation itself to `task`
+/// children, which are read-only by construction and so could only explore
+/// again until their budget ran out. The section states where
+/// implementation happens and that a task agent cannot do it.
 #[test]
 fn delegation_routing_section_keeps_implementation_in_this_session() {
     let section = crate::prompt::DELEGATION_ROUTING_SECTION;
 
     assert!(
-        section.contains("you implement the changes yourself in this session"),
-        "{section}"
-    );
-    assert!(
-        section
-            .contains("task agents cannot write files; never delegate the implementation itself"),
-        "{section}"
-    );
-    assert!(
-        !section.contains("Start implementing only after its report returns"),
-        "the first replaced sentence must be gone -- it read as license to delegate the \
-         implementation: {section}"
-    );
-    assert!(
-        section.contains("Keep working while it runs; its report will arrive as a notification"),
-        "the async contract must be stated where the old blocking wording was: {section}"
-    );
-}
-
-/// The third amendment (2026-07-28): the first async validation run drove
-/// the loop correctly but launched exactly one monolithic task, so the
-/// implementation entry sentence now asks for the investigation to be split
-/// and launched in parallel, and a closing sentence keeps delegation going
-/// during implementation. The closing sentence is an unmeasured
-/// prescription -- pinned here so removing it after the next dogfood run is
-/// a deliberate edit rather than a silent drift.
-#[test]
-fn delegation_routing_section_asks_for_parallel_decomposition() {
-    let section = crate::prompt::DELEGATION_ROUTING_SECTION;
-
-    assert!(
         section.contains(
-            "split it into independent, narrowly scoped questions and launch them as parallel \
-             task calls in one response (up to 2 run concurrently)"
+            "You implement the changes in this session — task agents cannot write \
+                          files"
         ),
         "{section}"
     );
-    // The "keep delegating during implementation" closing sentence was
-    // removed 2026-07-29 after two runs measured it inert (see the
-    // DELEGATION_ROUTING_SECTION doc comment); assert it stays out so a
-    // future edit does not resurrect an instruction known not to work.
-    assert!(
-        !section.contains("keep delegating narrow follow-up questions"),
-        "{section}"
-    );
-    // The decomposition must sit inside the implementation entry, before
-    // the unconditional hedge -- not appended as a separate afterthought.
-    let split = section
-        .find("split it into independent")
-        .expect("decomposition clause must be present");
-    let unconditional = section
-        .find("even when the change targets look already known")
-        .expect("the unconditional hedge must survive");
-    assert!(split < unconditional, "{section}");
 }
 
 #[test]

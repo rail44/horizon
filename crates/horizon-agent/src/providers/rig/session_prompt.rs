@@ -60,7 +60,12 @@ pub(super) fn session_extra_sections(
     }
     let include_repository_instructions = match role {
         Some(role) => {
-            sections.push(role.prompt_section.to_string());
+            // A role with no section of its own (`roles::MOA_PROPOSER_ROLE`)
+            // contributes nothing here rather than an empty section, which
+            // would land as a blank paragraph in the prompt.
+            if !role.prompt_section.is_empty() {
+                sections.push(role.prompt_section.to_string());
+            }
             if let Some(skills_section) = skills.prompt_section_for_ids(role.skill_ids) {
                 sections.push(skills_section);
             }
