@@ -58,6 +58,7 @@ mod bindings;
 mod commands;
 mod modals;
 mod render;
+mod restore;
 mod session_lifecycle;
 
 use render::SplitDrag;

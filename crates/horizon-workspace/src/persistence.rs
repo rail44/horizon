@@ -1,3 +1,5 @@
+mod validation;
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -353,130 +355,6 @@ impl WorkspaceState {
                 })
                 .collect(),
         })
-    }
-
-    fn validate(&self) -> Result<(), WorkspaceStateError> {
-        if self.version != WORKSPACE_STATE_VERSION {
-            return Err(WorkspaceStateError::UnsupportedVersion {
-                found: self.version,
-                supported: WORKSPACE_STATE_VERSION,
-            });
-        }
-        // A zero-tab workspace is a valid, persistable state (2026-07-18
-        // owner clarification: an empty workspace is first-class, not an
-        // error condition) -- so unlike every other structural rule below,
-        // there is no "at least one tab" requirement here. `self.active_tab`
-        // is simply not checked against `tab_ids` in that case (see below):
-        // with no tabs, any value is equally meaningless, exactly mirroring
-        // how the in-memory model tolerates a dangling `active_tab` once
-        // its last tab closes (`Workspace::close_tab_index`/`detach_pane`).
-        if self.next_terminal_display_number == 0 || self.next_agent_display_number == 0 {
-            return Err(state_error("display counters must be positive"));
-        }
-
-        let mut session_ids = HashSet::new();
-        let mut display_numbers = HashSet::new();
-        let mut max_terminal = 0;
-        let mut max_agent = 0;
-        let mut sessions = HashMap::new();
-        for session in &self.sessions {
-            if !session_ids.insert(session.id) {
-                return Err(state_error(format!(
-                    "duplicate session id {:?}",
-                    session.id
-                )));
-            }
-            if session.display_number == 0 {
-                return Err(state_error("session display numbers must be positive"));
-            }
-            if session.title.trim().is_empty() {
-                return Err(state_error("session titles must not be empty"));
-            }
-            let kind = SessionKind::from(session.kind);
-            if !display_numbers.insert((kind.label(), session.display_number)) {
-                return Err(state_error(format!(
-                    "duplicate {} display number {}",
-                    kind.label(),
-                    session.display_number
-                )));
-            }
-            match kind {
-                SessionKind::Terminal => max_terminal = max_terminal.max(session.display_number),
-                SessionKind::Agent => max_agent = max_agent.max(session.display_number),
-            }
-            sessions.insert(session.id, kind);
-        }
-        if self.next_terminal_display_number <= max_terminal
-            || self.next_agent_display_number <= max_agent
-        {
-            return Err(state_error(
-                "display counter must exceed every allocated number",
-            ));
-        }
-
-        let mut tab_ids = HashSet::new();
-        let mut pane_ids = HashSet::new();
-        let mut attached_sessions = HashSet::new();
-        for tab in &self.tabs {
-            if !tab_ids.insert(tab.id) {
-                return Err(state_error(format!("duplicate tab id {:?}", tab.id)));
-            }
-            let mut tab_panes = Vec::new();
-            tab.root.validate(None, &mut tab_panes)?;
-            if !tab_panes.iter().any(|pane| pane.id == tab.active_pane) {
-                return Err(state_error(format!(
-                    "active pane {:?} is not in tab {:?}",
-                    tab.active_pane, tab.id
-                )));
-            }
-            for pane in tab_panes {
-                if !pane_ids.insert(pane.id) {
-                    return Err(state_error(format!("duplicate pane id {:?}", pane.id)));
-                }
-                match pane.kind.expected_session_kind() {
-                    None => {
-                        if pane.session_id.is_some() {
-                            return Err(state_error(format!(
-                                "view pane {:?} must not have a session attachment",
-                                pane.id
-                            )));
-                        }
-                    }
-                    Some(expected_kind) => {
-                        let Some(session_id) = pane.session_id else {
-                            return Err(state_error(format!(
-                                "pane {:?} has no session attachment",
-                                pane.id
-                            )));
-                        };
-                        let Some(session_kind) = sessions.get(&session_id) else {
-                            return Err(state_error(format!(
-                                "pane {:?} references unknown session {session_id:?}",
-                                pane.id
-                            )));
-                        };
-                        if *session_kind != expected_kind {
-                            return Err(state_error(format!(
-                                "pane {:?} and session {session_id:?} have different kinds",
-                                pane.id
-                            )));
-                        }
-                        if !attached_sessions.insert(session_id) {
-                            return Err(state_error(format!(
-                                "session {session_id:?} is attached to multiple panes"
-                            )));
-                        }
-                    }
-                }
-            }
-        }
-        if !self.tabs.is_empty() && !tab_ids.contains(&self.active_tab) {
-            return Err(state_error(format!(
-                "active tab {:?} does not exist",
-                self.active_tab
-            )));
-        }
-        Ok(())
     }
 
     fn into_workspace(self) -> Workspace {
@@ -940,6 +818,31 @@ mod tests {
         let mut counter = json_value(&workspace);
         counter["next_terminal_display_number"] = json!(1);
         assert_invalid(counter, "counter");
+    }
+
+    #[test]
+    fn validation_preserves_session_then_layout_then_attachment_error_order() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let mut value = json_value(&workspace);
+        value["sessions"][0]["title"] = json!("");
+        value["tabs"][0]["root"]["children"][0]["weight"] = json!(0.0);
+        value["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"] = Value::Null;
+        assert_invalid(value.clone(), "session titles must not be empty");
+        value["sessions"][0]["title"] = json!("restored");
+        assert_invalid(value.clone(), "weights");
+        value["tabs"][0]["root"]["children"][0]["weight"] = json!(1.0);
+        assert_invalid(value, "no session attachment");
+    }
+
+    #[test]
+    fn validation_rejects_a_session_shared_by_distinct_panes() {
+        let mut workspace = Workspace::mvp();
+        workspace.split_active(PaneKind::Terminal, Some(SessionId::new()));
+        let mut value = json_value(&workspace);
+        let first = value["tabs"][0]["root"]["children"][0]["node"]["pane"]["session_id"].clone();
+        value["tabs"][0]["root"]["children"][1]["node"]["pane"]["session_id"] = first;
+        assert_invalid(value, "attached to multiple panes");
     }
 
     #[test]

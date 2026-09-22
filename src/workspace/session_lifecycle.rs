@@ -11,8 +11,6 @@
 //! bringing the session store and pane views in line with the model --
 //! lives here too, since every one of the above ends by calling it.
 
-use std::collections::{HashMap, HashSet};
-
 use gpui::*;
 use horizon_terminal_core::{TerminalSize, TerminalSpawnSpec, DEFAULT_SCROLLBACK_LINES};
 use horizon_workspace::types::SessionKind;
@@ -21,6 +19,7 @@ use horizon_workspace::{
 };
 use uuid::Uuid;
 
+use super::restore::RestoreCandidates;
 use super::{ensure_workspace_has_pane, CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
@@ -904,92 +903,20 @@ impl WorkspaceShell {
                         return None;
                     }
 
-                    let expected: HashMap<_, _> = shell
-                        .workspace
-                        .session_summaries()
-                        .into_iter()
-                        .map(|summary| (summary.id.as_uuid(), summary.kind))
-                        .collect();
-                    let terminal_ids: HashSet<_> = terminal_summaries
-                        .into_iter()
-                        .map(|summary| summary.session_id)
-                        .collect();
-                    // Captured before `agent_summaries` is consumed below --
-                    // the daemon's own report of each session's
-                    // `workspace_root` (the authoritative post-isolation
-                    // worktree path for an isolated session; see
-                    // `wire::SessionSummary::workspace_root`'s doc comment),
-                    // applied to the surviving candidates further down.
-                    let agent_workspace_roots: HashMap<Uuid, std::path::PathBuf> = agent_summaries
-                        .iter()
-                        .filter_map(|summary| {
-                            summary
-                                .workspace_root
-                                .clone()
-                                .map(|root| (summary.session_id.as_uuid(), root))
-                        })
-                        .collect();
-                    // Same capture-before-consume treatment as `agent_
-                    // workspace_roots` above, for the lineage edge
-                    // (`docs/session-relationship-design.md` decisions
-                    // 1-3): the daemon's report is authoritative, so this
-                    // is applied to the surviving candidates further down
-                    // exactly like the workspace root is.
-                    let agent_parents: HashMap<Uuid, Uuid> = agent_summaries
-                        .iter()
-                        .filter_map(|summary| {
-                            summary
-                                .parent_session_id
-                                .map(|parent| (summary.session_id.as_uuid(), parent.as_uuid()))
-                        })
-                        .collect();
-                    let agent_ids: HashSet<_> = agent_summaries
-                        .into_iter()
-                        .map(|summary| summary.session_id.as_uuid())
-                        .collect();
-                    let conflicts: HashSet<_> =
-                        terminal_ids.intersection(&agent_ids).copied().collect();
-                    for id in &conflicts {
-                        eprintln!(
-                            "ignoring session {id}: it appears in both terminal and agent inventories"
-                        );
-                    }
-
-                    let terminals = terminal_ids
-                        .into_iter()
-                        .filter(|id| !conflicts.contains(id))
-                        .filter(|id| {
-                            let matches = expected
-                                .get(id)
-                                .is_none_or(|kind| *kind == SessionKind::Terminal);
-                            if !matches {
-                                eprintln!(
-                                    "ignoring terminal session {id}: persisted kind is agent"
-                                );
-                            }
-                            matches
-                        })
-                        .collect::<Vec<_>>();
-                    let agents = agent_ids
-                        .into_iter()
-                        .filter(|id| !conflicts.contains(id))
-                        .filter(|id| {
-                            let matches = expected
-                                .get(id)
-                                .is_none_or(|kind| *kind == SessionKind::Agent);
-                            if !matches {
-                                eprintln!(
-                                    "ignoring agent session {id}: persisted kind is terminal"
-                                );
-                            }
-                            matches
-                        })
-                        .collect::<Vec<_>>();
-                    Some((terminals, agents, agent_workspace_roots, agent_parents))
+                    Some(RestoreCandidates::select(
+                        &shell.workspace,
+                        terminal_summaries,
+                        agent_summaries,
+                    ))
                 })
                 .ok()
                 .flatten();
-            let Some((terminal_ids, agent_ids, agent_workspace_roots, agent_parents)) = candidates
+            let Some(RestoreCandidates {
+                terminals: terminal_ids,
+                agents: agent_ids,
+                agent_workspace_roots,
+                agent_parents,
+            }) = candidates
             else {
                 return;
             };
@@ -1050,8 +977,7 @@ impl WorkspaceShell {
 
                     for (id, wire) in terminals {
                         let session_id = SessionId::from_uuid(id);
-                        if shell.workspace.session_pane_kind(session_id)
-                            == Some(PaneKind::Terminal)
+                        if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Terminal)
                         {
                             let exit_tx = shell.terminal_exit_tx.clone();
                             let title_tx = shell.session_title_tx.clone();
@@ -1060,12 +986,7 @@ impl WorkspaceShell {
                                 session_id,
                                 cx.new(|cx| {
                                     TerminalSession::spawn(
-                                        wire,
-                                        session_id,
-                                        exit_tx,
-                                        title_tx,
-                                        notify_tx,
-                                        cx,
+                                        wire, session_id, exit_tx, title_tx, notify_tx, cx,
                                     )
                                 }),
                             );

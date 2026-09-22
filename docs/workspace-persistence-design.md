@@ -82,6 +82,13 @@ explicit escape that discards the failed restore and starts a fresh workspace.
 Workspace mode remains available in this state so the command can be selected
 from the standard command palette.
 
+Persisted-state validation checks session identities/counters, then each tab's
+layout and its panes' attachment references in traversal order. The private
+`persistence::validation` module owns those checks. On the shell side,
+`workspace::restore` selects compatible candidates from both daemon inventories;
+the async lifecycle caller checks both runtime generations before selection and
+again before applying attachment results.
+
 ## Startup barrier
 
 When no valid saved document exists, startup follows the existing path and
