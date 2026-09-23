@@ -19,7 +19,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::message_scroller::{MessageScroller, MessageScrollerState};
 use gpui_component::StyledExt as _;
-use horizon_agent::contract::ToolCallId;
 
 use super::session::AgentSession;
 use super::turns;
@@ -39,7 +38,8 @@ pub(super) struct AgentTranscript {
     session_changes: Vec<turns::FileChange>,
     running_turn_clock: Option<RunningTurnClock>,
     expanded_receipts: HashSet<usize>,
-    expanded_rows: HashSet<ToolCallId>,
+    /// Absolute request indices keep reused provider call IDs independent.
+    expanded_rows: HashSet<usize>,
     changes_expanded: bool,
     /// Explicitly projected from `AgentComposer` events so row keyboard-target
     /// annotation never reaches across into the composer entity during render.

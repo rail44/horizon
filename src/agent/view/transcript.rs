@@ -103,7 +103,7 @@ impl AgentTranscript {
                     return Empty.into_any_element();
                 };
                 match presentation {
-                    BurstPresentation::Running => self.render_running_card(&items, cx),
+                    BurstPresentation::Running => self.render_running_card(receipt_key, &items, cx),
                     BurstPresentation::Intermediate => self.render_receipt(
                         receipt_key,
                         &items,
@@ -478,7 +478,7 @@ impl AgentTranscript {
             .into_iter()
             .find(|call| &call.call_id == call_id)
         {
-            Some(call) => Some(self.render_tool_call_row(all_items, &call, false, cx)),
+            Some(call) => Some(self.render_tool_call_row(index, all_items, &call, false, cx)),
             None => Some(
                 div()
                     .flex()
@@ -602,7 +602,12 @@ impl AgentTranscript {
             .gap_1()
             .child(row.into_any_element());
         if expanded && !tool_calls.is_empty() {
-            wrapper = wrapper.child(self.render_expanded_receipt_rows(items, &tool_calls, cx));
+            wrapper = wrapper.child(self.render_expanded_receipt_rows(
+                receipt_key,
+                items,
+                &tool_calls,
+                cx,
+            ));
         }
         wrapper.into_any_element()
     }
@@ -744,6 +749,7 @@ impl AgentTranscript {
     /// `ApprovalRequested` rendering path inside the running card at all.
     pub(super) fn render_running_card(
         &self,
+        receipt_key: usize,
         items: &[AgentFrameItem],
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -812,8 +818,13 @@ impl AgentTranscript {
 
         let row_count = tool_calls.len();
         for (row_index, call) in tool_calls.iter().enumerate() {
-            card =
-                card.child(self.render_tool_call_row(items, call, row_index + 1 < row_count, cx));
+            card = card.child(self.render_tool_call_row(
+                receipt_key + call.request_index,
+                items,
+                call,
+                row_index + 1 < row_count,
+                cx,
+            ));
         }
 
         card.into_any_element()

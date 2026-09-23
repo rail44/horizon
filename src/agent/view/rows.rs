@@ -9,7 +9,6 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::Sizable as _;
-use horizon_agent::contract::ToolCallId;
 use horizon_agent::frame::AgentFrameItem;
 
 use super::super::turns;
@@ -19,9 +18,9 @@ use super::AgentTranscript;
 
 impl AgentTranscript {
     /// Toggles one expanded-receipt row's own body expansion.
-    fn toggle_row(&mut self, call_id: ToolCallId, cx: &mut Context<Self>) {
-        if !self.expanded_rows.remove(&call_id) {
-            self.expanded_rows.insert(call_id);
+    fn toggle_row(&mut self, row_key: usize, cx: &mut Context<Self>) {
+        if !self.expanded_rows.remove(&row_key) {
+            self.expanded_rows.insert(row_key);
         }
         self.scroller
             .update(cx, |scroller, cx| scroller.remeasure(cx));
@@ -36,6 +35,7 @@ impl AgentTranscript {
     /// per call.
     pub(super) fn render_expanded_receipt_rows(
         &self,
+        receipt_key: usize,
         items: &[AgentFrameItem],
         tool_calls: &[turns::ToolCallView],
         cx: &mut Context<Self>,
@@ -50,6 +50,7 @@ impl AgentTranscript {
         let row_count = tool_calls.len();
         for (row_index, call) in tool_calls.iter().enumerate() {
             list = list.child(self.render_expandable_tool_call_row(
+                receipt_key + call.request_index,
                 items,
                 call,
                 row_index + 1 < row_count,
@@ -71,17 +72,17 @@ impl AgentTranscript {
     /// next row when expanded, mirroring the mock's own row grouping.
     fn render_expandable_tool_call_row(
         &self,
+        row_key: usize,
         items: &[AgentFrameItem],
         call: &turns::ToolCallView,
         divider: bool,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = self.expanded_rows.contains(&call.call_id);
+        let expanded = self.expanded_rows.contains(&row_key);
         let arrow = if expanded { "▾" } else { "▸" };
         let (glyph, glyph_color) = tool_call_glyph(call);
         let text = tool_call_line_text(call);
-        let call_id = call.call_id.clone();
-        let row_id = ElementId::from(format!("receipt-row-{}", call.call_id.0));
+        let row_id = ElementId::from(format!("receipt-row-{row_key}"));
 
         // The header's own background is `surface_panel` only while
         // expanded. Every text color
@@ -108,7 +109,7 @@ impl AgentTranscript {
             .cursor_pointer()
             .when(expanded, |this| this.bg(theme::surface_panel()))
             .on_click(cx.listener(move |view, _, _, cx| {
-                view.toggle_row(call_id.clone(), cx);
+                view.toggle_row(row_key, cx);
             }))
             .child(
                 div()
@@ -162,7 +163,7 @@ impl AgentTranscript {
                     div()
                         .px_3()
                         .pb_2()
-                        .child(self.render_tool_call_body(&call.call_id, &body)),
+                        .child(self.render_tool_call_body(row_key, &body)),
                 );
             }
         }
@@ -178,19 +179,15 @@ impl AgentTranscript {
     /// proposal body (row-centric v2, [`Self::render_waiting_proposal`])
     /// all reuse this one function. Every line-list body wraps in a
     /// height-bounded, internally scrollable container so one body can't
-    /// swallow the transcript. `call_id` seeds the scrollable containers'
+    /// swallow the transcript. `row_key` seeds the scrollable containers'
     /// element ids, stable across re-renders (GPUI's `overflow_y_scroll`
     /// needs a `Stateful` element -- i.e. one that's been given an id --
     /// to track scroll offset at all).
-    fn render_tool_call_body(
-        &self,
-        call_id: &ToolCallId,
-        body: &turns::ToolCallBody,
-    ) -> AnyElement {
+    fn render_tool_call_body(&self, row_key: usize, body: &turns::ToolCallBody) -> AnyElement {
         match body {
             turns::ToolCallBody::Diff { lines, omitted } => {
                 let mut container = div()
-                    .id(ElementId::from(format!("body-diff-{}", call_id.0)))
+                    .id(ElementId::from(format!("body-diff-{row_key}")))
                     .flex()
                     .flex_col()
                     .max_h(px(240.0))
@@ -219,7 +216,7 @@ impl AgentTranscript {
                         .child(label.clone()),
                 )
                 .child(render_line_body(
-                    format!("body-content-{}", call_id.0),
+                    format!("body-content-{row_key}"),
                     lines,
                     *omitted,
                 ))
@@ -255,7 +252,7 @@ impl AgentTranscript {
                             .child(header_text),
                     )
                     .child(render_line_body(
-                        format!("body-command-{}", call_id.0),
+                        format!("body-command-{row_key}"),
                         lines,
                         *omitted,
                     ))
@@ -268,7 +265,7 @@ impl AgentTranscript {
                 .child(text.clone())
                 .into_any_element(),
             turns::ToolCallBody::Raw { lines, omitted } => {
-                render_line_body(format!("body-raw-{}", call_id.0), lines, *omitted)
+                render_line_body(format!("body-raw-{row_key}"), lines, *omitted)
             }
         }
     }
@@ -328,6 +325,7 @@ impl AgentTranscript {
     /// thing to look at.
     pub(super) fn render_tool_call_row(
         &self,
+        row_key: usize,
         items: &[AgentFrameItem],
         call: &turns::ToolCallView,
         divider: bool,
@@ -337,7 +335,7 @@ impl AgentTranscript {
         let text = tool_call_line_text(call);
         let waiting = call.approval == turns::ApprovalState::Waiting;
         let expandable = turns::running_row_expandable(call);
-        let expanded = expandable && self.expanded_rows.contains(&call.call_id);
+        let expanded = expandable && self.expanded_rows.contains(&row_key);
 
         // The row's own background tint (warning while waiting on
         // approval, danger once resolved as an error -- see the `.bg(...)`
@@ -358,7 +356,7 @@ impl AgentTranscript {
         };
         let snap = |color: Hsla| theme::readable_on(color, row_surface);
 
-        // Gives the row itself a stable, call_id-scoped identity -- the
+        // Gives the row itself a stable, occurrence-scoped identity -- the
         // same convention `render_expandable_tool_call_row`'s header
         // already uses (`.id(row_id)`), which this row lacked: only its
         // Approve/Deny `Button`s carried an explicit id, the row wrapping
@@ -369,7 +367,7 @@ impl AgentTranscript {
         // elapsed-seconds ticker) is the most concrete, evidence-aligned
         // candidate found; this makes the row's identity as explicit and
         // stable as its buttons' own.
-        let row_id = ElementId::from(format!("running-row-{}", call.call_id.0));
+        let row_id = ElementId::from(format!("running-row-{row_key}"));
         let mut header = div()
             .id(row_id)
             .flex()
@@ -409,7 +407,7 @@ impl AgentTranscript {
                 .items_center()
                 .gap_1()
                 .child(
-                    Button::new(format!("row-approve-{}", call.call_id.0))
+                    Button::new(format!("row-approve-{row_key}"))
                         .primary()
                         .xsmall()
                         .label("Approve")
@@ -418,7 +416,7 @@ impl AgentTranscript {
                         })),
                 )
                 .child(
-                    Button::new(format!("row-deny-{}", call.call_id.0))
+                    Button::new(format!("row-deny-{row_key}"))
                         .danger()
                         .xsmall()
                         .label("Deny")
@@ -465,7 +463,6 @@ impl AgentTranscript {
             // otherwise -- there's nothing wrong to flag on a success row.
             // The whole row is still the click target, matching
             // `render_expandable_tool_call_row`'s convention.
-            let call_id = call.call_id.clone();
             let label_color = if call.is_error {
                 snap(theme::danger())
             } else {
@@ -474,7 +471,7 @@ impl AgentTranscript {
             header = header
                 .cursor_pointer()
                 .on_click(cx.listener(move |view, _, _, cx| {
-                    view.toggle_row(call_id.clone(), cx);
+                    view.toggle_row(row_key, cx);
                 }))
                 .child(
                     div()
@@ -496,7 +493,7 @@ impl AgentTranscript {
             // can't be a finished failure either), so this and the
             // `expanded` branch below are mutually exclusive.
             if let Some(body) = turns::tool_call_body(items, call) {
-                wrapper = wrapper.child(self.render_waiting_proposal(&call.call_id, &body));
+                wrapper = wrapper.child(self.render_waiting_proposal(row_key, &body));
             }
         } else if expanded {
             if let Some(body) = turns::tool_call_body(items, call) {
@@ -504,7 +501,7 @@ impl AgentTranscript {
                     div()
                         .px_3()
                         .pb_2()
-                        .child(self.render_tool_call_body(&call.call_id, &body)),
+                        .child(self.render_tool_call_body(row_key, &body)),
                 );
             }
         }
@@ -523,11 +520,7 @@ impl AgentTranscript {
     /// `command_head` -- and the terse/raw fallbacks for everything
     /// else), labeled with a small muted tag so it reads as informational
     /// rather than a fact about what already happened.
-    fn render_waiting_proposal(
-        &self,
-        call_id: &ToolCallId,
-        body: &turns::ToolCallBody,
-    ) -> AnyElement {
+    fn render_waiting_proposal(&self, row_key: usize, body: &turns::ToolCallBody) -> AnyElement {
         div()
             .flex()
             .flex_col()
@@ -540,7 +533,7 @@ impl AgentTranscript {
                     .text_color(theme::text_subtle())
                     .child("proposal — not applied"),
             )
-            .child(self.render_tool_call_body(call_id, body))
+            .child(self.render_tool_call_body(row_key, body))
             .into_any_element()
     }
 }

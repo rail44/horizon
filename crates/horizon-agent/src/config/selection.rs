@@ -26,9 +26,9 @@ impl ResolvedModelSelection<'_> {
     }
 }
 
-/// The daemon's announcement and the provider loop's application must resolve
-/// against the same startup catalog. Key presence for a plain provider remains
-/// an application-time check; a MoA entry must have an available aggregator.
+/// Share validation rules while the caller chooses the catalog generation:
+/// the daemon uses current config, and a running provider uses its startup config.
+/// Plain-provider keys are rechecked at application; MoA availability is captured.
 pub fn resolve_model_selection<'a>(
     table: &'a ProvidersTable,
     moa_table: &'a MoaTable,
