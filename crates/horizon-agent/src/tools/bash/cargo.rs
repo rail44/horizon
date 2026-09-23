@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::shell::{executable_index, tokenize, ShellToken};
+use super::shell::{any_command_segment, executable_index};
 
 const CONFIG_PATHS: [&str; 2] = [".cargo/config.toml", ".cargo/config"];
 
@@ -24,19 +24,7 @@ pub(super) fn shared_cache_clean_refusal(
 }
 
 fn command_has_unscoped_clean(command: &str) -> bool {
-    let mut segment = Vec::new();
-    for token in tokenize(command) {
-        match token {
-            ShellToken::Word(word) => segment.push(word),
-            ShellToken::Separator(_) => {
-                if segment_has_unscoped_clean(&segment) {
-                    return true;
-                }
-                segment.clear();
-            }
-        }
-    }
-    segment_has_unscoped_clean(&segment)
+    any_command_segment(command, segment_has_unscoped_clean)
 }
 
 fn refusal_message() -> &'static str {

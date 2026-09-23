@@ -20,6 +20,27 @@ pub(super) enum ShellToken {
     Separator(Separator),
 }
 
+/// Tests each command segment in order, including the trailing segment.
+/// Git and Cargo share separator handling while keeping their own predicates.
+pub(super) fn any_command_segment(
+    command: &str,
+    mut matches: impl FnMut(&[String]) -> bool,
+) -> bool {
+    let mut segment = Vec::new();
+    for token in tokenize(command) {
+        match token {
+            ShellToken::Word(word) => segment.push(word),
+            ShellToken::Separator(_) => {
+                if matches(&segment) {
+                    return true;
+                }
+                segment.clear();
+            }
+        }
+    }
+    matches(&segment)
+}
+
 /// Finds a directly invoked command after the small set of shell prefixes
 /// understood by Horizon's proactive command classifiers. This is not a
 /// security parser: unsupported shell syntax falls through to containment.

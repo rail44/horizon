@@ -1,10 +1,7 @@
 //! Ordinary host execution uses async pipes and abortable output pumps.
 #[cfg(unix)]
 use super::BASH_NICE_LEVEL;
-use super::{
-    failed_output, note_undrained, success_output, take, terminated_output, timeout_output,
-    wrapped_script,
-};
+use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
 use crate::config::BashToolConfig;
 use crate::contract::ToolCallId;
 use crate::tools::bash::registry::RegistryGuard;
@@ -42,30 +39,14 @@ pub(super) async fn run_async(
         Ok(captured) => captured,
         Err(message) => return failed_output(message, None, config),
     };
-    let killed = outcome.is_err();
-
-    let mut value = if killed {
-        timeout_output(timeout, raw_stdout, config)
-    } else {
-        match outcome {
-            // `status.code()` is `None` on unix when the process was
-            // terminated by a signal rather than exiting on its own — which
-            // is exactly what an *external* kill looks like (cancellation
-            // racing this call via `bash::kill_if_running`, arriving before
-            // our own timeout). Our own timeout-triggered kill is already
-            // handled above via `killed`; this covers every other way the
-            // child can end up signalled.
-            Ok(Ok(status)) if status.code().is_some() => {
-                success_output(status, raw_stdout, raw_stderr, cwd_handle, config)
-            }
-            Ok(Ok(status)) => terminated_output(status, raw_stdout, config),
-            Ok(Err(wait_error)) => failed_output(
-                &format!("failed to wait for bash: {wait_error}"),
-                Some(raw_stdout),
-                config,
-            ),
-            Err(_) => unreachable!("timeout path already handled above"),
-        }
+    let mut value = match outcome {
+        Ok(Ok(status)) => status_output(status, raw_stdout, raw_stderr, cwd_handle, config),
+        Ok(Err(wait_error)) => failed_output(
+            &format!("failed to wait for bash: {wait_error}"),
+            Some(raw_stdout),
+            config,
+        ),
+        Err(_) => timeout_output(timeout, raw_stdout, config),
     };
 
     if !drained {

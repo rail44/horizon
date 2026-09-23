@@ -15,7 +15,7 @@ use serde_json::Value;
 
 use horizon_sandbox::{FilesystemGrant, FilesystemGrantAccess, FilesystemGrantScope};
 
-use super::shell::{executable_index, tokenize, ShellToken};
+use super::shell::{any_command_segment, executable_index};
 
 const MAX_GIT_POINTER_BYTES: u64 = 16 * 1024;
 
@@ -79,19 +79,7 @@ pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
 }
 
 fn command_requires_metadata_write(command: &str) -> bool {
-    let mut segment = Vec::new();
-    for token in tokenize(command) {
-        match token {
-            ShellToken::Word(word) => segment.push(word),
-            ShellToken::Separator(_) => {
-                if segment_requires_metadata_write(&segment) {
-                    return true;
-                }
-                segment.clear();
-            }
-        }
-    }
-    segment_requires_metadata_write(&segment)
+    any_command_segment(command, segment_requires_metadata_write)
 }
 
 fn segment_requires_metadata_write(words: &[String]) -> bool {

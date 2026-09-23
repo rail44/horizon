@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use crate::contract::{SessionId, ToolCallId};
@@ -227,9 +227,9 @@ pub(super) fn is_session_queued(session_id: SessionId) -> bool {
 // and removed the instant its queue drains, so this table never accumulates
 // entries for sessions that aren't actively running bash.
 //
-// Panic safety: `advance` is the only place `running` is ever cleared, so a
+// Panic safety: `advance` is the only place a drained entry is removed, so a
 // job that panics without it running would leave the session's queue
-// permanently stuck "running" -- every later call for that session would
+// permanently active -- every later call for that session would
 // enqueue and never dispatch. `run_job` guarantees `advance` runs exactly
 // once per job via an RAII guard (`AdvanceGuard`, below) constructed before
 // `job()` and dropped after, regardless of whether `job()` returns normally
@@ -237,17 +237,8 @@ pub(super) fn is_session_queued(session_id: SessionId) -> bool {
 
 type Job = Box<dyn FnOnce() + Send>;
 
-#[derive(Default)]
-struct SessionQueue {
-    /// `true` while a job for this session has been handed to a thread and
-    /// hasn't finished yet -- distinguishes "a job is running with nothing
-    /// queued behind it" from "nothing running at all" (the latter has no
-    /// entry in the table in the first place, once `advance` cleans it up).
-    running: bool,
-    jobs: VecDeque<Job>,
-}
-
-type SessionQueues = Mutex<HashMap<SessionId, SessionQueue>>;
+// An entry means a job is active; its deque holds only the waiting jobs.
+type SessionQueues = Mutex<HashMap<SessionId, VecDeque<Job>>>;
 
 fn session_queues() -> &'static SessionQueues {
     static QUEUES: OnceLock<SessionQueues> = OnceLock::new();
@@ -261,12 +252,15 @@ pub(super) fn enqueue(session_id: SessionId, job: Job) {
     let mut queues = session_queues()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let queue = queues.entry(session_id).or_default();
-    if queue.running {
-        queue.jobs.push_back(job);
-        return;
+    match queues.entry(session_id) {
+        Entry::Occupied(mut entry) => {
+            entry.get_mut().push_back(job);
+            return;
+        }
+        Entry::Vacant(entry) => {
+            entry.insert(VecDeque::new());
+        }
     }
-    queue.running = true;
     drop(queues);
     run_job(session_id, job);
 }
@@ -310,9 +304,7 @@ fn advance(session_id: SessionId) {
     let mut queues = session_queues()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let next = queues
-        .get_mut(&session_id)
-        .and_then(|queue| queue.jobs.pop_front());
+    let next = queues.get_mut(&session_id).and_then(VecDeque::pop_front);
     match next {
         Some(job) => {
             drop(queues);
