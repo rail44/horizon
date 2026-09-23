@@ -755,3 +755,54 @@ fn bad_provider_kind_is_a_parse_error_of_the_whole_file() {
     // the ordinary never-fail-startup warning.
     assert!(parse("[[providers]]\nname = \"x\"\nkind = \"anthromorphic\"\n").is_err());
 }
+
+#[test]
+fn moa_resolution_preserves_member_order_and_diagnostic_precedence() {
+    let config = parse(r#"
+[[providers]]
+name = "p"
+[[moa]]
+aggregator = { provider = "missing", model = "" }
+[[moa]]
+name = "same"
+aggregator = { provider = "missing", model = "" }
+[[moa]]
+name = "same"
+aggregator = { provider = "p", model = "m" }
+proposers = [{ provider = "missing", model = "m" }, { provider = "p", model = "" }, { provider = "p", model = "x" }, { provider = "p", model = "x" }]
+[[moa]]
+name = "empty"
+aggregator = { provider = "p", model = "m" }
+[[moa]]
+name = "all-invalid"
+aggregator = { provider = "p", model = "m" }
+proposers = [{ provider = "missing", model = "m" }]
+"#).unwrap();
+    let resolved = config.resolved_moa();
+    assert_eq!(
+        resolved
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["same", "empty", "all-invalid"]
+    );
+    assert_eq!(
+        resolved[0]
+            .proposers
+            .iter()
+            .map(|member| member.model.as_str())
+            .collect::<Vec<_>>(),
+        ["x", "x"]
+    );
+    assert!(resolved[1].proposers.is_empty());
+    assert!(resolved[2].proposers.is_empty());
+    assert_eq!(moa_config_warnings(&config), [
+        "[[moa]]: entry 0 has no name, dropping it (name it so it can be selected)",
+        "[[moa]]: entry \"same\" aggregator has no model id, dropping the whole entry",
+        "[[moa]]: duplicate name same — the later entry is shadowed",
+        "[[moa]]: entry \"same\" proposer 0 names no [[providers]] entry (\"missing\"), dropping that proposer",
+        "[[moa]]: entry \"same\" proposer 1 has no model id, dropping that proposer",
+        "[[moa]]: entry \"empty\" lists no proposers — the aggregator will answer alone",
+        "[[moa]]: entry \"all-invalid\" proposer 0 names no [[providers]] entry (\"missing\"), dropping that proposer",
+    ]);
+}
