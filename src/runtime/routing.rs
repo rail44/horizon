@@ -53,18 +53,24 @@ pub(super) struct TerminalRoutes {
 }
 
 struct TerminalRouteState {
+    terminals: HashMap<Uuid, TerminalRoute>,
+    failure: Option<String>,
+}
+
+/// The three channels of one attachment retire together. A connection
+/// failure closes only commands, keeping the pane's diagnostic channels.
+struct TerminalRoute {
     /// The pane-facing frame stream: since wire v11 the frame path is a
     /// `watch<TerminalFrame>`, so the transport delivers full frames here
     /// (separate from `terminal_events`).
-    frames: HashMap<Uuid, tokio::sync::watch::Sender<TerminalFrame>>,
+    frames: tokio::sync::watch::Sender<TerminalFrame>,
     /// The pane-facing non-frame events (title/bell/clipboard/exit/error).
-    events: HashMap<Uuid, Sender<TerminalUpdate>>,
+    events: Sender<TerminalUpdate>,
     /// The local (sync-sendable) half of each terminal's command bridge —
     /// the same queue the handle's own forwarding thread feeds; registered
     /// here so a broadcast (`TerminaldHandle::broadcast_terminal_color_scheme`)
     /// can inject a command without going through a pane's handle.
-    commands: HashMap<Uuid, tokio::sync::mpsc::UnboundedSender<TerminalCommand>>,
-    failure: Option<String>,
+    commands: Option<tokio::sync::mpsc::UnboundedSender<TerminalCommand>>,
 }
 
 impl AgentRoutes {
@@ -174,9 +180,7 @@ impl TerminalRoutes {
     pub(super) fn new() -> Self {
         Self {
             state: Mutex::new(TerminalRouteState {
-                frames: HashMap::new(),
-                events: HashMap::new(),
-                commands: HashMap::new(),
+                terminals: HashMap::new(),
                 failure: None,
             }),
         }
@@ -196,16 +200,18 @@ impl TerminalRoutes {
             let _ = events.send(TerminalUpdate::Error(message));
             return;
         }
-        state.frames.insert(session_id, frames);
-        state.events.insert(session_id, events);
-        state.commands.insert(session_id, commands);
+        state.terminals.insert(
+            session_id,
+            TerminalRoute {
+                frames,
+                events,
+                commands: Some(commands),
+            },
+        );
     }
 
     pub(super) fn unregister_terminal(&self, session_id: Uuid) {
-        let mut state = self.state.lock().unwrap();
-        state.frames.remove(&session_id);
-        state.events.remove(&session_id);
-        state.commands.remove(&session_id);
+        self.state.lock().unwrap().terminals.remove(&session_id);
     }
 
     /// Injects `command` into every registered terminal's command bridge —
@@ -214,8 +220,10 @@ impl TerminalRoutes {
     /// same as every per-session command send.
     pub(super) fn broadcast_terminal_command(&self, command: TerminalCommand) {
         let state = self.state.lock().unwrap();
-        for sender in state.commands.values() {
-            let _ = sender.send(command.clone());
+        for route in state.terminals.values() {
+            if let Some(sender) = &route.commands {
+                let _ = sender.send(command.clone());
+            }
         }
     }
 
@@ -224,13 +232,11 @@ impl TerminalRoutes {
     pub(super) fn route_terminal_frame(&self, session_id: Uuid, frame: TerminalFrame) {
         let mut state = self.state.lock().unwrap();
         if state
-            .frames
+            .terminals
             .get(&session_id)
-            .is_some_and(|sender| sender.send(frame).is_err())
+            .is_some_and(|route| route.frames.send(frame).is_err())
         {
-            state.frames.remove(&session_id);
-            state.events.remove(&session_id);
-            state.commands.remove(&session_id);
+            state.terminals.remove(&session_id);
         }
     }
 
@@ -241,14 +247,12 @@ impl TerminalRoutes {
         let exited = matches!(update, TerminalUpdate::Exited);
         let mut state = self.state.lock().unwrap();
         if state
-            .events
+            .terminals
             .get(&session_id)
-            .is_some_and(|sender| sender.send(update).is_err())
+            .is_some_and(|route| route.events.send(update).is_err())
             || exited
         {
-            state.frames.remove(&session_id);
-            state.events.remove(&session_id);
-            state.commands.remove(&session_id);
+            state.terminals.remove(&session_id);
         }
     }
 
@@ -266,11 +270,20 @@ impl TerminalRoutes {
         let terminal_routes = {
             let mut state = self.state.lock().unwrap();
             state.failure = Some(message.clone());
-            state.commands.clear();
-            state.events.values().cloned().collect::<Vec<_>>()
+            state
+                .terminals
+                .values_mut()
+                .map(|route| {
+                    route.commands = None;
+                    route.events.clone()
+                })
+                .collect::<Vec<_>>()
         };
         for sender in terminal_routes {
             let _ = sender.send(TerminalUpdate::Error(message.clone()));
         }
     }
 }
+
+#[cfg(test)]
+mod tests;
