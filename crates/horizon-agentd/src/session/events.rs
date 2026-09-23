@@ -44,12 +44,6 @@ pub(super) fn persist_and_send_session_event(
     {
         return false;
     }
-    let Some(writer) = state.writer() else {
-        return false;
-    };
-    if writer.flush().is_err() {
-        return false;
-    }
     send_session_event(state, session_id, AgentWireEvent::Event(event));
     true
 }

@@ -347,12 +347,6 @@ fn handle_provider_event(
         {
             return;
         }
-        let Some(writer) = state.writer() else {
-            return;
-        };
-        if writer.flush().is_err() {
-            return;
-        }
     } else {
         let _ = live_state.extend_provider_events(processing.horizon_events);
     }

@@ -407,3 +407,11 @@ new records. Only newline-terminated bytes are decoded as UTF-8, so a crash
 inside a multibyte character cannot prevent recovery of earlier records.
 Complete lines, including corrupt or unknown-event lines, are kept unchanged;
 a valid JSON object without its final newline is still an uncommitted tail.
+
+`Appender::commit_provider_events` owns the enqueue-and-acknowledge boundary.
+Durable input/outbox events enter `LiveState` only after it succeeds; callers
+can then publish them without a separate writer lookup. Startup interruption
+fixups use the same boundary before provider creation, and skip that session's
+resume if the commit fails. Ordinary streaming events retain asynchronous
+appends. A batch is not transactional: a successfully written prefix can be
+recovered on restart even if a later record in that batch failed.

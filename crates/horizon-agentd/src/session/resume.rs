@@ -123,12 +123,23 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
             .as_ref()
             .is_some_and(horizon_agent::roles::is_exploration)
         {
-            terminate_orphaned_exploration(&mut appender, session_id, &frame);
-            terminated_explorations += 1;
+            match terminate_orphaned_exploration(&mut appender, &frame) {
+                Ok(()) => terminated_explorations += 1,
+                Err(error) => eprintln!(
+                    "horizon-agentd: failed to commit orphaned exploration termination for \
+                     {session_id:?}: {error}"
+                ),
+            }
             continue;
         }
 
-        settle_interrupted_turn(&mut appender, session_id, &frame, &mut events);
+        if let Err(error) = settle_interrupted_turn(&mut appender, &frame, &mut events) {
+            eprintln!(
+                "horizon-agentd: failed to commit interrupted work for {session_id:?}; \
+                 skipping resume: {error}"
+            );
+            continue;
+        }
 
         eprintln!(
             "horizon-agentd: resumed session {session_id:?} ({} event(s))",
@@ -167,10 +178,9 @@ pub(crate) fn resume_persisted_sessions(state: &Arc<AgentdState>, records: Vec<R
 /// The appender must already carry the original turn history and context.
 fn settle_interrupted_turn(
     appender: &mut Appender,
-    session_id: SessionId,
     frame: &AgentFrame,
     events: &mut Vec<Event>,
-) {
+) -> anyhow::Result<()> {
     let outcomes = interrupted_input_outcomes(events);
     if frame.is_turn_in_flight() || !outcomes.is_empty() {
         // Mirrors what a live `Command::Cancel` does (`providers::rig::
@@ -185,16 +195,11 @@ fn settle_interrupted_turn(
             closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
         }
         closing.push(Event::StateChanged(SessionState::WaitingForUser));
-        match appender
-            .append_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())
-        {
-            Ok(()) => events.extend(closing),
-            Err(error) => eprintln!(
-                "horizon-agentd: failed to commit interrupted turn as cancelled for \
-                 {session_id:?}: {error}"
-            ),
-        }
+        appender
+            .commit_provider_events(closing.iter().cloned().map(ProviderEvent::from).collect())?;
+        events.extend(closing);
     }
+    Ok(())
 }
 
 /// `docs/agent-explore-design.md` decision 8: an exploration session is
@@ -217,9 +222,8 @@ fn settle_interrupted_turn(
 /// entirely instead of doing this again.
 fn terminate_orphaned_exploration(
     appender: &mut Appender,
-    session_id: SessionId,
     frame: &AgentFrame,
-) {
+) -> anyhow::Result<()> {
     let mut closing = cancel_unfinished_tool_calls(frame);
     closing.push(Event::Error(AgentError {
         message: "Exploration session terminated on daemon restart: the `task` call \
@@ -231,14 +235,7 @@ fn terminate_orphaned_exploration(
     }
     closing.push(Event::StateChanged(SessionState::Terminated));
 
-    if let Err(error) =
-        appender.append_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
-    {
-        eprintln!(
-            "horizon-agentd: failed to record termination of orphaned exploration session \
-             {session_id:?}: {error}"
-        );
-    }
+    appender.commit_provider_events(closing.into_iter().map(ProviderEvent::from).collect())
 }
 
 /// Whether `frame`'s folded state shows its session already dead: either
@@ -383,9 +380,8 @@ pub(crate) fn resume_session(
     )
     .with_session_context(context.clone());
     appender
-        .append_provider_events(transitions.iter().cloned().map(Into::into).collect())
+        .commit_provider_events(transitions.iter().cloned().map(Into::into).collect())
         .map_err(|error| error.to_string())?;
-    writer.flush().map_err(|error| error.to_string())?;
     events.extend(transitions);
     super::spawn::spawn_session_thread_with_context(
         state.clone(),
@@ -486,9 +482,8 @@ impl AgentdState {
             appender = appender.with_session_context(context);
         }
         appender
-            .append_provider_events(vec![Event::DeliveryAcknowledged(delivery_id).into()])
-            .map_err(|error| error.to_string())?;
-        writer.flush().map_err(|error| error.to_string())
+            .commit_provider_events(vec![Event::DeliveryAcknowledged(delivery_id).into()])
+            .map_err(|error| error.to_string())
     }
 }
 
@@ -680,10 +675,10 @@ mod tests {
                 .unwrap();
             settle_interrupted_turn(
                 &mut appender,
-                session_id,
                 &agent_frame_from_events(&events),
                 &mut events,
-            );
+            )
+            .unwrap();
             writer.flush().unwrap();
 
             let retained = persisted_events(&path, session_id);
@@ -720,6 +715,30 @@ mod tests {
                     .collect::<Vec<_>>()
             );
         }
+    }
+
+    #[test]
+    fn failed_recovery_commit_keeps_the_restored_history_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let (writer, init) =
+            WriterHandle::open_with_reader(dir.path().join("events.jsonl"), |_| {
+                Err(anyhow::anyhow!("injected startup failure"))
+            });
+        assert!(matches!(
+            init.recv().unwrap(),
+            horizon_agent::persistence::event_log::WriterInit::Failed(_)
+        ));
+        assert!(writer.flush().is_err());
+        let mut appender = Appender::new(writer, SessionId::new(), None, None);
+        let original = vec![Event::StateChanged(SessionState::Running)];
+        let mut events = original.clone();
+        assert!(settle_interrupted_turn(
+            &mut appender,
+            &agent_frame_from_events(&events),
+            &mut events
+        )
+        .is_err());
+        assert_eq!(events, original);
     }
 
     fn open_test_event_log(label: &str) -> (tempfile::TempDir, PathBuf, WriterHandle) {

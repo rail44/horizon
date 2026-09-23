@@ -52,9 +52,7 @@ impl Appender {
         event: ProviderEvent,
     ) -> Result<()> {
         let previous = self.session_context.replace(context);
-        let result = self
-            .append_provider_events(vec![event])
-            .and_then(|()| self.writer.flush());
+        let result = self.commit_provider_events(vec![event]);
         if result.is_err() {
             self.session_context = previous;
         }
@@ -119,6 +117,14 @@ impl Appender {
             self.writer.append(record)?;
         }
         Ok(())
+    }
+
+    /// Acknowledge every queued record before the caller publishes durable
+    /// state or starts work which relies on it. This is not a batch transaction:
+    /// a failed batch may have written a prefix, recoverable by log replay.
+    pub fn commit_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
+        self.append_provider_events(events)?;
+        self.writer.flush()
     }
 }
 

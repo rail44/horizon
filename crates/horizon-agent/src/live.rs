@@ -159,8 +159,8 @@ impl LiveState {
         self.inner.borrow_mut().extend_provider_events(events)
     }
 
-    /// Persist transport/lifecycle records without swallowing writer failures.
-    /// The caller must flush the writer before publishing externally.
+    /// Commit transport/lifecycle records before folding them into live history.
+    /// A failed commit must not make a retry look already accepted.
     pub fn persist_provider_events(
         &self,
         events: impl IntoIterator<Item = ProviderEvent>,
@@ -171,7 +171,7 @@ impl LiveState {
         };
         appender
             .borrow_mut()
-            .append_provider_events(events.clone())
+            .commit_provider_events(events.clone())
             .map_err(|error| error.to_string())?;
         Ok(self.inner.borrow_mut().extend_provider_events(events))
     }

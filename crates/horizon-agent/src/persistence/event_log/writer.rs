@@ -935,6 +935,57 @@ mod tests {
         assert_failed_append_stays_failed(true);
     }
 
+    #[test]
+    fn failed_durable_input_does_not_enter_live_history() {
+        use crate::contract::SessionInput;
+        use crate::live::LiveState;
+
+        for on_flush in [false, true] {
+            let (tx, rx) = unbounded();
+            let worker = thread::spawn(move || {
+                run_writer(
+                    FailOnce {
+                        on_flush,
+                        failed: false,
+                    },
+                    Path::new("injected-failure"),
+                    rx,
+                    0,
+                    None,
+                );
+            });
+            let writer = WriterHandle { tx };
+            let history = vec![Event::StateChanged(SessionState::WaitingForUser)];
+            let live = LiveState::with_event_log_and_history(
+                SessionId::new(),
+                None,
+                None,
+                writer.clone(),
+                history.clone(),
+            );
+            let frame = live.frame();
+            let result = live.persist_provider_events([Event::InputAccepted(SessionInput {
+                id: "retryable-input".into(),
+                origin: "owner".into(),
+                text: "work".into(),
+                reply_to: None,
+                resume_work: false,
+            })
+            .into()]);
+            assert!(result.is_err(), "an enqueue is not a durable acceptance");
+            assert_eq!(
+                live.events(),
+                history,
+                "failed input must not suppress redelivery"
+            );
+            assert_eq!(live.frame(), frame);
+            assert!(writer.flush().is_err());
+            drop(live);
+            drop(writer);
+            worker.join().unwrap();
+        }
+    }
+
     // --- currency check + incremental catch-up (backlog-32) ----------------
 
     fn temp_duckdb_path(label: &str) -> PathBuf {
