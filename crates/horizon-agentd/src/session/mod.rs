@@ -41,6 +41,7 @@
 //! [`environment`], and lived by [`run`]; [`resume`] recreates one from the log.
 //! [`events`] fans a session's output out to the attached client and to
 //! in-process subscribers, [`host_tools`] runs the host round trip,
+//! [`input`] owns durable input acceptance and delivery acknowledgements;
 //! [`approval`] and [`completion`] own the approval seam and the
 //! asynchronous tool folds, [`subscription`] is the "observe another
 //! session's stop/blocking events" seam, [`exploration`] implements the
@@ -55,6 +56,7 @@ mod environment;
 mod events;
 mod exploration;
 mod host_tools;
+mod input;
 mod panic;
 mod resume;
 mod run;

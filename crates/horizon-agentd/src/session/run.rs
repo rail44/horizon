@@ -21,7 +21,7 @@ use horizon_agent::wire::AgentWireEvent;
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
-use super::events::send_session_event;
+use super::events::{persist_and_send_session_event, send_session_event};
 use super::host_tools::AgentdHostTools;
 use super::panic::{
     catch_session_panic, record_session_loop_panic, record_unexpected_provider_exit,
@@ -284,16 +284,7 @@ pub(super) fn run_session(
                 message: "Session runtime ended before completing this input.".into(),
             };
             let event = Event::InputOutcome(outcome);
-            if live_state
-                .persist_provider_events([event.clone().into()])
-                .is_ok()
-            {
-                if let Some(writer) = state.writer() {
-                    if writer.flush().is_ok() {
-                        send_session_event(state, session_id, AgentWireEvent::Event(event));
-                    }
-                }
-            }
+            persist_and_send_session_event(state, &live_state, session_id, event);
         }
     }
 }

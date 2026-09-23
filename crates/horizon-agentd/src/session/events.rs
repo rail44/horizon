@@ -3,7 +3,8 @@
 //! in-process observer holds a [`super::subscription::SessionSubscription`]
 //! on it.
 
-use horizon_agent::contract::SessionId;
+use horizon_agent::contract::{Event, SessionId};
+use horizon_agent::live::LiveState;
 use horizon_agent::wire::AgentWireEvent;
 
 use super::state::{lock_unpoisoned, AgentdState};
@@ -28,6 +29,29 @@ pub(super) fn send_session_event(
     {
         subscribers.remove(&session_id);
     }
+}
+
+/// Publishes a durable event only after the writer has flushed its queued record.
+pub(super) fn persist_and_send_session_event(
+    state: &AgentdState,
+    live_state: &LiveState,
+    session_id: SessionId,
+    event: Event,
+) -> bool {
+    if live_state
+        .persist_provider_events([event.clone().into()])
+        .is_err()
+    {
+        return false;
+    }
+    let Some(writer) = state.writer() else {
+        return false;
+    };
+    if writer.flush().is_err() {
+        return false;
+    }
+    send_session_event(state, session_id, AgentWireEvent::Event(event));
+    true
 }
 
 #[cfg(test)]

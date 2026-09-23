@@ -722,12 +722,8 @@ impl ProviderEvent {
 
     pub(crate) fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
         Self {
-            event,
             provider_payload: Some(provider_payload),
-            tool_call_progress: None,
-            session_model: None,
-            task_progress: None,
-            session_selection: None,
+            ..Self::new(event)
         }
     }
 
@@ -737,12 +733,8 @@ impl ProviderEvent {
     /// here is an unused placeholder rather than a new `Event` variant.
     pub fn tool_call_progress(progress: ToolCallProgress) -> Self {
         Self {
-            event: Event::StateChanged(SessionState::Running),
-            provider_payload: None,
             tool_call_progress: Some(progress),
-            session_model: None,
-            task_progress: None,
-            session_selection: None,
+            ..Self::new(Event::StateChanged(SessionState::Running))
         }
     }
 
@@ -751,12 +743,8 @@ impl ProviderEvent {
     /// is the same unused placeholder [`Self::tool_call_progress`] uses.
     pub fn session_model(model: String) -> Self {
         Self {
-            event: Event::StateChanged(SessionState::Running),
-            provider_payload: None,
-            tool_call_progress: None,
             session_model: Some(model),
-            task_progress: None,
-            session_selection: None,
+            ..Self::new(Event::StateChanged(SessionState::Running))
         }
     }
 
@@ -766,12 +754,8 @@ impl ProviderEvent {
     /// [`Self::tool_call_progress`] uses.
     pub fn task_progress(progress: TaskProgress) -> Self {
         Self {
-            event: Event::StateChanged(SessionState::Running),
-            provider_payload: None,
-            tool_call_progress: None,
-            session_model: None,
             task_progress: Some(progress),
-            session_selection: None,
+            ..Self::new(Event::StateChanged(SessionState::Running))
         }
     }
 
@@ -780,12 +764,8 @@ impl ProviderEvent {
     /// [`Self::session_selection`]'s field doc comment.
     pub fn session_selection(provider: String, model: String) -> Self {
         Self {
-            event: Event::StateChanged(SessionState::Running),
-            provider_payload: None,
-            tool_call_progress: None,
-            session_model: None,
-            task_progress: None,
             session_selection: Some(crate::wire::ModelSelection { provider, model }),
+            ..Self::new(Event::StateChanged(SessionState::Running))
         }
     }
 }

@@ -125,27 +125,15 @@ fn classify_tool(
                 ToolCallKind::Generic,
             )
         }
-        "fs.grep" => {
+        "fs.grep" | "fs.glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default().to_string();
             let summary = output
                 .and_then(|output| output.get("returned_count"))
                 .and_then(Value::as_u64)
                 .map(|count| format!("{count} matches"));
+            let verb = if tool_id == "fs.grep" { "Grep" } else { "Glob" };
             (
-                "Grep".to_string(),
-                Some(pattern),
-                summary,
-                ToolCallKind::Generic,
-            )
-        }
-        "fs.glob" => {
-            let pattern = str_field(input, "pattern").unwrap_or_default().to_string();
-            let summary = output
-                .and_then(|output| output.get("returned_count"))
-                .and_then(Value::as_u64)
-                .map(|count| format!("{count} matches"));
-            (
-                "Glob".to_string(),
+                verb.to_string(),
                 Some(pattern),
                 summary,
                 ToolCallKind::Generic,

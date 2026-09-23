@@ -267,24 +267,11 @@ pub(crate) fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<Tool
 /// a call that can no longer resolve (the "one approval worked, then
 /// everything looked permanently stuck" report).
 pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
-    let mut pending = Vec::<ToolCallId>::new();
-    for item in items {
-        match item {
-            AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
-                pending.push(request.call_id.clone());
-            }
-            AgentFrameItem::ToolCallStarted(call_id) => {
-                pending.retain(|pending_id| pending_id != call_id);
-            }
-            AgentFrameItem::ToolCallFinished(result) => {
-                pending.retain(|call_id| call_id != &result.call_id);
-            }
-            AgentFrameItem::TurnEnded { .. } => pending.clear(),
-            _ => {}
-        }
-    }
-
-    pending
+    let start = items
+        .iter()
+        .rposition(|item| matches!(item, AgentFrameItem::TurnEnded { .. }))
+        .map_or(0, |index| index + 1);
+    pending_approval_call_ids_in(&items[start..])
 }
 
 /// Whether the frame's last item is a guard-halted `TurnEnded` -- i.e. the
