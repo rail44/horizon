@@ -1,3 +1,5 @@
+mod response;
+
 use std::{collections::HashMap, future::Future, time::Duration};
 
 use crossbeam_channel::Sender;
@@ -9,15 +11,14 @@ use rig_core::{
         AssistantContent, CompletionError, CompletionModel, Message, ToolDefinition,
     },
     providers::{anthropic, openai},
-    streaming::{StreamedAssistantContent, ToolCallDeltaContent},
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{ProviderKind, RigAgentConfig},
     contract::{
-        Error, Event, Message as AgentMessage, MessageDelta, MessageRole, ProviderEvent,
-        ProviderRateLimited, ProviderRequestSent, ProviderRequestUsage, ToolCallId, ToolCallResult,
+        Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ProviderRequestSent,
+        ProviderRequestUsage, ToolCallId, ToolCallResult,
     },
     prompt::{system_prompt, SessionEnvironment},
     tools::{definitions, Definition},
@@ -27,9 +28,8 @@ use super::{
     clearing::{history_for_provider_request, ClearingState},
     mapping::{
         horizon_provider_events_from_rig_message, rig_fs_read_call, rig_multi_snapshot_calls,
-        rig_tool_call_provider_payload, rig_tool_call_request,
     },
-    rig_workspace_snapshot_call, StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer,
+    rig_workspace_snapshot_call,
 };
 
 /// Bounds the HTTP/request setup phase before rig yields a response stream.
@@ -805,29 +805,8 @@ where
         }
     };
 
-    let mut first_token_seen = false;
-    let mut text = String::new();
-    let mut requested_tool_call_ids = Vec::new();
-    let mut requested_tool_calls = HashMap::new();
-    let mut tool_calls: Vec<ToolCall> = Vec::new();
-    let mut cancelled = false;
-    let mut input_tokens = None;
-    let mut output_tokens: Option<u64> = None;
-    let mut text_buffer = StreamDeltaBuffer::new(
-        events_tx.clone(),
-        StreamDeltaKind::AssistantText,
-        MessageRole::Assistant,
-        config,
-    );
-    let mut reasoning_buffer = StreamDeltaBuffer::new(
-        events_tx.clone(),
-        StreamDeltaKind::Reasoning,
-        MessageRole::Assistant,
-        config,
-    );
-    let mut tool_call_progress = ToolCallProgressBuffer::new(events_tx.clone(), config);
-
-    loop {
+    let mut response = response::ResponseCollector::new(config, events_tx, durable_output_emitted);
+    let cancelled = loop {
         let chunk = match await_provider_phase(
             stream.next(),
             token,
@@ -836,182 +815,19 @@ where
         )
         .await?
         {
-            ProviderWait::Cancelled => {
-                cancelled = true;
-                break;
-            }
-            ProviderWait::Ready(chunk) => chunk,
+            ProviderWait::Cancelled => break true,
+            ProviderWait::Ready(None) => break false,
+            ProviderWait::Ready(Some(chunk)) => chunk?,
         };
-        let Some(chunk) = chunk else {
-            break;
-        };
-        // Decoded before anything is marked: an error chunk is not a token,
-        // and an OpenAI-compatible endpoint delivers a rejected request's
-        // status here rather than from stream establishment (rig sends the
-        // HTTP request lazily, on the stream's first poll).
-        let chunk = chunk?;
-        if !first_token_seen {
-            first_token_seen = true;
-            // The gap between `ProviderRequestSent` above and this event is
-            // provider time-to-first-byte, regardless of what kind of chunk
-            // arrived first (text, reasoning, or a tool-call delta).
-            let _ = events_tx.send(Event::ProviderRequestFirstToken.into());
-        }
-
-        match chunk {
-            StreamedAssistantContent::Text(delta) => {
-                text.push_str(&delta.text);
-                text_buffer.push(delta.text);
-            }
-            StreamedAssistantContent::ReasoningDelta { reasoning, .. } => {
-                reasoning_buffer.push(reasoning);
-            }
-            StreamedAssistantContent::Reasoning { reasoning, .. } => {
-                reasoning_buffer.flush();
-                let text = reasoning.display_text();
-                if !text.is_empty() {
-                    let _ = events_tx.send(
-                        Event::ReasoningDelta(MessageDelta {
-                            role: MessageRole::Assistant,
-                            text,
-                        })
-                        .into(),
-                    );
-                }
-            }
-            StreamedAssistantContent::ToolCall {
-                mut tool_call,
-                internal_call_id,
-            } => {
-                reasoning_buffer.flush();
-                text_buffer.flush();
-                // The provider payload records the provider's raw emission
-                // (a double-encoded `arguments` string included) as the
-                // forensic record, so it is captured before the repair
-                // below, which only changes what Horizon executes and
-                // replays.
-                let provider_payload = rig_tool_call_provider_payload(&tool_call);
-                repair_double_encoded_tool_arguments(&mut tool_call.function.arguments);
-                let request = rig_tool_call_request(tool_call.clone());
-                requested_tool_call_ids.push(request.call_id.clone());
-                requested_tool_calls.insert(
-                    request.call_id.clone(),
-                    ToolCallDescriptor {
-                        tool_id: request.tool_id.clone(),
-                        args: request.input.0.clone(),
-                    },
-                );
-                let _ = events_tx.send(ProviderEvent::with_provider_payload(
-                    Event::ToolCallRequested(request),
-                    provider_payload,
-                ));
-                tool_call_progress.note_finalized(&internal_call_id);
-                *durable_output_emitted = true;
-                tool_calls.push(tool_call);
-            }
-            // Tool-call arguments can arrive as many small chunks (a 4.7KB
-            // `fs.write` argument produced 13s of otherwise-silent
-            // streaming — see the design note on `ToolCallProgressBuffer`).
-            // These were previously dropped entirely; now they surface as
-            // coalesced, ephemeral `ToolCallProgress` ticks so the pane can
-            // show "preparing a tool call… (N bytes)" instead of going
-            // quiet mid-turn.
-            StreamedAssistantContent::ToolCallDelta {
-                internal_call_id,
-                content,
-                ..
-            } => match content {
-                ToolCallDeltaContent::Name(name) => {
-                    tool_call_progress.note_name(&internal_call_id, name);
-                }
-                ToolCallDeltaContent::Delta(delta) => {
-                    tool_call_progress.note_delta(&internal_call_id, &delta);
-                }
-            },
-            StreamedAssistantContent::Final(response) => {
-                let usage = provider_request_usage_event_from_stream_final(&response);
-                if let Event::ProviderRequestUsage(usage) = &usage {
-                    input_tokens = Some(usage.input_tokens);
-                    output_tokens = Some(usage.output_tokens);
-                }
-                let _ = events_tx.send(usage.into());
-            }
-            // rig 0.42 surfaces unrecognized stream chunks as `Unknown`;
-            // Horizon's contract has no representation for them, so they are
-            // skipped (the terminal `StreamFinal` still carries the outcome).
-            StreamedAssistantContent::Unknown(_) => {}
-        }
-    }
-
-    // The provider's response stream is done, either exhausted normally or
-    // cut short by cancellation — either way, the request's wall-clock span
-    // ends here, before the resulting message/tool-call events below.
-    request_span.finish();
-
-    reasoning_buffer.flush();
-    text_buffer.flush();
-
-    // One provider response persists as *several* events: a
-    // `ToolCallRequested` per tool call, emitted above as its chunks arrive
-    // (so Horizon can start executing it while the stream continues), plus
-    // this one `MessageCommitted` for the accumulated text, which can only
-    // be emitted now that the stream is done. In-memory history keeps them
-    // together as the single assistant message assembled below, but a replay
-    // of the log sees the text event *after* the calls -- and after any
-    // result that landed before the stream ended. Rebuilds therefore fold
-    // adjacent assistant messages back into one
-    // (`mapping::repair_replayed_message_pairing`); nothing is missing from
-    // the log, the grouping simply isn't recorded.
-    if !text.is_empty() {
-        let _ = events_tx.send(
-            Event::MessageCommitted(AgentMessage {
-                role: MessageRole::Assistant,
-                text: text.clone(),
-            })
-            .into(),
-        );
-        *durable_output_emitted = true;
-    }
-
-    // `stream.choice` is only aggregated when the stream runs to its end;
-    // on cancellation it is still the empty placeholder, so the history
-    // message must be assembled from the chunks observed before the cancel —
-    // otherwise the streamed partial (text and especially tool calls) would
-    // be lost from history and cancelled tool results would dangle.
-    let assistant_message = if cancelled {
-        partial_assistant_message(stream.message_id.clone(), &text, tool_calls)
-    } else {
-        // `stream.choice` is rig's own aggregation of the same chunks, built
-        // independently of the repaired `tool_calls` above, so it carries the
-        // provider's raw arguments and needs the same normalization before it
-        // becomes history.
-        let mut content = stream.choice.clone();
-        make_tool_call_arguments_replay_safe(&mut content);
-        Message::Assistant {
-            id: stream.message_id.clone(),
-            content,
-        }
+        // Decode before marking first-token or durable output. OpenAI may
+        // deliver a rejected HTTP request on the stream's first poll.
+        response.push(chunk);
     };
 
-    let truncated_ids = tool_call_progress.truncated_ids();
-    let truncated = !cancelled && !truncated_ids.is_empty();
-    let cap_truncated = output_cap_truncated(output_tokens, config.max_output_tokens, cancelled);
-
-    Ok((
-        assistant_message,
-        TurnCompletion {
-            final_text: (!cancelled && !truncated && !cap_truncated).then_some(text),
-            requested_tool_call_ids,
-            requested_tool_calls,
-            cancelled,
-            failed: false,
-            input_tokens,
-            output_tokens,
-            truncated,
-            truncated_tool_call_count: truncated_ids.len(),
-            cap_truncated,
-        },
-    ))
+    // End the request span before final deltas and the committed message.
+    // Errors instead drop both the span and the uncommitted response.
+    request_span.finish();
+    Ok(response.finish(cancelled, stream.message_id.clone(), stream.choice.clone()))
 }
 
 pub(super) fn provider_request_usage_event_from_stream_final(
