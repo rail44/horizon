@@ -11,6 +11,8 @@
 //! runtime/server problems (exit 1) instead. See
 //! `docs/cli-control-plane-design.md`.
 
+mod options;
+
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -194,80 +196,11 @@ Subcommands:\n  \
 /// subcommand that accepts `--split` has any positional argument of its own
 /// for a bare token after it to collide with.
 pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
-    let mut socket = None;
-    let mut json = false;
-    let mut yes = false;
-    let mut prompt: Option<String> = None;
-    let mut role: Option<String> = None;
-    let mut preview_name: Option<String> = None;
-    let mut split: Option<SplitFlag> = None;
-    let mut active = false;
-    let mut share = false;
-    let mut reason: Option<String> = None;
-    let mut positionals: Vec<String> = Vec::new();
-
-    let mut iter = args.iter().peekable();
-    while let Some(arg) = iter.next() {
-        if arg == "--socket" {
-            let value = iter
-                .next()
-                .ok_or_else(|| UsageError("--socket requires a value".to_string()))?;
-            socket = Some(PathBuf::from(value));
-        } else if let Some(value) = arg.strip_prefix("--socket=") {
-            socket = Some(PathBuf::from(value));
-        } else if arg == "--json" {
-            json = true;
-        } else if arg == "--yes" {
-            yes = true;
-        } else if arg == "--active" {
-            active = true;
-        } else if arg == "--share" {
-            share = true;
-        } else if arg == "--reason" {
-            let value = iter
-                .next()
-                .ok_or_else(|| UsageError("--reason requires a value".to_string()))?;
-            reason = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--reason=") {
-            reason = Some(value.to_string());
-        } else if arg == "--prompt" {
-            let value = iter
-                .next()
-                .ok_or_else(|| UsageError("--prompt requires a value".to_string()))?;
-            prompt = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--prompt=") {
-            prompt = Some(value.to_string());
-        } else if arg == "--name" {
-            let value = iter
-                .next()
-                .ok_or_else(|| UsageError("--name requires a value".to_string()))?;
-            preview_name = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--name=") {
-            preview_name = Some(value.to_string());
-        } else if arg == "--role" {
-            let value = iter
-                .next()
-                .ok_or_else(|| UsageError("--role requires a value".to_string()))?;
-            role = Some(value.clone());
-        } else if let Some(value) = arg.strip_prefix("--role=") {
-            role = Some(value.to_string());
-        } else if arg == "--split" {
-            split = Some(match iter.peek() {
-                Some(next) if !next.starts_with("--") => {
-                    let value = (*iter.next().expect("peeked Some")).clone();
-                    SplitFlag::Explicit(value)
-                }
-                _ => SplitFlag::Here,
-            });
-        } else if let Some(value) = arg.strip_prefix("--split=") {
-            split = Some(SplitFlag::Explicit(value.to_string()));
-        } else if arg.starts_with("--") {
-            return Err(UsageError(format!("unrecognized flag: {arg}")));
-        } else {
-            positionals.push(arg.clone());
-        }
-    }
-
+    let options::Arguments {
+        global,
+        mut options,
+        positionals,
+    } = options::scan(args)?;
     let mut positionals = positionals.into_iter();
     let name = positionals
         .next()
@@ -277,18 +210,18 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "new-terminal" => {
             reject_extra(&mut positionals, "new-terminal")?;
             Subcommand::NewTerminal {
-                split: split.take(),
-                activate: std::mem::take(&mut active),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
             }
         }
         "new-agent" => {
             reject_extra(&mut positionals, "new-agent")?;
             Subcommand::NewAgent {
-                prompt: prompt.take(),
-                role: role.take(),
-                split: split.take(),
-                activate: std::mem::take(&mut active),
-                share: std::mem::take(&mut share),
+                prompt: options.prompt.take(),
+                role: options.role.take(),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
+                share: std::mem::take(&mut options.share),
             }
         }
         // `new-config-agent` is kept as an alias for `new-agent --role config`
@@ -298,11 +231,11 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "new-config-agent" => {
             reject_extra(&mut positionals, "new-config-agent")?;
             Subcommand::NewAgent {
-                prompt: prompt.take(),
+                prompt: options.prompt.take(),
                 role: Some("config".to_string()),
-                split: split.take(),
-                activate: std::mem::take(&mut active),
-                share: std::mem::take(&mut share),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
+                share: std::mem::take(&mut options.share),
             }
         }
         "preview" => {
@@ -310,9 +243,9 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "preview")?;
             Subcommand::Preview {
                 path: PathBuf::from(path),
-                name: preview_name.take(),
-                split: split.take(),
-                activate: std::mem::take(&mut active),
+                name: options.preview_name.take(),
+                split: options.split.take(),
+                activate: std::mem::take(&mut options.active),
             }
         }
         "attach" => {
@@ -320,7 +253,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             reject_extra(&mut positionals, "attach")?;
             Subcommand::Attach {
                 session_id,
-                activate: std::mem::take(&mut active),
+                activate: std::mem::take(&mut options.active),
             }
         }
         "terminate-session" => {
@@ -348,7 +281,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             Subcommand::Deny {
                 session_id,
                 call_id,
-                reason: reason.take(),
+                reason: options.reason.take(),
             }
         }
         "cancel-turn" => {
@@ -405,36 +338,8 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         other => return Err(UsageError(format!("unknown subcommand: {other}"))),
     };
 
-    if prompt.is_some() {
-        return Err(UsageError(
-            "--prompt is only valid with new-agent/new-config-agent".to_string(),
-        ));
-    }
-    if role.is_some() {
-        return Err(UsageError(
-            "--role is only valid with new-agent/new-config-agent".to_string(),
-        ));
-    }
-    if preview_name.is_some() {
-        return Err(UsageError("--name is only valid with preview".to_string()));
-    }
-    if split.is_some() {
-        return Err(UsageError(
-            "--split is only valid with new-terminal/new-agent/new-config-agent/preview"
-                .to_string(),
-        ));
-    }
-    if active {
-        return Err(UsageError(
-            "--active is only valid with new-terminal/new-agent/new-config-agent/preview/attach"
-                .to_string(),
-        ));
-    }
-
-    Ok(ParsedArgs {
-        global: GlobalOptions { socket, json, yes },
-        subcommand,
-    })
+    options.validate_unused()?;
+    Ok(ParsedArgs { global, subcommand })
 }
 
 fn next_required(
@@ -558,6 +463,61 @@ mod tests {
                 yes: false
             }
         );
+    }
+
+    #[test]
+    fn option_values_preserve_equals_flag_like_text_and_last_value() {
+        let parsed = parse(&args(&[
+            "--socket=first",
+            "new-agent",
+            "--prompt",
+            "old",
+            "--prompt=a=b",
+            "--socket",
+            "last",
+        ]))
+        .unwrap();
+        assert_eq!(parsed.global.socket, Some(PathBuf::from("last")));
+        assert!(
+            matches!(parsed.subcommand, Subcommand::NewAgent { prompt: Some(ref text), .. } if text == "a=b")
+        );
+        let parsed = parse(&args(&["new-agent", "--prompt", "--json"])).unwrap();
+        assert!(!parsed.global.json);
+        assert!(
+            matches!(parsed.subcommand, Subcommand::NewAgent { prompt: Some(ref text), .. } if text == "--json")
+        );
+        assert_eq!(
+            parse(&args(&["state", "--json=true"])).unwrap_err().0,
+            "unrecognized flag: --json=true"
+        );
+    }
+
+    #[test]
+    fn command_arity_errors_precede_unused_option_errors() {
+        assert_eq!(
+            parse(&args(&["send", "--prompt=x", "--active"]))
+                .unwrap_err()
+                .0,
+            "send requires a session-id"
+        );
+        assert_eq!(
+            parse(&args(&["state", "--prompt=x", "--active"]))
+                .unwrap_err()
+                .0,
+            "--prompt is only valid with new-agent/new-config-agent"
+        );
+        assert_eq!(
+            parse(&args(&["new-config-agent", "--role=custom"]))
+                .unwrap_err()
+                .0,
+            "--role is only valid with new-agent/new-config-agent"
+        );
+    }
+
+    #[test]
+    fn unused_share_and_reason_keep_their_existing_acceptance() {
+        let parsed = parse(&args(&["state", "--share", "--reason=note"])).unwrap();
+        assert_eq!(parsed.subcommand, Subcommand::State);
     }
 
     #[test]
