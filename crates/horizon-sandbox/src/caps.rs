@@ -82,6 +82,15 @@ pub(crate) fn build_with_grants(
     policy: &SandboxPolicy,
     filesystem_grants: &[FilesystemGrant],
 ) -> Result<CapabilitySet, SandboxError> {
+    let mut caps = filesystem_capabilities(policy)?;
+    for grant in filesystem_grants {
+        caps = apply_grant(caps, grant)?;
+    }
+    let caps = network_capabilities(caps, &policy.network)?;
+    Ok(caps.set_signal_mode(SignalMode::AllowSameSandbox))
+}
+
+fn filesystem_capabilities(policy: &SandboxPolicy) -> Result<CapabilitySet, SandboxError> {
     let mut caps = CapabilitySet::new();
 
     match &policy.readable_scope {
@@ -106,35 +115,46 @@ pub(crate) fn build_with_grants(
         caps = allow_dir(caps, root, AccessMode::ReadWrite)?;
     }
 
-    for grant in filesystem_grants {
-        validate_grant(grant)?;
-        let access = match grant.access {
-            FilesystemGrantAccess::Read => AccessMode::Read,
-            FilesystemGrantAccess::ReadWrite => AccessMode::ReadWrite,
-        };
-        caps = match grant.scope {
-            FilesystemGrantScope::File => caps.allow_file(&grant.path, access)?,
-            FilesystemGrantScope::DirectoryTree => caps.allow_path(&grant.path, access)?,
-        };
-        let applied = caps
-            .fs_capabilities()
-            .last()
-            .expect("adding a filesystem capability must append one entry");
-        if applied.resolved != grant.path || applied.access != access {
-            return Err(SandboxError::GrantChanged {
-                approved: grant.path.clone(),
-                resolved: applied.resolved.clone(),
-            });
-        }
-        if applied.is_file != (grant.scope == FilesystemGrantScope::File) {
-            return Err(SandboxError::GrantTypeChanged {
-                path: grant.path.clone(),
-                scope: grant.scope,
-            });
-        }
-    }
+    Ok(caps)
+}
 
-    caps = match &policy.network {
+fn apply_grant(
+    mut caps: CapabilitySet,
+    grant: &FilesystemGrant,
+) -> Result<CapabilitySet, SandboxError> {
+    validate_grant(grant)?;
+    let access = match grant.access {
+        FilesystemGrantAccess::Read => AccessMode::Read,
+        FilesystemGrantAccess::ReadWrite => AccessMode::ReadWrite,
+    };
+    caps = match grant.scope {
+        FilesystemGrantScope::File => caps.allow_file(&grant.path, access)?,
+        FilesystemGrantScope::DirectoryTree => caps.allow_path(&grant.path, access)?,
+    };
+    let applied = caps
+        .fs_capabilities()
+        .last()
+        .expect("adding a filesystem capability must append one entry");
+    if applied.resolved != grant.path || applied.access != access {
+        return Err(SandboxError::GrantChanged {
+            approved: grant.path.clone(),
+            resolved: applied.resolved.clone(),
+        });
+    }
+    if applied.is_file != (grant.scope == FilesystemGrantScope::File) {
+        return Err(SandboxError::GrantTypeChanged {
+            path: grant.path.clone(),
+            scope: grant.scope,
+        });
+    }
+    Ok(caps)
+}
+
+fn network_capabilities(
+    mut caps: CapabilitySet,
+    network: &NetworkPolicy,
+) -> Result<CapabilitySet, SandboxError> {
+    Ok(match network {
         NetworkPolicy::Disabled => caps.set_network_mode(NetworkMode::Blocked),
         NetworkPolicy::Proxied {
             proxy_addr,
@@ -170,9 +190,7 @@ pub(crate) fn build_with_grants(
                 bind_ports: Vec::new(),
             })
         }
-    };
-
-    Ok(caps.set_signal_mode(SignalMode::AllowSameSandbox))
+    })
 }
 
 pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
@@ -295,6 +313,43 @@ mod tests {
     fn network_disabled_blocks_network() {
         let caps = build(&policy(vec![], NetworkPolicy::Disabled)).unwrap();
         assert_eq!(*caps.network_mode(), NetworkMode::Blocked);
+    }
+
+    #[test]
+    fn policy_validation_preserves_filesystem_then_endpoint_error_priority() {
+        let invalid_endpoint: SocketAddr = "192.0.2.1:80".parse().unwrap();
+        let invalid_proxy: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let mut base = policy(
+            vec![],
+            NetworkPolicy::Proxied {
+                proxy_addr: invalid_proxy,
+                loopback_connect: vec![invalid_endpoint],
+                unix_socket_connect: Vec::new(),
+            },
+        );
+        let protected = FilesystemGrant {
+            path: Path::new("/proc").to_path_buf(),
+            access: FilesystemGrantAccess::Read,
+            scope: FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
+        };
+        assert!(matches!(
+            build_with_grants(&base, &[protected]),
+            Err(SandboxError::UnsupportedGrantTarget(_))
+        ));
+        assert!(
+            matches!(build(&base), Err(SandboxError::InvalidLoopbackEndpoint(addr)) if addr == invalid_endpoint)
+        );
+        let NetworkPolicy::Proxied {
+            loopback_connect, ..
+        } = &mut base.network
+        else {
+            unreachable!()
+        };
+        loopback_connect.clear();
+        assert!(
+            matches!(build(&base), Err(SandboxError::InvalidProxyEndpoint(addr)) if addr == invalid_proxy)
+        );
     }
 
     #[test]

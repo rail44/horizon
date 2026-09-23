@@ -9,9 +9,9 @@
 | 設定・テーマ | 読み込みとreload、警告、反映、保存。MoAの解決と診断を一元化 | 関連203テスト通過 |
 | コマンド・操作 | CLIのオプション読み取り・コマンド構築・未使用検証を分離 | 関連161テスト通過 |
 | provider・履歴管理 | 通信待機と受信内容の集約を分離。履歴圧縮・再試行条件を確認 | 関連183テスト通過 |
-| 永続化 | 追記、DuckDB投影、検索、再構築、障害処理 | 未着手 |
-| sandbox・ネットワーク | 権限構築、OS側照合、拒否情報の返却 | 未着手 |
-| preview・WASM | 起動、通信、更新検知、購読と資源終了 | 未着手 |
+| 永続化 | live追記と再構築のトランザクションを統一。検索・復元を確認 | 関連77テスト通過 |
+| sandbox・ネットワーク | 基本権限・承認grant・通信設定の構築を分離 | 関連90テスト通過 |
+| preview・WASM | 古い応答待ちの所有とreload時の終了を明示 | 関連15テスト、実WASM 2テスト通過 |
 
 変更または維持の理由、検証と比較は各領域の確認後にここへ集約する。
 
@@ -34,3 +34,19 @@ provider・履歴管理: `completion/response.rs`がdeltaの集約、tool要求�
 tool要求済みの再試行禁止、中断時の部分履歴、usageと未完了callによる打切り判定を検証。
 要求構築・中断・timeoutは通信側に残す。typed errorの再試行判定、圧縮の出現回数と
 現在のcall単位の保護、canonical履歴を変更しないprovider向け投影は維持した。
+
+永続化: live追記と再構築chunkの書き込みを`append_records_atomic`へ統一した。
+派生turn行の失敗でeventと高水位も戻り、次の追記が成功することを変更前後で検証。
+JSONLの単一writer・破損行と未解釈eventのsequence保存、復元時のturn ID、共有DB接続、
+chunkを二分して不良recordだけを除く再構築、SQL側の検索件数・本文上限は維持した。
+
+sandbox・ネットワーク: capability構築を基本のfilesystem、承認grantの再検証、networkへ
+分離した。grantのcanonical path/type再照合と、filesystem→loopback→proxyの検証順を維持。
+Linuxの除外subpath優先、十分な権限の最長path選択、通知ID再確認と複製socketによる接続、
+認証済み拒否reportからbash結果への返却を追跡した。proxyの完全一致allowlistと拒否記録も維持。
+macOSの拒否収集は発生源・失敗時の扱いがLinuxと異なるため共通化せず、ソース確認のみ。
+
+preview・WASM: detachedだったpreview名の応答待ちをpane所有にし、reload時にloadと共に
+終了させる。旧応答がEmptyをLoadedへ戻す問題を変更前の失敗テストで再現し、修正後に確認。
+host/guestのtheme通知・subscription所有、artifactのdirectory監視・debounce・read除外を確認。
+実WASMで描画、theme通知、artifact交換、旧store/thread解放、破損artifactの失敗を確認した。

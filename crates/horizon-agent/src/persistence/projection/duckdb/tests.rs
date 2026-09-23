@@ -1423,3 +1423,35 @@ fn rebuild_skips_an_unprojectable_record_and_projects_the_rest() {
         .collect::<Vec<_>>();
     assert_eq!(texts, vec!["first".to_string(), "third".to_string()]);
 }
+
+#[test]
+fn failed_live_projection_rolls_back_event_and_mark_then_accepts_the_next_record() {
+    let store = Store::open_in_memory().expect("store");
+    let session_id = SessionId::new();
+    // The event insert and session upsert succeed before the derived turn
+    // row rejects its missing identity. Neither earlier write may remain.
+    let mut record = label_record(
+        "failed-turn",
+        0,
+        session_id,
+        None,
+        None,
+        Event::TurnEnded(TurnEndReason::Completed),
+        1,
+    );
+    assert!(store.append_record(&record).is_err());
+    assert!(store.events_for_session(session_id).unwrap().is_empty());
+    assert_eq!(store.max_last_sequence().unwrap(), None);
+    assert!(store.turns_for_session(session_id).unwrap().is_empty());
+
+    record.turn_id = Some("turn-1".into());
+    store
+        .append_record(&record)
+        .expect("connection remains usable");
+    assert_eq!(store.events_for_session(session_id).unwrap().len(), 1);
+    assert_eq!(store.max_last_sequence().unwrap(), Some(0));
+    assert_eq!(
+        store.turns_for_session(session_id).unwrap()[0].turn_id,
+        "turn-1"
+    );
+}

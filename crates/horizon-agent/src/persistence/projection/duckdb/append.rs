@@ -38,17 +38,22 @@ impl Store {
     /// this one record's several statements in a transaction makes them
     /// atomic: either both tables see it, or neither does.
     pub(crate) fn append_record(&self, record: &Record) -> Result<()> {
+        self.append_records_atomic(std::slice::from_ref(record))
+    }
+
+    /// Shared transaction boundary for live appends and rebuild chunks.
+    /// Every event, session mark, and derived row commits together; the first
+    /// failed projection rolls the whole batch back and preserves its error.
+    pub(super) fn append_records_atomic(&self, records: &[Record]) -> Result<()> {
         self.conn.execute_batch("BEGIN TRANSACTION")?;
-        match self.append_record_uncommitted(record) {
-            Ok(()) => {
-                self.conn.execute_batch("COMMIT")?;
-                Ok(())
-            }
-            Err(error) => {
+        for record in records {
+            if let Err(error) = self.append_record_uncommitted(record) {
                 let _ = self.conn.execute_batch("ROLLBACK");
-                Err(error)
+                return Err(error);
             }
         }
+        self.conn.execute_batch("COMMIT")?;
+        Ok(())
     }
 
     /// The actual insert/upsert/project body -- real `sequence`, and

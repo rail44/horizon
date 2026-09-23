@@ -118,6 +118,9 @@ pub(crate) struct PreviewPane {
     focus_handle: FocusHandle,
     _watch: Option<ArtifactWatch>,
     _load: Option<Task<()>>,
+    /// Belongs to this load; a reply from an old guest must not replace
+    /// the next load's status after reload or retarget.
+    _names: Option<Task<()>>,
 }
 
 impl PreviewPane {
@@ -135,6 +138,7 @@ impl PreviewPane {
             focus_handle: cx.focus_handle(),
             _watch: None,
             _load: None,
+            _names: None,
         };
         if let Some(path) = path {
             pane.set_target(path, cx);
@@ -166,6 +170,8 @@ impl PreviewPane {
 
     /// Drop the loaded plugin and load the artifact again.
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
+        self._load = None;
+        self._names = None;
         self.host = None;
         self._root = None;
         let Some(path) = self.path.clone() else {
@@ -220,7 +226,15 @@ impl PreviewPane {
             previews: Vec::new(),
         };
         cx.notify();
-        cx.spawn(async move |this, cx| {
+        self.receive_preview_names(names, cx);
+    }
+
+    fn receive_preview_names(
+        &mut self,
+        names: embedded_gpui::Receipt<Vec<String>>,
+        cx: &mut Context<Self>,
+    ) {
+        self._names = Some(cx.spawn(async move |this, cx| {
             let Ok(previews) = names.await else {
                 return;
             };
@@ -228,8 +242,7 @@ impl PreviewPane {
                 pane.status = Status::Loaded { previews };
                 cx.notify();
             });
-        })
-        .detach();
+        }));
     }
 
     /// Keys reach the guest through whichever of the two focus handles is
@@ -292,3 +305,6 @@ impl Render for PreviewPane {
             .child(div().flex_1().child(self.surface.clone()))
     }
 }
+
+#[cfg(test)]
+mod tests;

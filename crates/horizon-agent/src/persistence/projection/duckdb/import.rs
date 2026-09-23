@@ -153,7 +153,7 @@ impl Store {
         if chunk.is_empty() {
             return;
         }
-        let error = match self.apply_chunk_in_one_transaction(chunk) {
+        let error = match self.append_records_atomic(chunk) {
             Ok(()) => {
                 report.applied += chunk.len();
                 return;
@@ -169,20 +169,6 @@ impl Store {
         let (head, tail) = chunk.split_at(chunk.len() / 2);
         self.apply_chunk(head, report);
         self.apply_chunk(tail, report);
-    }
-
-    /// The fast path of [`Self::apply_chunk`]: the whole chunk in one
-    /// transaction, rolled back in full on the first error.
-    fn apply_chunk_in_one_transaction(&self, chunk: &[Record]) -> Result<()> {
-        self.conn.execute_batch("BEGIN TRANSACTION")?;
-        for record in chunk {
-            if let Err(error) = self.append_record_uncommitted(record) {
-                let _ = self.conn.execute_batch("ROLLBACK");
-                return Err(error);
-            }
-        }
-        self.conn.execute_batch("COMMIT")?;
-        Ok(())
     }
 
     fn clear_all_agent_state(&self) -> Result<()> {
