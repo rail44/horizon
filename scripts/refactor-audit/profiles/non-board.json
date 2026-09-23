@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "roots": [
+    "src",
+    "crates",
+    "preview-plugin/src"
+  ],
+  "exclude": [
+    "**/target/**",
+    "**/vendor/**",
+    "**/generated/**",
+    "src/board_pane.rs",
+    "src/board_pane/**",
+    "crates/horizon-board/**",
+    "crates/horizon-logd/**",
+    "**/board.rs",
+    "**/board/**"
+  ],
+  "test_paths": [
+    "**/tests/**",
+    "**/tests.rs",
+    "**/*_tests.rs",
+    "**/test_*.rs",
+    "**/e2e.rs"
+  ],
+  "test_attributes": [
+    "test",
+    "tokio::test",
+    "gpui::test",
+    "rstest",
+    "test_case"
+  ],
+  "clones": {
+    "min_tokens": 70,
+    "min_lines": 5,
+    "mode": "weak"
+  },
+  "rules": [
+    "rules/runtime-visibility.yml"
+  ],
+  "history": {
+    "min_shared": 3,
+    "max_commit_files": 50,
+    "min_coupling": 30
+  },
+  "exclude_nodes": [
+    {
+      "files": [
+        "**/*.rs"
+      ],
+      "query": "((function_item name: (identifier) @name) @exclude (#match? @name \"(^|_)board(_|$)\"))",
+      "reason": "Board-specific functions are maintained in a separate workstream."
+    },
+    {
+      "files": [
+        "src/workspace/commands.rs"
+      ],
+      "query": "((match_arm pattern: (_) @pattern) @exclude (#match? @pattern \"CommandId::[A-Za-z]*Board\"))",
+      "reason": "Board-only command dispatch remains outside this review."
+    }
+  ]
+}

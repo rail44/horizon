@@ -36,3 +36,9 @@ If refactoring: intended boundary and behavior to preserve
 Keep raw measurements in the generated report. Record accepted architectural
 decisions in the owning design document. This guide does not authorize product
 changes or define a project-wide development workflow.
+
+For recurring reviews, use the audit tool's `record` command and pass the ledger
+with `scan --reviews`. Include related source files that informed the judgment;
+changed or absent evidence requires another review. Keep reasons visible rather
+than suppressing findings. Use `compare --mapping` for moves or extractions so
+the comparison includes the helpers and retains unmatched functions.

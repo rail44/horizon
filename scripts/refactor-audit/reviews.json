@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "reviews": [
+    {
+      "target": {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "legacy_bytes",
+        "partition": "production"
+      },
+      "sha256": "dc3b1b09c7942ae2d1a9153d94dbbb8c66f085d50631c915837a4ea611f0e85a",
+      "related": {
+        "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14"
+      },
+      "decision": "preserve",
+      "reason": "Key and modifier combinations follow distinct wire encodings; preserve the protocol table and its mode-specific branches.",
+      "commit": "ceede795e764af4aad3f08d91d25e4d5c2faacca"
+    },
+    {
+      "target": {
+        "file": "src/terminal/glyphs.rs",
+        "owner": "<free>",
+        "name": "box_draw_geometry",
+        "partition": "production"
+      },
+      "sha256": "2bf5c2c8e03fa3f088e1173501127ffab91fd14e0f0d70ed0320b83b87c03062",
+      "related": {
+        "src/terminal/mod.rs": "33f49661a76c449f88528c5c80747908452b8cf51a8bdc4b0aac5f404b1080f3"
+      },
+      "decision": "preserve",
+      "reason": "The branches encode distinct glyph shapes; keep the character-to-geometry correspondence visible. Rendering orchestration is reviewed separately.",
+      "commit": "ceede795e764af4aad3f08d91d25e4d5c2faacca"
+    }
+  ]
+}

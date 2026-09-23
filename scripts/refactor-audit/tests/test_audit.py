@@ -151,6 +151,22 @@ class AnalyzerTests(unittest.TestCase):
         self.assertEqual(status, "complete", data["errors"])
         return output, data
 
+    def test_real_analyzers_respect_syntax_exclusions(self):
+        source = self.root / "src/runtime/visibility.rs"
+        source.write_text("pub fn exposed() {}\npub(crate) fn internal() {}\n")
+        settings = config()
+        settings["exclude_nodes"] = [{
+            "files": ["src/runtime/*.rs"],
+            "query": '((function_item name: (identifier) @name) @exclude (#eq? @name "exposed"))',
+            "reason": "Separate review scope",
+        }]
+        _, data = self.analyze(settings=settings)
+        self.assertFalse(data["rules"])
+        self.assertNotIn("exposed", {f["name"] for f in data["functions"]})
+        self.assertIn("internal", {f["name"] for f in data["functions"]})
+        self.assertTrue(any(r.get("reason") == "Separate review scope" for r in data["excluded"]))
+        self.assertIn("pub fn exposed", source.read_text())
+
     def test_real_tools_cover_functions_clones_and_scoped_convention(self):
         before = {p: p.read_bytes() for p in self.root.rglob("*.rs")}
         output, data = self.analyze()

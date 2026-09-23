@@ -1,6 +1,6 @@
 """Normalize tool output and render a bounded review entry point."""
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 import json
 from pathlib import Path
 
@@ -158,6 +158,19 @@ def summary(report, output, root, top):
         file = row["file"]
         return f"[{label or file + ':' + str(row['start'])}]({quote(str(root / file), safe='/')}:{row['start']})"
 
+    exclusions = [row for row in report["excluded"] if "start" in row]
+    if exclusions:
+        lines += [f"Explicit syntax exclusions: {len(exclusions)} ranges (reasons and coordinates in report.json).", ""]
+    if "reviews" in report:
+        counts = Counter(row["evidence"] for row in report["reviews"])
+        lines += ["## Recorded judgments", "", "; ".join(f"{state}: {count}" for state, count in sorted(counts.items())), "",
+                  "Evidence equality preserves a prior reason; it is not a new review. Unlisted dependencies may have changed. No candidates are hidden.", ""]
+        ordered_reviews = sorted(report["reviews"], key=lambda r: r["evidence"] == "evidence_unchanged")
+        for review in ordered_reviews[:top]:
+            target = review["target"]
+            reason = review["reason"].replace("\n", " ")
+            lines.append(f"- `{target['file']}` `{target['owner']}::{target['name']}`: {review['decision']} / {review['evidence']} — {reason}")
+        lines.append("")
     grouped = defaultdict(list)
     for fn in report["functions"]:
         grouped[(fn["region"], fn["partition"])].append(fn)

@@ -107,3 +107,49 @@ When updating a tool, update its pin/checksum (and `uv lock --script
 scripts/refactor-audit/run.py` for Python dependencies), then run `verify` and
 whole-repository scans for production and tests. Keep regenerated reports out
 of Git; preserve confirmed decisions in the relevant design document.
+
+## Repeat a review
+
+Use the checked-in scope for the current non-board work:
+
+```sh
+uv run --locked --script scripts/refactor-audit/run.py scan --config scripts/refactor-audit/profiles/non-board.json --reviews scripts/refactor-audit/reviews.json
+```
+
+Optional `exclude_nodes` entries contain `files` globs, a Tree-sitter Rust
+`query` capturing complete syntax nodes as `@exclude`, and a `reason`.
+The scanner masks those bytes before every analyzer and records source ranges,
+reasons, and hashes. Invalid queries or broken syntax fail the scan. The
+non-board profile excludes board files, named board functions, and board-only
+command arms. Shared functions and macro declarations can still contain board
+wiring; inspect those boundaries and keep their board behavior outside edits.
+
+Record a judgment after following its callers, callees, and tests:
+
+```sh
+uv run --locked --script scripts/refactor-audit/run.py record BEFORE/report.json --file src/terminal/glyphs.rs --name box_draw_geometry --decision preserve --reason 'The branches describe distinct glyph geometry.' --related src/terminal/mod.rs --output scripts/refactor-audit/reviews.json
+```
+
+Use `--owner TYPE` for methods. The report must identify exactly one function.
+The ledger retains its source fingerprint, reason, decision, and optional
+related-file hashes. A scan with `--reviews` reports unchanged evidence,
+changed code/dependencies, absent targets, or ambiguous identities; it never
+hides candidates. Unlisted dependencies are not checked. A preserved reason
+is supporting evidence, not a fresh semantic review. `record` explicitly writes
+the requested ledger; `scan` and `compare` never edit sources or judgments.
+
+Compare complete reports with identical selection, configuration, parser
+versions, analysis implementation, and analyzer binaries:
+
+```sh
+uv run --locked --script scripts/refactor-audit/run.py compare BEFORE/report.json AFTER/report.json --mapping correspondence.json --output target/refactor-audit/comparison
+```
+
+The optional mapping is an array of `{label, before, after}` objects. Both sides
+are nonempty arrays of `{file, owner, name, partition}` selectors; `<free>` is
+the owner of free functions. List the extracted helpers as well as the entry
+point. The summary compares maxima across that group. Unmapped identities are
+compared only when unambiguous and otherwise remain added, removed, or
+ambiguous in `comparison.json`; moves and splits are never guessed. Changed
+scope/settings require a fresh baseline. Metrics alone do not prove an
+improvement. Raw reports and comparison artifacts remain under `target/`.

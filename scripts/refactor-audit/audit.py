@@ -7,8 +7,9 @@ import json
 import sys
 import uuid
 
+from reviews import assess_reviews, read_reviews
 from results import clone_groups, clone_pairs, metrics, source_path, summary
-from sources import collect
+from sources import collect, exclusion_query
 from tooling import AuditError, HERE, Runner, Toolchain, git, sha256, write_json
 
 
@@ -23,11 +24,32 @@ def validate_config(config):
         "rules",
         "history",
     }
-    if not isinstance(config, dict) or set(config) != required or config["schema_version"] != 1:
+    if (
+        not isinstance(config, dict)
+        or not required <= set(config)
+        or set(config) - required - {"exclude_nodes"}
+        or config["schema_version"] != 1
+    ):
         raise AuditError("Unsupported config keys/schema_version")
     for key in ("roots", "exclude", "test_paths", "test_attributes", "rules"):
         if not isinstance(config[key], list) or not all(isinstance(x, str) for x in config[key]):
             raise AuditError(f"config.{key} must be an array of strings")
+    exclusions = config.get("exclude_nodes", [])
+    if not isinstance(exclusions, list):
+        raise AuditError("config.exclude_nodes must be an array")
+    for rule in exclusions:
+        if (
+            not isinstance(rule, dict)
+            or set(rule) != {"files", "query", "reason"}
+            or not isinstance(rule["files"], list)
+            or not rule["files"]
+            or not all(isinstance(path, str) and path for path in rule["files"])
+            or not isinstance(rule["query"], str)
+            or not isinstance(rule["reason"], str)
+            or not rule["reason"].strip()
+        ):
+            raise AuditError("Each exclusion needs files, a query, and a reason")
+        exclusion_query(rule["query"])
     for name in config["rules"]:
         if (
             not (HERE / name).resolve().is_relative_to(HERE / "rules")
@@ -69,6 +91,7 @@ def scan(
     history=False,
     dependencies=None,
     tools=None,
+    reviews=None,
 ):
     validate_config(config)
     root = root.resolve()
@@ -289,6 +312,9 @@ def scan(
                 raise AuditError(f"Source changed during analysis: {source['file']}")
         if git(root, "rev-parse", "HEAD").decode().strip() != commit:
             raise AuditError("HEAD changed during analysis")
+        if reviews is not None:
+            report["reviews"] = assess_reviews(report, read_reviews(reviews))
+            report["reviews_sha256"] = sha256(reviews.read_bytes())
         report["status"] = "complete"
     except (AuditError, OSError, ValueError, KeyError) as error:
         report["errors"].append(f"{type(error).__name__}: {error}")

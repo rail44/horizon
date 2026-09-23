@@ -9,7 +9,8 @@ import tree_sitter_rust
 
 from tooling import AuditError, git, sha256
 
-PARSER = tree_sitter.Parser(tree_sitter.Language(tree_sitter_rust.language()))
+LANGUAGE = tree_sitter.Language(tree_sitter_rust.language())
+PARSER = tree_sitter.Parser(LANGUAGE)
 
 
 def walk(node):
@@ -100,6 +101,44 @@ def test_only(node, data, test_attributes):
     return False, start
 
 
+def exclusion_query(query):
+    try:
+        compiled = tree_sitter.Query(LANGUAGE, query)
+    except (tree_sitter.QueryError, ValueError) as error:
+        raise AuditError(f"Invalid exclusion query: {error}") from error
+    if "exclude" not in [compiled.capture_name(i) for i in range(compiled.capture_count)]:
+        raise AuditError("Exclusion query must capture @exclude")
+    return compiled
+
+
+def exclude_nodes(data, rules):
+    """Mask explicitly selected syntax, keeping coordinates and a visible audit trail."""
+    tree = PARSER.parse(data)
+    if tree.root_node.has_error:
+        raise AuditError("Cannot apply exclusions to invalid Rust syntax")
+    masked = bytearray(data)
+    excluded = []
+    for rule in rules:
+        captures = tree_sitter.QueryCursor(exclusion_query(rule["query"])).captures(tree.root_node)
+        for node in sorted(captures.get("exclude", []), key=lambda n: n.start_byte):
+            start = node.start_byte
+            if node.type.endswith("_item"):
+                _, start = attributes(node, data)
+            for i in range(start, node.end_byte):
+                if data[i] not in (10, 13):
+                    masked[i] = 32
+            excluded.append({
+                "start": node.start_point.row + 1,
+                "end": node.end_point.row + 1,
+                "kind": node.type,
+                "reason": rule["reason"],
+                "sha256": sha256(data[start:node.end_byte]),
+            })
+    if PARSER.parse(bytes(masked)).root_node.has_error:
+        raise AuditError("Exclusion produced invalid syntax; capture a complete item or match arm")
+    return bytes(masked), excluded
+
+
 def partition(data, is_test_file, selection, test_attributes):
     original = PARSER.parse(data)
     if original.root_node.has_error:
@@ -155,6 +194,7 @@ def partition(data, is_test_file, selection, test_attributes):
                 "start": node.start_point.row + 1,
                 "end": node.end_point.row + 1,
                 "partition": "tests" if test_bytes[node.start_byte] else "production",
+                "sha256": sha256(data[node.start_byte:node.end_byte]),
             }
         )
     return (
@@ -215,8 +255,12 @@ def collect(root, config, paths, selection, input_dir, report):
         data = path.read_bytes()
         data.decode("utf-8")
         try:
+            selected, excluded = exclude_nodes(data, [
+                rule for rule in config.get("exclude_nodes", []) if matches(name, rule["files"])
+            ])
+            report["excluded"].extend({"file": name, **entry} for entry in excluded)
             masked, functions, tests = partition(
-                data, is_test, selection, config["test_attributes"]
+                selected, is_test, selection, config["test_attributes"]
             )
         except AuditError as error:
             raise AuditError(f"{name}: {error}") from error
