@@ -162,14 +162,7 @@ fn optional_session_id_arg(
     args: &serde_json::Value,
     key: &str,
 ) -> Result<Option<(SessionId, SplitAxis)>, String> {
-    match args.get(key) {
-        None | Some(serde_json::Value::Null) => Ok(None),
-        Some(serde_json::Value::String(raw)) => raw
-            .parse::<uuid::Uuid>()
-            .map(|uuid| Some((SessionId::from_uuid(uuid), SplitAxis::Horizontal)))
-            .map_err(|_| format!("`{key}` must be a UUID string")),
-        Some(_) => Err(format!("`{key}` must be a string")),
-    }
+    optional_plain_session_id_arg(args, key).map(|id| id.map(|id| (id, SplitAxis::Horizontal)))
 }
 
 /// Parses an optional session-id argument that is *not* a split target --
@@ -227,13 +220,7 @@ fn call_id_arg(
     args: &serde_json::Value,
     key: &str,
 ) -> Result<horizon_agent::contract::ToolCallId, String> {
-    match args.get(key) {
-        Some(serde_json::Value::String(raw)) => {
-            Ok(horizon_agent::contract::ToolCallId(raw.clone()))
-        }
-        Some(_) => Err(format!("`{key}` must be a string")),
-        None => Err(format!("`{key}` is required")),
-    }
+    required_string_arg(args, key).map(ToolCallId)
 }
 
 /// Parses a required plain-string argument -- the `send` command's `text`

@@ -214,19 +214,7 @@ impl LayoutNode {
                     },
                 );
             } else {
-                children[index].node = Self::Split {
-                    axis,
-                    children: vec![
-                        LayoutChild {
-                            node: Self::Pane(target),
-                            weight: 1.0,
-                        },
-                        LayoutChild {
-                            node: Self::Pane(new_pane_id),
-                            weight: 1.0,
-                        },
-                    ],
-                };
+                children[index].node.split_pane(target, new_pane_id, axis);
             }
             return true;
         }

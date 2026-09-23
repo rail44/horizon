@@ -97,14 +97,7 @@ fn wire(
     window: AnyWindowHandle,
     cx: &mut App,
 ) {
-    let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
-    std::thread::spawn(move || {
-        while let Ok(pending) = requests.recv() {
-            if async_tx.unbounded_send(pending).is_err() {
-                return;
-            }
-        }
-    });
+    let mut async_rx = crate::runtime::event_stream(requests);
     cx.spawn(async move |cx| {
         while let Some(pending) = async_rx.next().await {
             let shell = shell.clone();

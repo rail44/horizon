@@ -500,14 +500,7 @@ impl WorkspaceShell {
         host_tool_rx: crossbeam_channel::Receiver<horizon_agent::wire::HostToolRequest>,
         cx: &mut Context<Self>,
     ) {
-        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
-            while let Ok(request) = host_tool_rx.recv() {
-                if async_tx.unbounded_send(request).is_err() {
-                    return;
-                }
-            }
-        });
+        let mut async_rx = crate::runtime::event_stream(host_tool_rx);
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
             while let Some(request) = async_rx.next().await {
@@ -550,14 +543,7 @@ impl WorkspaceShell {
         )>,
         cx: &mut Context<Self>,
     ) {
-        let (async_tx, mut async_rx) = futures::channel::mpsc::unbounded();
-        std::thread::spawn(move || {
-            while let Ok(update) = workspace_root_rx.recv() {
-                if async_tx.unbounded_send(update).is_err() {
-                    return;
-                }
-            }
-        });
+        let mut async_rx = crate::runtime::event_stream(workspace_root_rx);
         cx.spawn(async move |this, cx| {
             use futures::StreamExt as _;
             while let Some((session_id, resolved)) = async_rx.next().await {

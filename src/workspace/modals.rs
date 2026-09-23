@@ -42,6 +42,17 @@ fn select_first_row_on_open<D: ListDelegate>(
 }
 
 impl WorkspaceShell {
+    /// Cancellation preserves workspace mode and its cursor; confirmation
+    /// instead restores focus directly to the active pane.
+    fn restore_focus_after_modal_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.workspace.is_workspace_mode_active() {
+            window.focus(&self.focus_handle, cx);
+        } else {
+            self.focus_active(window, cx);
+        }
+        cx.notify();
+    }
+
     pub(super) fn open_view_chooser(
         &mut self,
         placement: Placement,
@@ -98,12 +109,7 @@ impl WorkspaceShell {
     pub(super) fn cancel_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_chooser = None;
         self._view_chooser_subscription = None;
-        if self.workspace.is_workspace_mode_active() {
-            window.focus(&self.focus_handle, cx);
-        } else {
-            self.focus_active(window, cx);
-        }
-        cx.notify();
+        self.restore_focus_after_modal_cancel(window, cx);
     }
 
     // -- Model picker -----------------------------------------------------
@@ -207,12 +213,7 @@ impl WorkspaceShell {
         self.model_picker = None;
         self._model_picker_subscription = None;
         self.model_picker_target = None;
-        if self.workspace.is_workspace_mode_active() {
-            window.focus(&self.focus_handle, cx);
-        } else {
-            self.focus_active(window, cx);
-        }
-        cx.notify();
+        self.restore_focus_after_modal_cancel(window, cx);
     }
 
     /// One `list_providers` pull off the UI thread (it blocks up to
@@ -451,12 +452,7 @@ impl WorkspaceShell {
     pub(super) fn cancel_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.session_manager = None;
         self._session_manager_subscription = None;
-        if self.workspace.is_workspace_mode_active() {
-            window.focus(&self.focus_handle, cx);
-        } else {
-            self.focus_active(window, cx);
-        }
-        cx.notify();
+        self.restore_focus_after_modal_cancel(window, cx);
     }
 
     // -- Board pane ------------------------------------------------------
@@ -605,12 +601,7 @@ impl WorkspaceShell {
     pub(super) fn cancel_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
         self._palette_subscription = None;
-        if self.workspace.is_workspace_mode_active() {
-            window.focus(&self.focus_handle, cx);
-        } else {
-            self.focus_active(window, cx);
-        }
-        cx.notify();
+        self.restore_focus_after_modal_cancel(window, cx);
     }
 }
 
