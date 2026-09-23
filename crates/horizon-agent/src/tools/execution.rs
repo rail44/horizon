@@ -168,9 +168,7 @@ fn execute_boundary_tool(
     ];
     crate::tools::web::spawn(
         session_id,
-        request.call_id.clone(),
-        &request.tool_id,
-        request.input.0.clone(),
+        request,
         tool_state.domain_allowlist(),
         crate::tools::web::WebApprovalOrigin::Auto,
         runtime.async_results,

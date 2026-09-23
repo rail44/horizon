@@ -181,6 +181,18 @@ user-visible `batch` tool.
   Registration remains active through the bounded output drain; process
   retirement and cancellation serialize access to the kill handle.
 
+## Async Completion Identity
+
+Async completion identity (2026-09-24): bash and web capture the request's
+`OccurrenceId` before queueing and retain it on normal, denial, redirect, and
+panic outcomes. The daemon checks that identity before folding or forwarding
+any async completion, including approval judgments. An old attempt cannot
+answer a newer request with the same provider call ID. Untagged legacy results
+keep their existing fallback; synchronous denial resolution still returns the
+original attempt's `prior_result`. This changes no persisted or wire format.
+The provider's pending-call map owns outstanding work; a second cancelled-ID
+set is unnecessary and would suppress valid results when an ID is reused.
+
 ## Bash Containment
 
 Hardening added after a 2026-07 incident: a tool-approval banner that didn't

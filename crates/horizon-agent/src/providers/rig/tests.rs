@@ -1926,7 +1926,6 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
             args: serde_json::json!({ "path": "/x" }),
         },
     )]);
-    let cancelled: HashSet<ToolCallId> = HashSet::new();
     let pending_halt_result: Option<(ToolCallResult, String)> = None;
     let arrived = ToolCallResult::new(id_a.clone(), None, serde_json::json!({ "tab_count": 2 }));
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
@@ -1950,7 +1949,6 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         guard,
         rig_history: history,
         pending_tool_calls: pending,
-        cancelled_call_ids: cancelled,
         pending_halt_result,
         ..SessionLoopState::default()
     };
@@ -1981,12 +1979,6 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
                     if text.text.contains("cancelled")))));
 
     assert!(state.pending_tool_calls.is_empty());
-    assert!(state.cancelled_call_ids.contains(&id_b));
-    assert!(
-        !state.cancelled_call_ids.contains(&id_a),
-        "the real, already-executed result must not be marked cancelled"
-    );
-
     match recv(&rx).event {
         Event::ToolCallFinished(result) => {
             assert_eq!(

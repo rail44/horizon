@@ -15,8 +15,8 @@ use crate::judge::JudgeHandle;
 use crate::live::LiveState;
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 use crate::skills::SkillRegistry;
-use crate::tools::bash::ToolCompletion;
 use crate::tools::network::{SessionDomainPolicy, SessionNetworkProxy};
+use crate::tools::ToolCompletion;
 
 /// Where this session's persisted history lives, for the recall tools
 /// (`tools::recall`) to search/read it: the session's own id (the tools'

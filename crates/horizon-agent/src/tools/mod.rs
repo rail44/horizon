@@ -2,6 +2,7 @@ mod approval;
 mod bash;
 mod board;
 mod catalog;
+mod completion;
 mod config;
 mod execution;
 pub(crate) mod explore;
@@ -24,8 +25,8 @@ pub use approval::{
 pub(crate) use bash::{
     git_prefilter, metadata_writable_roots, requires_metadata_write, GitPrefilterVerdict,
 };
-pub use bash::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
+pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
 pub(crate) use fs::{call_escapes_root, out_of_root_refusal};
 // The `task` daemon seam (`docs/agent-explore-design.md`): `pub`
 // because `horizon-agentd` implements it and installs it on every

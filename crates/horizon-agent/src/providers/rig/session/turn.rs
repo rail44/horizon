@@ -220,8 +220,6 @@ impl SessionLoopState {
         }
         if outcome.cancelled {
             self.finish_input(crate::contract::InputResult::Interrupted);
-            self.cancelled_call_ids
-                .extend(outcome.requested_tool_call_ids.iter().cloned());
             append_cancelled_tool_results_to_history(
                 &mut self.rig_history,
                 &outcome.requested_tool_call_ids,
@@ -298,8 +296,6 @@ impl SessionLoopState {
             // Cancel any finalized tool calls from the truncated turn — the
             // turn is ending as Failed, so they must not hang as pending.
             if !outcome.requested_tool_call_ids.is_empty() {
-                self.cancelled_call_ids
-                    .extend(outcome.requested_tool_call_ids.iter().cloned());
                 append_cancelled_tool_results_to_history(
                     &mut self.rig_history,
                     &outcome.requested_tool_call_ids,
@@ -431,9 +427,10 @@ impl SessionLoopState {
     ///
     /// This operates on normalized provider call ids, not tool implementations,
     /// so the same path covers synchronous filesystem/config tools, asynchronous
-    /// bash/web tools, and approval-gated calls. Real results that arrive after
-    /// retirement are recognized through `cancelled_call_ids` and dropped by the
-    /// session loop instead of entering a later turn's batch.
+    /// bash/web tools, and approval-gated calls. No pending descriptor remains
+    /// for a retired call, so its result cannot advance the loop. The daemon
+    /// also checks async dispatch identity before forwarding a result when a
+    /// later provider batch reuses the same call ID.
     pub(crate) fn cancel_outstanding_tool_calls(&mut self) -> bool {
         let drained: HashMap<ToolCallId, ToolCallDescriptor> =
             std::mem::take(&mut self.pending_tool_calls);
@@ -442,7 +439,6 @@ impl SessionLoopState {
         }
         let call_ids: Vec<ToolCallId> = drained.keys().cloned().collect();
 
-        self.cancelled_call_ids.extend(call_ids.iter().cloned());
         append_cancelled_tool_results_to_history(&mut self.rig_history, &call_ids, &drained);
         for call_id in call_ids {
             let _ = self

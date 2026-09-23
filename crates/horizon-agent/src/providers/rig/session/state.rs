@@ -3,7 +3,7 @@
 //! pipeline methods (in [`super::turn`]) take `&mut self` instead of the
 //! 10+ individual arguments the free-function form accumulated.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, VecDeque};
 
 use crossbeam_channel::Sender;
 use rig_core::completion::Message;
@@ -59,8 +59,6 @@ pub(crate) struct SessionLoopState {
     pub(crate) inbox: VecDeque<Command>,
     /// Every tool call whose result is still outstanding.
     pub(crate) pending_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
-    /// Call ids whose real results should be silently dropped on arrival.
-    pub(crate) cancelled_call_ids: HashSet<ToolCallId>,
     /// Iteration-cap + doom-loop guard.
     pub(crate) guard: TurnLoopGuard,
     /// The real, already-executed tool result a guard halt stashed instead
@@ -121,7 +119,6 @@ impl Default for SessionLoopState {
             task_wake,
             inbox: VecDeque::new(),
             pending_tool_calls: HashMap::new(),
-            cancelled_call_ids: HashSet::new(),
             guard: TurnLoopGuard::new(0, 0),
             pending_halt_result: None,
             memory: None,
@@ -185,7 +182,6 @@ impl SessionLoopState {
             rig_history,
             clearing,
             pending_tool_calls: HashMap::new(),
-            cancelled_call_ids: HashSet::new(),
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             pending_halt_result: None,
             memory,

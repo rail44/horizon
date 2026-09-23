@@ -46,7 +46,9 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"
         ),
-        BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
+        BashCompletion::DomainGrantRequired {
+            call_id, domains, ..
+        } => panic!(
             "expected a finished bash completion, got a host-side domain grant for \
              {call_id:?} ({domains:?})"
         ),
@@ -802,21 +804,29 @@ fn registry_advances_past_a_panicking_job_so_the_queue_is_not_wedged() {
 fn run_job_body_sends_a_completion_when_work_succeeds() {
     let call_id = ToolCallId("panic-safe-normal".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
+    let occurrence = crate::contract::OccurrenceId::new();
 
     let work_call_id = call_id.clone();
-    super::run_job_body(SessionId::new(), call_id.clone(), &tx, move || {
-        BashCompletion::Finished(ToolCallResult::new(
-            work_call_id.clone(),
-            None,
-            json!({ "ok": true }),
-        ))
-    });
+    super::run_job_body(
+        SessionId::new(),
+        call_id.clone(),
+        Some(occurrence.clone()),
+        &tx,
+        move || {
+            BashCompletion::Finished(ToolCallResult::new(
+                work_call_id.clone(),
+                None,
+                json!({ "ok": true }),
+            ))
+        },
+    );
 
     let completion = rx
         .recv_timeout(Duration::from_secs(1))
         .expect("completion should be sent");
     let result = expect_finished(completion);
     assert_eq!(result.call_id, call_id);
+    assert_eq!(result.occurrence_id, Some(occurrence));
     assert_eq!(result.output, json!({ "ok": true }));
 }
 
@@ -829,16 +839,22 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
 fn run_job_body_still_sends_a_completion_when_work_panics() {
     let call_id = ToolCallId("panic-safe-panic".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
+    let occurrence = crate::contract::OccurrenceId::new();
 
-    super::run_job_body(SessionId::new(), call_id.clone(), &tx, || {
-        panic!("injected panic, not exec::run's own")
-    });
+    super::run_job_body(
+        SessionId::new(),
+        call_id.clone(),
+        Some(occurrence.clone()),
+        &tx,
+        || panic!("injected panic, not exec::run's own"),
+    );
 
     let completion = rx
         .recv_timeout(Duration::from_secs(1))
         .expect("a completion must still be delivered when the work function panics");
     let result = expect_finished(completion);
     assert_eq!(result.call_id, call_id);
+    assert_eq!(result.occurrence_id, Some(occurrence));
     assert_eq!(result.output["is_error"], true);
     assert!(result.output["message"]
         .as_str()

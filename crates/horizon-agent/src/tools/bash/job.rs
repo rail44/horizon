@@ -5,7 +5,7 @@ use super::{
     SandboxedApprovalOrigin,
 };
 use crate::config::BashToolConfig;
-use crate::contract::{SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::policy::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct BashJob {
     session_id: SessionId,
     call_id: ToolCallId,
+    occurrence_id: Option<OccurrenceId>,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
@@ -38,6 +39,7 @@ impl BashJob {
         Self {
             session_id,
             call_id: request.call_id.clone(),
+            occurrence_id: request.occurrence_id.clone(),
             input: request.input.0.clone(),
             cwd: tools.bash_cwd_handle(),
             config: tools.bash_config(),
@@ -66,6 +68,7 @@ impl BashJob {
                 run_job_body(
                     self.session_id,
                     self.call_id.clone(),
+                    self.occurrence_id.clone(),
                     &self.result_tx,
                     || {
                         let completion = work(&self, &registration);
@@ -145,7 +148,7 @@ fn run_sandboxed_job(
     };
     if let (Some(roots), Some(result)) = (
         sandbox.git_metadata_roots.as_deref(),
-        completion_result_mut(&mut completion),
+        completion.result_mut(),
     ) {
         annotate_git_operation_approval(&mut result.output, roots);
         result.is_error = result
@@ -211,6 +214,7 @@ pub(super) fn spawn(
         BashJob {
             session_id,
             call_id,
+            occurrence_id: None,
             input,
             cwd,
             config,
@@ -246,13 +250,6 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
                 );
             }
         }
-        // `occurrence_id` is `None` at every construction site in
-        // this module: an enqueued bash job is handed a `call_id`
-        // and nothing else. The agentd's fold sites
-        // (`fold_finished_bash_result` and the denial folds)
-        // stamp the originating request's occurrence on the way
-        // out -- see `exec::run_sandboxed`'s comment on the same
-        // seam.
         BashCompletion::Finished(ToolCallResult::new(job.call_id.clone(), None, output))
     });
 }
@@ -270,17 +267,6 @@ pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
         let sandbox = sandbox;
         run_sandboxed_job(job, registration, sandbox.0)
     });
-}
-
-fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCallResult> {
-    match completion {
-        BashCompletion::ApprovalJudged(_) => None,
-        BashCompletion::Finished(result)
-        | BashCompletion::DomainDenied { result, .. }
-        | BashCompletion::FilesystemDenied { result, .. }
-        | BashCompletion::MachServiceDenied { result, .. } => Some(result),
-        BashCompletion::DomainGrantRequired { .. } => None,
-    }
 }
 
 /// Runs `work` (in practice, `exec::run`/`exec::run_sandboxed`) and *always*
@@ -302,6 +288,7 @@ fn completion_result_mut(completion: &mut BashCompletion) -> Option<&mut ToolCal
 pub(super) fn run_job_body(
     session_id: SessionId,
     call_id: ToolCallId,
+    occurrence_id: Option<OccurrenceId>,
     result_tx: &Sender<BashCompletion>,
     work: impl FnOnce() -> BashCompletion + std::panic::UnwindSafe,
 ) {
@@ -324,7 +311,7 @@ pub(super) fn run_job_body(
             ))
         }
     };
-    let _ = result_tx.send(completion);
+    let _ = result_tx.send(completion.with_occurrence(occurrence_id));
 }
 
 /// Extracts a human-readable message from a caught panic's payload. Panic

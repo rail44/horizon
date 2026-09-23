@@ -165,7 +165,9 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"
         ),
-        BashCompletion::DomainGrantRequired { call_id, domains } => panic!(
+        BashCompletion::DomainGrantRequired {
+            call_id, domains, ..
+        } => panic!(
             "expected a finished bash completion, got a host-side domain grant for \
              {call_id:?} ({domains:?})"
         ),
@@ -2201,7 +2203,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
         call_id: ToolCallId("web-fetch-invalid".to_string()),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": "file:///etc/passwd" }).into(),
-        occurrence_id: None,
+        occurrence_id: Some(crate::contract::OccurrenceId::new()),
     };
 
     assert!(matches!(
@@ -2214,6 +2216,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
             .expect("invalid fetch completion"),
     );
     assert_eq!(result.call_id, request.call_id);
+    assert_eq!(result.occurrence_id, request.occurrence_id);
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["auto_approved"], true);
     assert_eq!(result.output["policy_tier"], "boundary_crossing");
@@ -2238,7 +2241,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: Some(crate::contract::OccurrenceId::new()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -2254,6 +2257,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
         .expect("the sandboxed bash call should finish");
     let result = expect_finished(completion);
     assert_eq!(result.call_id, request.call_id);
+    assert_eq!(result.occurrence_id, request.occurrence_id);
     assert_eq!(result.output["exit_code"], 0);
     assert_eq!(result.output["output"], "hi\n");
     assert_eq!(result.output["sandboxed"], true, "{:?}", result.output);
@@ -2415,7 +2419,9 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
                  request instead for {call_id:?} ({services:?})"
             );
         }
-        BashCompletion::DomainGrantRequired { call_id, domains } => {
+        BashCompletion::DomainGrantRequired {
+            call_id, domains, ..
+        } => {
             panic!(
                 "expected a finished, ungrantable-annotated result, got a host-side domain \
                  grant instead for {call_id:?} ({domains:?})"

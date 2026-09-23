@@ -25,7 +25,9 @@ fn pending_request(live: &LiveState, call_id: &ToolCallId) -> Option<ToolCallReq
 /// not pass through this retry-specific attribution step.
 fn result_for_attempt(request: &ToolCallRequest, result: ToolCallResult) -> ToolCallResult {
     ToolCallResult {
-        occurrence_id: request.occurrence_id.clone(),
+        occurrence_id: result
+            .occurrence_id
+            .or_else(|| request.occurrence_id.clone()),
         ..result
     }
 }
@@ -127,18 +129,8 @@ pub(super) fn fold_domain_denied(
         original_request.clone(),
         ApprovalRequest {
             call_id,
-            // `begin_reissued_approval` mints a fresh `OccurrenceId` for
-            // the reissued request and stamps it on both the new
-            // `ToolCallRequest` and the `ApprovalRequest` (see
-            // `session/approval.rs`). The `prior_result` here, by
-            // contrast, is the *first* attempt's outcome -- the bash
-            // executor constructed it without an in-scope request, so
-            // its `occurrence_id` is `None`. We stamp the original
-            // request's `occurrence_id` onto it now so the transcript
-            // and analytics attribute this result to the same
-            // occurrence the originating `ToolCallRequested` carries,
-            // not to whichever request happens to share its `call_id`
-            // at fold time.
+            // The reissue gets a new ID; prior_result retains the completed
+            // attempt's dispatch identity (or the legacy request fallback).
             occurrence_id: None,
             reason,
             kind: ApprovalKind::DomainDenialRetry {

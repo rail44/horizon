@@ -14,7 +14,7 @@ use reqwest::Url;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::contract::{SessionId, ToolCallId, ToolCallResult};
+use crate::contract::{SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::policy::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
@@ -69,13 +69,14 @@ pub(crate) fn validate_domain_grant(domain: &str) -> Result<String, String> {
 
 pub(crate) fn spawn(
     session_id: SessionId,
-    call_id: ToolCallId,
-    tool_id: &str,
-    input: Value,
+    request: &ToolCallRequest,
     domains: Arc<Allowlist>,
     origin: WebApprovalOrigin,
     result_tx: Sender<ToolCompletion>,
 ) {
+    let call_id = request.call_id.clone();
+    let occurrence_id = request.occurrence_id.clone();
+    let input = request.input.0.clone();
     let token = CancellationToken::new();
     let generation = next_generation();
     if let Some(replaced) = registry()
@@ -91,7 +92,7 @@ pub(crate) fn spawn(
     {
         replaced.token.cancel();
     }
-    let tool_id = tool_id.to_string();
+    let tool_id = request.tool_id.clone();
     let work_guard = super::work_boundary::begin(session_id);
     web_runtime().spawn(async move {
         let _work_guard = work_guard;
@@ -107,12 +108,6 @@ pub(crate) fn spawn(
             _ = token.cancelled() => None,
             result = work => Some(match result {
                 Ok(completion) => completion,
-                // `occurrence_id` is `None` here and in `with_call_id`
-                // below: a spawned web task is handed a `call_id`, never
-                // the originating `ToolCallRequest`. The agentd's
-                // `fold_finished_bash_result` (which folds every
-                // `ToolCompletion::Finished`, web included) stamps the
-                // request's occurrence before forwarding.
                 Err(payload) => ToolCompletion::Finished(ToolCallResult::new(
                     call_id.clone(),
                     None,
@@ -126,7 +121,7 @@ pub(crate) fn spawn(
                 if matches!(completion, ToolCompletion::Finished(_)) {
                     clear_approved_domains(session_id, &call_id);
                 }
-                let _ = result_tx.send(completion);
+                let _ = result_tx.send(completion.with_occurrence(occurrence_id));
             }
         }
     });
@@ -183,9 +178,11 @@ fn with_call_id(
             }
             ToolCompletion::Finished(ToolCallResult::new(call_id, None, output))
         }
-        WebOutcome::DomainGrantRequired(domains) => {
-            ToolCompletion::DomainGrantRequired { call_id, domains }
-        }
+        WebOutcome::DomainGrantRequired(domains) => ToolCompletion::DomainGrantRequired {
+            call_id,
+            occurrence_id: None,
+            domains,
+        },
     }
 }
 
@@ -306,6 +303,38 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn spawned_web_work_keeps_its_dispatch_occurrence_in_results_and_grant_requests() {
+        for url in ["not a URL", "https://example.com/"] {
+            let tools = ToolSessionState::without_root();
+            let request = ToolCallRequest {
+                call_id: ToolCallId("web-attempt".into()),
+                occurrence_id: Some(crate::contract::OccurrenceId::new()),
+                tool_id: "web_fetch".into(),
+                input: serde_json::json!({"url": url}).into(),
+            };
+            let (tx, rx) = crossbeam_channel::unbounded();
+            spawn(
+                SessionId::new(),
+                &request,
+                tools.domain_allowlist(),
+                WebApprovalOrigin::Auto,
+                tx,
+            );
+            let completion = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            match completion {
+                ToolCompletion::Finished(result) if url == "not a URL" => {
+                    assert!(result.is_error);
+                    assert_eq!(result.occurrence_id, request.occurrence_id);
+                }
+                ToolCompletion::DomainGrantRequired { occurrence_id, .. } if url != "not a URL" => {
+                    assert_eq!(occurrence_id, request.occurrence_id);
+                }
+                other => panic!("unexpected completion: {other:?}"),
+            }
+        }
+    }
 
     #[test]
     fn domain_grants_are_canonical_hosts_not_urls_or_credentials() {

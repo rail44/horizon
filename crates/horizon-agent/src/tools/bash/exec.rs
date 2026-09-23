@@ -292,7 +292,7 @@ fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> B
     BashCompletion::DomainDenied {
         call_id: call_id.clone(),
         domains,
-        // The daemon's fold stamps the originating request's occurrence ID.
+        // The owning BashJob binds every outcome to its dispatch occurrence.
         result: ToolCallResult::new(call_id.clone(), None, output),
     }
 }

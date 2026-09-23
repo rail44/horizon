@@ -338,9 +338,7 @@ fn resolve_web_fetch(
     let outcome = begin_execution(runtime, request, None);
     crate::tools::web::spawn(
         session_id,
-        request.call_id.clone(),
-        &request.tool_id,
-        request.input.0.clone(),
+        request,
         runtime.tool_state.domain_allowlist(),
         crate::tools::web::WebApprovalOrigin::ManualDomainGrant {
             domains: approved_domains,

@@ -43,6 +43,9 @@ pub(super) fn fold_tool_completion(
     session_id: SessionId,
     completion: ToolCompletion,
 ) {
+    if !completion.matches_live_request(&live_state.frame()) {
+        return;
+    }
     match completion {
         ToolCompletion::ApprovalJudged(judgment) => {
             fold_approval_judgment(state, live_state, commands_tx, session_id, judgment)
@@ -55,9 +58,9 @@ pub(super) fn fold_tool_completion(
             domains,
             result,
         } => fold_domain_denied(state, live_state, session_id, call_id, domains, result),
-        ToolCompletion::DomainGrantRequired { call_id, domains } => {
-            fold_domain_grant_required(state, live_state, session_id, call_id, domains)
-        }
+        ToolCompletion::DomainGrantRequired {
+            call_id, domains, ..
+        } => fold_domain_grant_required(state, live_state, session_id, call_id, domains),
         ToolCompletion::FilesystemDenied {
             call_id,
             denials,
@@ -136,21 +139,8 @@ fn fold_finished_bash_result(
         return;
     }
 
-    // Stamp the occurrence this result answers to. Every asynchronous
-    // executor (bash, web) is handed only a `call_id` -- it has no
-    // `ToolCallRequest` in scope -- so it constructs its result with
-    // `occurrence_id: None`. This fold is the first point that can see
-    // both, and it is the only one on the finished path, so without this
-    // the per-occurrence key would be absent from essentially all
-    // asynchronous traffic and both the transcript and the approval
-    // projection would fall back to call_id matching -- exactly the
-    // collapse `OccurrenceId` exists to prevent. Preserve an already-set
-    // occurrence rather than overwriting it (the denial-retry paths hand
-    // back a `prior_result` that `fold_domain_denied`/
-    // `fold_filesystem_denied` already stamped with the *first*
-    // attempt's occurrence); `None` stays `None` when the request is not
-    // in the frame, which is the legacy/replay fallback the consumers
-    // already handle.
+    // New workers carry their dispatch identity. Only legacy/synthetic
+    // completions need the current request's occurrence filled in here.
     let result = ToolCallResult {
         occurrence_id: result.occurrence_id.clone().or_else(|| {
             frame

@@ -10,16 +10,6 @@ use super::{
 
 impl SessionLoopState {
     pub(super) async fn handle_tool_result(&mut self, result: ToolCallResult) {
-        if self.cancelled_call_ids.remove(&result.call_id) {
-            // A result arriving after its turn was cancelled is
-            // accepted and silently dropped, per contract. This
-            // also covers the rest of a cancelled batch: `Cancel`
-            // drains every still-outstanding call id into
-            // `cancelled_call_ids`, so each of their real
-            // results, arriving later, lands here and is dropped
-            // rather than starting a turn.
-            return;
-        }
         let Some(descriptor) = self.pending_tool_calls.remove(&result.call_id) else {
             // Unsolicited (duplicate or stale) result: no pending
             // tool call under this id. Running a turn from it would
@@ -120,5 +110,51 @@ impl SessionLoopState {
             None => deterministic_tool_result_response(&result),
         })
         .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::ToolCallId;
+    use crate::providers::rig::{ToolCallDescriptor, TurnCompletion};
+    use std::collections::HashMap;
+    #[tokio::test]
+    async fn a_new_provider_batch_can_reuse_an_id_from_cancelled_work() {
+        let reused = ToolCallId("reused-after-cancel".into());
+        let sibling = ToolCallId("still-outstanding".into());
+        let descriptor = || ToolCallDescriptor {
+            tool_id: "fs.read".into(),
+            args: serde_json::json!({"path": "file"}),
+        };
+        let mut state = SessionLoopState {
+            pending_tool_calls: HashMap::from([(reused.clone(), descriptor())]),
+            guard: super::super::TurnLoopGuard::new(20, 10),
+            ..SessionLoopState::default()
+        };
+        assert!(state.cancel_outstanding_tool_calls());
+        state.apply_turn_outcome(TurnCompletion {
+            requested_tool_call_ids: vec![reused.clone(), sibling.clone()],
+            requested_tool_calls: HashMap::from([
+                (reused.clone(), descriptor()),
+                (sibling.clone(), descriptor()),
+            ]),
+            ..Default::default()
+        });
+        let before = state.rig_history.len();
+        state
+            .handle_tool_result(ToolCallResult::new(
+                reused.clone(),
+                Some(crate::contract::OccurrenceId::new()),
+                serde_json::json!({"content": "new result"}),
+            ))
+            .await;
+        assert_eq!(
+            state.rig_history.len(),
+            before + 1,
+            "new result must reach provider history"
+        );
+        assert!(!state.pending_tool_calls.contains_key(&reused));
+        assert!(state.pending_tool_calls.contains_key(&sibling));
     }
 }

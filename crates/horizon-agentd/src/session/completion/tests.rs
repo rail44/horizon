@@ -10,6 +10,72 @@ use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::tools::ApprovalCandidate;
 
 #[test]
+fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() {
+    use horizon_agent::contract::OccurrenceId;
+    let dir = tempfile::tempdir().unwrap();
+    let mut failures = Vec::new();
+    for kind in 0..6 {
+        let state = judge_test_state();
+        let live = LiveState::with_disabled_persistence();
+        let session = SessionId::new();
+        let mut outgoing = Connection::new(state.clone()).subscribe_agent(session);
+        let (commands, responses) = unbounded();
+        let mut old = judge_candidate("reused-call");
+        old.request.occurrence_id = Some(OccurrenceId::new());
+        old.approval.occurrence_id = old.request.occurrence_id.clone();
+        let mut current = old.request.clone();
+        current.occurrence_id = Some(OccurrenceId::new());
+        let result = ToolCallResult::new(
+            old.request.call_id.clone(),
+            old.request.occurrence_id.clone(),
+            serde_json::json!({"cancelled": true}),
+        );
+        let history = vec![
+            Event::ToolCallRequested(old.request.clone()),
+            Event::ToolCallFinished(result.clone()),
+            Event::ToolCallRequested(current),
+        ];
+        live.extend_provider_events(history.iter().cloned().map(Into::into));
+        let call_id = old.request.call_id.clone();
+        let completion = match kind {
+            0 => ToolCompletion::Finished(result),
+            1 => ToolCompletion::DomainDenied {
+                call_id,
+                domains: vec!["example.test".into()],
+                result,
+            },
+            2 => ToolCompletion::FilesystemDenied {
+                call_id,
+                denials: vec![tree_denial(&dir.path().join("file"))],
+                result,
+            },
+            3 => ToolCompletion::MachServiceDenied {
+                call_id,
+                services: vec!["com.apple.securityd".into()],
+                result,
+            },
+            4 => ToolCompletion::DomainGrantRequired {
+                call_id,
+                occurrence_id: old.request.occurrence_id.clone(),
+                domains: vec!["example.test".into()],
+            },
+            _ => ToolCompletion::ApprovalJudged(horizon_agent::tools::ApprovalJudgment {
+                candidate: old,
+                decision: JudgeDecision::Escalate,
+            }),
+        };
+        fold_tool_completion(&state, &live, &commands, session, completion);
+        if live.events() != history || outgoing.try_recv().is_ok() || responses.try_recv().is_ok() {
+            failures.push(kind);
+        }
+    }
+    assert!(
+        failures.is_empty(),
+        "stale variants changed the current attempt: {failures:?}"
+    );
+}
+
+#[test]
 fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_requests() {
     use horizon_agent::contract::{OccurrenceId, ToolCallRequest};
 
@@ -24,7 +90,7 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         let original = OccurrenceId::new();
         let result = ToolCallResult::new(
             call_id.clone(),
-            Some(OccurrenceId::new()),
+            Some(original.clone()),
             serde_json::json!({"exit_code": 0}),
         );
         let completion = match kind {
@@ -44,6 +110,7 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
                 result,
             },
             _ => ToolCompletion::DomainGrantRequired {
+                occurrence_id: None,
                 call_id: call_id.clone(),
                 domains: vec!["example.test".into()],
             },
@@ -284,12 +351,7 @@ fn fold_bash_completion_reports_running_when_no_approval_is_pending() {
     );
 }
 
-/// The bash/web executors construct their results with
-/// `occurrence_id: None` (they are handed a `call_id` and nothing
-/// else), so this fold is the only point that can attach the
-/// per-occurrence key to asynchronous traffic. Both the event it
-/// forwards to the UI and the `Command::ToolCallResult` it hands the
-/// provider must carry the originating request's occurrence.
+/// Untagged legacy completions still acquire the live request identity.
 #[test]
 fn fold_finished_bash_result_stamps_the_requests_occurrence_on_the_result() {
     use horizon_agent::contract::{OccurrenceId, ToolCallResult};
@@ -360,9 +422,8 @@ fn fold_finished_bash_result_stamps_the_requests_occurrence_on_the_result() {
 }
 
 /// A result that already names its occurrence keeps it. The
-/// denial-retry folds hand back the *first* attempt's `prior_result`
-/// under a `call_id` whose most recent request is the reissue, so
-/// overwriting here would re-attribute it to the wrong occurrence.
+/// asynchronous worker binds it before the call is queued. Prior denial
+/// results are delivered synchronously by the approval resolution path.
 #[test]
 fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
     use horizon_agent::contract::{OccurrenceId, ToolCallResult};
@@ -417,7 +478,7 @@ fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
         session_id,
         ToolCompletion::Finished(ToolCallResult::new(
             call_id.clone(),
-            Some(first.clone()),
+            Some(reissued.clone()),
             serde_json::json!({ "exit_code": 0 }),
         )),
     );
@@ -430,7 +491,7 @@ fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
             _ => None,
         })
         .expect("a finished result is forwarded");
-    assert_eq!(finished.occurrence_id, Some(first));
+    assert_eq!(finished.occurrence_id, Some(reissued));
 }
 
 /// Folds one `FilesystemDenied` completion and returns the approval
@@ -917,6 +978,7 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
         &commands_tx,
         session_id,
         ToolCompletion::DomainGrantRequired {
+            occurrence_id: None,
             call_id: call_id.clone(),
             domains: vec!["redirect.example".to_string()],
         },
