@@ -237,7 +237,9 @@ impl WriterHandle {
     /// strictly in order, a reply on the returned channel guarantees both
     /// that the startup read has finished and that everything sent via
     /// [`Self::append`] beforehand is now durable on disk (modulo the OS's
-    /// own page cache — this is not an `fsync`).
+    /// own page cache — this is not an `fsync`). A write or flush failure is
+    /// retained for every later flush; subsequent records are not written or
+    /// projected until a new writer is opened.
     ///
     /// Used by tests to assert durability deterministically, and by
     /// `horizon-agentd`'s `flush_event_log_before_exit` — which that daemon
@@ -514,6 +516,25 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
         .map(Duration::from_millis)
 }
 
+/// Encode and flush the complete JSONL record before updating derived state.
+fn append_jsonl_record(writer: &mut impl Write, record: &Record) -> Result<()> {
+    serde_json::to_writer(&mut *writer, record).context("encode/write record")?;
+    writer.write_all(b"\n").context("write record separator")?;
+    writer.flush().context("flush record")
+}
+
+/// A failed write may have left a partial record. Keep that failure until
+/// restart: another successful flush cannot establish a complete history.
+fn retain_write_failure(result: &Result<()>, failure: &mut Option<String>) {
+    if failure.is_none() {
+        if let Err(error) = result {
+            let message = format!("{error:#}");
+            eprintln!("horizon agent event log: writer stopped after {message}");
+            *failure = Some(message);
+        }
+    }
+}
+
 /// Drains `rx` for the lifetime of the writer, assigning each `Append`
 /// command the next sequence number in `next_sequence` (seeded by
 /// [`start_up`] from the startup read) — see the "Ordering guarantee"
@@ -534,72 +555,68 @@ fn test_duckdb_rebuild_delay() -> Option<Duration> {
 /// next restart's rebuild reconciles any projection rows this run couldn't
 /// keep live.
 fn run_writer(
-    file: std::fs::File,
+    file: impl Write,
     path: &Path,
     rx: Receiver<AgentEventLogWriterCommand>,
     mut next_sequence: u64,
     duckdb_store: Option<DuckdbStoreHandle>,
 ) {
     let mut writer = BufWriter::new(file);
+    let mut failure = None;
     let mut warned_duckdb_append_failure = false;
 
     while let Ok(command) = rx.recv() {
         match command {
             AgentEventLogWriterCommand::Append(mut record) => {
+                if failure.is_some() {
+                    continue;
+                }
                 record.sequence = next_sequence;
                 next_sequence += 1;
-                if serde_json::to_writer(&mut writer, &record).is_ok() {
-                    let _ = writer.write_all(b"\n");
-                    // Flushed immediately (not just batched in `BufWriter`'s
-                    // in-memory buffer) so a hard kill (SIGKILL, crash --
-                    // `horizon-agentd` has no signal handler for it and runs
-                    // no destructors) can only ever lose events that hadn't
-                    // arrived on this channel yet, never ones already
-                    // appended. This is what makes `docs/agent-runtime-
-                    // split-design.md` step 4's "agentd restart: read own
-                    // log, mark turns that died mid-flight as cancelled"
-                    // meaningful against a real `kill -9` — without this, a
-                    // session parked indefinitely in `WaitingForApproval`
-                    // (no further traffic to trigger a flush) could lose its
-                    // whole transcript to the process's own internal
-                    // buffering alone, with nothing to do with the kill
-                    // itself. Still not an `fsync` (see `WriterHandle::
-                    // flush`'s doc comment) -- a full machine crash / power
-                    // loss can still lose an unsynced page-cache write; that
-                    // tier of durability is out of scope here.
-                    let _ = writer.flush();
-
-                    if let Some(store) = &duckdb_store {
-                        let store = store
-                            .lock()
-                            .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        match store.append_record(&record) {
-                            Ok(()) => {}
-                            Err(error) => {
-                                if !warned_duckdb_append_failure {
-                                    eprintln!(
-                                        "horizon-agentd: DuckDB projection append failed \
-                                         ({error}); further append failures in this run won't \
-                                         be logged individually -- the next restart's rebuild \
-                                         reconciles"
-                                    );
-                                    warned_duckdb_append_failure = true;
-                                }
-                            }
+                // A parked session must not depend on future traffic to flush
+                // its last event. This reaches the OS page cache, not fsync.
+                let result = append_jsonl_record(&mut writer, &record)
+                    .with_context(|| format!("append agent event log {}", path.display()));
+                retain_write_failure(&result, &mut failure);
+                if result.is_err() {
+                    continue;
+                }
+                if let Some(store) = &duckdb_store {
+                    let store = store
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if let Err(error) = store.append_record(&record) {
+                        if !warned_duckdb_append_failure {
+                            eprintln!(
+                                "horizon-agentd: DuckDB projection append failed \
+                                 ({error}); further append failures in this run won't \
+                                 be logged individually -- the next restart's rebuild \
+                                 reconciles"
+                            );
+                            warned_duckdb_append_failure = true;
                         }
                     }
                 }
             }
             AgentEventLogWriterCommand::Flush(reply) => {
-                let result = writer
-                    .flush()
-                    .with_context(|| format!("flush agent event log {}", path.display()));
+                let result = match &failure {
+                    Some(message) => Err(anyhow::anyhow!("{message}")),
+                    None => writer
+                        .flush()
+                        .with_context(|| format!("flush agent event log {}", path.display())),
+                };
+                retain_write_failure(&result, &mut failure);
                 let _ = reply.send(result);
             }
         }
     }
 
-    let _ = writer.flush();
+    if failure.is_none() {
+        let result = writer.flush().context("flush closing agent event log");
+        retain_write_failure(&result, &mut failure);
+    }
+    // Do not let BufWriter::drop silently retry bytes after an uncertain write.
+    let _ = writer.into_parts();
 }
 
 #[cfg(test)]
@@ -772,6 +789,78 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(path);
+    }
+
+    struct FailOnce {
+        on_flush: bool,
+        failed: bool,
+    }
+
+    impl Write for FailOnce {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if !self.on_flush && !self.failed {
+                self.failed = true;
+                return Err(std::io::Error::other("injected write failure"));
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            if self.on_flush && !self.failed {
+                self.failed = true;
+                return Err(std::io::Error::other("injected flush failure"));
+            }
+            Ok(())
+        }
+    }
+
+    fn assert_failed_append_stays_failed(on_flush: bool) {
+        let store = DuckdbStoreHandle::new(Store::open_in_memory().unwrap());
+        let projected = store.clone();
+        let (tx, rx) = unbounded();
+        let writer = WriterHandle { tx };
+        let worker = thread::spawn(move || {
+            run_writer(
+                FailOnce {
+                    on_flush,
+                    failed: false,
+                },
+                Path::new("injected.jsonl"),
+                rx,
+                0,
+                Some(projected),
+            );
+        });
+        let session = SessionId::new();
+        writer.append(record_at(session, 0)).unwrap();
+        let first = writer.flush();
+        writer.append(record_at(session, 1)).unwrap();
+        let second = writer.flush();
+        drop(writer);
+        worker.join().unwrap();
+        assert!(
+            first.is_err(),
+            "a later flush must report the failed append"
+        );
+        assert!(
+            second.is_err(),
+            "the writer must not recover across an uncertain record boundary"
+        );
+        assert_eq!(
+            store.lock().unwrap().max_last_sequence().unwrap(),
+            None,
+            "failed JSONL writes must not reach the derived projection"
+        );
+    }
+
+    #[test]
+    fn append_write_failure_is_retained_by_subsequent_flushes() {
+        assert_failed_append_stays_failed(false);
+    }
+
+    #[test]
+    fn append_flush_failure_is_retained_by_subsequent_flushes() {
+        assert_failed_append_stays_failed(true);
     }
 
     // --- currency check + incremental catch-up (backlog-32) ----------------

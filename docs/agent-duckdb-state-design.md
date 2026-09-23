@@ -390,3 +390,14 @@ These are intentionally not decided by the DuckDB MVP:
 - adding a vector store,
 - exposing SQL directly in the UI,
 - making DuckDB mandatory for plugin-provided agents.
+
+### JSONL write failures (2026-09-24)
+
+The writer projects a record only after its JSON, newline, and flush all
+succeed. The first JSONL write/flush failure remains attached to that writer:
+subsequent flush requests report it, and later queued records are neither
+written nor projected. Reopening the writer is the recovery boundary because
+a failed write may have left an incomplete record. Dropping the buffer does
+not silently retry it. DuckDB projection failures remain separate: they do not
+invalidate a successful JSONL commit, and reconstruction can reconcile them.
+The acknowledged boundary still reaches the OS page cache, not `fsync`.
