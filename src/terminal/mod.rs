@@ -19,6 +19,7 @@
 
 mod glyphs;
 mod input;
+mod scrollback;
 mod session;
 mod shape_cache;
 #[cfg(test)]

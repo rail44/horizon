@@ -6,8 +6,8 @@
 
 | 領域 | 確認する責務 | 状態 |
 | --- | --- | --- |
-| セッションの寿命管理 | shellとdaemonを通した生成・接続・復元・終了 | shellの復元を3段階へ分離し、両runtimeの世代確認と端末entityの配線を集約。検証中 |
-| 端末の操作と描画 | スクロール状態、履歴取得、表示更新 | 未着手 |
+| セッションの寿命管理 | shellとdaemonを通した生成・接続・復元・終了 | main反映済み (`5827fdd9`)。復元を3段階へ分離し、世代確認と端末entityの配線を集約 |
+| 端末の操作と描画 | スクロール状態、履歴取得、表示更新 | scrollbackの状態遷移をsessionの通信・表示更新から分離し、両端の履歴要求を共通化。端末114テスト通過 |
 | agentの状態と表示 | イベント反映、状態判定、transcript変換 | 未着手 |
 | 個別ツール内部 | ファイル検索・読み取り、Git解析、出力再利用 | 未着手 |
 | 抽出ツール | 前後比較、判断の引き継ぎ、除外範囲の精密化 | main反映済み (`16dcdd84`)。20件の回帰検証、全体production/tests解析、全体ゲート通過 |
@@ -31,3 +31,9 @@ manual resumeのlifecycle lockを確認。terminaldは購読を先に登録す�
 attach、終了通知と登録削除の順序を確認した。復帰条件と資源の寿命が異なるため、共通の
 起動/終了抽象へはまとめない。workspace/runtimeの62テストと、専用Xvfb上のUI再起動で
 2タブ・2ペイン分割・同じ3端末session・復元frameを確認した。
+
+端末: `scrollback.rs`が表示位置・先読み・到着windowの採否を所有し、sessionはその判断に
+従ってIPCと再描画を行う。取得中のwheel操作は要求を重複送信せず、最新の小数行位置を
+保持する。live復帰・alternate screen・resize・stale responseの既存テストを移動して確認。
+描画は履歴window内とlive viewport内でcacheのindex・generationが異なり、cursor・selection・
+IMEもlive専用なので各paint経路を維持する。行の文字整形と描画は既に共通化されている。
