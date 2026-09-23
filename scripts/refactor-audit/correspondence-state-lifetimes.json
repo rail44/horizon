@@ -1,0 +1,811 @@
+[
+  {
+    "label": "Acknowledged JSONL commits and restart recovery",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "LiveState",
+        "name": "persist_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/appender.rs",
+        "owner": "Appender",
+        "name": "activate_context",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/mod.rs",
+        "owner": "<free>",
+        "name": "read",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "run_writer",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "start_up",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/events.rs",
+        "owner": "<free>",
+        "name": "persist_and_send_session_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "resume_persisted_sessions",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "resume_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "settle_interrupted_turn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "terminate_orphaned_exploration",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "AgentdState",
+        "name": "acknowledge_delivery",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "handle_provider_event",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "LiveState",
+        "name": "persist_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/appender.rs",
+        "owner": "Appender",
+        "name": "activate_context",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/appender.rs",
+        "owner": "Appender",
+        "name": "commit_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/mod.rs",
+        "owner": "<free>",
+        "name": "read",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "append_jsonl_record",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "discard_partial_tail",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "retain_write_failure",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "run_writer",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "start_up",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/events.rs",
+        "owner": "<free>",
+        "name": "persist_and_send_session_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "resume_persisted_sessions",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "resume_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "settle_interrupted_turn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "terminate_orphaned_exploration",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "AgentdState",
+        "name": "acknowledge_delivery",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "handle_provider_event",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider pending work as the canonical state",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "SessionLoopState",
+        "name": "default",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "SessionLoopState",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/tool_results.rs",
+        "owner": "SessionLoopState",
+        "name": "handle_tool_result",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "apply_turn_outcome",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "cancel_outstanding_tool_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "handle_truncation_recovery",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "SessionLoopState",
+        "name": "default",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "SessionLoopState",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/tool_results.rs",
+        "owner": "SessionLoopState",
+        "name": "handle_tool_result",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "apply_turn_outcome",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "cancel_outstanding_tool_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "handle_truncation_recovery",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Async completion dispatch identity and daemon acceptance",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "resolve_web_fetch",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "completion_result_mut",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "run_job_body",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "run_sandboxed_job",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "spawn_host",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "spawn_sandboxed",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/mod.rs",
+        "owner": "<free>",
+        "name": "kill_if_running",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/mod.rs",
+        "owner": "<free>",
+        "name": "should_fold_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/execution.rs",
+        "owner": "<free>",
+        "name": "execute_boundary_tool",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/mod.rs",
+        "owner": "<free>",
+        "name": "spawn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/mod.rs",
+        "owner": "<free>",
+        "name": "with_call_id",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_finished_bash_result",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_tool_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "result_for_attempt",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "resolve_web_fetch",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "run_job_body",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "run_sandboxed_job",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "spawn_host",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "<free>",
+        "name": "spawn_sandboxed",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/completion.rs",
+        "owner": "<free>",
+        "name": "should_fold_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/completion.rs",
+        "owner": "ToolCompletion",
+        "name": "matches_live_request",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/completion.rs",
+        "owner": "ToolCompletion",
+        "name": "result_mut",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/completion.rs",
+        "owner": "ToolCompletion",
+        "name": "with_occurrence",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/execution.rs",
+        "owner": "<free>",
+        "name": "execute_boundary_tool",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/mod.rs",
+        "owner": "<free>",
+        "name": "spawn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/mod.rs",
+        "owner": "<free>",
+        "name": "with_call_id",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_finished_bash_result",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_tool_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "result_for_attempt",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Queued bash ownership through process retirement",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "run",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "run_inner",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "capture",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "run_async",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed.rs",
+        "owner": "<free>",
+        "name": "run_sandboxed",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "collect",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "BashJob",
+        "name": "enqueue",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "BashJob",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "enumerate_descendants",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "kill",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "lock",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "read_proc_ppid",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "register",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "table",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "unregister",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "KillHandle",
+        "name": "kill",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "KillHandle",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "RegistryGuard",
+        "name": "drop",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "RegistryGuard",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/processing.rs",
+        "owner": "<free>",
+        "name": "process_agent_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "<free>",
+        "name": "unregister_session_runtime",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "kill_process_group",
+        "partition": "production",
+        "variants": "all"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variants": "all"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "kill_pid",
+        "partition": "production",
+        "variants": "all"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "run",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "run_inner",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "capture",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "run_async",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed.rs",
+        "owner": "<free>",
+        "name": "run_sandboxed",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "collect",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "BashJob",
+        "name": "enqueue",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/job.rs",
+        "owner": "BashJob",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "enumerate_descendants",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "read_proc_ppid",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "KillHandle",
+        "name": "kill",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "KillHandle",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "cancel",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "cancel_call",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "cancel_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "lock",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "table",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "ProcessGuard<'_>",
+        "name": "drop",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "ProcessGuard<'_>",
+        "name": "kill",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "Registration",
+        "name": "attach_process",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "Registration",
+        "name": "call_id",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "Registration",
+        "name": "drop",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "Registration",
+        "name": "is_cancelled",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "Registration",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/processing.rs",
+        "owner": "<free>",
+        "name": "process_agent_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "<free>",
+        "name": "unregister_session_runtime",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_group",
+        "partition": "production",
+        "variants": "all"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variants": "all"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "kill_pid",
+        "partition": "production",
+        "variants": "all"
+      }
+    ]
+  },
+  {
+    "label": "Failed atomic config replacement cleanup",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/config/write.rs",
+        "owner": "<free>",
+        "name": "write_atomically",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/config/write.rs",
+        "owner": "<free>",
+        "name": "write_atomically",
+        "partition": "production"
+      }
+    ]
+  }
+]

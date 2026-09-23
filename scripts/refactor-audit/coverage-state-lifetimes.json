@@ -1,0 +1,153 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "93a003ad96a9515afef1e5ac55e0f8a2e1853587",
+  "reviewed_commit": "0d6186ec783dfcf08d0003f066d74fecfb316ddd",
+  "profile": "profiles/non-board.json",
+  "scope": "Four cross-cutting state/lifetime/recovery/validation reviews. File hashes identify source and test evidence, not a new line-by-line audit of every file. Normal completion, partial failure, cancellation races and restoration were traced with callers and peers. Board directories, functions and mixed-file board logic are excluded.",
+  "groups": [
+    {
+      "id": "state_owners",
+      "scenario": "Accept and deduplicate identified input, run a multi-tool turn, cancel it, reuse a provider ID, and restore the input queue.",
+      "decision": "refactor",
+      "reason": "LiveState folds acknowledged transport records only after commit. The provider pending-call map owns outstanding work; remove the redundant cancelled-ID set. Preserve input destinations, paused queues, turn guards, ephemeral model/progress sidecars and the accepted model-reload generation difference.",
+      "validation": [
+        "Injected write/flush failure leaves live history and frame unchanged; the pre-fix regression failed.",
+        "Cancelled-then-reused provider ID reaches the new batch; ordinary late/duplicate results still do not advance it. Existing input deduplication, turn cancellation, batching and restore tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/contract.rs": "807859d9b6136a50ec2c8e60d411f6d44dcc0683878296b671f715b3bb928ca7",
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/frame/queries.rs": "dc3f92fd32ba2cf76210ce5dbfddeb8c97f6c3c9c56c4b845e91bce696d86468",
+        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
+        "crates/horizon-agent/src/live.rs": "14886440cbb5da77a2e22aab54809595460efda3469154aefcd1550891a5b9d5",
+        "crates/horizon-agent/src/providers/rig/session/input.rs": "858952299be0bd53c9a82fc25ee6a1cdaa7dd3cc99fef83bb7aa57b74099d586",
+        "crates/horizon-agent/src/providers/rig/session/interaction.rs": "213cc7ea4f6fe964a079023a15b9fbc907bd001961390155308ed9f07fcf43d7",
+        "crates/horizon-agent/src/providers/rig/session/state.rs": "7762b94427902fa2b212af3e1eb4c578c665183d47323ebc5828cf84e49e5644",
+        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "b6b15b29b41da67a7834d40a91443626dc1e7302fd068f5f71398ef1262b684f",
+        "crates/horizon-agent/src/providers/rig/session/turn.rs": "5374a8d52e7a39c6ff5550cf5184c070309330f9bbd607a2f8d5b466eb4456fb",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "003f2e83891d740884fea663955799d979a1c7f0ccd1a9c07c26556e5dc50c12",
+        "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
+        "crates/horizon-agentd/src/session/events.rs": "391fbdf5b64bd4d730f9977f2536662502adc939cc10b7727dafef78877f00b3",
+        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
+        "crates/horizon-agentd/src/session/input/tests.rs": "fcc925ad25184799695f40ddd525f071f9dac64725b3ccce60a5170e2e4d1510",
+        "crates/horizon-agentd/src/session/run.rs": "298fec9a7eea96e27304e59aae8f519e2d956174fd2940bbe2650e37cf8b6d00",
+        "crates/horizon-agentd/src/session/setup.rs": "9804d994d7d150a0bf7f993798c482abee79872e4375386ea2a3efe7e4e542fd",
+        "crates/horizon-agentd/src/session/state.rs": "b4ab6b66c92a684e8d04c9d47931a5cefd2bd89620cfa7945e0377c017f6df46",
+        "src/agent/session.rs": "8e2761f23dd45297dcc584318d36d8ad99d811ff84d5dd0650fc5b9b2dbbdab0",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b",
+        "src/model_picker.rs": "5b6dd72fa23409827d2592f6fa19d34407f47fc9e9210df9850bc20ec65434da"
+      }
+    },
+    {
+      "id": "async_lifetimes",
+      "scenario": "Queue/start/finish bash or web work, cancel before spawn or during execution, replace an ID, retire a session, and deliver an old result or judgment.",
+      "decision": "refactor",
+      "reason": "A bash registration owns cancellation from enqueue through process retirement, keyed by session and call with replacement-safe drop. Capture occurrence IDs before dispatch and check every completion variant at daemon admission. Keep OS process termination separate from registration, FIFO and work-boundary accounting. Task children remain session-scoped; MoA watchers remain pass-scoped.",
+      "validation": [
+        "Pre-fix tests reproduced queued work running after cancellation and an old registration removing its replacement. Real-child cancellation on late attachment, timeout and setsid-descendant tests pass.",
+        "Old finished/denied/judged completions affected a new occurrence before the fix. Six variants are now rejected; real async web outcomes, sandboxed bash dispatch and panic outcomes retain origin IDs. Synchronous denial prior_result behavior remains covered."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/approval.rs": "d364c502b44552b08e601856c4b323930b2817f3407a7025a795142025d367e6",
+        "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
+        "crates/horizon-agent/src/tools/bash/exec.rs": "7ebb8827186ae7b61af54223ed1d4f8afd0455e5fb041e896f666d73e7097865",
+        "crates/horizon-agent/src/tools/bash/exec/plain.rs": "a0b5070f056a0898b04f96ef15bd359c17d1b89db4dd61b8f48ddb9418e66201",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed.rs": "11af674642d9a7b46514a45fe07ba8a693387b803fd5a5b6236a31bcba78a25c",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs": "ce9317aafe22c00b543f755412dc33fea29c2f272a65271117800beb839d2008",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/prepare.rs": "ffff9e45332ed84103533450d1a6fa040af78a4749c752e640ec78080fa4487e",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/result.rs": "90843ab5a14c5c45b2dc1cf080eb0029016a448d0b0865f172f603a514292731",
+        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb",
+        "crates/horizon-agent/src/tools/bash/job.rs": "81c2ceff3e3a2e84e6fa6c85d7a74e11d6e43264ecad8a76bca1ac9895680290",
+        "crates/horizon-agent/src/tools/bash/mod.rs": "aa76f82cfb22f49163e7ee3f363056b44113115d5bcf41b71bcb757404d8e60c",
+        "crates/horizon-agent/src/tools/bash/process.rs": "76fb8434a175d8a2a25d214a66200d625fd924ae7a85c86e649c84d6dfbd559f",
+        "crates/horizon-agent/src/tools/bash/registry.rs": "36f1305104d02637858c32ce7047996d5c2d084f60832c5580f49278e4621a6e",
+        "crates/horizon-agent/src/tools/bash/shell.rs": "4726141a8404774d33a3d40adbadb2522ac0956750d50935934ce54ed5d802e6",
+        "crates/horizon-agent/src/tools/bash/tests.rs": "c829d3f05f818627b72dcadb864b64d34061b5d650493cc0c5a0b6c69c945d7d",
+        "crates/horizon-agent/src/tools/completion.rs": "37b9d86d3f0dc754083ca1ff25c47cad0d25e16d7f7722e1e126a908865d4d34",
+        "crates/horizon-agent/src/tools/execution.rs": "dc813d40cb42fb49985a315eb0d5dbbfb2cf35860d6ddf13ff994efe8c82479f",
+        "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
+        "crates/horizon-agent/src/tools/explore/children.rs": "96bfa7439275f1815b2c3ae1ff0518fca7a934d3f75534fd51a610e0c8fa6d2f",
+        "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
+        "crates/horizon-agent/src/tools/mod.rs": "b9ea973b23979cd412418b521f727adc77525fe2f9a546cbd411ab25cb3f406c",
+        "crates/horizon-agent/src/tools/processing.rs": "e7d4d48c88223ab39ad375f2a69f620ef2db4926acd715ba28e829e89665dd88",
+        "crates/horizon-agent/src/tools/state.rs": "d6d6456d419d243dda96f1bfaff9a8157824f64f0a37378b5937b27a0b45ae78",
+        "crates/horizon-agent/src/tools/tests.rs": "b4c62e10440a13372a917b67ece7fed425a0875fa3ec33e77b176ad114f3b6fe",
+        "crates/horizon-agent/src/tools/web/mod.rs": "9c156b095a2ceba03723ab66f1d6e6d3ce47ee77c6fe0d0256f7047ef9c704cb",
+        "crates/horizon-agent/src/tools/work_boundary.rs": "da06c49ffc8c342e6c8c3c438bb073a9a679ea76cfd0f29c25d9a5c6240b6051",
+        "crates/horizon-agentd/src/session/approval.rs": "b5ae418578f0b759a6eb2add80c62ecb965a2b654ef859f43b8fab17df7d75d0",
+        "crates/horizon-agentd/src/session/completion.rs": "55e8ebd5397d0287a79f7bc494266fb4966fa6261b80398b380785ffca68015b",
+        "crates/horizon-agentd/src/session/completion/retry.rs": "be237bb16a3f81bf6ed2c0f78388ed49dfaed3c8de0f6465e4ea52df20e1a1ed",
+        "crates/horizon-agentd/src/session/completion/tests.rs": "5f314a175f47635d083476395a73c0d311fa39b9ae22ed943d6eaa2f9d9006db",
+        "crates/horizon-agentd/src/session/panic.rs": "353d34795d0047fe02140083c707147824d191ca395082e616b967b04c4e1f98",
+        "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c",
+        "crates/horizon-agentd/src/session/subscription.rs": "e235012d043eb6d3f0c579a8298df2667fb891e2d2324f225e73657f36f06811"
+      }
+    },
+    {
+      "id": "persistence_recovery",
+      "scenario": "Write and acknowledge an event, fail partway through write/flush, restart from a torn UTF-8 tail, then recover cancelled work and redeliver identified input.",
+      "decision": "refactor",
+      "reason": "The writer retains its first JSONL failure, suppresses subsequent writes/projections and reports failure on later flushes. Only complete successful records reach DuckDB. Reader and writer agree on the newline commit boundary; startup removes only the ignored tail before append. Appender owns commit acknowledgement and recovery stops for a session whose fixup cannot commit. Streaming and panic diagnostics keep best-effort asynchronous persistence; DuckDB stays rebuildable.",
+      "validation": [
+        "Write and flush fault injection formerly produced false success and projection-only records; both regressions now pass.",
+        "Real-file cases cover a long partial tail, an unterminated valid record, and a split UTF-8 character while preserving complete corrupt lines and sequence numbering.",
+        "The real daemon boots from a corrupt line plus split-UTF-8 tail and saves the next user/assistant exchange. Existing killed/drained-daemon replay and original-turn-ID tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "f8f7e5c31debc29d18a3f22fbf2be19f666c8b4dd3b43041dc97edc3387aa66c",
+        "crates/horizon-agent/src/persistence/event_log/mod.rs": "d8ba4f816668aa1ff4278f406155c1be679138137b64607def08e309f746c178",
+        "crates/horizon-agent/src/persistence/event_log/turn.rs": "86a3dd0a2d49199b9e33c0f842c8100ab28eeae22c9e85307b108c7de6192e1b",
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "ab350d92f035d248f93cc97e612ed908e4d2947370805ece2b593224c8509593",
+        "crates/horizon-agent/src/persistence/projection/duckdb/shared_store.rs": "3986cb9729cf313ca5645e748b05ac4bbfde6239dd0dbca138ba8319efdacb18",
+        "crates/horizon-agentd/src/main.rs": "188cc74c15e36ea14b702edf668f80ac5034673f87d26408157958bb91bbd982",
+        "crates/horizon-agentd/src/session/resume.rs": "cb0cd155ad04ae0ab1b8b05bd954f35341efda7e52ca83497163142c5bdd07b4",
+        "crates/horizon-agentd/src/session/resume/environment.rs": "80c8482d363e0407165257d745ff69428a68c28a3e3d6a0e2a64034f77065a30",
+        "crates/horizon-agentd/tests/e2e.rs": "33f003209f3ed1cc4866e6c8e5db53d66a983b43a7b8dcb99a4be2660fa7ccb6"
+      }
+    },
+    {
+      "id": "boundary_conventions",
+      "scenario": "Validate and publish commands/results across UI/runtime/daemon/tools; drop views, time out, disconnect/reconnect, restore workspace inventory, or fail a file replacement.",
+      "decision": "refactor",
+      "reason": "Clean temporary config files on failed replacement, following the existing workspace-store convention. Preserve command-model dispatch, explicit versus active targets, close/detach versus terminate, per-daemon routes, initial-connect retries versus established failures, timeout-as-stop-waiting, preview task ownership, and terminal frame/event separation. Preserve fs.edit ordered partial success, staleness errors and config-specific atomic replacement; no generic error/RPC/atomic-write framework is introduced.",
+      "validation": [
+        "A real rename failure left a temporary config copy before the fix; the regression now preserves the original target and removes only the temporary file.",
+        "Existing workspace inventory validation/restore, runtime closed-queue/timeout/disconnect, route drop, terminal first-wins spawn/PTY shutdown, preview late-reply and frame publication tests pass. GUI code was unchanged; this round uses automated behavior tests, not visual/IME inspection."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/config/write.rs": "e46b6fdb4bc9140cbb174cac1322b682012086b0b7b4fc737f419e638d5fe820",
+        "crates/horizon-agent/src/tools/fs/edit.rs": "d51f3247dfd09b0ba57070f4ff2ce4f57650f29b8d17faf1acf635816ba63e55",
+        "crates/horizon-agent/src/tools/fs/locks.rs": "1f1819ab469e4f6030a68df3c4b3b2e0c87a9ba8adacfca8bbebbe1ed89bc984",
+        "crates/horizon-agent/src/tools/fs/safety.rs": "40815270bd395c6afc278ddef640892498e68904d5225099bac34581e6875f07",
+        "crates/horizon-agent/src/tools/fs/staleness.rs": "da40358f3f0cfb65038c1a1972a7c7b17b8016216e32d23b5ec3b818f85d58be",
+        "crates/horizon-agent/src/tools/fs/write.rs": "1544c89e9c9ff24252a49fbf93b9edbf7f5f4b43e082b8e6dd90420c7d18b2c0",
+        "crates/horizon-terminal-core/src/session_loop.rs": "65a9c739121c0bcb94aec00ba4507f100c57e50a7631f3c124dcff818e287945",
+        "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
+        "crates/horizon-terminald/src/terminal.rs": "eb82fe5e65fec5b596f6de7ca379e254eaf4ccbca089d7c9fe11070308b0a6a9",
+        "crates/horizon-workspace/src/persistence.rs": "e870467043afd475612ba78dbe03215117a88d7fbf38354efc3a81563b5fa01c",
+        "crates/horizon-workspace/src/persistence/validation.rs": "9c7932db278cc71273ffe57a7dd8323621e8c1689e26e2e551bf9f9b80298233",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/watch.rs": "b9a84a2ee4bce13490aa3bf0d126fb1792b3e0595582edf9c38aa25366bba697",
+        "src/runtime/agent.rs": "9a80c0d1406f18b5c2da28267e5251f4c8eb9a86e7b0d840ef2af9d38579b7a4",
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/notify.rs": "d1c264bb875b64fbde9de6fceccf31ab7289c5b7901050431a189c92d94f56b5",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/runtime/terminal.rs": "b5b83a8168688a5535aa691326f4b1e4c844c509372f599cee656fadfb63c769",
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
+        "src/workspace/commands.rs": "7bbcb6f6b608f8816b100c1fe2b991a28c4639872953ae8f87df4037119944d0",
+        "src/workspace/mod.rs": "c18ee32e81faa2d7eacf634c4965e8d3898d0623c15e4809478ee7b1d33a398c",
+        "src/workspace/restore.rs": "6721520a8f996ca2c95048fca304d7d5a4ebe7cfd81683c445e196a9c4af9132",
+        "src/workspace/session_lifecycle.rs": "c4e8114b2997ce01189d5eaf117b29d2d836ff91d86470f6be86499b7d36b12f",
+        "src/workspace_state.rs": "847f90952e06b4d86dd8c931e9cc76bf0bd02868615a34eef61e98b6b4b65eb1"
+      }
+    }
+  ]
+}
