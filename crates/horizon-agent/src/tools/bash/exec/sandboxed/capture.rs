@@ -1,10 +1,9 @@
 //! Own the child through exit and output drain, then collect denial evidence.
 use super::super::{failed_output, take};
 use crate::config::BashToolConfig;
-use crate::contract::ToolCallId;
 #[cfg(target_os = "linux")]
 use crate::policy::annotate_sandboxed;
-use crate::tools::bash::registry::RegistryGuard;
+use crate::tools::bash::registry::Registration;
 use serde_json::Value;
 use std::process::ExitStatus;
 use std::sync::{Arc, Mutex as StdMutex};
@@ -23,7 +22,7 @@ pub(super) struct Captured {
 
 pub(super) fn collect(
     sandboxed: horizon_sandbox::SandboxedChild,
-    call_id: &ToolCallId,
+    registration: &Registration,
     timeout: Duration,
     config: &BashToolConfig,
     #[cfg(target_os = "macos")] started_at: std::time::SystemTime,
@@ -60,7 +59,7 @@ pub(super) fn collect(
     // kill. Unlike tokio's `Child::id()` (`Option<u32>`, `None` once
     // already reaped), `std::process::Child::id()` is plain `u32` -- always
     // available up to this point.
-    let guard = RegistryGuard::new(call_id.clone(), child.id());
+    let guard = registration.attach_process(child.id());
 
     let (status, killed) = wait_child_with_timeout(child, timeout);
 
@@ -245,7 +244,7 @@ fn kill_pid(pid: u32) {
     // the group signal. But a descendant that called `setsid`/`setpgid`
     // escaped the group and survives it — `kill_process_tree` walks
     // `/proc` to find and kill those individually (issue 017).
-    crate::tools::bash::registry::kill_process_tree(pid);
+    crate::tools::bash::process::kill_process_tree(pid);
 }
 
 #[cfg(not(unix))]

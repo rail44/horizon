@@ -57,11 +57,12 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
 
 #[test]
 fn echo_round_trip_reports_output_and_exit_zero() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("echo-1".to_string());
 
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": "echo hello" }),
         &cwd,
         &config(),
@@ -76,10 +77,16 @@ fn echo_round_trip_reports_output_and_exit_zero() {
 
 #[test]
 fn non_zero_exit_is_a_normal_result_carrying_the_code() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("exit-7".to_string());
 
-    let output = super::exec::run(&call_id, &json!({ "command": "exit 7" }), &cwd, &config());
+    let output = super::exec::run(
+        &super::registry::Registration::new(session_id, call_id.clone()),
+        &json!({ "command": "exit 7" }),
+        &cwd,
+        &config(),
+    );
 
     assert!(
         output.get("is_error").is_none(),
@@ -92,12 +99,13 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
 
 #[test]
 fn timeout_kills_the_process_and_reports_captured_partial_output() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("timeout-1".to_string());
 
     let started = Instant::now();
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }),
         &cwd,
         &config(),
@@ -131,6 +139,7 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
 #[cfg(target_os = "linux")]
 #[test]
 fn timeout_kill_reaches_a_setsid_grandchild() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("timeout-setsid".to_string());
     let marker =
@@ -141,7 +150,7 @@ fn timeout_kill_reaches_a_setsid_grandchild() {
     // escaping the group SIGKILL. The `sleep 10` keeps the bash parent
     // alive so the timeout fires while the grandchild is still writing.
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({
             "command": format!(
                 "setsid bash -c 'while true; do echo x >> \"{marker_str}\"; sleep 0.1; done' & sleep 10"
@@ -204,6 +213,7 @@ fn timeout_kill_reaches_a_setsid_grandchild() {
 #[cfg(target_os = "linux")]
 #[test]
 fn repeated_spawn_failures_do_not_leak_file_descriptors() {
+    let session_id = SessionId::new();
     fn open_fd_count() -> usize {
         std::fs::read_dir("/proc/self/fd")
             .map(|entries| entries.count())
@@ -217,7 +227,12 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
 
     let before = open_fd_count();
     for _ in 0..50 {
-        let output = super::exec::run(&call_id, &json!({ "command": "echo hi" }), &cwd, &config());
+        let output = super::exec::run(
+            &super::registry::Registration::new(session_id, call_id.clone()),
+            &json!({ "command": "echo hi" }),
+            &cwd,
+            &config(),
+        );
         assert_eq!(output["is_error"], true);
         assert!(
             output["message"]
@@ -227,7 +242,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
             "expected a spawn-failure message, got: {output}"
         );
         assert!(
-            !super::registry::is_registered(&call_id),
+            !super::registry::is_running(session_id, &call_id),
             "a spawn that never produced a child must never register a kill handle"
         );
     }
@@ -243,6 +258,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
 
 #[test]
 fn background_child_holding_the_pipe_does_not_hang_the_call() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("bg-pipe-holder".to_string());
 
@@ -253,7 +269,7 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
     // the test hook so the suite stays fast.
     let started = Instant::now();
     let output = super::exec::run_with_drain_grace(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": "echo visible; sleep 30 &" }),
         &cwd,
         Duration::from_millis(200),
@@ -277,18 +293,19 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
         .expect("a cut-short drain should be noted in the result")
         .contains("background"),);
     // The kill registration must not outlive the call.
-    assert!(!super::registry::is_registered(&call_id));
+    assert!(!super::registry::is_running(session_id, &call_id));
 }
 
 // --- output capping and spilling -------------------------------------------
 
 #[test]
 fn truncation_preserves_head_and_tail_and_spills_full_output() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("truncate-1".to_string());
 
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": "head -c 40000 /dev/zero | tr '\\0' 'a'" }),
         &cwd,
         &config(),
@@ -319,13 +336,14 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
 
 #[test]
 fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
+    let session_id = SessionId::new();
     let base = std::env::temp_dir().join(format!("horizon-bash-cwd-test-{}", uuid::Uuid::new_v4()));
     let sub = base.join("sub");
     std::fs::create_dir_all(&sub).expect("create test dirs");
     let cwd = cwd_handle(base.clone());
 
     let first = super::exec::run(
-        &ToolCallId("cwd-1".to_string()),
+        &super::registry::Registration::new(session_id, ToolCallId("cwd-1".to_string())),
         &json!({ "command": "cd sub && pwd" }),
         &cwd,
         &config(),
@@ -339,7 +357,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
     let reported_cwd = first_output.trim().to_string();
 
     let second = super::exec::run(
-        &ToolCallId("cwd-2".to_string()),
+        &super::registry::Registration::new(session_id, ToolCallId("cwd-2".to_string())),
         &json!({ "command": "pwd" }),
         &cwd,
         &config(),
@@ -356,6 +374,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
 
 #[test]
 fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
+    let session_id = SessionId::new();
     let base = std::env::temp_dir().join(format!("horizon-bash-cwd-noop-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&base).expect("create test dir");
     // Canonicalize so the comparison survives macOS's `/var` ->
@@ -366,7 +385,7 @@ fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
     let cwd = cwd_handle(base.clone());
 
     let _ = super::exec::run(
-        &ToolCallId("cwd-noop".to_string()),
+        &super::registry::Registration::new(session_id, ToolCallId("cwd-noop".to_string())),
         &json!({ "command": "echo hi" }),
         &cwd,
         &config(),
@@ -380,12 +399,13 @@ fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
 
 #[test]
 fn kill_registry_entry_is_removed_after_normal_completion() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("registry-normal".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
     super::spawn(
-        SessionId::new(),
+        session_id,
         call_id.clone(),
         json!({ "command": "true" }),
         cwd,
@@ -397,17 +417,18 @@ fn kill_registry_entry_is_removed_after_normal_completion() {
         .recv_timeout(Duration::from_secs(5))
         .expect("bash call should finish");
     assert_eq!(expect_finished(completion).call_id, call_id);
-    assert!(!super::registry::is_registered(&call_id));
+    assert!(!super::registry::is_running(session_id, &call_id));
 }
 
 #[test]
 fn kill_registry_kills_a_running_child_and_removes_its_entry() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("registry-kill".to_string());
     let (tx, rx) = crossbeam_channel::unbounded();
 
     super::spawn(
-        SessionId::new(),
+        session_id,
         call_id.clone(),
         json!({ "command": "sleep 10", "timeout_secs": 30 }),
         cwd,
@@ -417,7 +438,7 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
 
     let mut registered = false;
     for _ in 0..100 {
-        if super::registry::is_registered(&call_id) {
+        if super::registry::is_running(session_id, &call_id) {
             registered = true;
             break;
         }
@@ -426,10 +447,10 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
     assert!(registered, "the child should have registered itself by now");
 
     assert!(
-        super::registry::kill(&call_id),
+        super::cancel_call(session_id, &call_id),
         "kill should find the registered child"
     );
-    assert!(!super::registry::is_registered(&call_id));
+    assert!(!super::registry::is_running(session_id, &call_id));
 
     let completion = rx
         .recv_timeout(Duration::from_secs(5))
@@ -594,6 +615,7 @@ fn bash_calls_for_different_sessions_are_not_serialized_against_each_other() {
 #[cfg(unix)]
 #[test]
 fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("nice-check".to_string());
     // SAFETY: `getpriority` is a plain syscall wrapper with no
@@ -604,7 +626,7 @@ fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
     // `/proc/self/stat` read was Linux-only and could never pass on
     // macOS (no procfs).
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": "ps -o nice= -p $$" }),
         &cwd,
         &config(),
@@ -846,11 +868,12 @@ fn resolve_timeout_does_not_panic_when_timeout_max_secs_is_zero() {
 
 #[test]
 fn lossy_non_utf8_output_does_not_panic() {
+    let session_id = SessionId::new();
     let cwd = cwd_handle(std::env::temp_dir());
     let call_id = ToolCallId("non-utf8".to_string());
 
     let output = super::exec::run(
-        &call_id,
+        &super::registry::Registration::new(session_id, call_id.clone()),
         &json!({ "command": r"printf 'a\xffb'" }),
         &cwd,
         &config(),
@@ -862,4 +885,45 @@ fn lossy_non_utf8_output_does_not_panic() {
         .expect("output should decode losslessly to a string");
     assert!(shown.starts_with('a'));
     assert!(shown.ends_with('b'));
+}
+
+#[test]
+fn cancellation_prevents_a_queued_bash_call_from_starting() {
+    let session_id = SessionId::new();
+    let call_id = ToolCallId("cancel-queued".into());
+    let directory =
+        std::env::temp_dir().join(format!("horizon-cancel-queued-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let (release, wait) = crossbeam_channel::bounded::<()>(1);
+    super::registry::enqueue(
+        session_id,
+        Box::new(move || {
+            let _ = wait.recv();
+        }),
+    );
+    let (results, _receive) = crossbeam_channel::unbounded();
+    super::spawn(
+        session_id,
+        call_id.clone(),
+        json!({"command": "touch should-not-exist"}),
+        cwd_handle(directory.clone()),
+        config(),
+        results,
+    );
+    super::cancel_call(session_id, &call_id);
+    let (settled, receive_settled) = crossbeam_channel::bounded(1);
+    super::registry::enqueue(
+        session_id,
+        Box::new(move || {
+            let _ = settled.send(());
+        }),
+    );
+    release.send(()).unwrap();
+    receive_settled
+        .recv_timeout(Duration::from_secs(5))
+        .unwrap();
+    let started = directory.join("should-not-exist").exists();
+    std::fs::remove_dir_all(directory).unwrap();
+    assert!(!started);
+    assert!(crate::tools::session_tool_work_settled(session_id));
 }

@@ -733,6 +733,7 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 /// find anything to execute against. Safe no-op for unknown ids (e.g.
 /// terminal sessions, which never register).
 pub fn unregister_session_runtime(session_id: SessionId) {
+    crate::tools::bash::cancel_session(session_id);
     crate::tools::web::cancel_session(session_id);
     crate::tools::explore::cancel_session(session_id);
     crate::tools::moa::unregister_exploration_host(session_id);

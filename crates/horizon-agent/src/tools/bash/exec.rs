@@ -17,6 +17,7 @@ use crate::contract::{ToolCallId, ToolCallResult};
 use crate::tools::error_output;
 
 use super::output::{self, Capped};
+use super::registry::Registration;
 use super::BashCompletion;
 
 /// Niceness applied to every spawned bash child (`docs/agent-tools-design.md`,
@@ -36,13 +37,13 @@ pub(super) const BASH_NICE_LEVEL: i32 = 10;
 /// the config file, `agent::config::BashToolConfig`; see its fields'
 /// doc comments for the constants they replaced).
 pub(super) fn run(
-    call_id: &ToolCallId,
+    registration: &Registration,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
 ) -> Value {
     run_inner(
-        call_id,
+        registration,
         input,
         cwd_handle,
         Duration::from_secs(config.drain_grace_secs),
@@ -55,17 +56,17 @@ pub(super) fn run(
 /// production grace.
 #[cfg(test)]
 pub(super) fn run_with_drain_grace(
-    call_id: &ToolCallId,
+    registration: &Registration,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
 ) -> Value {
-    run_inner(call_id, input, cwd_handle, drain_grace, config)
+    run_inner(registration, input, cwd_handle, drain_grace, config)
 }
 
 fn run_inner(
-    call_id: &ToolCallId,
+    registration: &Registration,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
@@ -96,7 +97,7 @@ fn run_inner(
     };
 
     runtime.block_on(run_async(
-        call_id,
+        registration,
         command,
         timeout,
         drain_grace,
@@ -209,7 +210,7 @@ fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfi
 /// The child ended without an exit code of its own — on unix, that means a
 /// signal terminated it (see the call site). This is a harness failure
 /// (`is_error`), not a normal result: nothing else outside `timeout_output`
-/// intentionally sends a process a fatal signal (see `bash::kill_if_running`
+/// intentionally sends a process a fatal signal (see `bash::cancel_call`
 /// and the process-group kill it performs, called for a still-running
 /// call whose turn was cancelled).
 fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {

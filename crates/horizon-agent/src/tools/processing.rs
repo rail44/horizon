@@ -49,7 +49,7 @@ pub fn process_agent_provider_event(
     // session itself ending (`tools::explore::cancel_session`, reached from
     // `unregister_session_runtime`).
     if let Event::ToolCallFinished(result) = &event {
-        bash::kill_if_running(&result.call_id);
+        bash::cancel_call(session_id, &result.call_id);
         crate::tools::web::cancel_if_running(session_id, &result.call_id);
     }
 

@@ -3,8 +3,7 @@
 use super::BASH_NICE_LEVEL;
 use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
 use crate::config::BashToolConfig;
-use crate::contract::ToolCallId;
-use crate::tools::bash::registry::RegistryGuard;
+use crate::tools::bash::registry::Registration;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
@@ -14,7 +13,7 @@ use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 
 pub(super) async fn run_async(
-    call_id: &ToolCallId,
+    registration: &Registration,
     command: &str,
     timeout: Duration,
     drain_grace: Duration,
@@ -35,7 +34,7 @@ pub(super) async fn run_async(
         raw_stdout,
         raw_stderr,
         drained,
-    } = match capture(call_id, child, timeout, drain_grace).await {
+    } = match capture(registration, child, timeout, drain_grace).await {
         Ok(captured) => captured,
         Err(message) => return failed_output(message, None, config),
     };
@@ -111,7 +110,7 @@ struct Captured {
 /// Keep cancellation registration through the bounded drain, including when
 /// the child has exited but a descendant still owns an output pipe.
 async fn capture(
-    call_id: &ToolCallId,
+    registration: &Registration,
     mut child: tokio::process::Child,
     timeout: Duration,
     drain_grace: Duration,
@@ -136,14 +135,14 @@ async fn capture(
     // exists, so a racing cancellation always has something real to kill.
     // `child.id()` is `None` only if the child has already been reaped,
     // which can't happen this early.
-    let guard = child
-        .id()
-        .map(|pid| RegistryGuard::new(call_id.clone(), pid));
+    let guard = child.id().map(|pid| registration.attach_process(pid));
 
     let outcome = tokio::time::timeout(timeout, child.wait()).await;
     let killed = outcome.is_err();
     if killed {
-        crate::tools::bash::registry::kill(call_id);
+        if let Some(guard) = &guard {
+            guard.kill();
+        }
     }
     // Reap the child (a no-op if `wait` above already completed it). In the
     // common case that closes the pipes' write ends and the pump tasks see

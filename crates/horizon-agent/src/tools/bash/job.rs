@@ -49,18 +49,29 @@ impl BashJob {
     /// Both execution modes use this same FIFO and panic/completion boundary.
     fn enqueue(
         self,
-        work: impl FnOnce(&Self) -> BashCompletion + Send + std::panic::UnwindSafe + 'static,
+        work: impl FnOnce(&Self, &registry::Registration) -> BashCompletion
+            + Send
+            + std::panic::UnwindSafe
+            + 'static,
     ) {
+        let registration = registry::Registration::new(self.session_id, self.call_id.clone());
         let work_guard = crate::tools::work_boundary::begin(self.session_id);
         registry::enqueue(
             self.session_id,
             Box::new(move || {
                 let _work_guard = work_guard;
+                if registration.is_cancelled() {
+                    return;
+                }
                 run_job_body(
                     self.session_id,
                     self.call_id.clone(),
                     &self.result_tx,
-                    || work(&self),
+                    || {
+                        let completion = work(&self, &registration);
+                        drop(registration);
+                        completion
+                    },
                 );
             }),
         );
@@ -108,10 +119,14 @@ impl SandboxedRun {
     }
 }
 
-fn run_sandboxed_job(job: &BashJob, sandbox: SandboxedRun) -> BashCompletion {
+fn run_sandboxed_job(
+    job: &BashJob,
+    registration: &registry::Registration,
+    sandbox: SandboxedRun,
+) -> BashCompletion {
     let mut completion = match sandbox.validated_grants() {
         Ok(grants) => exec::run_sandboxed(
-            &job.call_id,
+            registration,
             &job.input,
             &job.cwd,
             &sandbox.workspace_root,
@@ -213,8 +228,8 @@ pub(crate) fn spawn_approved_host(job: BashJob, approval: HostExecutionApproval)
 }
 
 fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
-    job.enqueue(move |job| {
-        let mut output = exec::run(&job.call_id, &job.input, &job.cwd, &job.config);
+    job.enqueue(move |job, registration| {
+        let mut output = exec::run(registration, &job.input, &job.cwd, &job.config);
         // Honest either way (`docs/agent-approval-design.md`'s
         // "Audit"): this path never engages the sandbox. Host
         // execution is not represented as sandboxed merely because
@@ -251,9 +266,9 @@ pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
     // The proxy's accessors synchronize internally; no proxy lock is held
     // across a caught panic. The following job can safely reuse the proxy.
     let sandbox = std::panic::AssertUnwindSafe(sandbox);
-    job.enqueue(move |job| {
+    job.enqueue(move |job, registration| {
         let sandbox = sandbox;
-        run_sandboxed_job(job, sandbox.0)
+        run_sandboxed_job(job, registration, sandbox.0)
     });
 }
 
@@ -357,7 +372,7 @@ mod tests {
         let (started, running) = unbounded();
         let (release, blocked) = unbounded();
         let first = BashJob::new(session_id, &request("first"), &tools, results.clone());
-        first.enqueue(move |job| {
+        first.enqueue(move |job, _registration| {
             started.send(()).unwrap();
             blocked.recv().unwrap();
             *job.cwd.lock().unwrap() = next;

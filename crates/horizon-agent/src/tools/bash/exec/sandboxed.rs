@@ -1,7 +1,7 @@
 //! Sandboxed bash: prepare authority, capture execution, then classify the result.
 use super::{failed_output, finished, resolve_timeout, BashCompletion};
 use crate::config::BashToolConfig;
-use crate::contract::ToolCallId;
+use crate::tools::bash::registry::Registration;
 use crate::tools::network::SessionNetworkProxy;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -66,7 +66,7 @@ mod result;
 /// temp dir must never be a writable root.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::tools::bash) fn run_sandboxed(
-    call_id: &ToolCallId,
+    registration: &Registration,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
@@ -75,6 +75,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
     config: &BashToolConfig,
 ) -> BashCompletion {
+    let call_id = registration.call_id();
     let Some(command) = input.get("command").and_then(Value::as_str) else {
         return finished(
             call_id,
@@ -129,7 +130,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
     };
     let captured = match capture::collect(
         sandboxed,
-        call_id,
+        registration,
         timeout,
         config,
         #[cfg(target_os = "macos")]

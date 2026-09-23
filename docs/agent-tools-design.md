@@ -170,13 +170,16 @@ user-visible `batch` tool.
   (`cat`/`grep`) — and under the sandbox even `bash` cannot reach the host's
   `/tmp` (issue 010). (Truncate-in-context + spill-to-file is the shipping
   standard across Claude Code, goose, Cline, Codex.)
-- Timeout and turn-cancellation both kill the in-flight command's process
-  group (`libc::kill(-pgid, SIGKILL)`), but this reaches only processes still
-  in that group — a descendant that escaped via `setsid`/daemonization
-  survives, and a `git commit`'s `hooks/pre-commit` child can outlive the
-  kill too. The bounded-drain comment in `tools/bash/exec.rs` already
-  acknowledges the `setsid`-grandchild escape; see issue 017 for the observed
-  "killed but landed" failure.
+- A bash registration belongs to one `(session_id, call_id)` from enqueue
+  through execution. Cancellation skips a queued job or kills its active
+  process; a process attached after cancellation is killed immediately.
+  Reusing an ID creates a distinct registration, so retiring an old job cannot
+  unregister its replacement. Session teardown cancels all its registrations.
+- Timeout and turn-cancellation kill the in-flight command's process group
+  (`libc::kill(-pgid, SIGKILL)`). On Linux, a best-effort `/proc` walk also
+  reaches descendants that escaped the group through `setsid`/`setpgid`.
+  Registration remains active through the bounded output drain; process
+  retirement and cancellation serialize access to the kill handle.
 
 ## Bash Containment
 

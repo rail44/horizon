@@ -14,6 +14,7 @@ mod exec;
 mod git;
 mod job;
 mod output;
+mod process;
 pub(crate) mod recent;
 mod registry;
 mod shell;
@@ -25,6 +26,7 @@ use crate::frame::AgentFrame;
 #[cfg(test)]
 use job::{run_job_body, spawn};
 pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun};
+pub(crate) use registry::{cancel_call, cancel_session};
 
 pub(crate) use git::{
     approved_metadata_roots, git_prefilter, metadata_writable_roots, requires_metadata_write,
@@ -167,16 +169,6 @@ impl HostExecutionApproval {
     pub(crate) fn new(source: ApprovalSource) -> Self {
         Self { source }
     }
-}
-
-/// Kills the running child for `call_id`, if this session has one in
-/// flight, and removes it from the registry. A no-op if `call_id` isn't a
-/// currently-running bash call — safe to call unconditionally for every
-/// provider-originated `ToolCallFinished` (see `agent::tools::processing`),
-/// since a cancelled turn's synthetic `ToolCallFinished` is exactly the
-/// signal that a still-running bash child needs to be killed.
-pub(crate) fn kill_if_running(call_id: &ToolCallId) {
-    registry::kill(call_id);
 }
 
 /// Whether a finished bash call's result should still be folded into the
