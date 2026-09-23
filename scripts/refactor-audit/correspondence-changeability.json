@@ -1,0 +1,1253 @@
+[
+  {
+    "label": "Knowledge document codec",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "KnowledgeStatus",
+        "name": "as_str",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "parse_status",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "is_valid_slug",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "strip_quotes",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "parse_inline_array",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "parse_knowledge_md",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "serialize_entry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge.rs",
+        "owner": "<free>",
+        "name": "fmt_array",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "KnowledgeStatus",
+        "name": "as_str",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "parse_status",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "is_valid_slug",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "strip_quotes",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "parse_inline_array",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "parse_knowledge_md",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "serialize_entry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/knowledge/document.rs",
+        "owner": "<free>",
+        "name": "fmt_array",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Bash FIFO ownership",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "enqueue",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "advance",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "enqueue",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/registry.rs",
+        "owner": "<free>",
+        "name": "advance",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Bash exit status result",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "run_async",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "success_output",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "terminated_output",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "status_output",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "run_async",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "success_output",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "terminated_output",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "status_output",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Git and Cargo command segments",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/git.rs",
+        "owner": "<free>",
+        "name": "command_requires_metadata_write",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/cargo.rs",
+        "owner": "<free>",
+        "name": "command_has_unscoped_clean",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/git.rs",
+        "owner": "<free>",
+        "name": "command_requires_metadata_write",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/cargo.rs",
+        "owner": "<free>",
+        "name": "command_has_unscoped_clean",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/shell.rs",
+        "owner": "<free>",
+        "name": "any_command_segment",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Named provider defaults",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/config.rs",
+        "owner": "NamedProviderConfig",
+        "name": "resolved",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config.rs",
+        "owner": "RigAgentConfig",
+        "name": "default",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/config.rs",
+        "owner": "NamedProviderConfig",
+        "name": "resolved",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config.rs",
+        "owner": "RigAgentConfig",
+        "name": "default",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider registry construction",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/registry.rs",
+        "owner": "ProviderRegistry",
+        "name": "builtin_with_config",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/registry.rs",
+        "owner": "ProviderRegistry",
+        "name": "builtin_with_config",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider retry policy",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "TransientRejection",
+        "name": "describe",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "retryable_rejection",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "classify_failure",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "retry_after_seconds",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "rejected_status",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "named_retry_after",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "retry_backoff",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "jitter_permille",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "sleep_unless_cancelled",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "with_pre_generation_retry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "truncate_for_log",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "provider_request_id_of",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "TransientRejection",
+        "name": "describe",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "retryable_rejection",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "classify_failure",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "retry_after_seconds",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "rejected_status",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "named_retry_after",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "retry_backoff",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "jitter_permille",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "sleep_unless_cancelled",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "with_pre_generation_retry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "truncate_for_log",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/retry.rs",
+        "owner": "<free>",
+        "name": "provider_request_id_of",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Fallback history reconstruction",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/history.rs",
+        "owner": "<free>",
+        "name": "load_rig_session_history",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/history.rs",
+        "owner": "<free>",
+        "name": "load_rig_session_history",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/history.rs",
+        "owner": "RigSessionHistory",
+        "name": "from_events",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Tools-disabled cap summary",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "run_cancellable_turn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "run_cap_summary_turn",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "run_cancellable_turn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "run_cap_summary_turn",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "run_cancellable_turn_with_config",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Actionable approval scope",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/frame/queries.rs",
+        "owner": "<free>",
+        "name": "pending_approval_call_ids_in",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/frame/queries.rs",
+        "owner": "<free>",
+        "name": "actionable_pending_approval_call_ids_in",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/frame/queries.rs",
+        "owner": "<free>",
+        "name": "pending_approval_call_ids_in",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/frame/queries.rs",
+        "owner": "<free>",
+        "name": "actionable_pending_approval_call_ids_in",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider event defaults",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "with_provider_payload",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "tool_call_progress",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "task_progress",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "session_selection",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "with_provider_payload",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "tool_call_progress",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "task_progress",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "session_selection",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Pattern query display",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify_tool",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify_tool",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Durable live-session input delivery",
+    "before": [
+      {
+        "file": "crates/horizon-agentd/src/session/approval.rs",
+        "owner": "<free>",
+        "name": "dispatch_inbound_command",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "run_session",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agentd/src/session/approval.rs",
+        "owner": "<free>",
+        "name": "dispatch_inbound_command",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "run_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/input.rs",
+        "owner": "<free>",
+        "name": "send_input",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/input.rs",
+        "owner": "<free>",
+        "name": "accept_input",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/input.rs",
+        "owner": "<free>",
+        "name": "acknowledge_delivery",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/events.rs",
+        "owner": "<free>",
+        "name": "persist_and_send_session_event",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "UI channel bridges",
+    "before": [
+      {
+        "file": "src/control_plane.rs",
+        "owner": "<free>",
+        "name": "wire",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/link.rs",
+        "owner": "<free>",
+        "name": "event_stream",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_host_tools",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_workspace_root_updates",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/control_plane.rs",
+        "owner": "<free>",
+        "name": "wire",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/link.rs",
+        "owner": "<free>",
+        "name": "event_stream",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_host_tools",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_workspace_root_updates",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Control plane argument validation",
+    "before": [
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "optional_session_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "optional_plain_session_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "call_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "required_string_arg",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "optional_session_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "optional_plain_session_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "call_id_arg",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "required_string_arg",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Split leaf construction",
+    "before": [
+      {
+        "file": "crates/horizon-workspace/src/layout.rs",
+        "owner": "LayoutNode",
+        "name": "split_pane",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/layout.rs",
+        "owner": "LayoutNode",
+        "name": "insert_pane",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-workspace/src/layout.rs",
+        "owner": "LayoutNode",
+        "name": "split_pane",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/layout.rs",
+        "owner": "LayoutNode",
+        "name": "insert_pane",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Modal cancellation focus restoration",
+    "before": [
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_palette",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_view_chooser",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_session_manager",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_model_picker",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_palette",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_view_chooser",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_session_manager",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "cancel_model_picker",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "restore_focus_after_modal_cancel",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Composer projection",
+    "before": [
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "project_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "sync_session_projection",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "project_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/composer.rs",
+        "owner": "AgentComposer",
+        "name": "sync_session_projection",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Transcript text rendering",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_item",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_item",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Grep and glob body summary",
+    "before": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "terse_summary",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "terse_summary",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Host tool receive pump",
+    "before": [
+      {
+        "file": "src/runtime/agent.rs",
+        "owner": "<free>",
+        "name": "spawn_host_tool_pump",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-wire/src/channels.rs",
+        "owner": "<free>",
+        "name": "receive_pump",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/runtime/agent.rs",
+        "owner": "<free>",
+        "name": "spawn_host_tool_pump",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-wire/src/channels.rs",
+        "owner": "<free>",
+        "name": "receive_pump",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Terminal PTY side effects",
+    "before": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "process_pty_chunk",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "process_pty_chunk",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "send_terminal_events",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Kitty CSI-u modifiers and suffix",
+    "before": [
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "kitty_override",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "navigation_key_event_override",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "csi_u_text_key",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "kitty_override",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "navigation_key_event_override",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "csi_u_text_key",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "modifier_value",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
+        "owner": "<free>",
+        "name": "finish_csi_u",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Live and history row backgrounds",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_scrollback_window",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_scrollback_window",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_row_backgrounds",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Theme contrast normalization",
+    "before": [
+      {
+        "file": "src/theme/scheme.rs",
+        "name": "resolve_text_contrast",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/seed.rs",
+        "name": "from_current_config",
+        "owner": "Seed",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/seed.rs",
+        "name": "clamp_contrast",
+        "owner": "Seed",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/theme/scheme.rs",
+        "name": "resolve_text_contrast",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/seed.rs",
+        "name": "from_current_config",
+        "owner": "Seed",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/seed.rs",
+        "name": "clamp_contrast",
+        "owner": "Seed",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Theme config table updates",
+    "before": [
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "save_to_path",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "write_seed",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "set_value",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "save_to_path",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "write_seed",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "set_value",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "src/theme_settings/save.rs",
+        "name": "table_mut",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Filesystem grant validation",
+    "before": [
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "name": "apply_grant",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/grant.rs",
+        "name": "revalidate_grant",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "name": "validate_grant",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "name": "apply_grant",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/grant.rs",
+        "name": "revalidate_grant",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/grant.rs",
+        "name": "validate_grant",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ]
+  }
+]

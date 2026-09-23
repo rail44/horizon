@@ -17,7 +17,7 @@
       },
       "decision": "preserve",
       "reason": "Event-to-frame reduction owns delta promotion and turn boundaries. Preserve the exhaustive event match and separate ephemeral sidecars; UI projection now has its own module.",
-      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -34,7 +34,7 @@
       },
       "decision": "preserve",
       "reason": "Current, incremental catch-up and full rebuild are distinct recovery paths. Keep their fallback and shared-store ownership; live and rebuild appends now share the same atomic write implementation.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -45,13 +45,14 @@
       },
       "sha256": "b0ceda0516388fddb35db5111ea1a3f28fdcfac60020dd93b78dc99fc99aa177",
       "related": {
-        "crates/horizon-agent/src/providers/rig/completion.rs": "cdaa45aa2bce0bbf1c6d401d02b367b0f7b40ac41b41d39a08b1d089c6bb785d",
+        "crates/horizon-agent/src/providers/rig/completion.rs": "43dec757679763d9bec9fcb9e26b16a2c49fd125cd46b2175cf33e1470221a3d",
         "crates/horizon-agent/src/providers/rig/completion/response.rs": "e09fde763ada7713676c998f2f371c00c3da9090cc5ad63e0bc1152fca8fb7de",
-        "crates/horizon-agent/src/providers/rig/history.rs": "b45feeb11acc9a0d5252b0ab947bbc2f957eda6b1ba2153206dc8c08b6587568"
+        "crates/horizon-agent/src/providers/rig/history.rs": "9a1c140309969542a0c75bb96f35dc315880b5e5e8be44c0ca65e98bc684433e",
+        "crates/horizon-agent/src/providers/rig/retry.rs": "72c216a251a46b66fe189f91e01fd8f4ffcce0c94a4395e5c1675a4e91a2824b"
       },
       "decision": "preserve",
       "reason": "Clearing replaces only frozen tool-result occurrences in the provider view. Canonical history, current-round call/result pairs and memory projection have distinct contracts; preserve them.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -63,12 +64,12 @@
       "sha256": "002f6a416110f571730eefdce6cfa8b5a1f834bcca7af17799c0a2646bd914ee",
       "related": {
         "crates/horizon-agent/src/tools/approval.rs": "b3ecf1bc03420f5054dd7d959bbb950df9f6e19017887b29abe4df0e2a528733",
-        "crates/horizon-agent/src/tools/bash/cargo.rs": "63b095cb5b42b80a8b335b7bb4317ac72a058ffe0e83b02931b222b264580816",
-        "crates/horizon-agent/src/tools/bash/git.rs": "e6eb62fa6cdbd8421322020288bcb5d1af3c8347e6f62a9755157cec678d3a35"
+        "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
+        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb"
       },
       "decision": "preserve",
       "reason": "The cohesive lexer preserves words, quoting and command boundaries for both Git and Cargo classifiers. Keep its state machine here; filesystem authority and approval remain outside it.",
-      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -80,12 +81,12 @@
       "sha256": "6e833a7cd728efd46f0c9e9dab87ffe7d4e47c507d1c0b495487da147030e1a5",
       "related": {
         "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
-        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "867da79056894c4ec47143157f08e852796cae6c849a58325a33c08117aeb290",
+        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "b31bb8b1d3bcb6ef3a89bb8ac23767b6ea199537a0ae045b3296b2188b524275",
         "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912"
       },
       "decision": "preserve",
       "reason": "Each request occurrence keeps its own approval, result and superseded state. Prefer occurrence identity and retain reverse call-id matching for legacy logs; do not collapse retry attempts or reorder the first-request sequence.",
-      "commit": "92dc0b407e0f2352a3e539f092445884efb457ea"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -94,17 +95,19 @@
         "name": "run_session",
         "partition": "production"
       },
-      "sha256": "7f51f44cdb03f1b316982fd59325675d07aa742b942fb0e11e272a35b87e1e71",
+      "sha256": "4a695b463ececdbf825280b34fa53c631614b77f85c893aeceb282da81ed37d6",
       "related": {
         "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
         "crates/horizon-agent/src/tools/moa.rs": "3f16cc44bb3db2a99aca87ee01ac145694c2fdfa59b6513af41358de1bc5c18d",
         "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
+        "crates/horizon-agentd/src/session/events.rs": "dedc2af0e3a73a34ef85cab3c50baea5ae98dc0584e7000831629276fefa928a",
+        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
         "crates/horizon-agentd/src/session/resume.rs": "83f4ff875ddb9a4bb579c39e6600de4c2472c5ca24b5cd81935261fb6b9ab7d7",
         "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c"
       },
       "decision": "preserve",
-      "reason": "Session execution orders environment readiness, queued input, provider completion and durable outcomes. Keep the select loop as the ordering owner; task and MoA child monitoring share only their panic boundary, with distinct cancellation and notification policies.",
-      "commit": "92dc0b407e0f2352a3e539f092445884efb457ea"
+      "reason": "Session execution orders environment readiness, queued input, provider completion and durable outcomes. Keep the select loop as the ordering owner; task and MoA child monitoring share only their panic boundary, with distinct cancellation and notification policies. Durable live-input delivery now has a separate owner; persistence is flushed before provider dispatch.",
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -116,12 +119,13 @@
       "sha256": "de35977288951b90f6448a396a33d1afd1e16068512b2091500d8e57ee183f9b",
       "related": {
         "crates/horizon-sandbox-runtime/src/linux/network.rs": "0607130ed577a1c61f40d3c1364b4267ad6d8b57b366d750e12cd52e02c5ebff",
-        "crates/horizon-sandbox/src/caps.rs": "83cd53ef9d8cfe3e2371383ac151542f084beba4601e212f54a85bdcd39bab9e",
+        "crates/horizon-sandbox/src/caps.rs": "bba0760387ea55568db59b46a45aaff8d24d598412c1b4acf155d6ea247961be",
+        "crates/horizon-sandbox/src/grant.rs": "8d7b32726a93dec65a7c43d5ab94928616cbad1bf4b9b344cdc23cdc4eada21d",
         "crates/horizon-sandbox/src/linux/mod.rs": "f805285f845c90a90e7e70d64e4a1a6346dad0f93c71097950c097a9066ff2b1"
       },
       "decision": "preserve",
       "reason": "Excluded subpaths must deny writes before selecting the longest sufficient capability. Coverage, sufficient access and refusal evidence are separate decisions; preserve the ordered matcher.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -136,7 +140,7 @@
       },
       "decision": "preserve",
       "reason": "Key and modifier combinations follow distinct wire encodings; preserve the protocol table and its mode-specific branches.",
-      "commit": "ceede795e764af4aad3f08d91d25e4d5c2faacca"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -145,7 +149,7 @@
         "name": "run_terminal_core",
         "partition": "production"
       },
-      "sha256": "e26d8690cd06a8d9038d0531f993b8f10b5e32cac505c44a8b956af9bbce6725",
+      "sha256": "b5b1e28b68fb603be7e69c6421eba6a1e550b5edb2f031539419b7885be201d0",
       "related": {
         "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
         "crates/horizon-terminald/src/terminal.rs": "eb82fe5e65fec5b596f6de7ca379e254eaf4ccbca089d7c9fe11070308b0a6a9",
@@ -153,8 +157,8 @@
         "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57"
       },
       "decision": "preserve",
-      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot.",
-      "commit": "92dc0b407e0f2352a3e539f092445884efb457ea"
+      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership.",
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -171,7 +175,7 @@
       },
       "decision": "preserve",
       "reason": "Key bindings map the internal CommandId vocabulary; CLI requests expose a different wire vocabulary. Preserve these tables instead of unifying distinct operation surfaces.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -188,7 +192,7 @@
       },
       "decision": "preserve",
       "reason": "Directory watching survives artifact replacement, content filtering avoids reload loops, and dropping the owner cancels the quiet-period task. Preserve this watcher beside pane-owned load and receipt tasks.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -199,13 +203,13 @@
       },
       "sha256": "2bf5c2c8e03fa3f088e1173501127ffab91fd14e0f0d70ed0320b83b87c03062",
       "related": {
-        "src/terminal/mod.rs": "8b729d8eaf9b68fb0a8692af73698323b7220aa000a16e9eefc4e6503723889b",
+        "src/terminal/mod.rs": "ddab8e6642937cf2bfe732e1cecae5221608765dccd1f9034fecb907eea80ea7",
         "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea",
         "src/terminal/shaping.rs": "99850c11e70513f968ab3b93a178964191d80b70cebee6813d28c644e9566339"
       },
       "decision": "preserve",
       "reason": "Character branches encode distinct geometry. Shared row shaping and text decorations now live in shaping.rs; geometry and cache epoch semantics remain unchanged.",
-      "commit": "92dc0b407e0f2352a3e539f092445884efb457ea"
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -214,7 +218,7 @@
         "name": "paint_terminal",
         "partition": "production"
       },
-      "sha256": "772b8057ad097516b7e13bd947409ab961c7e3920d8d283e0031d33200f5bad9",
+      "sha256": "6b5a702e1c045ecb53eff2316b4eb6464b394b5c58e6b3ac2de1c62050c7aa3c",
       "related": {
         "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
         "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
@@ -222,8 +226,8 @@
         "src/terminal/shaping.rs": "99850c11e70513f968ab3b93a178964191d80b70cebee6813d28c644e9566339"
       },
       "decision": "preserve",
-      "reason": "Live and history painting have distinct cache indices and generations. Cursor, selection and IME belong to the live viewport; both paths use the same separately owned row shaping.",
-      "commit": "92dc0b407e0f2352a3e539f092445884efb457ea"
+      "reason": "Live and history painting have distinct cache indices and generations. Cursor, selection and IME belong to the live viewport; both paths use the same separately owned row shaping. Both paths now also share background painting, including empty-text colored spans.",
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     },
     {
       "target": {
@@ -237,11 +241,12 @@
         "src/theme/gpui_component.rs": "f0c91a01af7b98b79ea372f211974fdcfcc0522cd6babd33ff062f368cc8c450",
         "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
         "src/theme/oklab.rs": "f599b0c34374d99be400bf6041da1252a064875f4b93fcaf14cccfa8122ea146",
-        "src/theme_settings/save.rs": "d13ec768fd9027756e2b1f3804484c90d4ac6d57f97649f56652a053bf6c3e11"
+        "src/theme_settings/save.rs": "88619554b8358a4c51c760ddd674c67b870f7b69fa3ef735235fb9c33a0d323b",
+        "src/theme_settings/seed.rs": "71fac9bb1c885a86f3b9d93375dbf71aba6ac731473f56c2799827333ae56ceb"
       },
       "decision": "preserve",
-      "reason": "Color roles share one resolved seed and contrast policy. Preserve the cohesive derivation; live application and TOML persistence already have separate owners.",
-      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+      "reason": "Color roles share one resolved seed and contrast policy. Preserve the cohesive derivation; live application and TOML persistence already have separate owners. The editor reuses the same contrast normalizer; config saving handles normal and inline TOML tables with errors for invalid shapes.",
+      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
     }
   ]
 }

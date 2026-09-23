@@ -1,0 +1,671 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "40848c9499725c5679c50f6804265d39f5fae828",
+  "reviewed_commit": "9041ff900ff58e07fd98fe013e0e082fd135f998",
+  "profile": "profiles/non-board.json",
+  "groups": [
+    {
+      "id": "tool_contract",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Catalog permissions, policy emission, execution dispatch and approval resolution agree on read escapes, contained writes and domain grants. Human and judge paths retain different stale-request checks; retries retain prior-result and grant-specific event order. ToolSessionState owns session grants and the work guard tracks actual asynchronous jobs.",
+      "files": {
+        "crates/horizon-agent/src/policy.rs": "c91e486b5ab2aacc0de6912144293f83a4aa9ff9d3da593f16bf362187b24871",
+        "crates/horizon-agent/src/tools/approval.rs": "b3ecf1bc03420f5054dd7d959bbb950df9f6e19017887b29abe4df0e2a528733",
+        "crates/horizon-agent/src/tools/catalog.rs": "f678dfc9bafd591511eca41840fb20173ab748d742eb08ec6452e6af46c63f80",
+        "crates/horizon-agent/src/tools/execution.rs": "d24cec5d63e3ec5a1aa835b965a74ba9eb4d94a6b6b0f77889c3dd826f4d02e8",
+        "crates/horizon-agent/src/tools/mod.rs": "37ca14ab9c07d1002cd725e418a6ad9f9fe02f671b3b6c7b0b1af7545680e5bc",
+        "crates/horizon-agent/src/tools/network.rs": "2f267c2e93cc73ff84df3e34a02a75c2ae86a0dfffc5b262d9954417e15ababe",
+        "crates/horizon-agent/src/tools/processing.rs": "01e92da0b3faa1fd4021b27b006cf55930d136e7d261589d2eb1260d4d24c3e6",
+        "crates/horizon-agent/src/tools/state.rs": "c7a7313e232bbb74be67af2894acf863fb7df4f5badc5d349044430ba576186e",
+        "crates/horizon-agent/src/tools/work_boundary.rs": "da06c49ffc8c342e6c8c3c438bb073a9a679ea76cfd0f29c25d9a5c6240b6051"
+      }
+    },
+    {
+      "id": "file_tools",
+      "area": "sandbox",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Read/write confinement shares canonical path resolution while Git metadata is readable only. Edit batches and writes share ordered per-path locks and staleness checks; read/grep rendering has independent output budgets, glob/grep share traversal exclusions. Keep partial-edit failure semantics and host-config write differences.",
+      "files": {
+        "crates/horizon-agent/src/tools/fs/edit.rs": "d51f3247dfd09b0ba57070f4ff2ce4f57650f29b8d17faf1acf635816ba63e55",
+        "crates/horizon-agent/src/tools/fs/glob.rs": "785d8523da86170fe220e50fdc471b963aba45e7382f30d5e3c7ab122346d917",
+        "crates/horizon-agent/src/tools/fs/grep.rs": "92f322052eff6db5064da22dc11d8e79a156b35d1a60730eda1209b36d1c6f84",
+        "crates/horizon-agent/src/tools/fs/locks.rs": "1f1819ab469e4f6030a68df3c4b3b2e0c87a9ba8adacfca8bbebbe1ed89bc984",
+        "crates/horizon-agent/src/tools/fs/mod.rs": "250484954e2a66e875b1dd5949eb85143e2f750fde3e02eede99ee06a2b2119f",
+        "crates/horizon-agent/src/tools/fs/read.rs": "9270a46b5d1bd2ddd93402129ddeddeb0db1a770582d078a26ad04c00bd5da4d",
+        "crates/horizon-agent/src/tools/fs/safety.rs": "40815270bd395c6afc278ddef640892498e68904d5225099bac34581e6875f07",
+        "crates/horizon-agent/src/tools/fs/staleness.rs": "da40358f3f0cfb65038c1a1972a7c7b17b8016216e32d23b5ec3b818f85d58be",
+        "crates/horizon-agent/src/tools/fs/traverse.rs": "dbde097ed7f3cac19269b0ed8c5f0415943745caebb5f2ee78b4b54810cf01e9",
+        "crates/horizon-agent/src/tools/fs/write.rs": "1544c89e9c9ff24252a49fbf93b9edbf7f5f4b43e082b8e6dd90420c7d18b2c0"
+      }
+    },
+    {
+      "id": "bash_tools",
+      "area": "sandbox",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Use queue membership as the sole running-state authority, reuse exit-status result construction for host and sandbox execution, and centralize shell-segment traversal for Git/Cargo classifiers. Keep lexer semantics, grant revalidation, per-session FIFO, cwd sharing, cancellation, capture/drain differences and denial attribution. Existing 72 sandbox-compatible bash tests pass.",
+      "files": {
+        "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
+        "crates/horizon-agent/src/tools/bash/exec.rs": "3c92f8da78099a09c44613bf76d54ab1b3d8504b290644f7b9dcc26acf6ef9ef",
+        "crates/horizon-agent/src/tools/bash/exec/plain.rs": "79f0f25ed09fa88e0b7771e7eba55f0779f0e9e320b4429337e3a6d64331ccd7",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed.rs": "25a82c12d8f7a8ec2dd60fe19365e5cb1b952996fb417df0434a4f62ce36d709",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs": "42ce5decf5304ac40a49804cc52ec693f02d7527e0d3fde543cd73cbc1d41229",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/prepare.rs": "ffff9e45332ed84103533450d1a6fa040af78a4749c752e640ec78080fa4487e",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/result.rs": "90843ab5a14c5c45b2dc1cf080eb0029016a448d0b0865f172f603a514292731",
+        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb",
+        "crates/horizon-agent/src/tools/bash/job.rs": "2cece20af87d879ca2287b523bacd183fb663b4b07e0e3ccdb5134d229fd65ce",
+        "crates/horizon-agent/src/tools/bash/mod.rs": "f464810b8db89f2f6660a5666c35207e0dd51910a2af4bd0d72172ff4da413a2",
+        "crates/horizon-agent/src/tools/bash/output.rs": "ebb8d5aa9e8c9904beb9cf81ffcc9339f3316dd952b3f6a64f61371e4f8d0e63",
+        "crates/horizon-agent/src/tools/bash/recent.rs": "608faea229a4c4e30d27b955758a8d5da7fd7a670d03c6192398f3633188d188",
+        "crates/horizon-agent/src/tools/bash/registry.rs": "6bcf7bae95309329c85d231fa769badcb9cb6e919ff6d230c9a0503434b6a097",
+        "crates/horizon-agent/src/tools/bash/shell.rs": "4726141a8404774d33a3d40adbadb2522ac0956750d50935934ce54ed5d802e6"
+      }
+    },
+    {
+      "id": "web_tools",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Fetch independently checks URL/DNS/connected address and each redirect against session grants; search uses a fixed endpoint with bounded output and secret redaction. Generation-checked task registration prevents stale completion delivery. Transport/body formatting separation from the sixth sweep remains appropriate.",
+      "files": {
+        "crates/horizon-agent/src/tools/web/fetch.rs": "228110e1d802cfe6cf6dfbde77f29a36c4628ca936294d851ae705a90f7f1595",
+        "crates/horizon-agent/src/tools/web/mod.rs": "ed38042281bdda4aae0667ffe01a94c82ae42175ae5c8112cf9d893af2c2c337",
+        "crates/horizon-agent/src/tools/web/search.rs": "3a3e2dac33ae5b33d1ad8f24224768b190758596af4a01b6950a42b55eaa16dd",
+        "crates/horizon-agent/src/tools/web/ssrf.rs": "835ef410a288cfc7a14cffe917d409e17af7e127952071e3ed5439a777b59fb5"
+      }
+    },
+    {
+      "id": "child_sessions",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Task and MoA share terminal-event folding and a take-once termination registry. Task children survive a cancelled turn and retain reports; proposers are aborted with their pass. Keep requester-scoped lookup, notification provenance, partial-report handling and those distinct lifetimes.",
+      "files": {
+        "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
+        "crates/horizon-agent/src/tools/explore/children.rs": "96bfa7439275f1815b2c3ae1ff0518fca7a934d3f75534fd51a610e0c8fa6d2f",
+        "crates/horizon-agent/src/tools/explore/notify.rs": "e2d09d8c1e02dac8d7773818deec131b5f58fb42e324274610cd26383c797e16",
+        "crates/horizon-agent/src/tools/moa.rs": "3f16cc44bb3db2a99aca87ee01ac145694c2fdfa59b6513af41358de1bc5c18d"
+      }
+    },
+    {
+      "id": "specialized_tools",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Config writes retain TOML validation, read-before-write mtimes and atomic replacement; recall keeps query validation, database access and bounded display distinct. Memory updates use a finite field schema and explicit operations; knowledge dispatch remains a thin project-root adapter.",
+      "files": {
+        "crates/horizon-agent/src/tools/config/mod.rs": "cf9b142a100fc18f09f807f43f69270dad2e55cb7689c3cbab44a3dfb5770fdc",
+        "crates/horizon-agent/src/tools/config/write.rs": "d9b8c888a8cb88943d5bbbd6566aa82dcee31954bf7f3da28a65fabb41fe319a",
+        "crates/horizon-agent/src/tools/knowledge/mod.rs": "cf28d01536c889f446effdca3aedae45f87fb0606d4b279204b549e5dee940d4",
+        "crates/horizon-agent/src/tools/memory.rs": "f5eaaed2284fc6e9224708c292db585f8ca16bdd84a2bc9a1fb5b1f39826b5f4",
+        "crates/horizon-agent/src/tools/recall/mod.rs": "98e94f09b652d889f1b11a119828b5fa5a203823235fd712c8e95ce93777dfcb"
+      }
+    },
+    {
+      "id": "instructions_roles_skills",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Separate the persisted knowledge document codec from project/store lookup and tool I/O. Preserve skill parsing differences, repository-root discovery order, fresh skill-body reads, role allowlists and trusted-project prompt/catalog gates. Existing 32 knowledge-related tests pass.",
+      "files": {
+        "crates/horizon-agent/src/instructions.rs": "24e1ad12bad6852c44f8113bd2a4367e1582e90c5a3cd85f6640bb9ef7cc9050",
+        "crates/horizon-agent/src/knowledge.rs": "d85cd23801c85b63605012b38c66ee8b8159d8d7987d378793f87ba5dc14c188",
+        "crates/horizon-agent/src/knowledge/document.rs": "7ed856de55e9ceee87e5d15ca7b4a95d3686c43dd952e34d9dfd9615939e4f25",
+        "crates/horizon-agent/src/prompt.rs": "31db2fb6d51b4026ea059d0764274e2525ddee86b5d71fb084e507405754a90b",
+        "crates/horizon-agent/src/roles.rs": "6e20cb339cef8afbb779a9b1ac7cb2d390f187a0b4959e9ea5da8debf013b6ab",
+        "crates/horizon-agent/src/skills.rs": "6ffcf4ecc858bc0e194aa9aa5b654b28344dc6b6a8a3d6de64af3c4436dfda4f"
+      }
+    },
+    {
+      "id": "judge",
+      "area": "tools",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Keep trusted mediation context separate from tool arguments, two-stage parsing with escalation fallback, bounded asynchronous judgment and audit recording. Candidate identity is rechecked by approval resolution. Process-lifetime judge client configuration remains intentional existing behavior.",
+      "files": {
+        "crates/horizon-agent/src/judge/client.rs": "412db55313b00a3c4e314d02ab09117bbf904b0f3f8fde67a5dfa19f5a339db7",
+        "crates/horizon-agent/src/judge/handle.rs": "40411fa3347123534d95340673b42ad87c09b5a3f6859a42d35d2481f8a55c8b",
+        "crates/horizon-agent/src/judge/mod.rs": "aaefedce2d8f34d20463e79e1e784536b05a35d237b198d13cecf049b1b8f53c",
+        "crates/horizon-agent/src/judge/parse.rs": "11f631f3654fb633c27a821da4ae15a52e9c17dc320b7c4b6ae352ee09d49339",
+        "crates/horizon-agent/src/judge/prompt.rs": "848f8133834c5b2ff264a253b264d49e3543a55fb30c9e02f39f80364d50f46e",
+        "crates/horizon-agent/src/judge/ratelimit.rs": "072b24dea49494b67a8c6c5266c046f00dd3ab442e14eb447ca43dbf65fe7022",
+        "crates/horizon-agent/src/judge/record.rs": "8f1de894357e82b964ae65dc85176adb7bfb0c5c4f46033688d87f7ff30b80a5",
+        "crates/horizon-agent/src/judge/runtime.rs": "8e5baaf964aa63b1b02bb958229006ca2094a3becb9c82ddd1baf58d8d205fcf"
+      }
+    },
+    {
+      "id": "provider_configuration",
+      "area": "providers",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Shared RigAgentConfig defaults now initialize named providers, and registry construction has one provider creation path. Loader precedence, role overrides, picker two-stage selection, model-switch preservation, environment handoff and new-session-only reload remain unchanged.",
+      "files": {
+        "crates/horizon-agent/src/config.rs": "3704e11cede88edde362e4ef3f8bf98b612965308fd73c5be166abf01ac02d8c",
+        "crates/horizon-agent/src/providers/mod.rs": "df1d90760011029a328a921b2a60b41473729d863cd56c87167fb93959fce726",
+        "crates/horizon-agent/src/providers/rig/mod.rs": "7a0f366201ec41d7417207c701b5e125b841a0c8da8097c81394cc2ba527dfe7",
+        "crates/horizon-agent/src/providers/rig/model_limits.rs": "dc2baf2ee7a36049e6c891211a3c549786f44554d60a7dff765ca2b38584c8ab",
+        "crates/horizon-agent/src/providers/rig/session_prompt.rs": "ed1886f8a910886b54b961ad2d8e07c060422ffaba6bf4d472085798a2909177",
+        "crates/horizon-agent/src/registry.rs": "267d764732c90aabe8cfc2d29345f2d83ed7572435ef8ac68bfe4a505ab84ac5",
+        "crates/horizon-agentd/src/providers.rs": "e038e0acf103b4277dec083723979b8e848a86275bd2d2c7e7377b9abf6449a3",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/moa.rs": "a6b6c6e8582234fc684de9b8c1d70b3c079d735bed8ba4c6fe8ec133f75c0b8f",
+        "crates/horizon-config/src/warnings.rs": "8aae95adf666f9d5026e96385fdf6bfc6f28b578ba596e0047f79b70c928dd93",
+        "src/model_picker.rs": "5b6dd72fa23409827d2592f6fa19d34407f47fc9e9210df9850bc20ec65434da"
+      }
+    },
+    {
+      "id": "provider_transport",
+      "area": "providers",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Separated pre-generation retry classification and pacing from request/stream assembly. Reviewed both provider kinds, durable-output retry cutoff, cancellable backoff, stream timeouts, request-span closure and raw-vs-normalized tool arguments; existing retry and stream tests preserve ordering.",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/completion.rs": "43dec757679763d9bec9fcb9e26b16a2c49fd125cd46b2175cf33e1470221a3d",
+        "crates/horizon-agent/src/providers/rig/completion/response.rs": "e09fde763ada7713676c998f2f371c00c3da9090cc5ad63e0bc1152fca8fb7de",
+        "crates/horizon-agent/src/providers/rig/retry.rs": "72c216a251a46b66fe189f91e01fd8f4ffcce0c94a4395e5c1675a4e91a2824b",
+        "crates/horizon-agent/src/providers/rig/stream.rs": "a059b87f484919545e34e04512420205426c3e41884725cd25b7930ed749e911"
+      }
+    },
+    {
+      "id": "provider_turns",
+      "area": "providers",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Reviewed queued/active input, stop handling, tool batches, truncation and memory recovery, MoA cancellation and guard halts. Fixed unused summary configuration by explicitly passing the tools-disabled config; loopback HTTP regression failed before and passed after, with original session config retained. Other event and cancellation ordering is preserved.",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/guards.rs": "aaa391f27499276ef10212d00dd321b17abeb7c0dcb621b5d01b86f07cc42372",
+        "crates/horizon-agent/src/providers/rig/session/environment.rs": "e4887d447f3c39d938decabbf827aad1ca14bd360a9fc988fe4cbd0224dbea33",
+        "crates/horizon-agent/src/providers/rig/session/input.rs": "858952299be0bd53c9a82fc25ee6a1cdaa7dd3cc99fef83bb7aa57b74099d586",
+        "crates/horizon-agent/src/providers/rig/session/interaction.rs": "213cc7ea4f6fe964a079023a15b9fbc907bd001961390155308ed9f07fcf43d7",
+        "crates/horizon-agent/src/providers/rig/session/moa.rs": "14ee8a221a064d2ded7a8a4d3066a8ab0f42b2d5a4ece86d6d7b7238f822b7ef",
+        "crates/horizon-agent/src/providers/rig/session/mod.rs": "78c510bedb8cc560734a71e6156935dcd3f8de689c00d575adb26edff327bf31",
+        "crates/horizon-agent/src/providers/rig/session/state.rs": "04b467720ff146c40dfa6d326a89eea22f13ce905922be93c4cd5f066e76cb78",
+        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "5b36d1e995b2ab7ab7a12cee93452e55e3c24d4647577b8b49a0ffe08a8739a2",
+        "crates/horizon-agent/src/providers/rig/session/turn.rs": "271aa63eb7e3352c9660f763af65fc764e46a7f74ca99d34601d81615580d7b8"
+      }
+    },
+    {
+      "id": "provider_history",
+      "area": "events",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Centralized fallback event reconstruction while retaining authoritative-log precedence and untouched cross-session memory seeding. Clearing remains a request-only projection with occurrence counts, protected tail and current-round exclusions. Pairing repair keeps whole-history evidence separate from incremental repair; title summarizer retains its separate bounded request lifetime.",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/clearing.rs": "94e58823ee18d8593002a9b2f7305b368455a5cd69eb934430446e3e24e45242",
+        "crates/horizon-agent/src/providers/rig/history.rs": "9a1c140309969542a0c75bb96f35dc315880b5e5e8be44c0ca65e98bc684433e",
+        "crates/horizon-agent/src/providers/rig/mapping.rs": "c6b5fdefdbc6c807f2d5e767f06e143efb917cd3d0cd1215b36146b2f61a7e90",
+        "crates/horizon-agent/src/providers/rig/mapping/replay.rs": "aa3c68ee91b81676510341c7c57e31f3bde03154d7958e975ceff9365a947655",
+        "crates/horizon-agent/src/summarize.rs": "29579de81ff9816bdd454a6de2d72b9536dfde2efbc4db48677361f5a69793c0"
+      }
+    },
+    {
+      "id": "mock_contracts",
+      "area": "providers",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Mock scripts and their delayed cancellation path provide intentional deterministic protocol fixtures. Prior response extraction keeps startup/dispatch separate; their limited state machine is not merged with real provider recovery or tool execution.",
+      "files": {
+        "crates/horizon-agent/src/providers/mock.rs": "4810a52634b24d0dc481d0b1bbd60b0902beffd7989316a57659513672dec3f2"
+      }
+    },
+    {
+      "id": "event_frames",
+      "area": "events",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Reviewed durable event contracts, live-only progress routing, incremental/replayed frame folding and caller queries. Centralized ProviderEvent defaults and reused pending-approval calculation on the post-TurnEnded slice; historical approval display remains unscoped. Kept turn status, tool occurrence identity and message promotion boundaries distinct.",
+      "files": {
+        "crates/horizon-agent/src/contract.rs": "807859d9b6136a50ec2c8e60d411f6d44dcc0683878296b671f715b3bb928ca7",
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/frame/mod.rs": "fc73723d0bc758b610d9008947e37a95982fd268147b476424c3da1507c3f75f",
+        "crates/horizon-agent/src/frame/queries.rs": "dc3f92fd32ba2cf76210ce5dbfddeb8c97f6c3c9c56c4b845e91bce696d86468",
+        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
+        "crates/horizon-agent/src/frame/types.rs": "790ffe4b06aa4aba282e5e8304f01910f9b340ec208a1e6b2c50a8929de9a0bd",
+        "crates/horizon-agent/src/live.rs": "fdf4c77293b941844b0e7c0d3f6c26e888f7c57693941a38c303f3a3c2a5bad4"
+      }
+    },
+    {
+      "id": "event_log",
+      "area": "events",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Appender owns turn identity and session context; writer owns global sequence, ordered JSONL append and shared projection startup. Tolerant reads preserve the sequence high-water of undecodable events. Resume settles interrupted turns with restored TurnTracker before LiveState starts a new turn; current/rebuild/catch-up decisions remain together.",
+      "files": {
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "84ae3f8be8f6d8d13fa8cf189a745f6c4dab4ca6ce212fb8016c09c7b90d932f",
+        "crates/horizon-agent/src/persistence/event_log/mod.rs": "4e38c1524e59d3804f2f21fdce2ac673fb500ef73dc5f77a307097215658aa72",
+        "crates/horizon-agent/src/persistence/event_log/turn.rs": "86a3dd0a2d49199b9e33c0f842c8100ab28eeae22c9e85307b108c7de6192e1b",
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "61030e56ead774115ff71fc2a4de7673f42f677421920e6e5b608c7a82e9d359",
+        "crates/horizon-agent/src/persistence/mod.rs": "6ac23750d7197581c73bd45e9ec3c9135dd09a024b64a8a28a3610f2c112fdfb",
+        "crates/horizon-agent/src/persistence/projection/mod.rs": "6e80311db5b5a906c73aaea85d6a7e10b00a0c8e67b4829a9dc666a426f1a6c2"
+      }
+    },
+    {
+      "id": "duckdb_projection",
+      "area": "events",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Reviewed transaction rollback, chunk bisection with malformed-record isolation, shared-store publication, event projection, bounded search/window queries and schema/record types. Domain-specific SQL bindings and projection shapes remain explicit; derived data remains rebuildable from JSONL. Benchmark helpers are retained as test-only callers.",
+      "files": {
+        "crates/horizon-agent/src/persistence/projection/duckdb/append.rs": "2a5173df9979d303c4dd65904dc7bb9aaa439169651b44d63d0bffd6fa4c8d86",
+        "crates/horizon-agent/src/persistence/projection/duckdb/bench_probe.rs": "7bb7176afa7b68f4086e855543047ccf5fceb664c84a4a56ec1de441b00df39c",
+        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "0c2ffa49c147d5f72d9f33af181ffb7852d8062608d50ed9848f4ab79a5f6588",
+        "crates/horizon-agent/src/persistence/projection/duckdb/mod.rs": "eeaa207586601da4d3bfb4f0e5a63632a537322280b5d434b2e082f9c45543a9",
+        "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs": "ba01dd92a39b978e9e38aa0b2ffbb6e7ad81bb588c3ff0f01345348c8912b021",
+        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "22bb6b46c78fb570bf7ad0b06fa801042a224bab4f65a2bf8d01fa3b2514c1ea",
+        "crates/horizon-agent/src/persistence/projection/duckdb/records.rs": "a203b47add6534f55231dc9057e8d42ed072d92d51b35317f0bc3fa2b2b20fb4",
+        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "7cfec3989f435e2b41f7286e1dee2bad2890393bc41b7ebed0367902917759fc",
+        "crates/horizon-agent/src/persistence/projection/duckdb/shared_store.rs": "3986cb9729cf313ca5645e748b05ac4bbfde6239dd0dbca138ba8319efdacb18"
+      }
+    },
+    {
+      "id": "transcript",
+      "area": "events",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Reviewed occurrence-aware tool/result folding, approval history, burst/turn boundaries, receipt aggregation and file effects against tool output producers. Combined grep/glob display construction with distinct labels. Retained separate error/superseded/unfinished paths and bounded text/diff formatting; no UI behavior change.",
+      "files": {
+        "crates/horizon-agent/src/transcript/bursts.rs": "57fb8c1afbb3b8d7bd256210648cba09156df76321363520e532183ec064f8b1",
+        "crates/horizon-agent/src/transcript/diff.rs": "dc02a00a95bdda60740d696d6af133a6471141adbf533c2b82f6f5f6d4b4aaf5",
+        "crates/horizon-agent/src/transcript/grouping.rs": "aa0cb4dc4bb1a1878e5dbebae559aa68fab5eafb3e8f417fcec334a125daef3f",
+        "crates/horizon-agent/src/transcript/mod.rs": "ed47a9841ce1ca82243c9661fe1f2f44a5b16b3e4fec3770f1f47cf60cdba424",
+        "crates/horizon-agent/src/transcript/receipt.rs": "369c98e5d315a0e0658dc4636254d01bc5c9fb73ad46f65f0d743b10f909cdb4",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
+        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "b31bb8b1d3bcb6ef3a89bb8ac23767b6ea199537a0ae045b3296b2188b524275",
+        "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912",
+        "crates/horizon-agent/src/transcript/tool_call/mod.rs": "4bf076bcd0482baedec16c31b7b37c004339ab2204a5cb3b77ff9724a83d18e7",
+        "crates/horizon-agent/src/transcript/tool_call/util.rs": "5827f47fc6fc014929d65154fcdf4bbde057d1b456a2d5765d707fcb42cbc164",
+        "crates/horizon-agent/src/transcript/tool_call/view.rs": "c63c2a3a8b9e7ee8955ce016f93759f524b5d857ed14a2bdba8df7c8ade2ad74"
+      }
+    },
+    {
+      "id": "daemon_sessions",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Reviewed provider startup, thread-local tool state, input/result dispatch, approval retries, recovery, environment activation, subscriptions and cleanup. Extracted durable input acceptance/delivery from approval dispatch and centralized record/flush/publish order, including end-of-runtime input failure. Startup recovery and explicit resume intentionally keep different validation/error policies; worktree ownership and grants remain validated before use.",
+      "files": {
+        "crates/horizon-agentd/src/session/approval.rs": "b5ae418578f0b759a6eb2add80c62ecb965a2b654ef859f43b8fab17df7d75d0",
+        "crates/horizon-agentd/src/session/completion.rs": "c7651095443d152fc3c686d2e5792849049071eb615b1053e9ec9fa0187352f2",
+        "crates/horizon-agentd/src/session/completion/retry.rs": "bee04186161db6361daaf13f2e648c0f0fd136f8e1281d95b155447c1c914752",
+        "crates/horizon-agentd/src/session/connection.rs": "1a4407d570315ae2884c3a3569f967917a5ee62b8e102ec7f65ab35bb301425e",
+        "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
+        "crates/horizon-agentd/src/session/events.rs": "dedc2af0e3a73a34ef85cab3c50baea5ae98dc0584e7000831629276fefa928a",
+        "crates/horizon-agentd/src/session/exploration.rs": "df8c5737cc6f07aaf7df21dc27bbe3b88dc84b6fa7cfced4b12adf8b456262db",
+        "crates/horizon-agentd/src/session/host_tools.rs": "8df63c1cebcf80150b8fe45de026d408f4db104694fffc550bacbdc1e8e4db02",
+        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
+        "crates/horizon-agentd/src/session/mod.rs": "a672002e4e990acdb63123fe88fbd48a69835fe5f22c018ed5cc04b1a50733ee",
+        "crates/horizon-agentd/src/session/panic.rs": "353d34795d0047fe02140083c707147824d191ca395082e616b967b04c4e1f98",
+        "crates/horizon-agentd/src/session/resume.rs": "83f4ff875ddb9a4bb579c39e6600de4c2472c5ca24b5cd81935261fb6b9ab7d7",
+        "crates/horizon-agentd/src/session/resume/environment.rs": "80c8482d363e0407165257d745ff69428a68c28a3e3d6a0e2a64034f77065a30",
+        "crates/horizon-agentd/src/session/run.rs": "fe055e74c4e039266225e196a4beb2c83f400705d82fdfeae865618671038f40",
+        "crates/horizon-agentd/src/session/setup.rs": "9804d994d7d150a0bf7f993798c482abee79872e4375386ea2a3efe7e4e542fd",
+        "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c",
+        "crates/horizon-agentd/src/session/state.rs": "b4ab6b66c92a684e8d04c9d47931a5cefd2bd89620cfa7945e0377c017f6df46",
+        "crates/horizon-agentd/src/session/subscription.rs": "e235012d043eb6d3f0c579a8298df2667fb891e2d2324f225e73657f36f06811",
+        "crates/horizon-agentd/src/worktree.rs": "64bf7a0b2f3802aa77db43f18077fc67b5a0ab95c00963f8a962a3632d5ab701"
+      }
+    },
+    {
+      "id": "daemon_hub",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Reviewed hello gating, per-attachment command/event channels, subscribe-before-replay, model/selection announcements, resume readiness and shutdown flush against shared wire types. Attachment lifetime is separate from session lifetime; transport limits remain explicit and provider reload applies through the existing connection seam.",
+      "files": {
+        "crates/horizon-agent/src/wire.rs": "24013ec833e2058f3323c30b5724718c4dbf6e9738cd883c0a6b765e9862b42c",
+        "crates/horizon-agent/src/wire/hub.rs": "8d0232f67d3a7158d8c1245456067d462197f371bd5f90abdf115b4046d15862",
+        "crates/horizon-agentd/src/hub.rs": "3812347bbd20de200e037de48a499fe891b680d1026776a6e2aea357ffe828bd",
+        "crates/horizon-agentd/src/main.rs": "188cc74c15e36ea14b702edf668f80ac5034673f87d26408157958bb91bbd982"
+      }
+    },
+    {
+      "id": "agent_view",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Composer construction and updates share the same projection with an explicit dismissed approval. Plain-text rows delegate to the Markdown row renderer after escaping; grep/glob summaries share count formatting with their quote difference retained. Reviewed attachment generation, title refinement, notifications, task lifetime, turn/burst segmentation, stable-prefix scroller updates, receipts, approval actions and body limits. Keep separate cached transcript/status/composer entities, actionable versus historical approval queries and the broader in-flight state used by display clocks.",
+      "files": {
+        "src/agent/mod.rs": "800895a1d2256af8790ed67f56d2e03de959ac2274acd73d5593605bf32eb8f5",
+        "src/agent/session.rs": "8e2761f23dd45297dcc584318d36d8ad99d811ff84d5dd0650fc5b9b2dbbdab0",
+        "src/agent/turns/composer.rs": "59e5386fefcda8d3b390e98645dea4aef3efc0061cfe0417cd73bffd7911a0c8",
+        "src/agent/turns/diff.rs": "d693484b951437a520fbc313662d4af53466aacba7870a236eb799bd71774241",
+        "src/agent/turns/mod.rs": "28cce02de61a115e2de098f6503d1f809f29a27c2d97db8d4af1eab48e61c633",
+        "src/agent/turns/receipt.rs": "da30c0aa43575a041052c4e48fcdb5b00f31d9188a5923e8e09d9e7ab224926e",
+        "src/agent/turns/tool_call.rs": "fa7046c1a6d07953f3ecee92170665417a2c526979ea3a6d252c6cd67d80c1c2",
+        "src/agent/view/composer.rs": "82ccfdc00c5374680eef533d6be00d21abbd5da10fdbb182cdc54c69124ff465",
+        "src/agent/view/mod.rs": "f5d1b09916a89e63e0e9a58af3af965d27fd1754f99279346299fabeb80c607e",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b",
+        "src/agent/view/rows.rs": "4a94bc9519d6721852a5306c815c1e2e1a631c9b5534b2847dabfd3118e12980",
+        "src/agent/view/scroll.rs": "b394a73d0335f7c50ff757886fcaf40bdb849309ef12928fa7b462a82bda3b71",
+        "src/agent/view/status.rs": "ce88730b68759b39da8dc6b4e1238e7aadbedb6a620e7ae2723d9931ad3903d9",
+        "src/agent/view/tasks.rs": "0e772de03e6c7084d387d5b34c4ddb91abae6bc0faccf8b5d435a13fabdcb146",
+        "src/agent/view/transcript.rs": "b2cc83864d96f1d93ecd111aea017f202b624a8c1619f4a783431441ba63ffe0"
+      }
+    },
+    {
+      "id": "command_clients",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "CLI option parsing and invoke decoding retain different caller defaults, confirmation and error contracts. Required strings and optional session UUIDs now have one decoder each; control requests use the existing runtime event-stream bridge. Reviewed command dispatch, explicit session actions, new-session inheritance, background lookup attachment and deferred model-switch replies.",
+      "files": {
+        "crates/horizon-cli/src/cli.rs": "8b979531a2b5c4a081e6077370dd13267c90da7bad1ca68a3a49b7736d0b711e",
+        "crates/horizon-cli/src/cli/options.rs": "ca54443736354a0e3bb93eeab0ca7ffc7789a11dec47d6ba8b8767f311bcab3a",
+        "crates/horizon-cli/src/client.rs": "c73f44cac89f75cd176446d8a60aad89077af28437f3ae999a0845901bbe1719",
+        "crates/horizon-cli/src/commands.rs": "0a2b75afb0545b83ea3bc261444387d1225a06a9a21715d791d8baa5dd5e3065",
+        "crates/horizon-cli/src/confirm.rs": "3f42321ece7529e78ddf5ac00cf0956cf39517dfed35126e95736ca9c3567f8b",
+        "crates/horizon-cli/src/lib.rs": "23c742f3a50486ed4366658a1469237999be627d8bed763ff479fceff69f09be",
+        "crates/horizon-cli/src/output.rs": "bc724d1aeef4673873f7b92256ead9c2d41c1bb584c88dd41453f72043cd2692",
+        "src/control_plane.rs": "8d851591a584f98bd2f71b7663ef31cc215328ed1d4a6a886889e9d4187b3aa4",
+        "src/control_plane/invoke.rs": "bbcb1ff9d8512762eae0efbb01aac0942b41ba059afc5f6280a8e6aa4f8166b0"
+      }
+    },
+    {
+      "id": "control_transport",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Reviewed JSONL framing, version rejection, unknown-message handling, request identity, synchronous executor boundary and socket selection/bind lifecycle against the CLI client. Transport parsing and GPUI command validation have distinct responsibilities; retained the existing per-connection/thread model and error replies.",
+      "files": {
+        "crates/horizon-control/src/contract.rs": "032abcdd7110802878e12f462985b9b64a1a6fc4fa38434b1e3a794fd728557b",
+        "crates/horizon-control/src/host/connection.rs": "97c8d42672652372b326b41e4c83d4279230a640e9ab56f9969dddf18516899e",
+        "crates/horizon-control/src/host/executor.rs": "4f8b4e6302f11059d725da4465d1da830daaef7c8e53103ae507bb9088769639",
+        "crates/horizon-control/src/host/listener.rs": "db602921c7e6045e4d02990181045facdc7d9c6fe088ada6eb8a56504f9460d5",
+        "crates/horizon-control/src/host/mod.rs": "065743d96c9a41bb45d167d7fab611778922c79eae4576c7e71a826376db4237",
+        "crates/horizon-control/src/host/socket.rs": "2f36948cec12b0aef993f0df60996d6375f58a245759fcfada93bf1f85c56dfd",
+        "crates/horizon-control/src/lib.rs": "c592be73b905d06046da29886d509753545c776a5574cf4bb2abb7edc62a420f",
+        "crates/horizon-control/src/socket.rs": "5f26c15f741876e67644049e8d94892e8dc880ac363b9647803d3ade437d2c40",
+        "crates/horizon-control/src/wire.rs": "a1868cf5360febed072884252c61fb3f21abb0eaea8e0992cf9e34dbb0b6c4b8"
+      }
+    },
+    {
+      "id": "workspace_model",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Layout insertion now delegates direct-leaf construction to split_pane. Reviewed command enablement, cursor/focus operations, close versus terminate, layout normalization and weight validation, spatial navigation, session metadata, inventory reconciliation and frozen snapshot types. Persistence validates before mutation and rejects cross-kind inventory conflicts; 145 workspace tests pass.",
+      "files": {
+        "crates/horizon-workspace/src/commands.rs": "3fee99fdbed39c2cfd64e1c11b068e5838b582f0db7e457d8a7aef7d4a240200",
+        "crates/horizon-workspace/src/layout.rs": "64507140e6995b0a9c251a16ce807ea3e999f63d966032d636ff07e03a387594",
+        "crates/horizon-workspace/src/lib.rs": "123270d11a10e07bd145d8f8c553875ecfc780ba50833a577764860cbf9d665c",
+        "crates/horizon-workspace/src/mode.rs": "d460f62f405e5dcf2490bc93816d07cb74cbec7277c02e5e3e8511946bf3bb62",
+        "crates/horizon-workspace/src/nav.rs": "976637f3bb366c67bf02e83e2838036a9daca80ffc13794ef41f9bbce8868e7e",
+        "crates/horizon-workspace/src/operations.rs": "8d62b6089e0e4eedcf60881c72f7867a8fea9a87cdb56d83d4b333944ec643ca",
+        "crates/horizon-workspace/src/persistence.rs": "e870467043afd475612ba78dbe03215117a88d7fbf38354efc3a81563b5fa01c",
+        "crates/horizon-workspace/src/persistence/validation.rs": "9c7932db278cc71273ffe57a7dd8323621e8c1689e26e2e551bf9f9b80298233",
+        "crates/horizon-workspace/src/query.rs": "452d554183a4ecb172434db48bf4a78509098beb39ce938f87ddfa3cb9ba569b",
+        "crates/horizon-workspace/src/session.rs": "e036bc5699f2db3354d63bf3e1d395c6741298b4868b5671ce9a2d5c924d11e6",
+        "crates/horizon-workspace/src/session_id.rs": "8159cb9f2df8c2026ce164ebd803add61136f4b590b3689550cbe0dc1ec2c398",
+        "crates/horizon-workspace/src/snapshot.rs": "28e7e390bb9b112461c0bac386f6d55369fa364be0d5a73c5b110d5761a5b9cb",
+        "crates/horizon-workspace/src/types.rs": "26ac7dbaec49cfaed9ec4cbd3ff7c3bb7af024111b5e6ef4c314edd4557d8da8",
+        "crates/horizon-workspace/src/types/entity.rs": "5351d6e4a3e35fc9bdab9be4c73ff9dcba6d1d4b7e116d565ba3f6a0f3fccd7d",
+        "crates/horizon-workspace/src/types/id.rs": "02c2f4bb9ff6db4aace252105817fc2e0c2be65f4874b7bdd8113fffaba19402",
+        "crates/horizon-workspace/src/types/kind.rs": "3dc3a8b1c8329959a5cf58cea6bc37ac3c75b0c65bffa361f2fe0537dfe2f583",
+        "crates/horizon-workspace/src/types/summary.rs": "e64401ceb108e2f51a807252a66f86011651fcb8b4c1f8ba5f1118d0df941e68",
+        "crates/horizon-workspace/src/types/tree.rs": "bc8b811e0c67f47784282ecb27d1badb1d879c8fcef2889c2aede5c99d898ed0"
+      }
+    },
+    {
+      "id": "workspace_shell",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Host-tool and workspace-root channels use runtime event_stream, matching control-plane and session consumers. Four modal cancellations share focus restoration while confirmation keeps its distinct mode behavior. Reviewed command callers, reconcile and detached entities, runtime identity checks, two-phase restore, spawn inheritance, notifications, keymap reload, drag persistence and cached versus composite pane rendering. Keep separate terminal and agent reload/adoption policies and board arms untouched.",
+      "files": {
+        "src/keymap.rs": "3b768ee675737bcbf5ce4bd897d0334f6c9f2a40ac45aecd306f2b5d427d6f80",
+        "src/workspace/bindings.rs": "59e5c624f66970b4704408376490e9ad92f2dc9059fb85c8b0de9ac78e35621c",
+        "src/workspace/commands.rs": "7bbcb6f6b608f8816b100c1fe2b991a28c4639872953ae8f87df4037119944d0",
+        "src/workspace/mod.rs": "c18ee32e81faa2d7eacf634c4965e8d3898d0623c15e4809478ee7b1d33a398c",
+        "src/workspace/modals.rs": "b00fbf768731184fbacba3e13ea2f5418ba035960e3b2f668c3968124cbf5b0c",
+        "src/workspace/render.rs": "d24457ab24943d28fb99d222bc24d736b2fb895da364e820fb8e02b7cbec8465",
+        "src/workspace/restore.rs": "6721520a8f996ca2c95048fca304d7d5a4ebe7cfd81683c445e196a9c4af9132",
+        "src/workspace/session_lifecycle.rs": "c4e8114b2997ce01189d5eaf117b29d2d836ff91d86470f6be86499b7d36b12f",
+        "src/workspace_state.rs": "847f90952e06b4d86dd8c931e9cc76bf0bd02868615a34eef61e98b6b4b65eb1"
+      }
+    },
+    {
+      "id": "view_choosers",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Palette, view chooser and session manager remain domain-specific List delegates with shared widget behavior. Filtering/selection/rendering is local; shell owns operations and modal lifetime. Session lineage uses cycle guards and preserves sibling order; subtree traversal deliberately returns ids rather than display rows. Launchable roles come from the role registry; command enablement comes from the command model. Small empty-state and selection boilerplate does not justify a new cross-domain UI layer.",
+      "files": {
+        "src/palette.rs": "e003b4bc916c2c54d5458c7610e1ff990a6d1bbc62e00cc9db6c7665a955263f",
+        "src/session_manager.rs": "21435e6a3df03ab1a424143c80071613ac8f83eabed989930e11acad3b4d47eb",
+        "src/view_chooser.rs": "8ff76dc78f80db05e322e19a9089ad80482077455305eaf638a4180bd3ab59be"
+      }
+    },
+    {
+      "id": "terminal_core",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Share PTY side-effect delivery between output and synchronized-update timeout paths, and CSI-u modifier/suffix encoding. Preserve input-priority drain budget, frame pacing, query replies, legacy key tables, OSC scanning, selection and color semantics. The strengthened timeout test requires a prior visible frame and verifies all side effects after timer flush; 132 terminal-core tests pass.",
+      "files": {
+        "crates/horizon-terminal-core/src/contract.rs": "cd8ea4613abb0e0b760b1117063077936e645b6f17d7831576a09b9caeefb84e",
+        "crates/horizon-terminal-core/src/core.rs": "1e13d60351e02c1c9aef68055b4312556f8e9b3b7ad0b9dc728c7c8b0fd9e348",
+        "crates/horizon-terminal-core/src/core/color.rs": "9f5d225f80ca8a3d0a6144c2985a0b32bc2e741898210776c58c86e6047386f5",
+        "crates/horizon-terminal-core/src/core/events.rs": "83dc9e13b7ae67883db534205acab9aca52a26692b6c3bea6dbb34b7c7fbf18b",
+        "crates/horizon-terminal-core/src/core/input.rs": "b1a523db537ecd4550116d0c83981bc0729a673c6938cc7fd9ef3fdb11911ced",
+        "crates/horizon-terminal-core/src/core/osc_notify.rs": "215cb2c1b3cbc002cc070a6de0ad67388bf06bc300438192446459c4b86590e2",
+        "crates/horizon-terminal-core/src/core/render.rs": "d80c8b7612caa8e9c0bd59dad81b5fd8a4bcc8226753cb6f61ad5d1fe3d67bb3",
+        "crates/horizon-terminal-core/src/lib.rs": "2e7eb727438db7c079cde48212d3e0c2142b53d1d71d421b4997e96fd5f1184d",
+        "crates/horizon-terminal-core/src/protocol.rs": "a8f0822406c05ead23cd7bf06bc8ce95c7e266da91dcdd57aff20043c48c7b1d",
+        "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs": "b9d5d18dedeefcb31b64df1987197c3e8429ef63b5d636a7e5141bab6128fa78",
+        "crates/horizon-terminal-core/src/session_loop.rs": "65a9c739121c0bcb94aec00ba4507f100c57e50a7631f3c124dcff818e287945",
+        "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
+        "crates/horizon-terminal-core/src/types.rs": "b25bc599358808d46e3cb77c4102ddf59d5090512c319247042af477d1ed5ac8",
+        "crates/horizon-terminal-core/src/types/color.rs": "2129d4103179f1f414c1d3b66adde985e1f058479042171adae76dcf1e218192",
+        "crates/horizon-terminal-core/src/types/frame.rs": "44b261da191758d6036a0e8ef551ad8bbabb60b5b00e5a2bd5715ea1a73cf3de",
+        "crates/horizon-terminal-core/src/types/key_event.rs": "3aee8394813af6bfcadd23de0a6c6636795f7f4456fbdc2738120c851c6760bf",
+        "crates/horizon-terminal-core/src/types/mouse.rs": "3a81e478d085fdc7efb8553ce350bb1c3c18467364387ee5f050f84234bc360c",
+        "crates/horizon-terminal-core/src/types/size.rs": "4b6b6c0d73452d4f4bfad0fda798084b81445f2a72dbf4007447db4f78ad87d8",
+        "crates/horizon-terminal-core/src/wire.rs": "6bd92ba0ce9f5e2d863028602dab29c74a47be9ee668d3366269d28b3d505edd"
+      }
+    },
+    {
+      "id": "terminal_host",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "TerminalHost owns PTY creation, retry arbitration, command routing and subscriber replacement; shared daemon code owns listener/connection lifecycle and hub uses receive_pump. Subscription precedes creation, attach seed is installed under the subscriber lock, late duplicate spawns are killed, and frame-channel closure leaves Exited delivery active. Reviewed read/core/writer threads, cwd inheritance, resize forwarding and teardown; keep watch frames and discrete events separate and UI disconnect distinct from termination.",
+      "files": {
+        "crates/horizon-terminald/src/hub.rs": "896d67ec4bf46b1536433d24ff9e0156b4d5d388cb03489ccc84ac69314b271f",
+        "crates/horizon-terminald/src/main.rs": "6b1fe1329bab39b13457e08aa0895469aa555de6d0912a8c6f70b813785c1894",
+        "crates/horizon-terminald/src/terminal.rs": "eb82fe5e65fec5b596f6de7ca379e254eaf4ccbca089d7c9fe11070308b0a6a9"
+      }
+    },
+    {
+      "id": "terminal_view",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Share row background painting between live and history frames, including empty-text colored spans. Preserve row generation/epoch caching, viewport request anchoring, IME versus key deduplication, mouse modes and glyph geometry. Isolated GUI verifies markers, colors, hyperlinks and session/layout restoration; detailed geometry and paint orchestration remain intentionally explicit.",
+      "files": {
+        "src/terminal/glyphs.rs": "ac44c35e251a3ae78e26ce1ebc44ad460e16d23e2b71798bf6ca8c90c3165795",
+        "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
+        "src/terminal/mod.rs": "ddab8e6642937cf2bfe732e1cecae5221608765dccd1f9034fecb907eea80ea7",
+        "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
+        "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea",
+        "src/terminal/shaping.rs": "99850c11e70513f968ab3b93a178964191d80b70cebee6813d28c644e9566339",
+        "src/terminal_focus.rs": "175f42ee71183813d9dcd957de0ab2d30b76dc666d4e090753b949d18b842a7d"
+      }
+    },
+    {
+      "id": "runtime_clients",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "The host-tool channel pump now uses horizon_wire::receive_pump, matching both daemon hubs and preserving malformed-item logging and final-error termination. Reviewed runtime lifetime cancellation, per-domain routes, stale handle identity, synchronous reply bounds, pre-hello retry/recovery, establishment deadlines, explicit reload, session command bridges and attachment cleanup. Keep terminal post-hello liveness probing and watch-frame/event lanes separate from agent event streams; closing frames must still allow terminal Exited delivery.",
+      "files": {
+        "src/runtime/agent.rs": "9a80c0d1406f18b5c2da28267e5251f4c8eb9a86e7b0d840ef2af9d38579b7a4",
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/mod.rs": "052b6b05dda545eb076f1e6f1c036ea1eb280c4f4fd437f8faacfc3beb0b80dd",
+        "src/runtime/notify.rs": "d1c264bb875b64fbde9de6fceccf31ab7289c5b7901050431a189c92d94f56b5",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/runtime/terminal.rs": "b5b83a8168688a5535aa691326f4b1e4c844c509372f599cee656fadfb63c769"
+      }
+    },
+    {
+      "id": "wire_transport",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Shared crate owns wire ids/version negotiation, HelloGate, item-size limits, decode skip logging and server connection cleanup. Runtime clients add their own bounded establishment and recovery policy; test clients and low-level connect helpers retain distinct failure contracts. Reviewed daemon socket/env/binary resolution, listener/run/serve lifecycle, protocol schema recursion and command-line checker. Existing additive rules intentionally distinguish appended enum variants, optional properties, required constraints and version markers.",
+      "files": {
+        "crates/horizon-wire/examples/check_wire_schema.rs": "95ce19c9bd1343ba2a234f7d009c413e9ce45269d453e2d44a9609408c987657",
+        "crates/horizon-wire/src/channels.rs": "5ecac6338008697016d3c75221dbaf29d692564107f56e220e25d544fb107cc0",
+        "crates/horizon-wire/src/codec.rs": "2913c6fe2d225eeab6350f51fc6c7f3181dc8141535c7014727c728fdf62d718",
+        "crates/horizon-wire/src/daemon.rs": "60ed7631f7ca252cc5c781352a526bbeb324cffd00faeb4cd0cb370e6e776056",
+        "crates/horizon-wire/src/hub.rs": "201e5789d63c7e73a6506d7ec8b3f0ec90bc06e4f98e077159311307174fdd11",
+        "crates/horizon-wire/src/lib.rs": "95780c6f87f36c4687e841f6defddb32ca98b2e47dfacfd9f27ef0e1b48355ee",
+        "crates/horizon-wire/src/negotiate.rs": "655da73c95d06ef1c53acd8f236e0efa240d5d203291bf6e1aaab106c7384701",
+        "crates/horizon-wire/src/schema_check.rs": "49db41bb7b831bead97d8a7a72694687531d4d843221b5bea27e2611e2143cf2",
+        "crates/horizon-wire/src/session.rs": "1dcf0825366b3b5f4a0e04c3bc664c39bd78ed87ee709bcdb2e434a2b054c5b1",
+        "crates/horizon-wire/src/socket.rs": "fadf9ca374bba0a0e98bc45cf3fa626917cbb4e1dea80be84f32ad06742c5bc8",
+        "crates/horizon-wire/src/spawn.rs": "eddf8af12de6ab1eb74248d5572cdf04b87e949f9c65db8bd59a0fd43d7e15a2"
+      }
+    },
+    {
+      "id": "daemon_testkit",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Binary lookup/link retry, isolated persistence paths, hub connection and process cleanup already have separate owners. AgentdSpawn persists the same options for restart tests; respawn/kill-and-keep-paths deliberately preserve data while Drop removes only owned artifacts. Test helper panics and bounded retries differ from production recovery. Compared shared users in daemon e2e/runtime tests and production connection helpers.",
+      "files": {
+        "crates/horizon-daemon-testkit/src/agentd.rs": "e5ba4c6373c9e81a9c72ffbbab26cec9e248b2d82d04cb37ef158c96dd15215c",
+        "crates/horizon-daemon-testkit/src/binary.rs": "532e099cdf98ec1149f648ae840272084e53549c17af4f5d579b7cd6c96bac58",
+        "crates/horizon-daemon-testkit/src/hub.rs": "dcf7ee9447326b594213f47963cffe847bd6ba0bda66eb006a23d1c15085f096",
+        "crates/horizon-daemon-testkit/src/lib.rs": "6f2bc52dce725c210b3d252c18d761fac1e242edfc5539c0af12445acec34f2a",
+        "crates/horizon-daemon-testkit/src/process.rs": "7a264aedbf3cc0bf43f4f17eb06cd8cd6fd28158e078c587e5342070ce18fffd"
+      }
+    },
+    {
+      "id": "preview",
+      "area": "runtime",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Host owns the WASM plugin, shared theme source and root; reload drops pending load/names tasks before replacing them. ArtifactWatch owns watcher and debounce task; retarget replaces watches only for changed paths. Guest theme/window projection, surface key forwarding, schema and sample remain separate; board registry entries are excluded. Native callers and WASM gate confirm the shared boundary.",
+      "files": {
+        "preview-plugin/src/lib.rs": "85792febb6e5ccfd7811eb57be0e7f7ac3e3658626aee04dc2fcdb2b0c459a54",
+        "src/preview/guest.rs": "51935d66f8aebd4592fd1a03d09fa4e330159adad91154d64528019afea77eba",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/mod.rs": "6c19edd9d37ddd76a1aec04ecbdf8d2270573c816d43e8fdd0b90ef536976dc9",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/registry.rs": "e5ae850696cde8f0c8874ddf0712320e54a2c68bda5165238d0889c1d393c062",
+        "src/preview/sample.rs": "2452e5fe6a73a069f65dde56eeeee85548e9aa12210d743b6a47faba9c7bd9b3",
+        "src/preview/schema.rs": "3ecc880178f1bd5f4a0077ab05ea4bae5cfe3b8c91506154765e413602753740",
+        "src/preview/watch.rs": "b9a84a2ee4bce13490aa3bf0d126fb1792b3e0595582edf9c38aa25366bba697"
+      }
+    },
+    {
+      "id": "theme",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Reuse one contrast normalization rule for derivation, editor initialization and slider values. Save through fallible TableLike access instead of assuming external TOML has normal tables; regression tests reproduce both scalar and valid inline-table panics, then cover unchanged invalid files and preserved inline values. Keep ordered seed derivation, color space math, presentation projections and live/saved ownership separate.",
+      "files": {
+        "src/theme/accessors.rs": "a26ed608231f81e57190359d23384ebbd0be880074fee7a9a6c23fb40b7a2762",
+        "src/theme/ansi.rs": "2d5d670051321a53eb302b9a8afa62e649031a9a174b969e64ecf6d55e2fbd92",
+        "src/theme/gpui_component.rs": "f0c91a01af7b98b79ea372f211974fdcfcc0522cd6babd33ff062f368cc8c450",
+        "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
+        "src/theme/mod.rs": "7a7b2b2ff5d7996ea3d1ecbba5a5bec4d8d04982ad80b2ef01082d11e77575bb",
+        "src/theme/oklab.rs": "f599b0c34374d99be400bf6041da1252a064875f4b93fcaf14cccfa8122ea146",
+        "src/theme/palette.rs": "52b6e4c6fb4b4f3402f937c281fa2c3fd2754251d58eb87b0a77dddc0db63aaa",
+        "src/theme/scheme.rs": "fae4f4c9560ffac627997a53cb4c40e9a7fadfe4f91c47af748a02e646b1acfe",
+        "src/theme/warnings.rs": "ffbd79d8c8fd730d1d18019305e0fa1483dfd83fb1d82b0a808d09511d15db3e",
+        "src/theme_settings/chips.rs": "0e669633eeedee3b660279fbd3b4bc74de11df7d42215c0598ba7758dcb3b9db",
+        "src/theme_settings/mod.rs": "866476b4fbb08564419758cc57588faf46711e999249b281449d68e8d202dff1",
+        "src/theme_settings/save.rs": "88619554b8358a4c51c760ddd674c67b870f7b69fa3ef735235fb9c33a0d323b",
+        "src/theme_settings/seed.rs": "71fac9bb1c885a86f3b9d93375dbf71aba6ac731473f56c2799827333ae56ceb"
+      }
+    },
+    {
+      "id": "sandbox_policy",
+      "area": "sandbox",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Share filesystem grant identity, type and breadth checks between retained session grants and freshly applied capabilities. Preserve the retained-grant absolute-path precheck and capability-build error behavior, revalidation after canonicalization, excluded subpaths and per-spawn validation. Config normalization, helper discovery, TMPDIR, Linux supervision and macOS denial attribution remain distinct. macOS paths were reviewed in source, not executed on this Linux host.",
+      "files": {
+        "crates/horizon-config/src/grants.rs": "39896b97d0b94019a24ef1fe9b9c6e7ea3633c2f659de339b570b7eade7e7ab0",
+        "crates/horizon-config/src/grants/resolution.rs": "750f333618733346ea8263823d0f30c2ceba734be843f057dc5e8d988381719f",
+        "crates/horizon-sandbox/src/bin/horizon-sandbox-helper.rs": "99ad6c95d70752e51ac9bbd098b16f5b2c76f1517f2474bb268229408ae3c5b3",
+        "crates/horizon-sandbox/src/bin/horizon-sandbox-network-probe.rs": "66ed77230a1460b745d606a53912c071eeb706c808827679ef335d96fa489842",
+        "crates/horizon-sandbox/src/caps.rs": "bba0760387ea55568db59b46a45aaff8d24d598412c1b4acf155d6ea247961be",
+        "crates/horizon-sandbox/src/error.rs": "a66836a0b1a75011ec632219995395883235b26f5b72b6bb6b0f93cc8df67de6",
+        "crates/horizon-sandbox/src/grant.rs": "8d7b32726a93dec65a7c43d5ab94928616cbad1bf4b9b344cdc23cdc4eada21d",
+        "crates/horizon-sandbox/src/helper.rs": "6af1c81939c5e592bdc2c81dd2d1bbda1f7b8f0f513367c5cd6e900118198dd6",
+        "crates/horizon-sandbox/src/lib.rs": "0ad0aafe2e58884033e1b5bb0221ebddff4496307e66bf13c7cd3f2aeb4c654f",
+        "crates/horizon-sandbox/src/linux/mod.rs": "f805285f845c90a90e7e70d64e4a1a6346dad0f93c71097950c097a9066ff2b1",
+        "crates/horizon-sandbox/src/macos/denials.rs": "7e26b334afa741549adb389c1798f21ae6c860c86be839f439a6ef8c6d75925f",
+        "crates/horizon-sandbox/src/macos/mod.rs": "6f2484df4f27283bc286fcf82ea4a27368e65b02ef7ba36c1273e4ec1f67bef6",
+        "crates/horizon-sandbox/src/policy.rs": "e482e354cd1dfb1be153ec264439fdaef83f06817e12ad6d32f7100faf850008",
+        "crates/horizon-sandbox/src/tmpdir.rs": "d3489525c7d9778f7bfaeb60aded547856dcfdc336475193689f783912006ea1"
+      }
+    },
+    {
+      "id": "sandbox_runtime",
+      "area": "sandbox",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Open and network mediation have distinct syscall data, notification validation and enforcement paths. Keep excluded-path precedence, read-probe handling, rate limits and deny recording, trusted endpoint fd duplication, native BPF assembly, single-threaded fork/subreaper lifecycle and credential-checked bounded reports. Initial-capability selection remains explicit; callers preserve report ownership and process-tree cleanup.",
+      "files": {
+        "crates/horizon-sandbox-runtime/src/approval.rs": "5fceb3a954ed50384cb201b578c647dc721aa976706bd49d98e1d2c8c5a8194a",
+        "crates/horizon-sandbox-runtime/src/evidence.rs": "61ec5e42db053ac3398b796b7406b79224deb20942961a2904c64c491f9e59cc",
+        "crates/horizon-sandbox-runtime/src/execute.rs": "bb321046a7a35d38cafe6a4f7210092c29ccbd5e7ce2d0499776aa440d961af4",
+        "crates/horizon-sandbox-runtime/src/lib.rs": "244816848e03b05e0fd016c6d636b118ce8cd352050078f8d5120829bafb0cdb",
+        "crates/horizon-sandbox-runtime/src/linux.rs": "fcb03e124c4541e0151a210232ed2f1ae9724574d21e1100ffc39ff5466648fa",
+        "crates/horizon-sandbox-runtime/src/linux/filter.rs": "a96dceaa22c0e029b27bacae8728b97d7ab64e6583acbe876fff054a9a5d1fcd",
+        "crates/horizon-sandbox-runtime/src/linux/network.rs": "0607130ed577a1c61f40d3c1364b4267ad6d8b57b366d750e12cd52e02c5ebff",
+        "crates/horizon-sandbox-runtime/src/linux/open.rs": "232140dc92c1cf0ab09dc612e8a15b7c190f75cbae5d9cc86fc69a3e6f21e4b5",
+        "crates/horizon-sandbox-runtime/src/report.rs": "1d7ddd4b4f4760a2bbf56088496bec54b93113fc613ebbdae568c76b9c4acf7c"
+      }
+    },
+    {
+      "id": "sandbox_proxy",
+      "area": "sandbox",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Exact normalized host matching is the shared authority for CONNECT and HTTP; CONNECT remains opaque without TLS interception. Session proxy owns listener/task lifetime and a shared allowlist; per-command denial drain is serialized by the existing bash FIFO. Keep transport/denial evidence separate from tool-level redirect and public-address checks.",
+      "files": {
+        "crates/horizon-sandbox-proxy/src/allowlist.rs": "c99502695e6c2124f9227f5099248da6c209720c779882c10b1a0b95f385b39c",
+        "crates/horizon-sandbox-proxy/src/denial_log.rs": "145f41cfa2d006b133f1c1f97ab2a23aac3db58b71fb796bf8f0d010e59f2ac9",
+        "crates/horizon-sandbox-proxy/src/error.rs": "9b7b1c3987075a31d5c498725c1d33bad62fc3f82316fa2570fe4a53c9a24efb",
+        "crates/horizon-sandbox-proxy/src/handler.rs": "7c508a2408e920218be5ddae18683b8a8528abc26395483c286c4ecc7aef1b41",
+        "crates/horizon-sandbox-proxy/src/lib.rs": "a1cf52fabd4715df101c0afdbbdde1a4011de45c7b16261a33d9c39f719d17f8",
+        "crates/horizon-sandbox-proxy/src/proxy.rs": "0694a936b4de68676c9456c51361bfc2b63111b0ff43590a8b28c06b05997f0f"
+      }
+    },
+    {
+      "id": "application_wiring",
+      "area": "workspace",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Entry separates CLI routing from native GUI startup and WASM exports. Shared runtime panic capture preserves thread-local locations and prior hooks; daemon and provider callers retain phase-specific recovery. Desktop notifications escape markup and route by session UUID; terminal and agent reuse title normalization. Input tracing stays opt-in. Board module declarations are outside the audit.",
+      "files": {
+        "crates/horizon-agent/src/lib.rs": "0d1032c0831498efaa1a9a63355024302281c7517ece31d2e8a6e7b243fbed27",
+        "crates/horizon-agent/src/runtime_panic.rs": "f542c67a0638748ba619d86de0aff669f7d0b4d5965e199c97dd7bce60a2f831",
+        "src/desktop_notify.rs": "c52d29112940dc261b35c2659ae68922b941ae3cd8e8ce5f825f1cc2f7dfa27f",
+        "src/entry.rs": "2a4c0ad5442c9715b87393a22b69a9daf8a46741943cb1ae4dfddd66e68de492",
+        "src/input_trace.rs": "07f2960938f005a36508018a988c41978311518b46cf08e3e498e8924aa0706b",
+        "src/lib.rs": "c1a21e3c9df3e3f70b8b30811504afbc090c353524f083977c01f74949ae30a7",
+        "src/main.rs": "c916e1afa3135344c706b40428e2e5e2f21316ef4668fafa7d8df61c653c500b",
+        "src/title.rs": "6935a441ffd903841004448cfb48f6ff913fbf1c9893a5f1d6aa58b5204b3215"
+      }
+    }
+  ],
+  "baseline_file_count": 320,
+  "reviewed_file_count": 323,
+  "added_files": [
+    "crates/horizon-agent/src/knowledge/document.rs",
+    "crates/horizon-agent/src/providers/rig/retry.rs",
+    "crates/horizon-agentd/src/session/input.rs"
+  ]
+}
