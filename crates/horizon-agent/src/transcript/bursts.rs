@@ -87,77 +87,43 @@ pub struct Burst {
 /// prose, exactly as it always has.
 pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
     let mut bursts = Vec::new();
-    let mut open: Option<(usize, usize)> = None; // (start, last_tool_index)
+    let mut open: Option<Burst> = None;
 
     for (index, item) in items.iter().enumerate() {
         if is_tool_related(item) {
             match &mut open {
-                Some((_, last)) => *last = index,
-                None => open = Some((index, index)),
-            }
-            continue;
-        }
-        if is_assistant_text(item) {
-            if let Some((start, last)) = open {
-                let all_finished = build_tool_call_views(&items[start..=last])
-                    .iter()
-                    .all(|call| call.finished);
-                if all_finished {
-                    bursts.push(Burst {
-                        start,
-                        end: last + 1,
-                        closed: true,
+                Some(burst) => burst.end = index + 1,
+                None => {
+                    open = Some(Burst {
+                        start: index,
+                        end: index + 1,
+                        closed: false,
                     });
-                    open = None;
                 }
-                // Else: not closeable yet (a call opened in this burst
-                // is still unfinished) -- this text isn't the closing
-                // one, keep the burst open and scanning.
             }
             continue;
         }
-        if matches!(item, AgentFrameItem::TurnEnded { .. }) {
-            if let Some((start, last)) = open.take() {
-                bursts.push(Burst {
-                    start,
-                    end: last + 1,
-                    closed: true,
-                });
+        let closes_burst = match item {
+            item if is_assistant_text(item) => open.as_ref().is_some_and(|burst| {
+                build_tool_call_views(&items[burst.start..burst.end])
+                    .iter()
+                    .all(|call| call.finished)
+            }),
+            // Both markers close the burst before themselves. In particular,
+            // compaction must remain a visible divider outside every receipt.
+            AgentFrameItem::TurnEnded { .. } | AgentFrameItem::HistoryCleared(_) => true,
+            // User interjections, reasoning, and errors never close a burst.
+            _ => false,
+        };
+        if closes_burst {
+            if let Some(mut burst) = open.take() {
+                burst.closed = true;
+                bursts.push(burst);
             }
-            // `TurnEnded` is always the turn's own last item
-            // (`group_into_turns`'s invariant), so there's nothing left
-            // to scan either way.
-            continue;
         }
-        // A Tier 1 clearing pass closes the open burst as well, for a
-        // different reason than the two above: it is a *divider*
-        // (`docs/agent-compaction-design.md`'s "transcript に区切りを表示").
-        // Everything before it is what the provider will no longer see in
-        // full, so folding it into the surrounding receipt -- where a burst
-        // range renders as a single row and its interior items never render
-        // individually -- would hide the one marker of that change.
-        if matches!(item, AgentFrameItem::HistoryCleared(_)) {
-            if let Some((start, last)) = open.take() {
-                bursts.push(Burst {
-                    start,
-                    end: last + 1,
-                    closed: true,
-                });
-            }
-            continue;
-        }
-        // Anything else (an interjected user `Message`, a
-        // `ReasoningDelta`, `Error`, `Exited`, ...) never affects burst
-        // boundaries.
     }
 
-    if let Some((start, last)) = open {
-        bursts.push(Burst {
-            start,
-            end: last + 1,
-            closed: false,
-        });
-    }
+    bursts.extend(open);
 
     bursts
 }

@@ -5,6 +5,7 @@
 //! heights can change.
 
 mod composer;
+mod projection;
 mod rows;
 mod scroll;
 mod status;
@@ -23,10 +24,10 @@ use horizon_agent::contract::ToolCallId;
 use super::session::AgentSession;
 use super::turns;
 use composer::{AgentComposer, ComposerEvent};
+use projection::{build_transcript_rows, TranscriptRow};
 use scroll::RunningTurnClock;
 use status::AgentStatus;
 use tasks::BackgroundTasks;
-use transcript::{build_transcript_rows, TranscriptRow};
 
 /// The stable, expensive portion of an agent pane. Session updates project
 /// into compact row descriptors here; `Render` constructs only visible rows.

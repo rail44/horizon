@@ -7,8 +7,8 @@
 | 領域 | 確認する責務 | 状態 |
 | --- | --- | --- |
 | セッションの寿命管理 | shellとdaemonを通した生成・接続・復元・終了 | main反映済み (`5827fdd9`)。復元を3段階へ分離し、世代確認と端末entityの配線を集約 |
-| 端末の操作と描画 | スクロール状態、履歴取得、表示更新 | scrollbackの状態遷移をsessionの通信・表示更新から分離し、両端の履歴要求を共通化。端末114テスト通過 |
-| agentの状態と表示 | イベント反映、状態判定、transcript変換 | 未着手 |
+| 端末の操作と描画 | スクロール状態、履歴取得、表示更新 | main反映済み (`6473dcb5`)。scrollbackの状態遷移を分離し、履歴要求を共通化。114テスト・描画入力検証通過 |
+| agentの状態と表示 | イベント反映、状態判定、transcript変換 | 表示行のprojectionをGPUI描画から分離し、burstの終了処理を統一。関連167テスト通過 |
 | 個別ツール内部 | ファイル検索・読み取り、Git解析、出力再利用 | 未着手 |
 | 抽出ツール | 前後比較、判断の引き継ぎ、除外範囲の精密化 | main反映済み (`16dcdd84`)。20件の回帰検証、全体production/tests解析、全体ゲート通過 |
 
@@ -37,3 +37,11 @@ attach、終了通知と登録削除の順序を確認した。復帰条件と�
 保持する。live復帰・alternate screen・resize・stale responseの既存テストを移動して確認。
 描画は履歴window内とlive viewport内でcacheのindex・generationが異なり、cursor・selection・
 IMEもlive専用なので各paint経路を維持する。行の文字整形と描画は既に共通化されている。
+専用Xvfbでmarker・256色・truecolor・OSC 8のframe dumpも確認した（pixelの目視ではない）。
+
+agent: event fold → LiveState → session → turn/burst → 表示行 → GPUI描画を確認。
+表示行のdescriptorとそのテストを`view/projection.rs`へ移し、純粋なprojectionとlist更新・描画の
+境界を明確化。burstは同じ範囲を持つ値を開閉し、assistantの終了文・TurnEnded・compactionの
+3箇所で繰り返していた終了処理を統一した。receiptの範囲とkey、thinkingの表示条件は維持する。
+foldとstatusはイベントの履歴と最新の稼働状態を区別する既存の責務配置を維持。deltaをmessageへ
+昇格する位置、tool progressの非永続化、失敗後のidle表示、再接続世代の棄却は既存テストで確認。
