@@ -105,8 +105,11 @@ fn write_atomically(path: &Path, content: &str) -> io::Result<()> {
         None => PathBuf::from(tmp_name),
     };
 
-    fs::write(&tmp_path, content)?;
-    fs::rename(&tmp_path, path)
+    let result = fs::write(&tmp_path, content).and_then(|()| fs::rename(&tmp_path, path));
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
 }
 
 #[cfg(test)]
@@ -237,5 +240,22 @@ mod tests {
         let result = execute(&tool_state, None, &json!({ "content": "[theme]\n" }));
 
         assert_eq!(result["is_error"], true);
+    }
+
+    #[test]
+    fn failed_config_replacement_removes_only_its_temporary_file() {
+        let dir = temp_path("failed-replace");
+        let target = dir.join("config.toml");
+        fs::create_dir_all(&target).unwrap();
+        fs::write(target.join("keep"), "original").unwrap();
+        let result = write_atomically(&target, "[theme]\n");
+        assert!(result.is_err());
+        assert_eq!(fs::read_to_string(target.join("keep")).unwrap(), "original");
+        assert_eq!(
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "failed replacement must not leave a temporary config copy"
+        );
+        fs::remove_dir_all(dir).unwrap();
     }
 }

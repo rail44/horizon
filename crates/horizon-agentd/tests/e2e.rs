@@ -965,7 +965,8 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
-    std::fs::write(&event_log_path, "not valid json\n").expect("write corrupt fixture log");
+    std::fs::write(&event_log_path, b"not valid json\n{\"text\":\"\xe6\x97")
+        .expect("write corrupt line and a tail split inside UTF-8");
 
     let agentd = spawn_agentd_at(socket_path, event_log_path);
     let mut client = connect_hub(&agentd.socket_path).await;
@@ -975,7 +976,36 @@ async fn corrupt_event_log_lines_are_reported_to_the_client_once_per_connection(
         .expect("timed out waiting for the skipped-lines summary")
         .expect("skipped-lines channel error")
         .expect("the daemon should report its startup diagnostics on the skipped-lines channel");
-    assert_eq!(summary, "skipped 1 corrupt line");
+    assert_eq!(summary, "skipped 1 corrupt line and a torn trailing line");
+
+    // The ignored tail must not consume the first new record after startup.
+    let session_id = SessionId::new();
+    let mut attachment = client.hub.new_agent(session_new(session_id)).await.unwrap();
+    attachment
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: "after torn tail".into(),
+        })
+        .await
+        .unwrap();
+    collect_events_until(&mut attachment.events, |event| {
+        matches!(event, Event::MessageCommitted(message)
+            if message.role == MessageRole::Assistant && message.text == "Mock response: after torn tail")
+    }).await;
+    wait_for_persisted_event(&agentd.event_log_path, session_id, |event| {
+        matches!(event, Event::MessageCommitted(message)
+            if message.role == MessageRole::Assistant && message.text == "Mock response: after torn tail")
+    }).await;
+    let report = horizon_agent::persistence::event_log::read(&agentd.event_log_path).unwrap();
+    assert_eq!(
+        report.corrupt_line_count, 1,
+        "only the original corrupt line remains"
+    );
+    assert!(!report.ignored_partial_line);
+    assert_eq!(report.records.first().unwrap().sequence, 0);
+    assert!(report.records.iter().any(|record| matches!(&record.event,
+        Event::MessageCommitted(message) if message.role == MessageRole::User && message.text == "after torn tail"
+    )));
 }
 
 /// Step 4's headline scenario: `kill -9` a live daemon mid-session (a turn
