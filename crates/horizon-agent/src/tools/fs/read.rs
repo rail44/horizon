@@ -51,6 +51,30 @@ pub(super) fn execute(
         }
     };
 
+    let mut output = render_content(&content, input, tool_state.tools_config().fs.read_line_cap);
+
+    let mtime = metadata.modified().ok();
+    if let Some(mtime) = mtime {
+        tool_state.record_mtime(resolved.clone(), mtime);
+    }
+    let content_version = mtime
+        .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
+        .map(|duration| {
+            format!(
+                "{}.{:09}:{}",
+                duration.as_secs(),
+                duration.subsec_nanos(),
+                metadata.len()
+            )
+        });
+
+    output["path"] = json!(path_arg);
+    output["content_version"] = json!(content_version);
+    output
+}
+
+/// Render a bounded line window independently of filesystem access and staleness tracking.
+fn render_content(content: &str, input: &Value, default_limit: usize) -> Value {
     let offset = input
         .get("offset")
         .and_then(Value::as_u64)
@@ -60,7 +84,7 @@ pub(super) fn execute(
         .get("limit")
         .and_then(Value::as_u64)
         .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-        .unwrap_or(tool_state.tools_config().fs.read_line_cap)
+        .unwrap_or(default_limit)
         .clamp(1, MAX_LINE_LIMIT);
     let requested_limit = input.get("limit").and_then(Value::as_u64);
 
@@ -137,30 +161,13 @@ pub(super) fn execute(
     }
     let notice = (!notices.is_empty()).then(|| notices.join(" "));
 
-    let mtime = metadata.modified().ok();
-    if let Some(mtime) = mtime {
-        tool_state.record_mtime(resolved.clone(), mtime);
-    }
-    let content_version = mtime
-        .and_then(|mtime| mtime.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| {
-            format!(
-                "{}.{:09}:{}",
-                duration.as_secs(),
-                duration.subsec_nanos(),
-                metadata.len()
-            )
-        });
-
     json!({
-        "path": path_arg,
         "start_line": start_index + 1,
         "end_line": end_index,
         "total_lines": total_lines,
         "truncated": next_offset.is_some() || truncated_line_count > 0,
         "next_offset": next_offset,
         "content_chars": rendered_chars,
-        "content_version": content_version,
         "notice": notice,
         "content": rendered,
     })

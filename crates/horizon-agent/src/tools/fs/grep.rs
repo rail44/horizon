@@ -1,13 +1,14 @@
 use std::fs;
 use std::path::Path;
 
-use globset::Glob;
+use globset::{Glob, GlobMatcher};
 use regex::Regex;
 use serde_json::{json, Value};
 
 use super::error_output;
 use super::safety::resolve_read_path;
 use super::traverse;
+use crate::config::FsToolConfig;
 use crate::tools::state::ToolSessionState;
 
 /// A match is reported as a location, never as content: `fs.grep` answers
@@ -24,7 +25,10 @@ use crate::tools::state::ToolSessionState;
 /// context-consumption entry.
 const MAX_OUTPUT_CHARS: usize = 50_000;
 
+#[derive(Default)]
 struct GrepResults {
+    visited: usize,
+    scan_truncated: bool,
     matches: Vec<Value>,
     total_matches: usize,
     bytes_read: u64,
@@ -108,59 +112,76 @@ pub(super) fn execute(
         None => None,
     };
 
-    let fs_config = tool_state.tools_config().fs;
-    let mut results = GrepResults {
-        matches: Vec::new(),
-        total_matches: 0,
-        bytes_read: 0,
-        rendered_chars: 0,
-        output_capped: false,
-    };
-    let mut visited = 0usize;
-    let mut scan_truncated = false;
+    let results = scan(
+        &base,
+        &regex,
+        matcher.as_ref(),
+        limit,
+        &tool_state.tools_config().fs,
+    );
+    render_results(results, base_arg, pattern, input.get("context").is_some())
+}
+
+/// Traverse and collect locations, keeping scan budgets independent of output caps.
+fn scan(
+    base: &Path,
+    regex: &Regex,
+    matcher: Option<&GlobMatcher>,
+    limit: usize,
+    fs_config: &FsToolConfig,
+) -> GrepResults {
+    let mut results = GrepResults::default();
     if base.is_file() {
-        let matches_filter = matcher
-            .as_ref()
-            .is_none_or(|matcher| matcher.is_match(base.file_name().unwrap_or_default()));
+        let matches_filter =
+            matcher.is_none_or(|matcher| matcher.is_match(base.file_name().unwrap_or_default()));
         if matches_filter {
-            visited = 1;
-            scan_file(&base, &regex, limit, &mut results);
+            results.visited = 1;
+            scan_file(base, regex, limit, &mut results);
         }
     } else {
-        for entry in traverse::walk(&base) {
+        for entry in traverse::walk(base) {
             if !entry
                 .file_type()
                 .is_some_and(|file_type| file_type.is_file())
             {
                 continue;
             }
-            if visited >= fs_config.traversal_max_files
+            if results.visited >= fs_config.traversal_max_files
                 || results.bytes_read >= fs_config.grep_max_bytes
             {
-                scan_truncated = true;
+                results.scan_truncated = true;
                 break;
             }
-            visited += 1;
-            let relative = entry.path().strip_prefix(&base).unwrap_or(entry.path());
-            if let Some(matcher) = &matcher {
+            results.visited += 1;
+            let relative = entry.path().strip_prefix(base).unwrap_or(entry.path());
+            if let Some(matcher) = matcher {
                 if !matcher.is_match(relative) {
                     continue;
                 }
             }
-            scan_file(entry.path(), &regex, limit, &mut results);
+            scan_file(entry.path(), regex, limit, &mut results);
         }
     }
 
+    results
+}
+
+fn render_results(
+    results: GrepResults,
+    base_arg: &str,
+    pattern: &str,
+    legacy_context: bool,
+) -> Value {
     let mut notes = Vec::new();
-    if scan_truncated {
-        notes.push(traverse::scan_truncated_note(visited));
+    if results.scan_truncated {
+        notes.push(traverse::scan_truncated_note(results.visited));
     }
     if results.output_capped {
         notes.push(format!(
             "Returned matches stopped at the {MAX_OUTPUT_CHARS}-character output cap; narrow the path or pattern."
         ));
     }
-    if input.get("context").is_some() {
+    if legacy_context {
         notes.push(
             "`context` is no longer accepted: fs.grep returns locations only. \
              Use fs.read with offset/limit around a reported line."
@@ -181,7 +202,7 @@ pub(super) fn execute(
             "matches": matches,
             "returned_count": returned_count,
             "total_matches": results.total_matches,
-            "truncated": results.total_matches > returned_count || output_capped || scan_truncated,
+            "truncated": results.total_matches > returned_count || output_capped || results.scan_truncated,
         });
         if !notes.is_empty() {
             output["note"] = json!(notes.join(" "));

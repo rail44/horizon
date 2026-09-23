@@ -16,6 +16,7 @@ mod job;
 mod output;
 pub(crate) mod recent;
 mod registry;
+mod shell;
 
 use std::path::PathBuf;
 

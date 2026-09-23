@@ -97,59 +97,44 @@ pub(crate) fn find_reusable_output(
         return None;
     }
 
-    let mut found_prior: Option<ReusableOutput> = None;
-    let mut has_intervening_modification = false;
-
     for item in frame.items.iter().rev().take(SCAN_LIMIT) {
-        // A new assignment may follow external changes (for example a merge
-        // prepared by the coordinator). Only reuse output within one turn.
+        // External changes may precede a new assignment; never reuse across it.
         if matches!(item, AgentFrameItem::Message(message) if message.role == crate::contract::MessageRole::User)
         {
             break;
         }
-        if let AgentFrameItem::ToolCallFinished(result) = item {
-            let Some(req) = frame.tool_call_request(&result.call_id) else {
-                continue;
-            };
-
-            // Items seen before `found_prior` is set (in reverse iteration)
-            // are *newer* than the prior match. Check whether any of them
-            // modified files.
-            if found_prior.is_none() {
-                let command = req.input.get("command").and_then(|v| v.as_str());
-                if is_intervening_modification(&req.tool_id, command, incoming_base) {
-                    has_intervening_modification = true;
-                }
-            }
-
-            // Look for a prior bash run with the same base command whose
-            // spill file still exists.
-            if found_prior.is_none() && req.tool_id == "bash" {
-                if let Some(cmd) = req.input.get("command").and_then(|v| v.as_str()) {
-                    if base_command(cmd) == incoming_base {
-                        if let Some(path) =
-                            result.output.get("output_file").and_then(|v| v.as_str())
-                        {
-                            if Path::new(path).exists() {
-                                let exit_code =
-                                    result.output.get("exit_code").and_then(|v| v.as_i64());
-                                found_prior = Some(ReusableOutput {
-                                    command: cmd.to_string(),
-                                    output_file: PathBuf::from(path),
-                                    exit_code,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
+        let AgentFrameItem::ToolCallFinished(result) = item else {
+            continue;
+        };
+        let Some(request) = frame.tool_call_request(&result.call_id) else {
+            continue;
+        };
+        let command = request.input.get("command").and_then(Value::as_str);
+        // Reverse order makes this modification newer than any remaining
+        // candidate. Older results cannot be reused after it.
+        if is_intervening_modification(&request.tool_id, command, incoming_base) {
+            return None;
+        }
+        if request.tool_id != "bash" {
+            continue;
+        }
+        let Some(command) = command.filter(|command| base_command(command) == incoming_base) else {
+            continue;
+        };
+        let Some(path) = result.output.get("output_file").and_then(Value::as_str) else {
+            continue;
+        };
+        if Path::new(path).exists() {
+            // The first surviving candidate is the newest; older mutations
+            // and results no longer affect its validity.
+            return Some(ReusableOutput {
+                command: command.to_string(),
+                output_file: PathBuf::from(path),
+                exit_code: result.output.get("exit_code").and_then(Value::as_i64),
+            });
         }
     }
-
-    if has_intervening_modification {
-        return None;
-    }
-    found_prior
+    None
 }
 
 /// Builds the bash-shaped `Value` returned as the tool result when a
@@ -481,6 +466,36 @@ mod tests {
 
         std::fs::remove_file(&old_spill).ok();
         std::fs::remove_file(&new_spill).ok();
+    }
+
+    #[test]
+    fn modification_before_the_matching_run_does_not_invalidate_it() {
+        let spill = temp_spill("older-modification");
+        let f = frame(vec![
+            other_request("edit", "fs.edit"),
+            other_result("edit"),
+            bash_request("build", "cargo nextest run"),
+            bash_result("build", Some(spill.to_str().unwrap()), Some(0)),
+        ]);
+        assert!(find_reusable_output(&f, "cargo nextest run | tail -5").is_some());
+        std::fs::remove_file(&spill).ok();
+    }
+
+    #[test]
+    fn a_missing_newest_spill_does_not_hide_an_older_usable_result() {
+        let spill = temp_spill("surviving-spill");
+        let removed = temp_spill("removed-spill");
+        std::fs::remove_file(&removed).unwrap();
+        let f = frame(vec![
+            bash_request("old", "cargo nextest run"),
+            bash_result("old", Some(spill.to_str().unwrap()), Some(1)),
+            bash_request("new", "cargo nextest run | tail -30"),
+            bash_result("new", Some(removed.to_str().unwrap()), Some(0)),
+        ]);
+        let output = find_reusable_output(&f, "cargo nextest run | tail -5").unwrap();
+        assert_eq!(output.output_file, spill);
+        assert_eq!(output.exit_code, Some(1));
+        std::fs::remove_file(&spill).ok();
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use super::git::{executable_index, tokenize, ShellToken};
+use super::shell::{executable_index, tokenize, ShellToken};
 
 const CONFIG_PATHS: [&str; 2] = [".cargo/config.toml", ".cargo/config"];
 
