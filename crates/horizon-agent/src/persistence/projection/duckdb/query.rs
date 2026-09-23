@@ -28,6 +28,17 @@ use super::{
 /// snippet, a ~16k-char total cap for `recall.read`) on top of this.
 const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
+/// One label per result, using its tagged occurrence or the latest preceding
+/// legacy request. Shared by search and history windows so id reuse neither
+/// multiplies rows nor borrows a label from a future request.
+const RESULT_CALL_JOIN: &str = "LEFT JOIN LATERAL (
+    SELECT arg_max(c.tool_id, c.sequence) AS tool_id
+    FROM agent_tool_calls c
+    WHERE c.session_id = r.session_id AND c.call_id = r.call_id
+      AND c.sequence < r.sequence
+      AND (r.occurrence_id IS NULL OR c.occurrence_id = r.occurrence_id)
+) tc ON TRUE";
+
 impl Store {
     /// Test-only: both current callers (`session_snapshots` below and
     /// `projection.rs`'s `rebuild_projections`) are themselves `cfg(test)`,
@@ -265,9 +276,9 @@ impl Store {
     ///
     /// Rows are newest-first (`event_at` then `sequence`, both descending).
     /// [`RecallSearchReport::total`] counts every match, not just the
-    /// `limit`-bounded rows actually returned -- computed via `COUNT(*)
-    /// OVER ()` over the unlimited match set, before the `LIMIT` clause
-    /// trims it.
+    /// `limit`-bounded rows actually returned. The filtered relation supplies
+    /// both the rows and a scalar count in the same query snapshot. This avoids
+    /// the parallel window operator that has failed inside system DuckDB.
     pub(crate) fn search_history(
         &self,
         scope: Option<SessionId>,
@@ -331,17 +342,19 @@ impl Store {
                        r.is_error
                 FROM agent_tool_results r
                 JOIN agent_events e ON e.event_id = r.event_id
-                LEFT JOIN agent_tool_calls tc
-                    ON tc.call_id = r.call_id AND tc.session_id = r.session_id
+                {RESULT_CALL_JOIN}
                 WHERE {predicate_r} {scope_r}
+            ), filtered_matches AS (
+                SELECT matches.session_id, matches.sequence, matches.kind, matches.role_or_tool,
+                       matches.text, matches.at_ts, matches.is_error, t.end_reason
+                FROM matches
+                LEFT JOIN agent_turns t
+                    ON t.session_id = matches.session_id AND t.turn_id = matches.turn_id
+                {turn_outcome_clause}
             )
-            SELECT matches.session_id, matches.sequence, matches.kind, matches.role_or_tool,
-                   matches.text, matches.at_ts, matches.is_error, t.end_reason,
-                   COUNT(*) OVER () AS total
-            FROM matches
-            LEFT JOIN agent_turns t
-                ON t.session_id = matches.session_id AND t.turn_id = matches.turn_id
-            {turn_outcome_clause}
+            SELECT filtered_matches.*, totals.total
+            FROM filtered_matches
+            CROSS JOIN (SELECT COUNT(*) AS total FROM filtered_matches) totals
             ORDER BY at_ts DESC, sequence DESC
             LIMIT ?",
             bound = RECALL_TEXT_BOUND_CHARS,
@@ -425,8 +438,7 @@ impl Store {
                        r.is_error
                 FROM agent_tool_results r
                 JOIN agent_events e ON e.event_id = r.event_id
-                LEFT JOIN agent_tool_calls tc
-                    ON tc.call_id = r.call_id AND tc.session_id = r.session_id
+                {RESULT_CALL_JOIN}
                 WHERE r.session_id = ? AND r.sequence >= ?
             )
             SELECT sequence, kind, role_or_tool, text, at_ts, is_error
@@ -583,6 +595,73 @@ mod recall_tests {
             role,
             text: text.to_string(),
         })
+    }
+
+    #[test]
+    fn recall_correlates_reused_ids_without_duplicate_or_future_result_labels() {
+        use crate::contract::OccurrenceId;
+        use serde_json::json;
+
+        for tagged in [false, true] {
+            let store = Store::open_in_memory().unwrap();
+            let session = SessionId::new();
+            let occurrence = |id: &str| tagged.then(|| OccurrenceId(id.into()));
+            let request = |call: &str, id: &str, tool: &str| {
+                Event::ToolCallRequested(ToolCallRequest {
+                    call_id: ToolCallId(call.into()),
+                    occurrence_id: occurrence(id),
+                    tool_id: tool.into(),
+                    input: json!({}).into(),
+                })
+            };
+            let result = |call: &str, id: &str| {
+                Event::ToolCallFinished(ToolCallResult::new(
+                    ToolCallId(call.into()),
+                    occurrence(id),
+                    json!({"output": "needle"}),
+                ))
+            };
+            let mut events = vec![
+                request("dup", "first", "fs.read"),
+                result("dup", "first"),
+                request("dup", "second", "bash"),
+                result("dup", "second"),
+                result("orphan", "unknown"),
+                request("orphan", "future", "fs.write"),
+            ];
+            let mut expected = vec!["fs.read", "bash", "orphan"];
+            if tagged {
+                events.push(result("dup", "first"));
+                expected.push("fs.read");
+            }
+            store.append_events(session, None, events).unwrap();
+            let rows = store.read_history_window(session, 0, 100).unwrap();
+            let labels: Vec<_> = rows
+                .iter()
+                .filter(|row| row.kind == RecallEntryKind::ToolResult)
+                .map(|row| row.role_or_tool.as_str())
+                .collect();
+            assert_eq!(
+                labels, expected,
+                "read must keep one row per result; tagged={tagged}"
+            );
+            let search = store
+                .search_history(Some(session), Some("needle"), 100, None)
+                .unwrap();
+            assert_eq!(
+                search.total,
+                expected.len(),
+                "search must count results once"
+            );
+            assert_eq!(
+                search
+                    .hits
+                    .iter()
+                    .map(|row| row.role_or_tool.as_str())
+                    .collect::<Vec<_>>(),
+                expected.into_iter().rev().collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]
