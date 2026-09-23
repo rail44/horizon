@@ -1018,25 +1018,17 @@ fn paint_scrollback_window(
         for (row, line) in lines.iter().enumerate() {
             let row_origin = bounds.origin + point(px(0.0), y_offset + line_height * row as f32);
 
-            // Background quads, identical to the live path
-            // (`paint_terminal`): a blank run carrying only `columns`/`bg`
-            // still fills its background, so BCE-erased regions and
-            // bg-colored padding survive in history too.
-            let mut col = 0_usize;
-            for span in &line.spans {
-                let x = cell_width * col as f32;
-                col += span.columns;
-                let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
-                if bg != default_bg {
-                    window.paint_quad(fill(
-                        Bounds::new(
-                            row_origin + point(x, px(0.0)),
-                            gpui::size(cell_width * span.columns as f32, line_height),
-                        ),
-                        bg,
-                    ));
-                }
-            }
+            paint_row_backgrounds(
+                line,
+                PaintMetrics {
+                    origin: row_origin,
+                    cell_width,
+                    line_height,
+                },
+                palette_overrides,
+                default_bg,
+                window,
+            );
 
             let window_row = first_window_row + row;
             let items = shape_cache.get_or_shape(window_row, generation, || {
@@ -1181,35 +1173,17 @@ fn paint_terminal(
         }
         let row_origin = bounds.origin + point(px(0.0), line_height * row as f32);
 
-        // Background quads paint every frame — the scene is rebuilt from
-        // scratch each frame, so only shaping is worth memoizing. Painting
-        // must not be gated on `span.text` being non-empty: a run of blank
-        // cells (`push_styled_cell` in horizon-terminal-core's `render`
-        // module represents a space run as an empty-text span carrying
-        // only `columns`/`bg`) is exactly how BCE-erased regions
-        // (`CSI K`/`CSI J` filling with the currently active background --
-        // classic `bce` terminfo semantics) and explicit bg-colored space
-        // padding (a status line's fill, a selection highlight over blank
-        // cells) reach the screen. An earlier
-        // `if span.text.is_empty() { continue }` here skipped this block
-        // for those spans, silently dropping their background fill -- the
-        // root cause of the gaps/interruptions in bg-colored regions
-        // (owner dogfooding report, 2026-07-18).
-        let mut col = 0_usize;
-        for span in &line.spans {
-            let x = cell_width * col as f32;
-            col += span.columns;
-            let bg = theme::to_hsla(theme::resolve(span.bg, &frame.palette_overrides));
-            if bg != default_bg {
-                window.paint_quad(fill(
-                    Bounds::new(
-                        row_origin + point(x, px(0.0)),
-                        gpui::size(cell_width * span.columns as f32, line_height),
-                    ),
-                    bg,
-                ));
-            }
-        }
+        paint_row_backgrounds(
+            line,
+            PaintMetrics {
+                origin: row_origin,
+                cell_width,
+                line_height,
+            },
+            &frame.palette_overrides,
+            default_bg,
+            window,
+        );
 
         let generation = row_generations.get(row).copied().unwrap_or(NO_GENERATION);
         let items = cache.get_or_shape(row, generation, || {
@@ -1343,6 +1317,35 @@ fn paint_terminal(
             horizon_terminal_core::TerminalCursorShape::HollowBlock => {
                 window.paint_quad(outline(cell, color, BorderStyle::Solid));
             }
+        }
+    }
+}
+
+/// Repaint backgrounds even for empty-text spans: erased cells and colored
+/// padding carry their fill in `columns`/`bg` in both live and history frames.
+fn paint_row_backgrounds(
+    line: &horizon_terminal_core::TerminalLine,
+    metrics: PaintMetrics,
+    palette_overrides: &[(u16, [u8; 3])],
+    default_bg: Hsla,
+    window: &mut Window,
+) {
+    let mut col = 0_usize;
+    for span in &line.spans {
+        let x = metrics.cell_width * col as f32;
+        col += span.columns;
+        let bg = theme::to_hsla(theme::resolve(span.bg, palette_overrides));
+        if bg != default_bg {
+            window.paint_quad(fill(
+                Bounds::new(
+                    metrics.origin + point(x, px(0.0)),
+                    gpui::size(
+                        metrics.cell_width * span.columns as f32,
+                        metrics.line_height,
+                    ),
+                ),
+                bg,
+            ));
         }
     }
 }

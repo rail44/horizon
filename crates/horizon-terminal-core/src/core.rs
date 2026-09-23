@@ -11,7 +11,8 @@ use termwiz::input::{KeyCode, KeyCodeEncodeModes, KeyboardEncoding, Modifiers};
 
 use self::color::resolve_query_color;
 pub use self::color::TerminalColorScheme;
-use self::events::{EventSink, TerminalEvents};
+use self::events::EventSink;
+pub(crate) use self::events::TerminalEvents;
 use self::input::{arrow_scroll_input, sgr_mouse_input, sgr_mouse_wheel_input};
 use self::osc_notify::OscNotificationScanner;
 use crate::protocol::kitty_keyboard;

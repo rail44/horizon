@@ -221,35 +221,13 @@ fn kitty_override(
         return None;
     }
 
-    // `Modifiers::encode_xterm()` (termwiz, via `wezterm-input-types`) only
-    // ever encodes shift(1)/alt(2)/ctrl(4) — it silently drops `SUPER` even
-    // though `app::keymap::termwiz_modifiers` does carry it through from
-    // the OS's Cmd/Win key. The Kitty spec reserves bit `0b1000` (8) for
-    // super in this same field, so add it back for the keys we encode
-    // ourselves; `Modifiers` has no distinct hyper/true-meta/caps_lock/
-    // num_lock bits at all (`ALT` doubles as "meta" in this crate), so
-    // those spec bits (16/32/64/128) are unreachable here — see
-    // `KITTY_COMPLIANCE`'s "Extended modifier bits" row.
-    let mut mod_bits = u32::from(mods.encode_xterm());
-    if mods.contains(Modifiers::SUPER) {
-        mod_bits |= 0b1000;
-    }
-    let mod_value = 1u32 + mod_bits;
-    let event_type = event_type_subfield(event, flags);
-    let text = associated_text_subfield(text, flags, event);
-    let mut sequence = format!("\x1b[{codepoint}");
-    if mod_value != 1 || event_type.is_some() || text.is_some() {
-        sequence.push_str(&format!(";{mod_value}"));
-        if let Some(event_type) = event_type {
-            sequence.push_str(&format!(":{event_type}"));
-        }
-        if let Some(text) = text {
-            sequence.push(';');
-            sequence.push_str(&text);
-        }
-    }
-    sequence.push('u');
-    Some(sequence.into_bytes())
+    Some(finish_csi_u(
+        format!("\x1b[{codepoint}"),
+        mods,
+        flags,
+        event,
+        text,
+    ))
 }
 
 /// The associated-text subfield: decimal codepoints, colon-separated, only
@@ -350,11 +328,7 @@ fn navigation_key_event_override(
     // kitty's own reference, whose `cursor_key_mode` `SS3` special case is
     // itself gated on "legacy mode", unconditionally false once
     // `REPORT_EVENT_TYPES` is negotiated.
-    let mut mod_bits = u32::from(mods.encode_xterm());
-    if mods.contains(Modifiers::SUPER) {
-        mod_bits |= 0b1000;
-    }
-    let mod_value = 1u32 + mod_bits;
+    let mod_value = modifier_value(mods);
     let text = associated_text_subfield(text, flags, event);
     let mut sequence = format!("{intro};{mod_value}:{event_type}");
     if let Some(text) = text {
@@ -743,12 +717,6 @@ fn csi_u_text_key(
     event: KeyEventKind,
     text: Option<&str>,
 ) -> Vec<u8> {
-    let mut mod_bits = u32::from(mods.encode_xterm());
-    if mods.contains(Modifiers::SUPER) {
-        mod_bits |= 0b1000;
-    }
-    let mod_value = 1u32 + mod_bits;
-
     let mut sequence = format!("\x1b[{}", c as u32);
     if flags.contains(KittyKeyboardFlags::REPORT_ALTERNATE_KEYS)
         && mods.contains(Modifiers::SHIFT)
@@ -756,6 +724,34 @@ fn csi_u_text_key(
     {
         sequence.push_str(&format!(":{}", c.to_ascii_uppercase() as u32));
     }
+    finish_csi_u(sequence, mods, flags, event, text)
+}
+
+fn modifier_value(mods: Modifiers) -> u32 {
+    // `Modifiers::encode_xterm()` (termwiz, via `wezterm-input-types`) only
+    // ever encodes shift(1)/alt(2)/ctrl(4) — it silently drops `SUPER` even
+    // though `app::keymap::termwiz_modifiers` does carry it through from
+    // the OS's Cmd/Win key. The Kitty spec reserves bit `0b1000` (8) for
+    // super in this same field, so add it back for the keys we encode
+    // ourselves; `Modifiers` has no distinct hyper/true-meta/caps_lock/
+    // num_lock bits at all (`ALT` doubles as "meta" in this crate), so
+    // those spec bits (16/32/64/128) are unreachable here — see
+    // `KITTY_COMPLIANCE`'s "Extended modifier bits" row.
+    let mut mod_bits = u32::from(mods.encode_xterm());
+    if mods.contains(Modifiers::SUPER) {
+        mod_bits |= 0b1000;
+    }
+    1u32 + mod_bits
+}
+
+fn finish_csi_u(
+    mut sequence: String,
+    mods: Modifiers,
+    flags: KittyKeyboardFlags,
+    event: KeyEventKind,
+    text: Option<&str>,
+) -> Vec<u8> {
+    let mod_value = modifier_value(mods);
     let event_type = event_type_subfield(event, flags);
     let text = associated_text_subfield(text, flags, event);
     if mod_value != 1 || event_type.is_some() || text.is_some() {

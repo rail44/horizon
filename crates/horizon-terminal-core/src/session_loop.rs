@@ -30,7 +30,7 @@ use termwiz::input::{KeyCode, Modifiers};
 use crate::contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalUpdate,
 };
-use crate::core::{TerminalColorScheme, TerminalCore};
+use crate::core::{TerminalColorScheme, TerminalCore, TerminalEvents};
 use crate::types::{
     KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSize,
 };
@@ -155,12 +155,40 @@ fn process_pty_chunk(
     frames: &mut FramePublisher,
     sync_flush_rx: &mut Receiver<Instant>,
 ) {
-    let mut events = core.write_vt(bytes);
+    let events = core.write_vt(bytes);
     tracing::debug!(
         target: "horizon_terminal_core::session_loop",
         visible_dirty = events.visible_dirty,
         "pty_chunk_processed"
     );
+    let visible_dirty = events.visible_dirty;
+    send_terminal_events(events, command_tx, update_tx);
+    rearm_sync_flush(core, sync_flush_rx);
+    // Only a chunk that actually reached the grid deserves
+    // `FramePublisher::notify`'s immediate slot -- a chunk that landed entirely
+    // inside an already-open BSU/ESU window (buffered, nothing flushed yet)
+    // must not steal it from the real content that flushes later. See
+    // `TerminalCore::write_vt`.
+    if visible_dirty {
+        frames.notify(core);
+        tracing::debug!(
+            target: "horizon_terminal_core::session_loop",
+            "notify_snapshot"
+        );
+    } else {
+        tracing::debug!(
+            target: "horizon_terminal_core::session_loop",
+            "skipped_notify_buffered"
+        );
+    }
+}
+
+/// Publish parser side effects in the same order for PTY input and timed flushes.
+fn send_terminal_events(
+    events: TerminalEvents,
+    command_tx: &Sender<TerminalCommand>,
+    update_tx: &Sender<TerminalUpdate>,
+) {
     for bytes in events.pty_writes {
         let _ = command_tx.send(TerminalCommand::Input(bytes));
     }
@@ -176,26 +204,8 @@ fn process_pty_chunk(
             destination: ClipboardDestination::Clipboard,
         });
     }
-    for notification in events.notifications.drain(..) {
+    for notification in events.notifications {
         let _ = update_tx.send(TerminalUpdate::Notification(notification));
-    }
-    rearm_sync_flush(core, sync_flush_rx);
-    // Only a chunk that actually reached the grid deserves
-    // `FramePublisher::notify`'s immediate slot -- a chunk that landed entirely
-    // inside an already-open BSU/ESU window (buffered, nothing flushed yet)
-    // must not steal it from the real content that flushes later. See
-    // `TerminalCore::write_vt`.
-    if events.visible_dirty {
-        frames.notify(core);
-        tracing::debug!(
-            target: "horizon_terminal_core::session_loop",
-            "notify_snapshot"
-        );
-    } else {
-        tracing::debug!(
-            target: "horizon_terminal_core::session_loop",
-            "skipped_notify_buffered"
-        );
     }
 }
 
@@ -479,29 +489,12 @@ pub fn run_terminal_core(
                 frames.flush(&core);
             }
             recv(sync_flush_rx) -> _ => {
-                let mut events = core.flush_sync_update();
+                let events = core.flush_sync_update();
                 tracing::debug!(
                     target: "horizon_terminal_core::session_loop",
                     "sync_flush_fired"
                 );
-                for bytes in events.pty_writes {
-                    let _ = command_tx.send(TerminalCommand::Input(bytes));
-                }
-                if events.bell_count > 0 {
-                    let _ = update_tx.send(TerminalUpdate::Bell);
-                }
-                if events.title.is_some() {
-                    let _ = update_tx.send(TerminalUpdate::Title(events.title));
-                }
-                for text in events.clipboard_writes {
-                    let _ = update_tx.send(TerminalUpdate::Clipboard {
-                        text,
-                        destination: ClipboardDestination::Clipboard,
-                    });
-                }
-                for notification in events.notifications.drain(..) {
-                    let _ = update_tx.send(TerminalUpdate::Notification(notification));
-                }
+                send_terminal_events(events, &command_tx, &update_tx);
                 rearm_sync_flush(&core, &mut sync_flush_rx);
                 frames.notify(&core);
             }
@@ -634,9 +627,9 @@ mod tests {
     #[test]
     fn sync_update_failsafe_flushes_a_stuck_window_after_the_deadline() {
         let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-        let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
-        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+        let (update_tx, update_rx) = crossbeam_channel::unbounded();
         let receivers = CoreReceivers {
             resize_rx: crossbeam_channel::never(),
             scroll_rx: crossbeam_channel::never(),
@@ -662,10 +655,22 @@ mod tests {
             );
         });
 
+        frame_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("startup frame");
         pty_tx.send(b"STALE".to_vec()).unwrap();
+        let stale = frame_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("visible pre-update frame");
+        assert!(stale.text().contains("STALE"));
         // Open a synchronized-update window with an erase queued inside it,
         // then go silent — no ESU, no further PTY data, ever.
-        pty_tx.send(b"\x1b[?2026h\x1b[H\x1b[K".to_vec()).unwrap();
+        pty_tx
+            .send(
+                b"\x1b[?2026h\x1b[H\x1b[K\x1b]2;flushed\x07\x07\x1b]52;c;aGVsbG8=\x07\x1b[6n"
+                    .to_vec(),
+            )
+            .unwrap();
 
         let deadline = Instant::now() + Duration::from_secs(2);
         let mut healed = false;
@@ -683,6 +688,23 @@ mod tests {
             healed,
             "failsafe timer should flush the stuck sync window without any further PTY data"
         );
+        // The same flush must forward parser side effects before its frame.
+        assert_eq!(
+            update_rx.try_iter().collect::<Vec<_>>(),
+            vec![
+                TerminalUpdate::Bell,
+                TerminalUpdate::Title(Some("flushed".into())),
+                TerminalUpdate::Clipboard {
+                    text: "hello".into(),
+                    destination: ClipboardDestination::Clipboard,
+                },
+            ]
+        );
+        assert_eq!(
+            command_rx.try_recv().unwrap(),
+            TerminalCommand::Input(b"\x1b[1;1R".to_vec())
+        );
+        assert!(command_rx.try_recv().is_err());
     }
 
     /// Regression test for the terminal keystroke latency fix
