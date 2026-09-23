@@ -159,50 +159,31 @@ impl Connection {
     ) -> Result<(), String> {
         let resolved = {
             let config = lock_unpoisoned(&self.state.agent_config);
-            if model.is_empty() {
-                return Err("A model id is required.".to_string());
-            }
-            if provider == horizon_agent::config::MOA_PROVIDER_NAME {
-                // The announced model is the aggregator's: it is what the
-                // session's provider requests actually name.
-                let Some(entry) = config.moa.entry(&model) else {
-                    return Err(format!("Unknown moa entry `{model}`."));
-                };
-                // Refused here as well as in the session loop, so the caller
-                // gets the reason back from the call instead of only seeing
-                // an error event on the session.
-                if !entry.aggregator.api_key_present {
-                    return Err(format!(
-                        "moa entry `{model}` is unavailable: its `{}` provider's key variable \
-                         {} is not set.",
-                        entry.aggregator.provider, entry.aggregator.api_key_env
-                    ));
-                }
-                entry.aggregator.model.clone()
-            } else {
-                if config.providers.entry(&provider).is_none() {
-                    return Err(format!("Unknown provider `{provider}`."));
-                }
-                model.clone()
-            }
+            horizon_agent::config::resolve_model_selection(
+                &config.providers,
+                &config.moa,
+                &provider,
+                &model,
+            )?
+            .model()
+            .to_string()
         };
         let selection = horizon_agent::wire::ModelSelection {
             provider: provider.clone(),
             model: model.clone(),
         };
-        let inbound = {
+        {
             let mut sessions = self.state.sessions.lock().unwrap();
             let Some(entry) = sessions.get_mut(&session_id) else {
                 return Err(format!("Unknown session {session_id:?}."));
             };
+            entry
+                .inbound
+                .send(Command::SetSessionModel { provider, model })
+                .map_err(|_| "Session is no longer accepting commands.".to_string())?;
             entry.model = Some(resolved.clone());
             entry.selection = Some(selection.clone());
-            entry.inbound.clone()
-        };
-        let _ = inbound.send(Command::SetSessionModel {
-            provider,
-            model: model.clone(),
-        });
+        }
         send_session_event(
             &self.state,
             session_id,
@@ -718,6 +699,21 @@ mod tests {
             matches!(&sent, horizon_agent::wire::AgentWireEvent::SessionModel(model) if model == "m-opus"),
             "{sent:?}"
         );
+    }
+
+    #[test]
+    fn a_closed_session_channel_does_not_announce_an_unapplied_model_switch() {
+        let (state, _) = two_provider_state();
+        let session_id = SessionId::new();
+        drop(state.install_test_session(session_id));
+        let connection = Connection::new(state);
+        let before = connection.session_model(session_id);
+        let mut events = connection.subscribe_agent(session_id);
+        assert!(connection
+            .set_session_model(session_id, "openai".into(), "new-model".into())
+            .is_err());
+        assert_eq!(connection.session_model(session_id), before);
+        assert!(events.try_recv().is_err());
     }
 
     fn moa_member(

@@ -115,19 +115,6 @@ impl MoaLaunch {
     }
 }
 
-/// Why a member on an unavailable entry was not asked, naming the entry and
-/// the variable its key is read from (never a value).
-pub(crate) fn unavailable_reason(member: &MoaMember) -> String {
-    if member.api_key_env.is_empty() {
-        format!("the `{}` provider is not configured", member.provider)
-    } else {
-        format!(
-            "the `{}` provider's key variable {} is not set",
-            member.provider, member.api_key_env
-        )
-    }
-}
-
 /// Starts one proposer session per member and returns without waiting; the
 /// caller consumes [`MoaLaunch::results`] until every launched proposer has
 /// reported. A member whose session cannot be started becomes a failed
@@ -156,7 +143,7 @@ pub(crate) fn launch(
                     model: member.model.clone(),
                 },
                 text: None,
-                failure: Some(unavailable_reason(member)),
+                failure: Some(member.unavailable_reason()),
             });
             continue;
         }

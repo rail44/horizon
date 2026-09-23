@@ -42,6 +42,9 @@
 //! `HORIZON_AGENT_STATE_DB` plus the XDG-based built-in default remain the
 //! only override path.
 
+mod selection;
+pub use selection::{resolve_model_selection, ResolvedModelSelection};
+
 use std::path::PathBuf;
 
 use rig_core::providers::openai;
@@ -409,6 +412,19 @@ pub struct MoaMember {
 }
 
 impl MoaMember {
+    /// Why a member on an unavailable entry was not asked, naming the entry and
+    /// the variable its key is read from (never a value).
+    pub(crate) fn unavailable_reason(&self) -> String {
+        if self.api_key_env.is_empty() {
+            format!("the `{}` provider is not configured", self.provider)
+        } else {
+            format!(
+                "the `{}` provider's key variable {} is not set",
+                self.provider, self.api_key_env
+            )
+        }
+    }
+
     /// The file-level pair, before [`AgentConfig::from_env_and_providers`]
     /// resolves the entry behind it.
     pub fn new(provider: String, model: String) -> Self {

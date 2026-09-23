@@ -376,36 +376,7 @@ pub(super) fn apply_set_session_model(
     provider: &str,
     model: &str,
 ) -> Result<(), String> {
-    if model.is_empty() {
-        return Err("A model id is required.".to_string());
-    }
-    if provider == crate::config::MOA_PROVIDER_NAME {
-        let Some(entry) = moa_table.entry(model) else {
-            return Err(format!("Unknown moa entry `{model}`."));
-        };
-        // An unavailable aggregator would answer from the deterministic
-        // fallback responder, which reads in the pane as the model's own
-        // answer. Refused instead, the way a key-less `[[providers]]` entry
-        // is not offered for selection.
-        if !entry.aggregator.api_key_present {
-            return Err(format!(
-                "moa entry `{model}` is unavailable: {}.",
-                crate::tools::moa::unavailable_reason(&entry.aggregator)
-            ));
-        }
-        if !crate::config::apply_moa_selection(config, table, entry) {
-            return Err(format!(
-                "moa entry `{model}` names no provider `{}`.",
-                entry.aggregator.provider
-            ));
-        }
-        return Ok(());
-    }
-    let Some(entry) = table.entry(provider) else {
-        return Err(format!("Unknown provider `{provider}`."));
-    };
-    crate::config::apply_provider_entry(config, entry, model);
-    config.moa = None;
+    crate::config::resolve_model_selection(table, moa_table, provider, model)?.apply(config);
     Ok(())
 }
 
