@@ -46,6 +46,10 @@ pub struct FileEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallView {
     pub call_id: ToolCallId,
+    /// Source positions in the same item slice passed to `build_tool_call_views`.
+    /// Expanded bodies use these bindings instead of matching reused call ids again.
+    pub request_index: usize,
+    pub result_index: Option<usize>,
     /// The raw tool id (e.g. `fs.edit`, `bash`) -- kept alongside the
     /// display `verb`/`kind` so receipt aggregation
     /// (`classify_call`/`aggregate_receipt`) can classify precisely
@@ -112,6 +116,8 @@ pub enum ApprovalState {
 pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     struct Building<'a> {
         call_id: ToolCallId,
+        request_index: usize,
+        result_index: Option<usize>,
         /// Per-occurrence identity from the originating `ToolCallRequest`.
         /// `None` for legacy / replayed logs that pre-date the field; the
         /// matching logic below falls back to `.rev()`-by-call_id in that
@@ -125,11 +131,13 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     }
 
     let mut building: Vec<Building> = Vec::new();
-    for item in items {
+    for (index, item) in items.iter().enumerate() {
         match item {
             AgentFrameItem::ToolCallRequested(request) => {
                 building.push(Building {
                     call_id: request.call_id.clone(),
+                    request_index: index,
+                    result_index: None,
                     occurrence_id: request.occurrence_id.clone(),
                     tool_id: &request.tool_id,
                     input: &request.input,
@@ -230,6 +238,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 };
                 if let Some(entry) = entry {
                     entry.result = Some(result);
+                    entry.result_index = Some(index);
                 }
             }
             _ => {}
@@ -244,6 +253,8 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             let affected_files = affected_files(entry.tool_id, entry.input, output);
             ToolCallView {
                 call_id: entry.call_id,
+                request_index: entry.request_index,
+                result_index: entry.result_index,
                 tool_id: entry.tool_id.to_string(),
                 verb,
                 target,

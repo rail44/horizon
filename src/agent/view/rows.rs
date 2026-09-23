@@ -157,7 +157,7 @@ impl AgentTranscript {
         }
         wrapper = wrapper.child(header);
         if expanded {
-            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+            if let Some(body) = turns::tool_call_body(items, call) {
                 wrapper = wrapper.child(
                     div()
                         .px_3()
@@ -495,11 +495,11 @@ impl AgentTranscript {
             // never coincide (a `Waiting` call has no result yet, so it
             // can't be a finished failure either), so this and the
             // `expanded` branch below are mutually exclusive.
-            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+            if let Some(body) = turns::tool_call_body(items, call) {
                 wrapper = wrapper.child(self.render_waiting_proposal(&call.call_id, &body));
             }
         } else if expanded {
-            if let Some(body) = turns::tool_call_body(items, &call.call_id) {
+            if let Some(body) = turns::tool_call_body(items, call) {
                 wrapper = wrapper.child(
                     div()
                         .px_3()
@@ -747,6 +747,8 @@ mod tests {
     fn finished_view(superseded: bool, is_error: bool) -> ToolCallView {
         ToolCallView {
             call_id: ToolCallId("c".to_string()),
+            request_index: 0,
+            result_index: Some(1),
             tool_id: "bash".to_string(),
             verb: "Bash".to_string(),
             target: None,

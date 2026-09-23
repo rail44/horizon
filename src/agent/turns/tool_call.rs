@@ -10,12 +10,11 @@
 //! transcript`'s module doc for why that kept the whole family together
 //! rather than splitting the enum from its one constructor.
 
-use horizon_agent::contract::ToolCallId;
 use horizon_agent::frame::AgentFrameItem;
 use serde_json::Value;
 
 use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff};
-use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind};
+use super::{classify, edit_entries, str_field, DiffLine, DiffLineKind, ToolCallView};
 
 /// A tool call's expanded-row body (stage D, decision 3's "each row
 /// expands further individually"), keyed off the tool id the same way
@@ -237,33 +236,30 @@ pub(crate) fn build_tool_call_body(
     }
 }
 
-/// Finds `call_id`'s request/result within `items` (a single turn's item
-/// slice, same contract as `build_tool_call_views`) and builds its
-/// [`ToolCallBody`]. `None` if `call_id` has no matching request in
-/// `items` at all (shouldn't happen for a row the caller already built a
-/// `ToolCallView` from).
-///
-/// `.rev()` on both lookups: same reused-call_id reasoning as
-/// `build_tool_call_views` -- picks the *most recently requested*
-/// occurrence's request/result, not a stale earlier one that happened to
-/// share the id, so a `Waiting` row's proposal body always reflects the
-/// call actually pending approval.
+/// Builds a row's body from the request/result positions already correlated by
+/// `build_tool_call_views`. `items` must be the same slice used to build `call`.
+/// This preserves occurrence-aware matching and legacy replay ordering without
+/// letting the view independently bind a reused call id to a different attempt.
 pub(crate) fn tool_call_body(
     items: &[AgentFrameItem],
-    call_id: &ToolCallId,
+    call: &ToolCallView,
 ) -> Option<ToolCallBody> {
-    let request = items.iter().rev().find_map(|item| match item {
-        AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id => Some(request),
-        _ => None,
-    })?;
-    let result = items.iter().rev().find_map(|item| match item {
-        AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => Some(result),
-        _ => None,
-    });
+    let AgentFrameItem::ToolCallRequested(request) = items.get(call.request_index)? else {
+        return None;
+    };
+    let output = match call.result_index {
+        Some(index) => {
+            let AgentFrameItem::ToolCallFinished(result) = items.get(index)? else {
+                return None;
+            };
+            Some(&result.output.0)
+        }
+        None => None,
+    };
     Some(build_tool_call_body(
         &request.tool_id,
         &request.input,
-        result.map(|result| &result.output.0),
+        output,
     ))
 }
 
@@ -274,6 +270,95 @@ mod tests {
     use super::super::test_support::*;
     use super::super::{build_tool_call_views, ApprovalState, DiffLineKind};
     use super::*;
+
+    #[test]
+    fn expanded_bodies_keep_each_reused_call_occurrence_and_pending_result_separate() {
+        for tagged in [false, true] {
+            let mut items = vec![
+                tool_requested("dup", "bash", json!({"command": "echo first"})),
+                tool_finished("dup", json!({"exit_code": 0, "output": "first"})),
+                tool_requested("dup", "bash", json!({"command": "echo second"})),
+            ];
+            if tagged {
+                use horizon_agent::contract::OccurrenceId;
+                for (index, item) in items.iter_mut().enumerate() {
+                    let occurrence = Some(OccurrenceId(
+                        if index < 2 { "first" } else { "second" }.into(),
+                    ));
+                    match item {
+                        AgentFrameItem::ToolCallRequested(request) => {
+                            request.occurrence_id = occurrence
+                        }
+                        AgentFrameItem::ToolCallFinished(result) => {
+                            result.occurrence_id = occurrence
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+            let views = build_tool_call_views(&items);
+            assert_eq!(
+                tool_call_body(&items, &views[0]),
+                Some(ToolCallBody::Command {
+                    command: "echo first".into(),
+                    exit_code: Some(0),
+                    lines: vec!["first".into()],
+                    omitted: 0,
+                }),
+                "the completed row must retain its own request and output; tagged={tagged}",
+            );
+            assert_eq!(
+                tool_call_body(&items, &views[1]),
+                Some(ToolCallBody::Command {
+                    command: "echo second".into(),
+                    exit_code: None,
+                    lines: vec![],
+                    omitted: 0,
+                }),
+                "a pending row must not borrow the previous output; tagged={tagged}",
+            );
+        }
+    }
+
+    #[test]
+    fn expanded_body_follows_occurrence_binding_when_an_old_attempt_finishes_last() {
+        use horizon_agent::contract::OccurrenceId;
+
+        let mut items = vec![
+            tool_requested("dup", "bash", json!({"command": "first"})),
+            tool_requested("dup", "bash", json!({"command": "retry"})),
+            tool_finished("dup", json!({"exit_code": 0, "output": "retry result"})),
+            tool_finished("dup", json!({"superseded_by_retry": true})),
+        ];
+        for (item, id) in items.iter_mut().zip(["first", "retry", "retry", "first"]) {
+            let occurrence = Some(OccurrenceId(id.into()));
+            match item {
+                AgentFrameItem::ToolCallRequested(request) => request.occurrence_id = occurrence,
+                AgentFrameItem::ToolCallFinished(result) => result.occurrence_id = occurrence,
+                _ => unreachable!(),
+            }
+        }
+        let views = build_tool_call_views(&items);
+        assert!(views[0].superseded);
+        assert_eq!(
+            tool_call_body(&items, &views[0]),
+            Some(ToolCallBody::Command {
+                command: "first".into(),
+                exit_code: None,
+                lines: vec![],
+                omitted: 0,
+            }),
+        );
+        assert_eq!(
+            tool_call_body(&items, &views[1]),
+            Some(ToolCallBody::Command {
+                command: "retry".into(),
+                exit_code: Some(0),
+                lines: vec!["retry result".into()],
+                omitted: 0,
+            }),
+        );
+    }
 
     #[test]
     fn build_tool_call_body_reconstructs_an_fs_edit_diff() {
@@ -520,8 +605,8 @@ mod tests {
 
         // Its proposal body must reflect the *second* call's own content,
         // not the already-finished first one that happens to share the
-        // id (`tool_call_body`'s matching `.rev()` fix).
-        match tool_call_body(&items, &views[1].call_id) {
+        // id. The body uses the view's existing source binding.
+        match tool_call_body(&items, &views[1]) {
             Some(ToolCallBody::Diff { lines, .. }) => {
                 assert_eq!(
                     diff_texts(&lines),
@@ -547,8 +632,8 @@ mod tests {
             tool_finished("a", json!({"total_lines": 10})),
             tool_finished("b", json!({"path": "b.rs", "replaced": true})),
         ];
-        let call_id = ToolCallId("b".to_string());
-        match tool_call_body(&items, &call_id) {
+        let views = build_tool_call_views(&items);
+        match tool_call_body(&items, &views[1]) {
             Some(ToolCallBody::Diff { lines, .. }) => {
                 assert_eq!(
                     diff_texts(&lines),
@@ -560,10 +645,10 @@ mod tests {
     }
 
     #[test]
-    fn tool_call_body_is_none_for_an_unknown_call_id() {
+    fn tool_call_body_rejects_missing_source_items() {
         let items = vec![tool_requested("a", "fs.read", json!({"path": "a.rs"}))];
-        let call_id = ToolCallId("missing".to_string());
-        assert!(tool_call_body(&items, &call_id).is_none());
+        let views = build_tool_call_views(&items);
+        assert!(tool_call_body(&[], &views[0]).is_none());
     }
 
     #[test]
@@ -581,7 +666,8 @@ mod tests {
             tool_requested("a", "bash", json!({"command": long_command})),
             approval_requested("a"),
         ];
-        match tool_call_body(&items, &ToolCallId("a".to_string())) {
+        let views = build_tool_call_views(&items);
+        match tool_call_body(&items, &views[0]) {
             Some(ToolCallBody::Command {
                 command, exit_code, ..
             }) => {
