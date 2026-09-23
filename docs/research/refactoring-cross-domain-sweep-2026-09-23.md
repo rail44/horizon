@@ -1,56 +1,57 @@
 # 実行・操作経路のリファクタリング第四巡
 
-基準: `ceede795`。board固有実装を除く下記5領域を、呼び出し先・関連実装・
-テストまで追って確認する。必要な変更、回帰検証、main反映、再ビルド、同条件の
-再解析までを完了条件とする。既存の操作・表示・権限・停止・復元の仕様は維持。
+開始: `ceede795`。下記5領域を呼び出し先・関連実装・テストまで確認し、変更を段階的にmainへ
+反映した。board UI・CLI・horizon-board・logd・board連携専用directory・共通ファイル内の
+board固有処理は対象外。既存の操作・表示・権限・停止・復元・保存形式を維持した。
 
-| 領域 | 確認する責務 | 状態 |
+| 領域 | 変更 | 維持した境界・理由 |
 | --- | --- | --- |
-| セッションの寿命管理 | shellとdaemonを通した生成・接続・復元・終了 | main反映済み (`5827fdd9`)。復元を3段階へ分離し、世代確認と端末entityの配線を集約 |
-| 端末の操作と描画 | スクロール状態、履歴取得、表示更新 | main反映済み (`6473dcb5`)。scrollbackの状態遷移を分離し、履歴要求を共通化。114テスト・描画入力検証通過 |
-| agentの状態と表示 | イベント反映、状態判定、transcript変換 | main反映済み (`3b338101`)。表示行のprojectionをGPUI描画から分離し、burstの終了処理を統一。167テスト通過 |
-| 個別ツール内部 | ファイル検索・読み取り、Git解析、出力再利用 | readの取得と整形、grepの検証・走査・出力を分離。共通shell解析の所有箇所と出力再利用の走査を整理 |
-| 抽出ツール | 前後比較、判断の引き継ぎ、除外範囲の精密化 | main反映済み (`16dcdd84`)。20件の回帰検証、全体production/tests解析、全体ゲート通過 |
+| セッション寿命 | 在庫取得・接続・モデル反映を分離。端末entity生成と通知配線を集約 (`5827fdd9`) | 選定前と反映前に両runtimeの世代を確認。terminalのAttach成功とagentの非同期接続は完了契約が異なる。daemonの購読登録・終了通知・lifecycle lockの順序も維持 |
+| 端末操作・描画 | scrollbackの状態遷移をsessionの通信・表示更新から分離し、両端の履歴要求を共通化 (`6473dcb5`) | 取得中の要求は重複送信せず最新の小数行位置を保持。履歴とliveはcacheのindex・generationが異なり、cursor・selection・IMEはlive専用なのでpaint経路を維持 |
+| agent状態・表示 | 純粋な表示行projectionをGPUI描画から分離。burstの終了処理を統一 (`3b338101`) | receiptの範囲とkey、thinkingの表示条件を維持。foldとstatusは履歴と最新稼働状態を区別する既存の配置を維持 |
+| 個別ツール | readの取得と整形、grepの検証・走査・出力を分離。Git/Cargo共通のshell解析を独立。出力再利用の逆順走査を単純化 (`f120f173`) | ignore・mtime・read/writeの権限差・出力上限・承認経路を維持。字句解析の状態機械と、budgetの異なるglob/grepの収集処理は維持 |
+| 抽出ツール | 構文単位の除外、移動・分割の明示的な対応表、根拠hash付きの判断記録を追加 (`16dcdd84`) | 同条件の完全なreportだけを比較。判断の根拠が変わった場合は再確認対象とし、結果を隠さない。未記録の依存先まで妥当とは扱わない |
 
-抽出ツール: 構文単位の除外を全解析器へ適用し、理由と座標を記録する。
-比較は同条件の完全なreport間に限定し、移動・分割は明示した対応表で補助関数まで含める。
-過去の判断は関数と関連ファイルのhashで根拠の変化を示す。結果を隠したり、
-未確認の依存先まで妥当と扱ったりはしない。通常ファイル内に残るboardの配線や
-macro宣言は手作業でも境界を確認し、変更対象から外す。
+抽出ツールの実用上の改善は、既存の解析器を使ったまま、比較と再レビューを再現できるように
+した点。責務の適切さや仕様維持の判断は引き続きソース・呼び出し先・テストの確認が必要。
+boardのmacro宣言や混在する配線は一律には除けないため、変更境界を手作業でも確認する。
 
-同じRustソースに細かい除外を適用した開始値は318ファイル・2342関数。
-除外範囲の変更による件数の減少は改善値に含めず、この条件を以降の比較基準とする。
+## 同条件の前後比較
 
-セッション寿命: 在庫取得と接続は背景thread、候補選定とモデル反映はUI threadに維持。
-両runtimeの世代は選定前・反映前の2箇所で同じ条件を使う。terminalはAttach成功分のみ、
-agentは従来どおり非同期接続のhandleを採用し、完了契約を揃えない。作成・再接続・workspace
-復元の端末entity生成を一箇所に集約し、終了・title・通知channelの配線を統一する。
+最終の除外設定で開始時のRustソースを再解析した。基準reportのcommitは`16dcdd84`
+（`ceede795`からRust変更なし）。最初の318ファイル・2342関数という値からの除外による減少は
+改善に含めない。同条件では313→316ファイル、2308→2317関数、clone pair 244→243、
+clone group 140→140。件数の増減自体を品質評価には使わない。
 
-agentdのspawn/run/resumeは、thread登録・panic時の記録・終了時の登録解除とworktree回収、
-manual resumeのlifecycle lockを確認。terminaldは購読を先に登録するcreateと、存在確認付きの
-attach、終了通知と登録削除の順序を確認した。復帰条件と資源の寿命が異なるため、共通の
-起動/終了抽象へはまとめない。workspace/runtimeの62テストと、専用Xvfb上のUI再起動で
-2タブ・2ペイン分割・同じ3端末session・復元frameを確認した。
+下表は認知的複雑度。分割後は入口だけでなく対応する補助関数を含む最大値で比較した。
 
-端末: `scrollback.rs`が表示位置・先読み・到着windowの採否を所有し、sessionはその判断に
-従ってIPCと再描画を行う。取得中のwheel操作は要求を重複送信せず、最新の小数行位置を
-保持する。live復帰・alternate screen・resize・stale responseの既存テストを移動して確認。
-描画は履歴window内とlive viewport内でcacheのindex・generationが異なり、cursor・selection・
-IMEもlive専用なので各paint経路を維持する。行の文字整形と描画は既に共通化されている。
-専用Xvfbでmarker・256色・truecolor・OSC 8のframe dumpも確認した（pixelの目視ではない）。
+| 対応する責務 | 前 | 後 |
+| --- | ---: | ---: |
+| workspace復元と端末entity配線 | 54 | 24 |
+| scrollbackのwheelと履歴要求 | 65 | 49 |
+| fs.readの取得と行窓の整形 | 26 | 19 |
+| fs.grepの検証・走査・出力 | 36 | 20 |
+| 出力再利用の探索 | 41 | 14 |
+| burstの分割・終了 | 26 | 13 |
 
-agent: event fold → LiveState → session → turn/burst → 表示行 → GPUI描画を確認。
-表示行のdescriptorとそのテストを`view/projection.rs`へ移し、純粋なprojectionとlist更新・描画の
-境界を明確化。burstは同じ範囲を持つ値を開閉し、assistantの終了文・TurnEnded・compactionの
-3箇所で繰り返していた終了処理を統一した。receiptの範囲とkey、thinkingの表示条件は維持する。
-foldとstatusはイベントの履歴と最新の稼働状態を区別する既存の責務配置を維持。deltaをmessageへ
-昇格する位置、tool progressの非永続化、失敗後のidle表示、再接続世代の棄却は既存テストで確認。
+scrollbackのwindow管理、表示行projection、shell字句解析は所有箇所の整理で、複雑度は不変。
+対応表で説明できない追加・削除関数は0。既存の条件付き実装など、同名で一意に対応しない
+10組は曖昧なまま別表示し、改善とは数えない。高い値が残る状態機械・描画・protocol表も、
+数値だけを理由に分割しない。
 
-個別ツール: `fs.read`はパス検証・取得・mtime登録と、行窓の整形・文字上限を分離。
-`fs.grep`は引数と権限の検証、走査budget、結果JSON全体の上限処理を分離した。共通walkerの
-ignore規則と、read/writeで異なるGit metadataへのアクセス条件は維持。grepとglobの走査では
-budgetと件数の意味が異なるため、無理に同じ収集器へ統合しない。
-GitとCargoが使う字句解析・実行名探索を`bash/shell.rs`へ移した。字句解析の状態機械自体は
-引用・escape・separatorを追う責務がまとまっているため維持し、承認経路の判定も変えない。
-出力再利用は逆順走査中に更新操作または有効な最新結果を確定した時点で戻る形へ単純化。
-新しいuser messageを越えない条件と、spill消失時の探索継続を維持した。
+## 検証と再利用
+
+- 変更段階ごとにworkspace build、fmt、Clippy、全体nextest、wire schema、WASM previewを確認。
+  最終の全体nextestは2151件成功・14件skip。抽出ツールの回帰fixtureは20件成功。
+- 関連テストで復元・世代棄却、scrollbackのlive復帰・resize・stale response、deltaの昇格位置、
+  burst/表示行、read/grepの上限・権限・ignore、Git/Cargo分類、出力再利用の時系列を確認。
+- 隔離XvfbでUI再起動後の2タブ・2ペイン分割・同じ3端末を確認。marker・256色・truecolor・
+  OSC 8のframe dumpも確認した。これは描画入力の検証であり、pixelの目視確認ではない。
+- production/testsの解析が完了し、最終mainのソースhashと比較対象の一致を確認した。
+
+入口は[利用手順](../refactoring-review.md)。継続利用する設定・判断は
+[除外profile](../../scripts/refactor-audit/profiles/non-board.json)、
+[判断記録](../../scripts/refactor-audit/reviews.json)、
+[今回の対応表](../../scripts/refactor-audit/correspondence-cross-domain.json)に残した。
+生成物はgit管理外の[最終解析](../../target/refactor-audit/fourth-final/summary.md)と
+[前後比較](../../target/refactor-audit/fourth-final-comparison/summary.md)。

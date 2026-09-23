@@ -13,6 +13,7 @@
     "src/board_pane/**",
     "crates/horizon-board/**",
     "crates/horizon-logd/**",
+    "crates/horizon-agentd/src/board_flow/**",
     "**/board.rs",
     "**/board/**"
   ],

@@ -1,0 +1,417 @@
+[
+  {
+    "label": "Workspace restoration and terminal entity wiring",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reconcile",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_workspace_restore",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_terminal_resume",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reconcile",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "install_terminal_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_terminal_resume",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/restore.rs",
+        "owner": "RestoreRuntimes",
+        "name": "is_current",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/restore.rs",
+        "owner": "RestoreRuntimes",
+        "name": "inventory",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/restore.rs",
+        "owner": "RestoreRuntimes",
+        "name": "attach",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/restore.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_workspace_restore",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/restore.rs",
+        "owner": "WorkspaceShell",
+        "name": "apply_workspace_restore",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Scrollback wheel and edge requests",
+    "before": [
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "Scrollback",
+        "name": "on_wheel",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "request_edge_window",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "Scrollback",
+        "name": "on_wheel",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Scrollback window policy ownership",
+    "before": [
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "requested_window_height",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "edge_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "index_for_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "prefetch_threshold",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "WindowInstall",
+        "name": "dropped",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "WindowInstall",
+        "name": "installed",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "split_row_position",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "continuous_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "request_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "served_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "Scrollback",
+        "name": "install_window",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "Scrollback",
+        "name": "visible_lines",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "Scrollback",
+        "name": "on_live_frame",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "Scrollback",
+        "name": "abandon",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "requested_window_height",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "edge_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "index_for_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "prefetch_threshold",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "WindowInstall",
+        "name": "dropped",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "WindowInstall",
+        "name": "installed",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "split_row_position",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "continuous_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "request_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "<free>",
+        "name": "served_anchor",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "Scrollback",
+        "name": "install_window",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "Scrollback",
+        "name": "visible_lines",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "Scrollback",
+        "name": "on_live_frame",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/scrollback.rs",
+        "owner": "Scrollback",
+        "name": "abandon",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Transcript row projection ownership",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "build_transcript_rows",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "build_transcript_rows",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Filesystem read and bounded content rendering",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/fs/read.rs",
+        "owner": "<free>",
+        "name": "execute",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/fs/read.rs",
+        "owner": "<free>",
+        "name": "execute",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/read.rs",
+        "owner": "<free>",
+        "name": "render_content",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Grep validation, traversal and bounded output",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "render_location",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "scan_file",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "execute",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "render_location",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "scan_file",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "execute",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "scan",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/fs/grep.rs",
+        "owner": "<free>",
+        "name": "render_results",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Shared shell recognition ownership",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/git.rs",
+        "owner": "<free>",
+        "name": "executable_index",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/git.rs",
+        "owner": "<free>",
+        "name": "is_assignment",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/git.rs",
+        "owner": "<free>",
+        "name": "tokenize",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/shell.rs",
+        "owner": "<free>",
+        "name": "executable_index",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/shell.rs",
+        "owner": "<free>",
+        "name": "is_assignment",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/shell.rs",
+        "owner": "<free>",
+        "name": "tokenize",
+        "partition": "production"
+      }
+    ]
+  }
+]

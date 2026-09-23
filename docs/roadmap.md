@@ -40,8 +40,10 @@ environment setup on main (2026-09-23); see
 The third sweep completed agent job startup, approvals and retries, completion
 folding, turn control, and history reconstruction on main (2026-09-23); see
 [its results and retained boundaries](research/refactoring-agent-execution-sweep-2026-09-23.md).
-The fourth sweep follows session lifetime, terminal interaction and rendering,
-agent projections, individual tools, and repeatable review support; see
+The fourth sweep completed session restoration, terminal scrollback policy,
+agent projections, filesystem tool stages, and shared shell recognition. The
+discovery tooling now carries explicit split/move comparisons, evidence-backed
+review records, and syntax-level exclusions; see
 [its scope and results](research/refactoring-cross-domain-sweep-2026-09-23.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).

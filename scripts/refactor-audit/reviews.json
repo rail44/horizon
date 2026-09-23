@@ -3,6 +3,41 @@
   "reviews": [
     {
       "target": {
+        "file": "crates/horizon-agent/src/frame/fold.rs",
+        "owner": "<free>",
+        "name": "apply_agent_event_to_frame",
+        "partition": "production"
+      },
+      "sha256": "049f83f1ceb7f7dd95df7ad5b30540cd69984e7de331ca4ace604c42bb119217",
+      "related": {
+        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
+        "crates/horizon-agent/src/live.rs": "fdf4c77293b941844b0e7c0d3f6c26e888f7c57693941a38c303f3a3c2a5bad4",
+        "src/agent/session.rs": "8e2761f23dd45297dcc584318d36d8ad99d811ff84d5dd0650fc5b9b2dbbdab0",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b"
+      },
+      "decision": "preserve",
+      "reason": "Event-to-frame reduction owns delta promotion and turn boundaries. Preserve the exhaustive event match and separate ephemeral sidecars; UI projection now has its own module.",
+      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agent/src/tools/bash/shell.rs",
+        "owner": "<free>",
+        "name": "tokenize",
+        "partition": "production"
+      },
+      "sha256": "002f6a416110f571730eefdce6cfa8b5a1f834bcca7af17799c0a2646bd914ee",
+      "related": {
+        "crates/horizon-agent/src/tools/approval.rs": "b3ecf1bc03420f5054dd7d959bbb950df9f6e19017887b29abe4df0e2a528733",
+        "crates/horizon-agent/src/tools/bash/cargo.rs": "63b095cb5b42b80a8b335b7bb4317ac72a058ffe0e83b02931b222b264580816",
+        "crates/horizon-agent/src/tools/bash/git.rs": "e6eb62fa6cdbd8421322020288bcb5d1af3c8347e6f62a9755157cec678d3a35"
+      },
+      "decision": "preserve",
+      "reason": "The cohesive lexer preserves words, quoting and command boundaries for both Git and Cargo classifiers. Keep its state machine here; filesystem authority and approval remain outside it.",
+      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+    },
+    {
+      "target": {
         "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
         "owner": "<free>",
         "name": "legacy_bytes",
@@ -25,11 +60,29 @@
       },
       "sha256": "2bf5c2c8e03fa3f088e1173501127ffab91fd14e0f0d70ed0320b83b87c03062",
       "related": {
-        "src/terminal/mod.rs": "33f49661a76c449f88528c5c80747908452b8cf51a8bdc4b0aac5f404b1080f3"
+        "src/terminal/mod.rs": "d8a96d1f79b09aab268cdefc5185a8cba3cea7430b6b27de14e816b3ece38e44",
+        "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea"
       },
       "decision": "preserve",
-      "reason": "The branches encode distinct glyph shapes; keep the character-to-geometry correspondence visible. Rendering orchestration is reviewed separately.",
-      "commit": "ceede795e764af4aad3f08d91d25e4d5c2faacca"
+      "reason": "Character branches encode distinct geometry. The terminal caller only gained the scrollback module declaration; paint semantics and shape-cache contracts remain unchanged.",
+      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+    },
+    {
+      "target": {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_terminal",
+        "partition": "production"
+      },
+      "sha256": "772b8057ad097516b7e13bd947409ab961c7e3920d8d283e0031d33200f5bad9",
+      "related": {
+        "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
+        "src/terminal/session.rs": "268c17043fd57961deca2aa4b2882207c7f9d6b350dc3be2bc3ecf8f4b7c4f53",
+        "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea"
+      },
+      "decision": "preserve",
+      "reason": "Live and history painting have different cache indices and generation sources; cursor, selection and IME belong only to the live viewport. Shared row shaping is already factored out.",
+      "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
     }
   ]
 }
