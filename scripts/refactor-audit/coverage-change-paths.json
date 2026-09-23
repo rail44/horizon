@@ -1,0 +1,163 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "796043ab4f70cb66dd7ef4d95aad2e89e2dded68",
+  "reviewed_commit": "a967cc6af6b12aa3984a4f911640c4b760e5420c",
+  "profile": "profiles/non-board.json",
+  "scope": "Six cross-module change paths, including callers, peers and tests. File fingerprints identify evidence, not a new line-by-line audit of every production file. Groups may overlap. Board directories, functions and mixed command arms are excluded.",
+  "groups": [
+    {
+      "id": "tool_lifecycle",
+      "status": "reviewed",
+      "scenario": "Add a tool and inspect an approval retry with a reused call ID.",
+      "decision": "refactor",
+      "reason": "Keep schema/permission classification, containment decisions and execution as separate owners. Bind UI bodies once through shared occurrence correlation; use absolute request indices for expansion and element state. Approval commands still use the existing protocol call ID.",
+      "files": {
+        "crates/horizon-agent/src/frame/mod.rs": "7c3af03ac346f6c86808cd62c8051b988d32874d1ad25010c5d25060b5a3234b",
+        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
+        "crates/horizon-agent/src/policy.rs": "c91e486b5ab2aacc0de6912144293f83a4aa9ff9d3da593f16bf362187b24871",
+        "crates/horizon-agent/src/tools/approval.rs": "b3ecf1bc03420f5054dd7d959bbb950df9f6e19017887b29abe4df0e2a528733",
+        "crates/horizon-agent/src/tools/catalog.rs": "f678dfc9bafd591511eca41840fb20173ab748d742eb08ec6452e6af46c63f80",
+        "crates/horizon-agent/src/tools/execution.rs": "d24cec5d63e3ec5a1aa835b965a74ba9eb4d94a6b6b0f77889c3dd826f4d02e8",
+        "crates/horizon-agent/src/tools/processing.rs": "01e92da0b3faa1fd4021b27b006cf55930d136e7d261589d2eb1260d4d24c3e6",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
+        "crates/horizon-agent/src/transcript/tool_call/view.rs": "b5d25f190ac5fdadcd5ed8768156fc0e16d98d8d83c173c1b016a4c49577f5bd",
+        "src/agent/turns/tool_call.rs": "5d7b276b01010b8b4dcaa3c75b0a854542d0417509d3b4bcede1a53f1e4838a5",
+        "src/agent/view/mod.rs": "7923c5140c8ed48a705b63193722c0ac65d6c6c3a87f2f82c09c4a0a2ff03f7b",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b",
+        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e",
+        "src/agent/view/transcript.rs": "5355a66e389bf00aae307dbc268dcb68368e57c5057ed32822e4ebd8f361da81"
+      },
+      "validation": [
+        "Reused tagged and legacy IDs retain distinct bodies and pending results; late completion of an old attempt stays attached to it.",
+        "Existing approval, denial retry and provider lifecycle tests; full workspace gate."
+      ]
+    },
+    {
+      "id": "agent_lifetime",
+      "status": "reviewed",
+      "scenario": "Interrupt a queued/running input or a denial retry, then restore its session.",
+      "decision": "refactor",
+      "reason": "Frame correlation now drives unfinished-occurrence recovery and emits one tagged cancellation per unfinished attempt. Keep environment readiness, durable input delivery, command priority and select-loop ownership. Task children survive a cancelled turn; MoA proposers are pass-scoped.",
+      "files": {
+        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
+        "crates/horizon-agent/src/providers/rig/session/input.rs": "858952299be0bd53c9a82fc25ee6a1cdaa7dd3cc99fef83bb7aa57b74099d586",
+        "crates/horizon-agent/src/providers/rig/session/interaction.rs": "213cc7ea4f6fe964a079023a15b9fbc907bd001961390155308ed9f07fcf43d7",
+        "crates/horizon-agent/src/providers/rig/session/turn.rs": "271aa63eb7e3352c9660f763af65fc764e46a7f74ca99d34601d81615580d7b8",
+        "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
+        "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
+        "crates/horizon-agentd/src/session/completion.rs": "c7651095443d152fc3c686d2e5792849049071eb615b1053e9ec9fa0187352f2",
+        "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
+        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
+        "crates/horizon-agentd/src/session/resume.rs": "85b3231be237bec96d2a88f044303992f30dd35a14430ff99154486612753161",
+        "crates/horizon-agentd/src/session/run.rs": "fe055e74c4e039266225e196a4beb2c83f400705d82fdfeae865618671038f40",
+        "crates/horizon-agentd/src/session/setup.rs": "9804d994d7d150a0bf7f993798c482abee79872e4375386ea2a3efe7e4e542fd",
+        "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c",
+        "crates/horizon-agentd/src/session/state.rs": "b4ab6b66c92a684e8d04c9d47931a5cefd2bd89620cfa7945e0377c017f6df46",
+        "crates/horizon-agentd/src/session/subscription.rs": "e235012d043eb6d3f0c579a8298df2667fb891e2d2324f225e73657f36f06811"
+      },
+      "validation": [
+        "Real JSONL restart regression for a superseded attempt followed by an unfinished retry and for two unfinished occurrences.",
+        "Existing real-daemon crash, drain, replay, input deduplication and cancellation tests pass in the default profile."
+      ]
+    },
+    {
+      "id": "event_history",
+      "status": "reviewed",
+      "scenario": "Change result metadata and retrieve the same history through replay, recall and the GUI.",
+      "decision": "refactor",
+      "reason": "JSONL remains canonical; DuckDB and UI remain projections. Both recall queries share a latest-preceding occurrence-aware result-label join, returning each result once, with the call ID fallback for orphans. Preserve search filtering, order, total-before-limit and bounded text. Replace the observed failing DuckDB window operator with a count over the same filtered CTE.",
+      "files": {
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
+        "crates/horizon-agent/src/live.rs": "fdf4c77293b941844b0e7c0d3f6c26e888f7c57693941a38c303f3a3c2a5bad4",
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "84ae3f8be8f6d8d13fa8cf189a745f6c4dab4ca6ce212fb8016c09c7b90d932f",
+        "crates/horizon-agent/src/persistence/event_log/turn.rs": "86a3dd0a2d49199b9e33c0f842c8100ab28eeae22c9e85307b108c7de6192e1b",
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "61030e56ead774115ff71fc2a4de7673f42f677421920e6e5b608c7a82e9d359",
+        "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs": "ba01dd92a39b978e9e38aa0b2ffbb6e7ad81bb588c3ff0f01345348c8912b021",
+        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "bf2348db85d92d827795cf5961eb32eed387f1b232c54e11c4af3cebce9b186b",
+        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "7cfec3989f435e2b41f7286e1dee2bad2890393bc41b7ebed0367902917759fc",
+        "crates/horizon-agent/src/providers/rig/mapping.rs": "c6b5fdefdbc6c807f2d5e767f06e143efb917cd3d0cd1215b36146b2f61a7e90",
+        "crates/horizon-agent/src/tools/recall/mod.rs": "98e94f09b652d889f1b11a119828b5fa5a203823235fd712c8e95ce93777dfcb",
+        "src/agent/session.rs": "8e2761f23dd45297dcc584318d36d8ad99d811ff84d5dd0650fc5b9b2dbbdab0"
+      },
+      "validation": [
+        "Recall regression covers reused tagged/legacy IDs, delayed old results, orphan/future requests and totals/order.",
+        "The existing DuckDB PhysicalWindow error occurred once during the gate; 120 executions before and 120 after the SQL change did not reproduce it. No claim of a proven flake fix."
+      ]
+    },
+    {
+      "id": "workspace_entrypoints",
+      "status": "reviewed",
+      "scenario": "Invoke the same operation by CLI target, active-pane shortcut and UI binding.",
+      "decision": "preserve",
+      "reason": "The command model owns operations. Keep explicit CLI session targets distinct from the active workspace cursor, and preserve input validation, restore guards, close/detach versus terminate, confirmation and modal focus handling. Small adapters encode meaningful entrypoint differences.",
+      "files": {
+        "crates/horizon-cli/src/cli.rs": "8b979531a2b5c4a081e6077370dd13267c90da7bad1ca68a3a49b7736d0b711e",
+        "crates/horizon-cli/src/commands.rs": "0a2b75afb0545b83ea3bc261444387d1225a06a9a21715d791d8baa5dd5e3065",
+        "src/control_plane.rs": "8d851591a584f98bd2f71b7663ef31cc215328ed1d4a6a886889e9d4187b3aa4",
+        "src/control_plane/invoke.rs": "bbcb1ff9d8512762eae0efbb01aac0942b41ba059afc5f6280a8e6aa4f8166b0",
+        "src/keymap.rs": "3b768ee675737bcbf5ce4bd897d0334f6c9f2a40ac45aecd306f2b5d427d6f80",
+        "src/workspace/bindings.rs": "59e5c624f66970b4704408376490e9ad92f2dc9059fb85c8b0de9ac78e35621c",
+        "src/workspace/commands.rs": "7bbcb6f6b608f8816b100c1fe2b991a28c4639872953ae8f87df4037119944d0",
+        "src/workspace/modals.rs": "b00fbf768731184fbacba3e13ea2f5418ba035960e3b2f668c3968124cbf5b0c",
+        "src/workspace/restore.rs": "6721520a8f996ca2c95048fca304d7d5a4ebe7cfd81683c445e196a9c4af9132",
+        "src/workspace/session_lifecycle.rs": "c4e8114b2997ce01189d5eaf117b29d2d836ff91d86470f6be86499b7d36b12f"
+      },
+      "validation": [
+        "Existing CLI/command/workspace tests and real control-plane tests.",
+        "Isolated GUI restart restored two tabs, a two-pane split and the same three terminal sessions."
+      ]
+    },
+    {
+      "id": "configuration",
+      "status": "reviewed",
+      "scenario": "Select a plain/MoA model, reload provider settings, or publish a theme to an existing preview.",
+      "decision": "refactor",
+      "reason": "Share model validation and application with caller-selected catalog generations; move MoA availability wording to its configuration owner. Announce a selection only after command delivery succeeds. Preserve the explicitly accepted current-config hub versus startup-config provider behavior after reload (agent-output-ui-amendment.md, model-picker addendum); do not adopt the separately considered startup-snapshot behavior. Retain startup-only terminal/UI settings and live theme/keybindings/provider reload.",
+      "files": {
+        "crates/horizon-agent/src/config.rs": "3302dbf02113744aa2dbeb62adee863a1059e00b568a207bc18887f7e34baa0c",
+        "crates/horizon-agent/src/config/selection.rs": "ce2b481416dec992fc4017a91f3f3cc64075bfd6f6ce6e05a7110310dbbe4bbd",
+        "crates/horizon-agent/src/providers/rig/session/state.rs": "51010bdadf2656e1dbf4ce7de112271a975b8b41634be5d41d80a942721c66cf",
+        "crates/horizon-agent/src/registry.rs": "267d764732c90aabe8cfc2d29345f2d83ed7572435ef8ac68bfe4a505ab84ac5",
+        "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
+        "crates/horizon-agentd/src/session/connection.rs": "238c8319429e54da41f3fa56f8ae8f3a86d9e2aa21c4a96aecc3ea2561a8d3b8",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/moa.rs": "a6b6c6e8582234fc684de9b8c1d70b3c079d735bed8ba4c6fe8ec133f75c0b8f",
+        "src/model_picker.rs": "5b6dd72fa23409827d2592f6fa19d34407f47fc9e9210df9850bc20ec65434da",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
+        "src/workspace/commands.rs": "7bbcb6f6b608f8816b100c1fe2b991a28c4639872953ae8f87df4037119944d0"
+      },
+      "validation": [
+        "Closed-channel model switch returns an error without changing stored selection or announcing success; regression failed before the fix.",
+        "Existing plain/MoA model selection, role override, reload and theme tests."
+      ]
+    },
+    {
+      "id": "runtime_io",
+      "status": "reviewed",
+      "scenario": "Drop a view, lose a connection, reload a runtime or retarget a preview while work is in flight.",
+      "decision": "preserve",
+      "reason": "Retain per-daemon routes and drain policy, pre-hello retries versus established-connection failure, entity-owned event pumps, attachment generations and preview task cancellation. Terminal input priority, synchronization deadlines and row-generation caching have separate responsibilities. Do not combine lifetimes just because their channel APIs resemble each other.",
+      "files": {
+        "crates/horizon-terminal-core/src/session_loop.rs": "65a9c739121c0bcb94aec00ba4507f100c57e50a7631f3c124dcff818e287945",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/watch.rs": "b9a84a2ee4bce13490aa3bf0d126fb1792b3e0595582edf9c38aa25366bba697",
+        "src/runtime/agent.rs": "9a80c0d1406f18b5c2da28267e5251f4c8eb9a86e7b0d840ef2af9d38579b7a4",
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/notify.rs": "d1c264bb875b64fbde9de6fceccf31ab7289c5b7901050431a189c92d94f56b5",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/runtime/terminal.rs": "b5b83a8168688a5535aa691326f4b1e4c844c509372f599cee656fadfb63c769",
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57"
+      },
+      "validation": [
+        "Existing drop-without-drain, stale-reply cancellation, reconnect classification, PTY and synchronized-update tests.",
+        "Isolated Xvfb checks passed marker, Indexed(208), truecolor, OSC 8 and workspace restart. Frame assertions only; no pixel inspection or real IME verification."
+      ]
+    }
+  ]
+}

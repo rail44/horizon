@@ -78,15 +78,18 @@
         "name": "build_tool_call_views",
         "partition": "production"
       },
-      "sha256": "6e833a7cd728efd46f0c9e9dab87ffe7d4e47c507d1c0b495487da147030e1a5",
+      "sha256": "c8bf490e42046cc2754e51a720e41de12eab6bd9ab3a39241096334a6520530b",
       "related": {
+        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
         "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
         "crates/horizon-agent/src/transcript/tool_call/classify.rs": "b31bb8b1d3bcb6ef3a89bb8ac23767b6ea199537a0ae045b3296b2188b524275",
-        "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912"
+        "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912",
+        "src/agent/turns/tool_call.rs": "5d7b276b01010b8b4dcaa3c75b0a854542d0417509d3b4bcede1a53f1e4838a5",
+        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e"
       },
       "decision": "preserve",
-      "reason": "Each request occurrence keeps its own approval, result and superseded state. Prefer occurrence identity and retain reverse call-id matching for legacy logs; do not collapse retry attempts or reorder the first-request sequence.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate.",
+      "commit": "a967cc6af6b12aa3984a4f911640c4b760e5420c"
     },
     {
       "target": {
@@ -98,16 +101,16 @@
       "sha256": "4a695b463ececdbf825280b34fa53c631614b77f85c893aeceb282da81ed37d6",
       "related": {
         "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
-        "crates/horizon-agent/src/tools/moa.rs": "3f16cc44bb3db2a99aca87ee01ac145694c2fdfa59b6513af41358de1bc5c18d",
+        "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
         "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
         "crates/horizon-agentd/src/session/events.rs": "dedc2af0e3a73a34ef85cab3c50baea5ae98dc0584e7000831629276fefa928a",
         "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
-        "crates/horizon-agentd/src/session/resume.rs": "83f4ff875ddb9a4bb579c39e6600de4c2472c5ca24b5cd81935261fb6b9ab7d7",
+        "crates/horizon-agentd/src/session/resume.rs": "85b3231be237bec96d2a88f044303992f30dd35a14430ff99154486612753161",
         "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c"
       },
       "decision": "preserve",
-      "reason": "Session execution orders environment readiness, queued input, provider completion and durable outcomes. Keep the select loop as the ordering owner; task and MoA child monitoring share only their panic boundary, with distinct cancellation and notification policies. Durable live-input delivery now has a separate owner; persistence is flushed before provider dispatch.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Session execution orders environment readiness, queued input, provider completion and durable outcomes. Keep the select loop as the ordering owner; task and MoA child monitoring share only their panic boundary, with distinct cancellation and notification policies. Durable live-input delivery now has a separate owner; persistence is flushed before provider dispatch. Recovery now closes each unfinished occurrence through the shared frame correlation. Moving MoA availability wording to configuration does not change child lifetimes.",
+      "commit": "a967cc6af6b12aa3984a4f911640c4b760e5420c"
     },
     {
       "target": {

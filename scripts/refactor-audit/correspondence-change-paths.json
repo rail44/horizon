@@ -1,0 +1,282 @@
+[
+  {
+    "label": "Occurrence correlation and interrupted recovery",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_views",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "outstanding_tool_call_ids",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_views",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/frame/tool_calls.rs",
+        "owner": "<free>",
+        "name": "tool_call_occurrences",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/frame/tool_calls.rs",
+        "owner": "<free>",
+        "name": "matching_call",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/frame/tool_calls.rs",
+        "owner": "AgentFrame",
+        "name": "unfinished_tool_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/resume.rs",
+        "owner": "<free>",
+        "name": "cancel_unfinished_tool_calls",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Bound tool bodies and independent row state",
+    "before": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "tool_call_body",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expanded_receipt_rows",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expandable_tool_call_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_body",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_waiting_proposal",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_transcript_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_orphan_tool_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_running_card",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "tool_call_body",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expanded_receipt_rows",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expandable_tool_call_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_body",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_waiting_proposal",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_transcript_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_orphan_tool_row",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_running_card",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Model resolution with caller-owned config generations",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "<free>",
+        "name": "apply_set_session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/connection.rs",
+        "owner": "Connection",
+        "name": "set_session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/moa.rs",
+        "owner": "<free>",
+        "name": "unavailable_reason",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/session/state.rs",
+        "owner": "<free>",
+        "name": "apply_set_session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/connection.rs",
+        "owner": "Connection",
+        "name": "set_session_model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config.rs",
+        "owner": "MoaMember",
+        "name": "unavailable_reason",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config/selection.rs",
+        "owner": "<free>",
+        "name": "resolve_model_selection",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config/selection.rs",
+        "owner": "ResolvedModelSelection<'_>",
+        "name": "model",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/config/selection.rs",
+        "owner": "ResolvedModelSelection<'_>",
+        "name": "apply",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Occurrence-aware recall joins",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/query.rs",
+        "owner": "Store",
+        "name": "search_history",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/query.rs",
+        "owner": "Store",
+        "name": "read_history_window",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/query.rs",
+        "owner": "Store",
+        "name": "search_history",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/query.rs",
+        "owner": "Store",
+        "name": "read_history_window",
+        "partition": "production"
+      }
+    ]
+  }
+]

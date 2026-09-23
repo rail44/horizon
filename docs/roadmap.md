@@ -57,6 +57,10 @@ The seventh sweep reviewed all 320 baseline non-board production files in 37
 responsibility groups. It consolidated repeated policy/projection paths and
 fixed tools-disabled summaries and TOML theme-save handling, with seven staged
 main integrations; see [coverage and results](research/refactoring-changeability-sweep-2026-09-24.md).
+The eighth sweep traced six cross-module change paths. It shared tool-occurrence
+correlation across display and recovery, corrected recall result joins, and
+consolidated model validation while preserving config-generation semantics; see
+[its decisions and verification](research/refactoring-change-paths-2026-09-24.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 
