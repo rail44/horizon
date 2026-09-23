@@ -1,4 +1,4 @@
-use std::{collections::HashSet, thread, time::Duration};
+use std::{collections::HashSet, ops::ControlFlow, thread, time::Duration};
 
 use crossbeam_channel::{unbounded, Receiver, RecvTimeoutError, Sender};
 
@@ -64,147 +64,9 @@ impl Provider for MockProvider {
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::UserMessage { text } => {
-                        let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
-                        let _ = events_tx.send(
-                            Event::MessageCommitted(Message {
-                                role: MessageRole::User,
-                                text: text.clone(),
-                            })
-                            .into(),
-                        );
-                        let lower_text = text.to_ascii_lowercase();
-                        if lower_text.contains("streaming tool") {
-                            // Manual test hook for tool-call-argument
-                            // streaming feedback (see `ToolCallProgressBuffer`
-                            // in the rig provider): simulates a slow-to-
-                            // stream tool call by emitting a few
-                            // `ToolCallProgress` ticks — first the tool name,
-                            // then growing byte counts — before the real
-                            // `ToolCallRequested`, so the pane header/
-                            // transcript "preparing a tool call…" feedback is
-                            // exercisable without a network provider.
-                            let call_id = ToolCallId("mock-streaming-tool-1".to_string());
-                            pending_tool_call = Some(call_id.clone());
-                            for (bytes, tool_id) in [
-                                (0usize, Some("mock.approval_required".to_string())),
-                                (64, None),
-                                (512, None),
-                            ] {
-                                let _ = events_tx.send(ProviderEvent::tool_call_progress(
-                                    ToolCallProgress {
-                                        key: call_id.0.clone(),
-                                        tool_id,
-                                        bytes,
-                                    },
-                                ));
-                                thread::sleep(MOCK_STREAM_CHUNK_TICK);
-                            }
-                            let _ = events_tx.send(
-                                Event::ToolCallRequested(ToolCallRequest {
-                                    call_id,
-                                    tool_id: "mock.approval_required".to_string(),
-                                    input: serde_json::json!({ "message": text }).into(),
-                                    occurrence_id: None,
-                                })
-                                .into(),
-                            );
-                            continue;
+                        if respond_to_user_message(&commands_rx, &events_tx, text, &mut pending_tool_call).is_break() {
+                            break;
                         }
-                        if lower_text.contains("snapshot") {
-                            let call_id = ToolCallId("workspace-snapshot-1".to_string());
-                            pending_tool_call = Some(call_id.clone());
-                            let _ = events_tx.send(
-                                Event::ToolCallRequested(ToolCallRequest {
-                                    call_id,
-                                    tool_id: "workspace.snapshot".to_string(),
-                                    input: serde_json::json!({}).into(),
-                                    occurrence_id: None,
-                                })
-                                .into(),
-                            );
-                            continue;
-                        }
-                        if lower_text.contains("bash") {
-                            // Manual test hook for exercising the *real*
-                            // `bash` approval/execution path (not just the
-                            // approval-only `mock.approval_required` tool)
-                            // without a network provider -- used by
-                            // `horizon-agentd`'s e2e suite to prove bash
-                            // actually runs agentd-side.
-                            let call_id = ToolCallId("mock-bash-1".to_string());
-                            pending_tool_call = Some(call_id.clone());
-                            let _ = events_tx.send(
-                                Event::ToolCallRequested(ToolCallRequest {
-                                    call_id,
-                                    tool_id: "bash".to_string(),
-                                    input: serde_json::json!({ "command": "echo agentd-bash-ok" })
-                                        .into(),
-                                    occurrence_id: None,
-                                })
-                                .into(),
-                            );
-                            continue;
-                        }
-                        if lower_text.contains("tool") {
-                            let call_id = ToolCallId("mock-tool-1".to_string());
-                            pending_tool_call = Some(call_id.clone());
-                            let _ = events_tx.send(
-                                Event::ToolCallRequested(ToolCallRequest {
-                                    call_id: call_id.clone(),
-                                    tool_id: "mock.approval_required".to_string(),
-                                    input: serde_json::json!({ "message": text }).into(),
-                                    occurrence_id: None,
-                                })
-                                .into(),
-                            );
-                            continue;
-                        }
-                        if lower_text.contains("slow") {
-                            // Simulates a streaming turn that takes long
-                            // enough to be interrupted, so cancellation
-                            // semantics are testable without a network
-                            // provider (see docs/agent-tools-design.md).
-                            // Also the cheap, deterministic stand-in for the
-                            // rig streaming path's provider-request lifecycle
-                            // markers (see `Event::ProviderRequestSent`'s doc
-                            // comment) so ordering is unit-testable without a
-                            // network provider.
-                            let _ = events_tx.send(
-                                Event::ProviderRequestSent(ProviderRequestSent {
-                                    model: "mock".to_string(),
-                                })
-                                .into(),
-                            );
-                            match run_cancellable_mock_turn(&commands_rx, &events_tx, &text) {
-                                MockTurnOutcome::Completed => {
-                                    let _ = events_tx.send(
-                                        Event::StateChanged(SessionState::WaitingForUser).into(),
-                                    );
-                                }
-                                MockTurnOutcome::Cancelled => {}
-                                MockTurnOutcome::Shutdown => {
-                                    let _ = events_tx
-                                        .send(Event::StateChanged(SessionState::Terminated).into());
-                                    let _ = events_tx.send(
-                                        Event::Exited(Exit {
-                                            reason: "shutdown".to_string(),
-                                        })
-                                        .into(),
-                                    );
-                                    break;
-                                }
-                            }
-                            continue;
-                        }
-                        let _ = events_tx.send(
-                            Event::MessageCommitted(Message {
-                                role: MessageRole::Assistant,
-                                text: format!("Mock response: {text}"),
-                            })
-                            .into(),
-                        );
-                        let _ = events_tx
-                            .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::Cancel { .. } => {
                         let Some(call_id) = pending_tool_call.take() else {
@@ -333,6 +195,151 @@ impl Provider for MockProvider {
     }
 }
 
+/// Runs the mock's prompt-selected scenario. The session loop retains
+/// ownership of pending/cancelled tool calls and all non-message commands.
+fn respond_to_user_message(
+    commands_rx: &Receiver<Command>,
+    events_tx: &Sender<ProviderEvent>,
+    text: String,
+    pending_tool_call: &mut Option<ToolCallId>,
+) -> ControlFlow<()> {
+    let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
+    let _ = events_tx.send(
+        Event::MessageCommitted(Message {
+            role: MessageRole::User,
+            text: text.clone(),
+        })
+        .into(),
+    );
+    let lower_text = text.to_ascii_lowercase();
+    if lower_text.contains("streaming tool") {
+        // Manual test hook for tool-call-argument
+        // streaming feedback (see `ToolCallProgressBuffer`
+        // in the rig provider): simulates a slow-to-
+        // stream tool call by emitting a few
+        // `ToolCallProgress` ticks — first the tool name,
+        // then growing byte counts — before the real
+        // `ToolCallRequested`, so the pane header/
+        // transcript "preparing a tool call…" feedback is
+        // exercisable without a network provider.
+        let call_id = ToolCallId("mock-streaming-tool-1".to_string());
+        *pending_tool_call = Some(call_id.clone());
+        for (bytes, tool_id) in [
+            (0usize, Some("mock.approval_required".to_string())),
+            (64, None),
+            (512, None),
+        ] {
+            let _ = events_tx.send(ProviderEvent::tool_call_progress(ToolCallProgress {
+                key: call_id.0.clone(),
+                tool_id,
+                bytes,
+            }));
+            thread::sleep(MOCK_STREAM_CHUNK_TICK);
+        }
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id,
+                tool_id: "mock.approval_required".to_string(),
+                input: serde_json::json!({ "message": text }).into(),
+                occurrence_id: None,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
+    if lower_text.contains("snapshot") {
+        let call_id = ToolCallId("workspace-snapshot-1".to_string());
+        *pending_tool_call = Some(call_id.clone());
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id,
+                tool_id: "workspace.snapshot".to_string(),
+                input: serde_json::json!({}).into(),
+                occurrence_id: None,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
+    if lower_text.contains("bash") {
+        // Manual test hook for exercising the *real*
+        // `bash` approval/execution path (not just the
+        // approval-only `mock.approval_required` tool)
+        // without a network provider -- used by
+        // `horizon-agentd`'s e2e suite to prove bash
+        // actually runs agentd-side.
+        let call_id = ToolCallId("mock-bash-1".to_string());
+        *pending_tool_call = Some(call_id.clone());
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id,
+                tool_id: "bash".to_string(),
+                input: serde_json::json!({ "command": "echo agentd-bash-ok" }).into(),
+                occurrence_id: None,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
+    if lower_text.contains("tool") {
+        let call_id = ToolCallId("mock-tool-1".to_string());
+        *pending_tool_call = Some(call_id.clone());
+        let _ = events_tx.send(
+            Event::ToolCallRequested(ToolCallRequest {
+                call_id: call_id.clone(),
+                tool_id: "mock.approval_required".to_string(),
+                input: serde_json::json!({ "message": text }).into(),
+                occurrence_id: None,
+            })
+            .into(),
+        );
+        return ControlFlow::Continue(());
+    }
+    if lower_text.contains("slow") {
+        // Simulates a streaming turn that takes long
+        // enough to be interrupted, so cancellation
+        // semantics are testable without a network
+        // provider (see docs/agent-tools-design.md).
+        // Also the cheap, deterministic stand-in for the
+        // rig streaming path's provider-request lifecycle
+        // markers (see `Event::ProviderRequestSent`'s doc
+        // comment) so ordering is unit-testable without a
+        // network provider.
+        let _ = events_tx.send(
+            Event::ProviderRequestSent(ProviderRequestSent {
+                model: "mock".to_string(),
+            })
+            .into(),
+        );
+        match run_cancellable_mock_turn(commands_rx, events_tx, &text) {
+            MockTurnOutcome::Completed => {
+                let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+            }
+            MockTurnOutcome::Cancelled => {}
+            MockTurnOutcome::Shutdown => {
+                let _ = events_tx.send(Event::StateChanged(SessionState::Terminated).into());
+                let _ = events_tx.send(
+                    Event::Exited(Exit {
+                        reason: "shutdown".to_string(),
+                    })
+                    .into(),
+                );
+                return ControlFlow::Break(());
+            }
+        }
+        return ControlFlow::Continue(());
+    }
+    let _ = events_tx.send(
+        Event::MessageCommitted(Message {
+            role: MessageRole::Assistant,
+            text: format!("Mock response: {text}"),
+        })
+        .into(),
+    );
+    let _ = events_tx.send(Event::StateChanged(SessionState::WaitingForUser).into());
+    ControlFlow::Continue(())
+}
+
 enum MockTurnOutcome {
     Completed,
     Cancelled,
@@ -420,6 +427,68 @@ fn run_cancellable_mock_turn(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prompt_scenarios_keep_precedence_and_leave_shutdown_to_the_session() {
+        let provider = MockProvider::new();
+        for (text, expected_call, expected_tool) in [
+            (
+                "streaming tool snapshot bash slow",
+                "mock-streaming-tool-1",
+                "mock.approval_required",
+            ),
+            (
+                "snapshot bash tool slow",
+                "workspace-snapshot-1",
+                "workspace.snapshot",
+            ),
+            ("bash tool slow", "mock-bash-1", "bash"),
+            ("tool slow", "mock-tool-1", "mock.approval_required"),
+        ] {
+            let handle = provider.start_session(StartSession {
+                session_id: SessionId::new(),
+                provider_id: provider.provider_id(),
+                role_id: None,
+                workspace_root: None,
+                history: Vec::new(),
+                trusted_project: true,
+            });
+            let commands = handle.sender();
+            let events = handle.events();
+            let receive = || events.recv_timeout(Duration::from_secs(2)).unwrap();
+            for _ in 0..3 {
+                receive();
+            }
+            commands
+                .send(Command::UserMessage { text: text.into() })
+                .unwrap();
+            assert_eq!(receive().event, Event::StateChanged(SessionState::Running));
+            assert!(matches!(
+                receive().event,
+                Event::MessageCommitted(Message {
+                    role: MessageRole::User,
+                    ..
+                })
+            ));
+            if expected_call == "mock-streaming-tool-1" {
+                for expected_bytes in [0, 64, 512] {
+                    let event = receive();
+                    assert_eq!(event.tool_call_progress.unwrap().bytes, expected_bytes);
+                }
+            }
+            let Event::ToolCallRequested(request) = receive().event else {
+                panic!("expected tool request")
+            };
+            assert_eq!(request.call_id.0, expected_call);
+            assert_eq!(request.tool_id, expected_tool);
+            commands.send(Command::Shutdown).unwrap();
+            assert_eq!(
+                receive().event,
+                Event::StateChanged(SessionState::Terminated)
+            );
+            assert!(matches!(receive().event, Event::Exited(_)));
+        }
+    }
 
     #[test]
     fn resolved_model_is_none_regardless_of_role() {

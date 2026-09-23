@@ -14,6 +14,9 @@ once at session spawn (`src/terminal/session.rs`):
   `dump_frame` in `src/terminal/mod.rs`). Last writer wins when several
   sessions share the path — the tap is per-process, so drive the pane
   you assert on.
+  A `{session_id}` placeholder in the path writes one dump per session;
+  `check-workspace-restore.sh` uses this to await all initial frames before
+  restarting the UI.
 - `HORIZON_GPUI_DRIVE=<bytes>` — typed as raw PTY input into the first
   session ~1.5s after startup. `HORIZON_GPUI_DRIVE_ENTER=1` sends the
   trailing Enter through the key encoder (exercises the core-side kitty

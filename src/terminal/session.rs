@@ -24,6 +24,17 @@ use crate::input_trace::{input_trace, sink as input_trace_sink};
 use crate::runtime::{event_stream, RuntimeLink, TerminalSessionHandle};
 use crate::title::derive_session_title;
 
+/// A fixed dump path keeps its historical last-writer-wins behavior. A
+/// session placeholder lets restart checks observe each attachment separately.
+fn dump_path_for_session(path: std::ffi::OsString, session_id: SessionId) -> std::path::PathBuf {
+    match path.to_str() {
+        Some(path) => std::path::PathBuf::from(
+            path.replace("{session_id}", &session_id.as_uuid().to_string()),
+        ),
+        None => std::path::PathBuf::from(path),
+    }
+}
+
 /// Per-row content generations for the visible grid — the surviving form
 /// of the wire's row-level change information (goal 3 of
 /// `docs/terminal-protocol-goals.md`). Since wire v11 the frame path is a
@@ -223,7 +234,8 @@ impl TerminalSession {
         // replayed every obsolete frame for seconds after PTY output stopped.
         // `watch::changed` collapses that backlog: after each main-thread
         // update completes, the next borrow observes only the newest frame.
-        let dump_path = std::env::var_os("HORIZON_GPUI_DUMP").map(std::path::PathBuf::from);
+        let dump_path = std::env::var_os("HORIZON_GPUI_DUMP")
+            .map(|path| dump_path_for_session(path, session_id));
         cx.spawn(async move |this, cx| {
             while frames_rx.changed().await.is_ok() {
                 let frame = frames_rx.borrow_and_update().clone();

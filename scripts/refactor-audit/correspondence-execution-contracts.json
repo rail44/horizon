@@ -1,0 +1,285 @@
+[
+  {
+    "label": "Terminal route ownership",
+    "before": [
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "register_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "unregister_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "broadcast_terminal_command",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_frame",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_update",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "terminal_failed",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "connection_failed",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "register_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "unregister_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "broadcast_terminal_command",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_frame",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_update",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "terminal_failed",
+        "partition": "production"
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "connection_failed",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Task and MoA watcher panic boundary",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "start",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/moa.rs",
+        "owner": "<free>",
+        "name": "launch",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "start",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/moa.rs",
+        "owner": "<free>",
+        "name": "launch",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "watch_until_terminal",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Session and view split target lookup",
+    "before": [
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_view",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_view",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/query.rs",
+        "owner": "Workspace",
+        "name": "split_target_for_session",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Fetch transport, response validation and output conversion",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/web/fetch.rs",
+        "owner": "<free>",
+        "name": "fetch",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/web/fetch.rs",
+        "owner": "<free>",
+        "name": "fetch",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/fetch.rs",
+        "owner": "<free>",
+        "name": "read_response",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/web/fetch.rs",
+        "owner": "<free>",
+        "name": "format_content",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Terminal row shaping and text decorations",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "shape_row_items",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/shaping.rs",
+        "owner": "<free>",
+        "name": "shape_row_items",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/shaping.rs",
+        "owner": "<free>",
+        "name": "text_run",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Mock session lifecycle and prompt scenario",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/mock.rs",
+        "owner": "MockProvider",
+        "name": "start_session",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/mock.rs",
+        "owner": "MockProvider",
+        "name": "start_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/mock.rs",
+        "owner": "<free>",
+        "name": "respond_to_user_message",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Session-specific frame diagnostics for restart checks",
+    "before": [
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "TerminalSession",
+        "name": "spawn",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "TerminalSession",
+        "name": "spawn",
+        "partition": "production"
+      },
+      {
+        "file": "src/terminal/session.rs",
+        "owner": "<free>",
+        "name": "dump_path_for_session",
+        "partition": "production"
+      }
+    ]
+  }
+]

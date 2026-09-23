@@ -76,7 +76,7 @@ query() {
   "$binary" --socket "$control_socket" --json "$1"
 }
 
-start_app "$out/first.log"
+start_app "$out/first.log" "$out/initial-{session_id}.txt"
 [[ "$(query state | jq -r '.payload.tab_count')" == "1" ]]
 "$binary" --socket "$control_socket" new-terminal --active >/dev/null
 split_target="$(query sessions | jq -r '.payload.sessions[0].session_id')"
@@ -88,6 +88,28 @@ first_sessions="$(query sessions)"
 [[ "$(jq -r '.payload.sessions | length' <<<"$first_sessions")" == "3" ]]
 first_ids="$(jq -r '.payload.sessions[].session_id' <<<"$first_sessions" | sort)"
 [[ -s "$state_file" ]]
+
+# Creation replies describe the workspace model; the daemon may still be
+# spawning its PTYs. Restart only after every attachment has delivered a
+# real frame (the initial empty watch seed has neither cursor nor row spans).
+# Otherwise shutting the UI down can discard pending creates, testing an
+# interrupted startup instead of restoration of established sessions.
+for session_id in $first_ids; do
+  initial_frame="$out/initial-$session_id.txt"
+  ready=0
+  for _ in $(seq 1 100); do
+    if [[ -s "$initial_frame" ]] && grep -qE '^(cursor:|row [0-9]+:)' "$initial_frame"; then
+      ready=1
+      break
+    fi
+    kill -0 "$app_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  if [[ "$ready" != 1 ]]; then
+    echo "terminal $session_id never delivered an initial frame; see $out/first.log" >&2
+    exit 1
+  fi
+done
 
 cleanup_app
 start_app "$out/second.log" "$dump_file"
