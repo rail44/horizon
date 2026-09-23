@@ -1,8 +1,14 @@
-//! Select restore candidates from both daemon inventories and persisted kinds.
+//! Restore a workspace in inventory, attachment, and model-adoption phases.
 
+use gpui::*;
 use horizon_agent::wire::SessionSummary;
 use horizon_terminal_core::TerminalSummary;
-use horizon_workspace::{types::SessionKind, Workspace};
+use horizon_workspace::{types::SessionKind, PaneKind, SessionId, SessionInventory, Workspace};
+
+use super::WorkspaceShell;
+use crate::agent::AgentSession;
+use crate::runtime::{AgentSessionHandle, AgentdHandle, TerminalSessionHandle, TerminaldHandle};
+use crate::theme;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -101,6 +107,218 @@ impl RestoreCandidates {
             agent_workspace_roots,
             agent_parents,
         }
+    }
+}
+
+/// Both handles identify the generations the entire restore belongs to.
+/// Reloading either runtime invalidates inventory and attachment results.
+#[derive(Clone)]
+struct RestoreRuntimes {
+    agents: AgentdHandle,
+    terminals: TerminaldHandle,
+}
+
+impl RestoreRuntimes {
+    fn is_current(&self, shell: &WorkspaceShell) -> bool {
+        shell
+            .agentd
+            .as_ref()
+            .is_some_and(|current| current.same_runtime(&self.agents))
+            && shell
+                .terminald
+                .as_ref()
+                .is_some_and(|current| current.same_runtime(&self.terminals))
+    }
+
+    fn inventory(&self) -> Result<(Vec<TerminalSummary>, Vec<SessionSummary>), String> {
+        // Both inventories must answer before missing sessions can be reconciled.
+        let terminals = self.terminals.terminal_list()?;
+        let agents = self.agents.session_list()?;
+        Ok((terminals, agents))
+    }
+
+    fn attach(&self, candidates: RestoreCandidates) -> RestoredSessions {
+        let terminals = self.terminals.attach_terminals(candidates.terminals);
+        let agents = candidates
+            .agents
+            .into_iter()
+            .map(|id| {
+                let session_id = horizon_agent::contract::SessionId::from_uuid(id);
+                (id, self.agents.attach_session(session_id))
+            })
+            .collect();
+        RestoredSessions {
+            terminals,
+            agents,
+            agent_workspace_roots: candidates.agent_workspace_roots,
+            agent_parents: candidates.agent_parents,
+        }
+    }
+}
+
+/// Successful terminal attachments and routed agent handles, plus the daemon's
+/// authoritative metadata captured before attachment. Agent attachment retains
+/// its existing asynchronous completion/error contract.
+struct RestoredSessions {
+    terminals: Vec<(Uuid, TerminalSessionHandle)>,
+    agents: Vec<(Uuid, AgentSessionHandle)>,
+    agent_workspace_roots: HashMap<Uuid, PathBuf>,
+    agent_parents: HashMap<Uuid, Uuid>,
+}
+
+impl WorkspaceShell {
+    /// Release the restore barrier only after both inventories and attachment
+    /// results belong to the current runtime generations.
+    pub(super) fn spawn_workspace_restore(
+        &self,
+        handle: AgentdHandle,
+        terminal_handle: TerminaldHandle,
+        cx: &mut Context<Self>,
+    ) {
+        let runtimes = RestoreRuntimes {
+            agents: handle,
+            terminals: terminal_handle,
+        };
+        let window_handle = self.window;
+        let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
+        let list_runtimes = runtimes.clone();
+        std::thread::spawn(move || {
+            let _ = list_tx.unbounded_send(list_runtimes.inventory());
+        });
+        cx.spawn(async move |this, cx| {
+            use futures::StreamExt as _;
+            let (terminals, agents) = match list_rx.next().await {
+                Some(Ok(summaries)) => summaries,
+                Some(Err(error)) => {
+                    let _ = this.update(cx, |shell, cx| shell.fail_workspace_restore(error, cx));
+                    return;
+                }
+                None => {
+                    let _ = this.update(cx, |shell, cx| {
+                        shell.fail_workspace_restore("inventory worker stopped", cx);
+                    });
+                    return;
+                }
+            };
+            let candidates = this
+                .update(cx, |shell, _| {
+                    if !runtimes.is_current(shell) {
+                        return None;
+                    }
+                    Some(RestoreCandidates::select(
+                        &shell.workspace,
+                        terminals,
+                        agents,
+                    ))
+                })
+                .ok()
+                .flatten();
+            let Some(candidates) = candidates else {
+                return;
+            };
+
+            let (attach_tx, mut attach_rx) = futures::channel::mpsc::unbounded();
+            let attach_runtimes = runtimes.clone();
+            std::thread::spawn(move || {
+                let _ = attach_tx.unbounded_send(attach_runtimes.attach(candidates));
+            });
+            let Some(attached) = attach_rx.next().await else {
+                let _ = this.update(cx, |shell, cx| {
+                    shell.fail_workspace_restore("attach worker stopped", cx);
+                });
+                return;
+            };
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = this.update(cx, move |shell, cx| {
+                    shell.apply_workspace_restore(&runtimes, attached, window, cx);
+                });
+            });
+        })
+        .detach();
+    }
+
+    fn apply_workspace_restore(
+        &mut self,
+        runtimes: &RestoreRuntimes,
+        restored: RestoredSessions,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !runtimes.is_current(self) {
+            return;
+        }
+        let RestoredSessions {
+            terminals,
+            agents,
+            agent_workspace_roots,
+            agent_parents,
+        } = restored;
+        let inventory = SessionInventory::new(
+            terminals
+                .iter()
+                .map(|(id, _)| SessionId::from_uuid(*id))
+                .collect(),
+            agents
+                .iter()
+                .map(|(id, _)| SessionId::from_uuid(*id))
+                .collect(),
+        );
+        if let Err(error) = self.workspace.reconcile_session_inventory(&inventory) {
+            self.fail_workspace_restore(format_args!("inventory is invalid: {error}"), cx);
+            return;
+        }
+
+        for (id, wire) in terminals {
+            let session_id = SessionId::from_uuid(id);
+            if self.workspace.session_pane_kind(session_id) == Some(PaneKind::Terminal) {
+                self.install_terminal_session(session_id, wire, cx);
+            }
+        }
+        for (id, wire) in agents {
+            let session_id = SessionId::from_uuid(id);
+            if self.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
+                // See `spawn_agent_resume`'s matching comment:
+                // the daemon's report is authoritative,
+                // especially for an isolated session whose real
+                // (worktree) root was only known after
+                // `SessionNew` returned.
+                if let Some(root) = agent_workspace_roots.get(&id) {
+                    self.workspace
+                        .set_session_workspace_root(session_id, root.clone());
+                }
+                // See `spawn_agent_resume`'s matching comment
+                // for the lineage edge -- same authoritative
+                // treatment as `workspace_root` above.
+                if let Some(parent) = agent_parents.get(&id) {
+                    self.workspace
+                        .set_session_parent(session_id, SessionId::from_uuid(*parent));
+                }
+                let title_tx = self.session_title_tx.clone();
+                self.agent_sessions.insert(
+                    session_id,
+                    cx.new(|cx| AgentSession::new(wire, session_id, title_tx, cx)),
+                );
+            }
+        }
+
+        // Adopted sessions carry the prior process's spawn-time
+        // scheme (or an even older one, resumed again); a
+        // theme change between runs would otherwise leave
+        // their OSC 10/11/12 replies stale until the next live
+        // theme apply. The runtime pair is still current -- Attach
+        // already confirmed the daemon-side session exists, so
+        // this push lands after the session it targets is
+        // already routable, the same ordering guarantee
+        // `Create` gets by carrying the scheme inline.
+        runtimes
+            .terminals
+            .broadcast_terminal_color_scheme(theme::terminal_color_scheme());
+
+        self.restoring_workspace = false;
+        self.workspace_restore_failed = false;
+        self.persistence_ready = true;
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
     }
 }
 

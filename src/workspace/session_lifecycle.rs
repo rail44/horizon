@@ -14,18 +14,16 @@
 use gpui::*;
 use horizon_terminal_core::{TerminalSize, TerminalSpawnSpec, DEFAULT_SCROLLBACK_LINES};
 use horizon_workspace::types::SessionKind;
-use horizon_workspace::{
-    PaneId, PaneKind, SessionId, SessionInventory, SplitAxis, ViewKind, Workspace,
-};
+use horizon_workspace::{PaneId, PaneKind, SessionId, SplitAxis, ViewKind, Workspace};
 use uuid::Uuid;
 
-use super::restore::RestoreCandidates;
 use super::{ensure_workspace_has_pane, CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
 use crate::preview::{preview_pane_for_path, PreviewPane, PreviewTarget};
 use crate::runtime::{
-    wait_for_drain, AgentSessionHandle, AgentdHandle, AgentdResponder, TerminaldHandle,
+    wait_for_drain, AgentSessionHandle, AgentdHandle, AgentdResponder, TerminalSessionHandle,
+    TerminaldHandle,
 };
 use crate::terminal::{TerminalSession, TerminalView};
 use crate::theme;
@@ -309,15 +307,7 @@ impl WorkspaceShell {
                         };
                         let wire = terminald
                             .start_terminal(id.as_uuid(), self.terminal_spawn_spec(pending));
-                        let exit_tx = self.terminal_exit_tx.clone();
-                        let title_tx = self.session_title_tx.clone();
-                        let notify_tx = self.terminal_notify_tx.clone();
-                        self.sessions.insert(
-                            id,
-                            cx.new(|cx| {
-                                TerminalSession::spawn(wire, id, exit_tx, title_tx, notify_tx, cx)
-                            }),
-                        );
+                        self.install_terminal_session(id, wire, cx);
                     }
                 }
                 SessionKind::Agent => {
@@ -841,207 +831,21 @@ impl WorkspaceShell {
         .detach();
     }
 
-    /// Restores a persisted workspace only after both domain inventories are
-    /// authoritative and every retained terminal has acknowledged Attach.
-    /// Until this barrier opens, normal reconcile must not see the saved ids:
-    /// it would interpret a missing entity as a request to create a new
-    /// process with that id.
-    pub(super) fn spawn_workspace_restore(
-        &self,
-        handle: AgentdHandle,
-        terminal_handle: TerminaldHandle,
+    /// Wire every shell-side terminal entity identically on creation and adoption.
+    /// Registration and attachment policy remain with the caller.
+    pub(super) fn install_terminal_session(
+        &mut self,
+        session_id: SessionId,
+        wire: TerminalSessionHandle,
         cx: &mut Context<Self>,
     ) {
-        let window_handle = self.window;
-        let (list_tx, mut list_rx) = futures::channel::mpsc::unbounded();
-        let list_handle = handle.clone();
-        let list_terminal_handle = terminal_handle.clone();
-        std::thread::spawn(move || {
-            // Two daemons, two inventories -- the cross-inventory conflict
-            // check below now compares reports from *different* processes
-            // (before the split one daemon reported both). Both must
-            // answer: a restore that adopted only half the sessions would
-            // let normal reconcile interpret the missing half as "create a
-            // new process with that id".
-            let result = (|| {
-                let terminals = list_terminal_handle.terminal_list()?;
-                let agents = list_handle.session_list()?;
-                Ok::<_, String>((terminals, agents))
-            })();
-            let _ = list_tx.unbounded_send(result);
-        });
-        cx.spawn(async move |this, cx| {
-            use futures::StreamExt as _;
-            let (terminal_summaries, agent_summaries) = match list_rx.next().await {
-                Some(Ok(summaries)) => summaries,
-                Some(Err(error)) => {
-                    let _ = this.update(cx, |shell, cx| {
-                        shell.fail_workspace_restore(error, cx);
-                    });
-                    return;
-                }
-                None => {
-                    let _ = this.update(cx, |shell, cx| {
-                        shell.fail_workspace_restore("inventory worker stopped", cx);
-                    });
-                    return;
-                }
-            };
-
-            let candidates = this
-                .update(cx, |shell, _| {
-                    let adopted = shell.agentd.as_ref()?;
-                    if !adopted.same_runtime(&handle) {
-                        return None;
-                    }
-                    // Both runtimes must still be the ones this restore
-                    // listed against -- a reload of *either* daemon while
-                    // the inventory was in flight invalidates the whole
-                    // restore, not half of it.
-                    let adopted_terminals = shell.terminald.as_ref()?;
-                    if !adopted_terminals.same_runtime(&terminal_handle) {
-                        return None;
-                    }
-
-                    Some(RestoreCandidates::select(
-                        &shell.workspace,
-                        terminal_summaries,
-                        agent_summaries,
-                    ))
-                })
-                .ok()
-                .flatten();
-            let Some(RestoreCandidates {
-                terminals: terminal_ids,
-                agents: agent_ids,
-                agent_workspace_roots,
-                agent_parents,
-            }) = candidates
-            else {
-                return;
-            };
-
-            let (attach_tx, mut attach_rx) = futures::channel::mpsc::unbounded();
-            let attach_handle = handle.clone();
-            let attach_terminal_handle = terminal_handle.clone();
-            std::thread::spawn(move || {
-                let terminals = attach_terminal_handle.attach_terminals(terminal_ids);
-                let agents = agent_ids
-                    .into_iter()
-                    .map(|id| {
-                        let session_id = AgentSessionId::from_uuid(id);
-                        (id, attach_handle.attach_session(session_id))
-                    })
-                    .collect::<Vec<_>>();
-                let _ = attach_tx.unbounded_send((terminals, agents));
-            });
-            let Some((terminals, agents)) = attach_rx.next().await else {
-                let _ = this.update(cx, |shell, cx| {
-                    shell.fail_workspace_restore("attach worker stopped", cx);
-                });
-                return;
-            };
-
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, move |shell, cx| {
-                    let Some(adopted) = shell.agentd.as_ref() else {
-                        return;
-                    };
-                    if !adopted.same_runtime(&handle) {
-                        return;
-                    }
-                    let Some(adopted_terminals) = shell.terminald.as_ref() else {
-                        return;
-                    };
-                    if !adopted_terminals.same_runtime(&terminal_handle) {
-                        return;
-                    }
-
-                    let inventory = SessionInventory::new(
-                        terminals
-                            .iter()
-                            .map(|(id, _)| SessionId::from_uuid(*id))
-                            .collect(),
-                        agents
-                            .iter()
-                            .map(|(id, _)| SessionId::from_uuid(*id))
-                            .collect(),
-                    );
-                    if let Err(error) = shell.workspace.reconcile_session_inventory(&inventory) {
-                        shell.fail_workspace_restore(
-                            format_args!("inventory is invalid: {error}"),
-                            cx,
-                        );
-                        return;
-                    }
-
-                    for (id, wire) in terminals {
-                        let session_id = SessionId::from_uuid(id);
-                        if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Terminal)
-                        {
-                            let exit_tx = shell.terminal_exit_tx.clone();
-                            let title_tx = shell.session_title_tx.clone();
-                            let notify_tx = shell.terminal_notify_tx.clone();
-                            shell.sessions.insert(
-                                session_id,
-                                cx.new(|cx| {
-                                    TerminalSession::spawn(
-                                        wire, session_id, exit_tx, title_tx, notify_tx, cx,
-                                    )
-                                }),
-                            );
-                        }
-                    }
-                    for (id, wire) in agents {
-                        let session_id = SessionId::from_uuid(id);
-                        if shell.workspace.session_pane_kind(session_id) == Some(PaneKind::Agent) {
-                            // See `spawn_agent_resume`'s matching comment:
-                            // the daemon's report is authoritative,
-                            // especially for an isolated session whose real
-                            // (worktree) root was only known after
-                            // `SessionNew` returned.
-                            if let Some(root) = agent_workspace_roots.get(&id) {
-                                shell
-                                    .workspace
-                                    .set_session_workspace_root(session_id, root.clone());
-                            }
-                            // See `spawn_agent_resume`'s matching comment
-                            // for the lineage edge -- same authoritative
-                            // treatment as `workspace_root` above.
-                            if let Some(parent) = agent_parents.get(&id) {
-                                shell
-                                    .workspace
-                                    .set_session_parent(session_id, SessionId::from_uuid(*parent));
-                            }
-                            let title_tx = shell.session_title_tx.clone();
-                            shell.agent_sessions.insert(
-                                session_id,
-                                cx.new(|cx| AgentSession::new(wire, session_id, title_tx, cx)),
-                            );
-                        }
-                    }
-
-                    // Adopted sessions carry the prior process's spawn-time
-                    // scheme (or an even older one, resumed again); a
-                    // theme change between runs would otherwise leave
-                    // their OSC 10/11/12 replies stale until the next live
-                    // theme apply. `adopted` is still valid here -- Attach
-                    // already confirmed the daemon-side session exists, so
-                    // this push lands after the session it targets is
-                    // already routable, the same ordering guarantee
-                    // `Create` gets by carrying the scheme inline.
-                    adopted_terminals
-                        .broadcast_terminal_color_scheme(theme::terminal_color_scheme());
-
-                    shell.restoring_workspace = false;
-                    shell.workspace_restore_failed = false;
-                    shell.persistence_ready = true;
-                    shell.reconcile(window, cx);
-                    shell.focus_active(window, cx);
-                });
-            });
-        })
-        .detach();
+        let exit_tx = self.terminal_exit_tx.clone();
+        let title_tx = self.session_title_tx.clone();
+        let notify_tx = self.terminal_notify_tx.clone();
+        self.sessions.insert(
+            session_id,
+            cx.new(|cx| TerminalSession::spawn(wire, session_id, exit_tx, title_tx, notify_tx, cx)),
+        );
     }
 
     /// Discovers terminal sessions left alive by an earlier UI process and
@@ -1093,7 +897,7 @@ impl WorkspaceShell {
             };
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    let Some(adopted) = shell.terminald.as_ref() else {
+                    let Some(adopted) = shell.terminald.clone() else {
                         return;
                     };
                     if !adopted.same_runtime(&handle) {
@@ -1112,17 +916,7 @@ impl WorkspaceShell {
                         shell
                             .workspace
                             .register_detached_session(PaneKind::Terminal, session_id);
-                        let exit_tx = shell.terminal_exit_tx.clone();
-                        let title_tx = shell.session_title_tx.clone();
-                        let notify_tx = shell.terminal_notify_tx.clone();
-                        shell.sessions.insert(
-                            session_id,
-                            cx.new(|cx| {
-                                TerminalSession::spawn(
-                                    wire, session_id, exit_tx, title_tx, notify_tx, cx,
-                                )
-                            }),
-                        );
+                        shell.install_terminal_session(session_id, wire, cx);
                     }
                     // See `spawn_workspace_restore`'s matching comment: an
                     // adopted session carries a possibly-stale spawn-time
