@@ -1,5 +1,5 @@
 use std::{
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     thread,
     time::Duration,
@@ -300,13 +300,37 @@ fn start_up(
         .map(|sequence| sequence + 1)
         .unwrap_or(0);
 
-    let file = std::fs::OpenOptions::new()
+    let mut file = std::fs::OpenOptions::new()
         .create(true)
+        .read(true)
         .append(true)
         .open(path)
         .with_context(|| format!("open agent event log for writing {}", path.display()))?;
+    if report.ignored_partial_line {
+        discard_partial_tail(&mut file).with_context(|| {
+            format!("discard unfinished agent event log tail {}", path.display())
+        })?;
+    }
 
     Ok((file, report, next_sequence))
+}
+
+/// The reader excludes an unterminated tail. Remove those same bytes before
+/// appending, so the next record cannot join them or promote them into history.
+fn discard_partial_tail(file: &mut std::fs::File) -> std::io::Result<()> {
+    let mut end = file.metadata()?.len();
+    let mut buffer = [0; 8192];
+    while end > 0 {
+        let start = end.saturating_sub(buffer.len() as u64);
+        let chunk = &mut buffer[..(end - start) as usize];
+        file.seek(SeekFrom::Start(start))?;
+        file.read_exact(chunk)?;
+        if let Some(index) = chunk.iter().rposition(|byte| *byte == b'\n') {
+            return file.set_len(start + index as u64 + 1);
+        }
+        end = start;
+    }
+    file.set_len(0)
 }
 
 /// Opens (creating parent directories as needed) and reconciles the DuckDB
@@ -664,6 +688,54 @@ mod tests {
             }),
             ..record_at(session_id, sequence)
         }
+    }
+
+    fn assert_restart_discards_partial_tail(prefix: &[u8], tail: &[u8], next_sequence: u64) {
+        let path =
+            std::env::temp_dir().join(format!("horizon-agent-tail-{}.jsonl", Uuid::new_v4()));
+        let mut contents = prefix.to_vec();
+        contents.extend_from_slice(tail);
+        std::fs::write(&path, contents).unwrap();
+        let before = read(&path).expect("an unfinished tail is not a record");
+        assert!(before.ignored_partial_line);
+        let (writer, init_rx) = WriterHandle::open(&path);
+        assert!(matches!(init_rx.recv().unwrap(), WriterInit::Ready(_)));
+        let appended = record_at(SessionId::new(), 999);
+        writer.append(appended.clone()).unwrap();
+        writer.flush().unwrap();
+        let after = read(&path).unwrap();
+        assert_eq!(after.records.len(), before.records.len() + 1);
+        assert_eq!(after.corrupt_line_count, before.corrupt_line_count);
+        assert!(!after.ignored_partial_line);
+        let last = after.records.last().unwrap();
+        assert_eq!(last.event_id, appended.event_id);
+        assert_eq!(last.sequence, next_sequence);
+        assert!(std::fs::read(&path).unwrap().starts_with(prefix));
+        drop(writer);
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn restart_preserves_complete_lines_and_discards_a_long_partial_tail() {
+        let record = serde_json::to_string(&record_at(SessionId::new(), 4)).unwrap();
+        let prefix = format!("broken complete line\n{record}\n");
+        assert_restart_discards_partial_tail(prefix.as_bytes(), &vec![b'x'; 20_000], 5);
+    }
+
+    #[test]
+    fn restart_does_not_promote_an_unterminated_valid_record() {
+        let tail = serde_json::to_vec(&record_at(SessionId::new(), 99)).unwrap();
+        assert_restart_discards_partial_tail(b"", &tail, 0);
+    }
+
+    #[test]
+    fn restart_discards_a_tail_split_inside_a_utf8_character() {
+        let record = serde_json::to_string(&record_at(SessionId::new(), 0)).unwrap();
+        assert_restart_discards_partial_tail(
+            format!("{record}\n").as_bytes(),
+            b"{\"text\":\"\xe6\x97",
+            1,
+        );
     }
 
     /// The whole point of moving the startup read off the caller: prove it

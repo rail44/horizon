@@ -196,15 +196,19 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
 
     let mut file =
         File::open(path).with_context(|| format!("open agent event log {}", path.display()))?;
-    let mut text = String::new();
-    file.read_to_string(&mut text)
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
         .with_context(|| format!("read agent event log {}", path.display()))?;
 
-    let ignored_partial_line = !text.is_empty() && !text.ends_with('\n');
-    let mut lines = text.lines().collect::<Vec<_>>();
-    if ignored_partial_line {
-        lines.pop();
-    }
+    // A crash may split a UTF-8 character as well as a JSON record. Decode
+    // only newline-terminated bytes; an incomplete tail was never committed.
+    let complete_len = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0, |i| i + 1);
+    let ignored_partial_line = complete_len != bytes.len();
+    let text = std::str::from_utf8(&bytes[..complete_len])
+        .with_context(|| format!("decode agent event log {}", path.display()))?;
 
     let mut records = Vec::new();
     let mut corrupt_line_count = 0;
@@ -213,7 +217,7 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
     let note_sequence = |sequence: u64, max: &mut Option<u64>| {
         *max = Some(max.map_or(sequence, |seen| seen.max(sequence)));
     };
-    for line in lines {
+    for line in text.lines() {
         if line.trim().is_empty() {
             continue;
         }

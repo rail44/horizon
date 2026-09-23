@@ -401,3 +401,9 @@ a failed write may have left an incomplete record. Dropping the buffer does
 not silently retry it. DuckDB projection failures remain separate: they do not
 invalidate a successful JSONL commit, and reconstruction can reconcile them.
 The acknowledged boundary still reaches the OS page cache, not `fsync`.
+
+Startup discards the unterminated tail excluded by the reader before appending
+new records. Only newline-terminated bytes are decoded as UTF-8, so a crash
+inside a multibyte character cannot prevent recovery of earlier records.
+Complete lines, including corrupt or unknown-event lines, are kept unchanged;
+a valid JSON object without its final newline is still an uncommitted tail.
