@@ -49,6 +49,10 @@ The fifth sweep completed configuration, command parsing, provider response
 assembly, persistence transactions, sandbox capability construction, and preview
 response lifetimes, with staged main integration and matching analysis; see
 [its scope and results](research/refactoring-system-boundaries-sweep-2026-09-23.md).
+The sixth sweep completed terminal route ownership, child-session observation,
+workspace split targeting, Web response stages, row shaping, and mock response
+scenarios. Restart checks now await each terminal's real initial frame; see
+[its scope and results](research/refactoring-execution-contracts-sweep-2026-09-23.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 

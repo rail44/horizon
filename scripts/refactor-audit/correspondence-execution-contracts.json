@@ -116,6 +116,18 @@
         "owner": "<free>",
         "name": "launch",
         "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "fold_until_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "panic_message",
+        "partition": "production"
       }
     ],
     "after": [
@@ -135,6 +147,18 @@
         "file": "crates/horizon-agent/src/tools/explore.rs",
         "owner": "<free>",
         "name": "watch_until_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "fold_until_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/explore.rs",
+        "owner": "<free>",
+        "name": "panic_message",
         "partition": "production"
       }
     ]

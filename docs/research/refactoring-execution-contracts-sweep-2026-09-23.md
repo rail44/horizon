@@ -34,3 +34,22 @@ UI復元チェックが、モデル上の作成直後・daemonのPTY起動完了
 待ってから再起動する。固定パスの従来動作は維持。隔離Xvfbで、追加の固定待機なしに
 2タブ・2ペイン分割・同じ3端末と復元フレームを確認した。marker・256色・truecolor・OSC 8も成功。
 これはframe/描画入力の検証であり、pixelの目視確認ではない。
+
+## 同条件比較と完了条件
+
+基準の319ファイル/2,331関数から320ファイル/2,338関数へ。追加した7関数と移動先は
+[対応表](../../scripts/refactor-audit/correspondence-execution-contracts.json)にすべて含めた。
+認知的複雑度の最大値（closure・補助関数込み）は、Web取得21→10、行整形28→17、
+mock応答44→18。経路管理は2→3で、効果は数値低下ではなく状態の所有単位の統合。
+子監視・分割先探索・診断dumpの値は不変。clone pairは242→241、groupは139→138。
+未対応の追加/削除関数は0。同名で曖昧な既存10組はsource hash不変のまま別表示する。
+selectマクロ内の複雑さは数値に十分表れないため、実行順序の確認とテストを併用した。
+
+- 変更ごとにbuild、fmt、Clippy、全体nextest、wire schema、WASM previewを通して段階的にmain統合。
+  全体nextestは2,172件成功・14件skip。sandboxedは2,028件成功・82件skip。
+- 抽出ツールの20 fixtureが成功。前巡の維持判断11件を引き継ぎ、関連変更を再確認し14件に更新。
+- board固有の除外33ノードはhash不変。production/testsとも最終mainのソースと一致を確認。
+
+生成物はgit管理外の[最終解析](../../target/refactor-audit/sixth-final/summary.md)と
+[前後比較](../../target/refactor-audit/sixth-final-comparison/summary.md)。
+判断の根拠は[レビュー記録](../../scripts/refactor-audit/reviews.json)に引き継ぐ。
