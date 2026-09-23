@@ -45,6 +45,10 @@ agent projections, filesystem tool stages, and shared shell recognition. The
 discovery tooling now carries explicit split/move comparisons, evidence-backed
 review records, and syntax-level exclusions; see
 [its scope and results](research/refactoring-cross-domain-sweep-2026-09-23.md).
+The fifth sweep completed configuration, command parsing, provider response
+assembly, persistence transactions, sandbox capability construction, and preview
+response lifetimes, with staged main integration and matching analysis; see
+[its scope and results](research/refactoring-system-boundaries-sweep-2026-09-23.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
 

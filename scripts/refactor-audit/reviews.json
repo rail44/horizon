@@ -21,6 +21,40 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/persistence/event_log/writer.rs",
+        "owner": "<free>",
+        "name": "rebuild_and_open_duckdb_projection",
+        "partition": "production"
+      },
+      "sha256": "079e85e43db4a30f0e8b2268ffce595f2222039dd47b86f38025fe7fd250c03d",
+      "related": {
+        "crates/horizon-agent/src/persistence/projection/duckdb/append.rs": "2a5173df9979d303c4dd65904dc7bb9aaa439169651b44d63d0bffd6fa4c8d86",
+        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "0c2ffa49c147d5f72d9f33af181ffb7852d8062608d50ed9848f4ab79a5f6588",
+        "crates/horizon-agent/src/persistence/projection/duckdb/shared_store.rs": "3986cb9729cf313ca5645e748b05ac4bbfde6239dd0dbca138ba8319efdacb18"
+      },
+      "decision": "preserve",
+      "reason": "Current, incremental catch-up and full rebuild are distinct recovery paths. Keep their fallback and shared-store ownership; live and rebuild appends now share the same atomic write implementation.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agent/src/providers/rig/clearing.rs",
+        "owner": "<free>",
+        "name": "project_cleared",
+        "partition": "production"
+      },
+      "sha256": "b0ceda0516388fddb35db5111ea1a3f28fdcfac60020dd93b78dc99fc99aa177",
+      "related": {
+        "crates/horizon-agent/src/providers/rig/completion.rs": "cdaa45aa2bce0bbf1c6d401d02b367b0f7b40ac41b41d39a08b1d089c6bb785d",
+        "crates/horizon-agent/src/providers/rig/completion/response.rs": "e09fde763ada7713676c998f2f371c00c3da9090cc5ad63e0bc1152fca8fb7de",
+        "crates/horizon-agent/src/providers/rig/history.rs": "b45feeb11acc9a0d5252b0ab947bbc2f957eda6b1ba2153206dc8c08b6587568"
+      },
+      "decision": "preserve",
+      "reason": "Clearing replaces only frozen tool-result occurrences in the provider view. Canonical history, current-round call/result pairs and memory projection have distinct contracts; preserve them.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/tools/bash/shell.rs",
         "owner": "<free>",
         "name": "tokenize",
@@ -38,6 +72,23 @@
     },
     {
       "target": {
+        "file": "crates/horizon-sandbox-runtime/src/linux/open.rs",
+        "owner": "<free>",
+        "name": "match_initial_capability",
+        "partition": "production"
+      },
+      "sha256": "de35977288951b90f6448a396a33d1afd1e16068512b2091500d8e57ee183f9b",
+      "related": {
+        "crates/horizon-sandbox-runtime/src/linux/network.rs": "0607130ed577a1c61f40d3c1364b4267ad6d8b57b366d750e12cd52e02c5ebff",
+        "crates/horizon-sandbox/src/caps.rs": "83cd53ef9d8cfe3e2371383ac151542f084beba4601e212f54a85bdcd39bab9e",
+        "crates/horizon-sandbox/src/linux/mod.rs": "f805285f845c90a90e7e70d64e4a1a6346dad0f93c71097950c097a9066ff2b1"
+      },
+      "decision": "preserve",
+      "reason": "Excluded subpaths must deny writes before selecting the longest sufficient capability. Coverage, sufficient access and refusal evidence are separate decisions; preserve the ordered matcher.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+    },
+    {
+      "target": {
         "file": "crates/horizon-terminal-core/src/protocol/kitty_keyboard.rs",
         "owner": "<free>",
         "name": "legacy_bytes",
@@ -50,6 +101,40 @@
       "decision": "preserve",
       "reason": "Key and modifier combinations follow distinct wire encodings; preserve the protocol table and its mode-specific branches.",
       "commit": "ceede795e764af4aad3f08d91d25e4d5c2faacca"
+    },
+    {
+      "target": {
+        "file": "src/keymap.rs",
+        "owner": "<free>",
+        "name": "command_for",
+        "partition": "production"
+      },
+      "sha256": "b02e380c2cc59e8cd20dcb3f6149dd15c1a4ea159f7a00d8206a04800501141e",
+      "related": {
+        "crates/horizon-cli/src/commands.rs": "0a2b75afb0545b83ea3bc261444387d1225a06a9a21715d791d8baa5dd5e3065",
+        "crates/horizon-workspace/src/commands.rs": "3fee99fdbed39c2cfd64e1c11b068e5838b582f0db7e457d8a7aef7d4a240200",
+        "src/palette.rs": "e003b4bc916c2c54d5458c7610e1ff990a6d1bbc62e00cc9db6c7665a955263f"
+      },
+      "decision": "preserve",
+      "reason": "Key bindings map the internal CommandId vocabulary; CLI requests expose a different wire vocabulary. Preserve these tables instead of unifying distinct operation surfaces.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
+    },
+    {
+      "target": {
+        "file": "src/preview/watch.rs",
+        "owner": "<free>",
+        "name": "debounce_loop",
+        "partition": "production"
+      },
+      "sha256": "8a148618e47c8b2d50f425fc0beb403d3ef0e171cd80a7f629b7fa14d5a2f018",
+      "related": {
+        "src/preview/guest.rs": "51935d66f8aebd4592fd1a03d09fa4e330159adad91154d64528019afea77eba",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5"
+      },
+      "decision": "preserve",
+      "reason": "Directory watching survives artifact replacement, content filtering avoids reload loops, and dropping the owner cancels the quiet-period task. Preserve this watcher beside pane-owned load and receipt tasks.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
     },
     {
       "target": {
@@ -83,6 +168,24 @@
       "decision": "preserve",
       "reason": "Live and history painting have different cache indices and generation sources; cursor, selection and IME belong only to the live viewport. Shared row shaping is already factored out.",
       "commit": "f120f1733971a6caa6a90f3beeec8bd048d78ec7"
+    },
+    {
+      "target": {
+        "file": "src/theme/scheme.rs",
+        "owner": "<free>",
+        "name": "scheme_from",
+        "partition": "production"
+      },
+      "sha256": "e942395fb08491c581cca349c5469d5a8f2ebc766cf67dacff55d51ed676ac56",
+      "related": {
+        "src/theme/gpui_component.rs": "f0c91a01af7b98b79ea372f211974fdcfcc0522cd6babd33ff062f368cc8c450",
+        "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
+        "src/theme/oklab.rs": "f599b0c34374d99be400bf6041da1252a064875f4b93fcaf14cccfa8122ea146",
+        "src/theme_settings/save.rs": "d13ec768fd9027756e2b1f3804484c90d4ac6d57f97649f56652a053bf6c3e11"
+      },
+      "decision": "preserve",
+      "reason": "Color roles share one resolved seed and contrast policy. Preserve the cohesive derivation; live application and TOML persistence already have separate owners.",
+      "commit": "d5d28ca66605bab7f959271e71418c4036b4312b"
     }
   ]
 }

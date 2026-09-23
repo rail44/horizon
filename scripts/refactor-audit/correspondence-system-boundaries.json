@@ -1,0 +1,260 @@
+[
+  {
+    "label": "MoA resolution and diagnostics",
+    "before": [
+      {
+        "file": "crates/horizon-config/src/lib.rs",
+        "owner": "RawConfig",
+        "name": "resolved_moa",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-config/src/lib.rs",
+        "owner": "<free>",
+        "name": "moa_config_warnings",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-config/src/moa.rs",
+        "owner": "RawConfig",
+        "name": "resolved_moa",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-config/src/moa.rs",
+        "owner": "<free>",
+        "name": "moa_config_warnings",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-config/src/moa.rs",
+        "owner": "<free>",
+        "name": "resolve_moa",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-config/src/moa.rs",
+        "owner": "<free>",
+        "name": "resolve_entry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-config/src/moa.rs",
+        "owner": "<free>",
+        "name": "resolve_member",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "CLI parsing, option scanning and validation",
+    "before": [
+      {
+        "file": "crates/horizon-cli/src/cli.rs",
+        "owner": "<free>",
+        "name": "parse",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-cli/src/cli.rs",
+        "owner": "<free>",
+        "name": "parse",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-cli/src/cli/options.rs",
+        "owner": "CommandOptions",
+        "name": "validate_unused",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-cli/src/cli/options.rs",
+        "owner": "<free>",
+        "name": "scan",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-cli/src/cli/options.rs",
+        "owner": "<free>",
+        "name": "required_value",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider transport waits and response assembly",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "run_provider_stream",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "run_provider_stream",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/response.rs",
+        "owner": "ResponseCollector<'a>",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/response.rs",
+        "owner": "ResponseCollector<'a>",
+        "name": "push",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/response.rs",
+        "owner": "ResponseCollector<'a>",
+        "name": "record_tool_call",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/response.rs",
+        "owner": "ResponseCollector<'a>",
+        "name": "finish",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Live and rebuild transaction ownership",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/append.rs",
+        "owner": "Store",
+        "name": "append_record",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/import.rs",
+        "owner": "Store",
+        "name": "apply_chunk",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/import.rs",
+        "owner": "Store",
+        "name": "apply_chunk_in_one_transaction",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/append.rs",
+        "owner": "Store",
+        "name": "append_record",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/append.rs",
+        "owner": "Store",
+        "name": "append_records_atomic",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/import.rs",
+        "owner": "Store",
+        "name": "apply_chunk",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Filesystem and network capability construction",
+    "before": [
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "owner": "<free>",
+        "name": "build_with_grants",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "owner": "<free>",
+        "name": "build_with_grants",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "owner": "<free>",
+        "name": "filesystem_capabilities",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "owner": "<free>",
+        "name": "apply_grant",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/caps.rs",
+        "owner": "<free>",
+        "name": "network_capabilities",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Preview load and pending response lifetime",
+    "before": [
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "reload",
+        "partition": "production"
+      },
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "attach",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "reload",
+        "partition": "production"
+      },
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "attach",
+        "partition": "production"
+      },
+      {
+        "file": "src/preview/pane.rs",
+        "owner": "PreviewPane",
+        "name": "receive_preview_names",
+        "partition": "production"
+      }
+    ]
+  }
+]

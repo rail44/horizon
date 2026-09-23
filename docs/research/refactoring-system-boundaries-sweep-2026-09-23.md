@@ -1,7 +1,7 @@
 # 設定・外部境界・永続化のリファクタリング第五巡
 
-基準: `fd75af25`。board固有実装を除く6領域の主要経路・関連実装・テストを確認し、
-必要な整理、回帰検証、全体品質ゲート、段階的main統合、再ビルド、同条件の再解析まで行う。
+基準: `fd75af25`。6領域の確認・変更を`d5d28ca6`までにmainへ統合し、再ビルド済み。
+board固有実装を除き、主要経路から関連実装・テストまで確認した。
 既存の仕様・権限・保存形式・イベント順序を維持し、数値だけを理由に分割しない。
 
 | 領域 | 確認・変更 | 状態 |
@@ -12,8 +12,6 @@
 | 永続化 | live追記と再構築のトランザクションを統一。検索・復元を確認 | 関連77テスト通過 |
 | sandbox・ネットワーク | 基本権限・承認grant・通信設定の構築を分離 | 関連90テスト通過 |
 | preview・WASM | 古い応答待ちの所有とreload時の終了を明示 | 関連15テスト、実WASM 2テスト通過 |
-
-変更または維持の理由、検証と比較は各領域の確認後にここへ集約する。
 
 設定・テーマ: MoAの採用条件と警告生成を`moa.rs`の同じ解決処理に集約した。
 名前・aggregator・proposerの検証順、重複したmemberとentryの順序、元から空のproposer一覧と
@@ -50,3 +48,18 @@ preview・WASM: detachedだったpreview名の応答待ちをpane所有にし、
 終了させる。旧応答がEmptyをLoadedへ戻す問題を変更前の失敗テストで再現し、修正後に確認。
 host/guestのtheme通知・subscription所有、artifactのdirectory監視・debounce・read除外を確認。
 実WASMで描画、theme通知、artifact交換、旧store/thread解放、破損artifactの失敗を確認した。
+
+比較は分割先・補助関数・closureを含む。認知的複雑度の関数最大値は、MoA 21→10、
+CLI 29→10、provider 17→8、sandbox 32→15。永続化3→3、preview 5→5は、
+重複した責務と非同期処理の所有を整理した。数値の低下自体を完了条件にはしていない。
+対象は316→319ファイル、2317→2331関数。今回の全変更を6組の対応表で説明でき、
+未対応の増減・変更は0。曖昧な関数識別10組は内容の一致を別途確認した。
+boardの構文除外33箇所は変更なし。維持判断は既存5件に今回の6件を追加した。
+
+検証: workspace build、fmt、Clippy、全体2163テスト通過（14 skip）、wire schema、
+WASM buildを通過。別途、実WASMの2テストと解析ツールの20検証も通過した。
+macOS固有の実行は未検証。解析の設定・実装・ツールbinaryは基準時から同一。
+[対応表](../../scripts/refactor-audit/correspondence-system-boundaries.json)と
+[維持判断](../../scripts/refactor-audit/reviews.json)を保存した。
+生成結果: [最終main解析](../../target/refactor-audit/fifth-final/summary.md)、
+[同条件の比較](../../target/refactor-audit/fifth-final-comparison/summary.md)。
