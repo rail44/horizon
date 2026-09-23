@@ -32,6 +32,18 @@ pub(super) struct RigSessionHistory {
     pub(super) seed_from_fallback: bool,
 }
 
+impl RigSessionHistory {
+    fn from_events(events: &[Event]) -> Self {
+        Self {
+            messages: rig_messages_from_horizon_events(events),
+            cleared_call_ids: cleared_call_ids_from_events(events),
+            memory_document: memory_document_from_events_if_nonempty(events),
+            moa_conversation: super::session::moa::MoaConversation::from_events(events),
+            seed_from_fallback: false,
+        }
+    }
+}
+
 /// Loads this session's prior history (if any) as Rig messages, through the
 /// *shared* DuckDB store handle -- never a fresh `Store::open` of the same
 /// path. A second, independent open of the same file is unsound here: with
@@ -67,25 +79,13 @@ pub(super) fn load_rig_session_history(
         .iter()
         .any(|event| matches!(event, Event::StateChanged(_) | Event::MessageCommitted(_)))
     {
-        return RigSessionHistory {
-            messages: rig_messages_from_horizon_events(fallback_events),
-            cleared_call_ids: cleared_call_ids_from_events(fallback_events),
-            memory_document: memory_document_from_events_if_nonempty(fallback_events),
-            moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
-            seed_from_fallback: false,
-        };
+        return RigSessionHistory::from_events(fallback_events);
     }
     let Some(store) = store else {
         if fallback_events.is_empty() {
             return RigSessionHistory::default();
         }
-        return RigSessionHistory {
-            messages: rig_messages_from_horizon_events(fallback_events),
-            cleared_call_ids: cleared_call_ids_from_events(fallback_events),
-            memory_document: memory_document_from_events_if_nonempty(fallback_events),
-            moa_conversation: super::session::moa::MoaConversation::from_events(fallback_events),
-            seed_from_fallback: false,
-        };
+        return RigSessionHistory::from_events(fallback_events);
     };
 
     store
@@ -123,15 +123,7 @@ pub(super) fn load_rig_session_history(
             if fallback_events.is_empty() {
                 return RigSessionHistory::default();
             }
-            RigSessionHistory {
-                messages: rig_messages_from_horizon_events(fallback_events),
-                cleared_call_ids: cleared_call_ids_from_events(fallback_events),
-                memory_document: memory_document_from_events_if_nonempty(fallback_events),
-                moa_conversation: super::session::moa::MoaConversation::from_events(
-                    fallback_events,
-                ),
-                seed_from_fallback: false,
-            }
+            RigSessionHistory::from_events(fallback_events)
         })
 }
 

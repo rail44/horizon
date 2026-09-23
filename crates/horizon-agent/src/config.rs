@@ -594,18 +594,10 @@ impl NamedProviderConfig {
             ),
             kind: self.kind,
             api_key_env: self.api_key_env.clone(),
-            iteration_cap: DEFAULT_ITERATION_CAP,
-            doom_loop_window: DEFAULT_DOOM_LOOP_WINDOW,
-            stream_flush_interval_ms: DEFAULT_STREAM_FLUSH_INTERVAL_MS,
-            stream_flush_chars: DEFAULT_STREAM_FLUSH_CHARS,
-            repository_instructions_cap_chars: DEFAULT_REPOSITORY_INSTRUCTIONS_CAP_CHARS,
-            max_output_tokens: DEFAULT_AGENT_MAX_OUTPUT_TOKENS,
             clearing_threshold_pct: resolve_clearing_threshold_pct(
                 std::env::var(CLEARING_THRESHOLD_PCT_VAR).ok(),
             ),
-            allowed_tool_ids: None,
-            trusted_project: false,
-            moa: None,
+            ..RigAgentConfig::default()
         }
     }
 

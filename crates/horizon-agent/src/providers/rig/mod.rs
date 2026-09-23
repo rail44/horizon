@@ -4,6 +4,7 @@ mod guards;
 mod history;
 mod mapping;
 mod model_limits;
+mod retry;
 mod session;
 mod session_prompt;
 mod stream;

@@ -114,24 +114,18 @@ impl ProviderRegistry {
         let moa = config.moa.clone();
         for entry in &table.entries {
             let id = named_rig_provider_id(&entry.name);
-            let provider = if entry.name == table.default_name {
-                crate::providers::rig::Provider::for_entry(
-                    id.clone(),
-                    config.rig.clone(),
-                    table.clone(),
-                    moa.clone(),
-                    duckdb_cell.clone(),
-                )
+            let provider_config = if entry.name == table.default_name {
+                config.rig.clone()
             } else {
-                crate::providers::rig::Provider::for_entry(
-                    id.clone(),
-                    entry.resolved(),
-                    table.clone(),
-                    moa.clone(),
-                    duckdb_cell.clone(),
-                )
+                entry.resolved()
             };
-            let provider = Arc::new(provider);
+            let provider = Arc::new(crate::providers::rig::Provider::for_entry(
+                id.clone(),
+                provider_config,
+                table.clone(),
+                moa.clone(),
+                duckdb_cell.clone(),
+            ));
             registry.insert_under(id, provider.clone());
             if entry.name == table.default_name {
                 registry.insert_under(ProviderId("builtin.agent.rig".to_string()), provider);

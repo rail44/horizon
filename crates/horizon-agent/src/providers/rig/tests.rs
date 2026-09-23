@@ -3,10 +3,9 @@ use std::time::Duration;
 
 use super::completion::{
     await_provider_phase, output_cap_truncated, partial_assistant_message,
-    provider_additional_params, provider_request_usage_event_from_stream_final, retry_backoff,
-    retryable_rejection, rig_tool_definitions, sleep_unless_cancelled, with_pre_generation_retry,
-    Attempt, ProviderRequestSpan, ProviderWait, Retried, TurnCompletion,
-    MULTI_TOOL_TEST_BATCH_SIZE, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
+    provider_additional_params, provider_request_usage_event_from_stream_final,
+    rig_tool_definitions, ProviderRequestSpan, ProviderWait, TurnCompletion,
+    MULTI_TOOL_TEST_BATCH_SIZE,
 };
 use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
 use super::mapping::{
@@ -15,6 +14,10 @@ use super::mapping::{
     rig_messages_from_horizon_events, rig_tool_call_provider_payload, rig_tool_call_request,
     rig_workspace_snapshot_call, rig_workspace_snapshot_call_with_provider_metadata,
     RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION,
+};
+use super::retry::{
+    retry_backoff, retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
+    Retried, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
 use super::session::{
     append_cancelled_tool_results_to_history, fold_batched_tool_result, BatchStep, SessionLoopState,

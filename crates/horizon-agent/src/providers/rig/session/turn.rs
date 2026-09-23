@@ -14,6 +14,7 @@ use rig_core::completion::Message;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    config::RigAgentConfig,
     contract::{
         Command, Error, Event, Message as AgentMessage, MessageRole, SessionState, ToolCallId,
         ToolCallResult, TurnEndReason,
@@ -150,6 +151,17 @@ impl SessionLoopState {
         prompt: Message,
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
+        let config = self.config.clone();
+        self.run_cancellable_turn_with_config(&config, prompt, fallback)
+            .await
+    }
+
+    async fn run_cancellable_turn_with_config(
+        &mut self,
+        config: &RigAgentConfig,
+        prompt: Message,
+        fallback: impl FnOnce() -> Message,
+    ) -> TurnCompletion {
         let token = CancellationToken::new();
         // Resolved here, against the history as it stands before this round
         // appends anything, so every round of one turn injects the block at
@@ -160,7 +172,7 @@ impl SessionLoopState {
             .as_ref()
             .map(|doc| doc as &crate::tools::MemoryDocument);
         let turn = complete_rig_turn(
-            &self.config,
+            config,
             &self.environment,
             &self.extra_sections,
             &mut self.rig_history,
@@ -561,9 +573,11 @@ impl SessionLoopState {
             .events_tx
             .send(Event::StateChanged(SessionState::Running).into());
         let outcome = self
-            .run_cancellable_turn(Message::user(CAP_SUMMARY_INSTRUCTION), || {
-                deterministic_rig_response(CAP_SUMMARY_INSTRUCTION)
-            })
+            .run_cancellable_turn_with_config(
+                &wrap_up_config,
+                Message::user(CAP_SUMMARY_INSTRUCTION),
+                || deterministic_rig_response(CAP_SUMMARY_INSTRUCTION),
+            )
             .await;
 
         if outcome.failed || outcome.cancelled {
@@ -714,3 +728,6 @@ const CAP_SUMMARY_INSTRUCTION: &str = "You have reached the turn limit for this 
 const MEMORY_CHECKPOINT_REMINDER: &str = "You have not updated your memory document this turn. \
      Before ending the turn, call memory.update to record what you learned (or declare no_update \
      with a reason). The turn cannot end without one of these.";
+
+#[cfg(test)]
+mod tests;
