@@ -43,7 +43,7 @@ impl AgentComposer {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let (turn_in_flight, model, mode) = Self::project_session(&session, cx);
+        let (turn_in_flight, model, mode) = Self::project_session(&session, None, cx);
         // Plain Enter submits, Shift+Enter remains a newline, and auto-grow
         // preserves the one-row empty composer while allowing up to the cap.
         let input = cx.new(|cx| {
@@ -99,6 +99,7 @@ impl AgentComposer {
 
     fn project_session(
         session: &Entity<AgentSession>,
+        dismissed: Option<&ToolCallId>,
         cx: &App,
     ) -> (bool, Option<String>, turns::ComposerMode) {
         let session = session.read(cx);
@@ -108,21 +109,13 @@ impl AgentComposer {
             session.model.as_deref(),
             turns::latest_turn_model(&session.frame.items),
         );
-        let mode = turns::next_composer_mode(&session.pending_approval_call_ids(), None);
+        let mode = turns::next_composer_mode(&session.pending_approval_call_ids(), dismissed);
         (turn_in_flight, model, mode)
     }
 
     fn sync_session_projection(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (turn_in_flight, model, queue) = {
-            let session = self.session.read(cx);
-            let turn_in_flight = state_indicates_turn_in_flight(session.frame.state);
-            let model = turns::composer_model_label(
-                session.selection.as_ref(),
-                session.model.as_deref(),
-                turns::latest_turn_model(&session.frame.items),
-            );
-            (turn_in_flight, model, session.pending_approval_call_ids())
-        };
+        let (turn_in_flight, model, mode) =
+            Self::project_session(&self.session, self.dismissed_approval.as_ref(), cx);
 
         if self.turn_in_flight != turn_in_flight {
             self.input.update(cx, |input, cx| {
@@ -132,10 +125,7 @@ impl AgentComposer {
         }
         let model_changed = self.model != model;
         self.model = model;
-        self.set_mode(
-            turns::next_composer_mode(&queue, self.dismissed_approval.as_ref()),
-            cx,
-        );
+        self.set_mode(mode, cx);
         if model_changed {
             cx.notify();
         }

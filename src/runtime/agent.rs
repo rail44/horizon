@@ -18,7 +18,7 @@ use horizon_agent::wire::{
     AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::{
-    CappedReceiver, DecodeSkipLog, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
+    receive_pump, CappedReceiver, DecodeSkipLog, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
     TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -461,22 +461,16 @@ where
 }
 
 fn spawn_host_tool_pump(
-    mut host_tools: CappedReceiver<wire::HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
+    host_tools: CappedReceiver<wire::HostToolRequest, TOOL_IO_MAX_ITEM_BYTES>,
     routes: Arc<AgentRoutes>,
 ) {
-    tokio::spawn(async move {
-        let mut skips = DecodeSkipLog::new("host-tool requests");
-        loop {
-            match host_tools.recv().await {
-                Ok(Some(request)) => routes.host_tool_request(request),
-                Ok(None) => break,
-                Err(err) if err.is_final() => break,
-                // Adoption condition 2: skip the poisoned item, keep the
-                // channel.
-                Err(err) => skips.note(&err),
-            }
-        }
-    });
+    tokio::spawn(receive_pump(
+        host_tools,
+        "host-tool requests",
+        move |request| {
+            routes.host_tool_request(request);
+        },
+    ));
 }
 
 fn spawn_skipped_lines_pump(mut skipped_lines: CappedReceiver<String, CONTROL_MAX_ITEM_BYTES>) {

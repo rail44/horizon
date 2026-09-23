@@ -115,19 +115,13 @@ fn terse_summary(tool_id: &str, input: &Value, output: Option<&Value>) -> String
                 None => path.to_string(),
             }
         }
-        "fs.grep" => {
+        "fs.grep" | "fs.glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default();
-            let base = str_field(input, "base_path").unwrap_or_default();
-            let count = output
-                .and_then(|output| output.get("returned_count"))
-                .and_then(Value::as_u64);
-            match count {
-                Some(count) => format!("\"{pattern}\" in {base} · {count} matches"),
-                None => format!("\"{pattern}\" in {base}"),
-            }
-        }
-        "fs.glob" => {
-            let pattern = str_field(input, "pattern").unwrap_or_default();
+            let pattern = if tool_id == "fs.grep" {
+                format!("\"{pattern}\"")
+            } else {
+                pattern.to_string()
+            };
             let base = str_field(input, "base_path").unwrap_or_default();
             let count = output
                 .and_then(|output| output.get("returned_count"))

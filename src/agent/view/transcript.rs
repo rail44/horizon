@@ -159,29 +159,6 @@ impl AgentTranscript {
         item: &AgentFrameItem,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        // Plain-text bodies render through the same selectable TextView
-        // pipeline the assistant markdown uses so every transcript row's text
-        // is selectable and copyable; `escape_markdown` keeps the text
-        // verbatim (no GFM construct reinterpretation).
-        let block = |label: &str, label_color: Hsla, id: (&'static str, usize), text: String| {
-            div()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .child(
-                    div()
-                        .text_size(px(10.0))
-                        .text_color(label_color)
-                        .child(label.to_string()),
-                )
-                .child(
-                    TextView::markdown(id, escape_markdown(&text))
-                        .selectable(true)
-                        .text_size(px(crate::terminal::font_size()))
-                        .text_color(theme::text_primary()),
-                )
-                .into_any_element()
-        };
         // Assistant content renders as Markdown (gpui-component's `TextView`,
         // reuse over port); the element id keys its managed parse state, so
         // it must stay stable across re-renders of the same transcript item.
@@ -205,6 +182,13 @@ impl AgentTranscript {
                     )
                     .into_any_element()
             };
+        // Plain-text bodies render through the same selectable TextView
+        // pipeline the assistant markdown uses so every transcript row's text
+        // is selectable and copyable; `escape_markdown` keeps the text
+        // verbatim (no GFM construct reinterpretation).
+        let block = |label: &str, label_color: Hsla, id: (&'static str, usize), text: String| {
+            markdown_block(label, label_color, id, escape_markdown(&text))
+        };
         match item {
             AgentFrameItem::Message(message) => {
                 // The label string is centralized in
