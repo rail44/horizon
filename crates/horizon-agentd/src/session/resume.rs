@@ -9,7 +9,7 @@ use std::sync::Arc;
 #[cfg(test)]
 use horizon_agent::contract::ProviderId;
 use horizon_agent::contract::{
-    Error as AgentError, Event, ProviderEvent, SessionId, SessionState, ToolCallId, TurnEndReason,
+    Error as AgentError, Event, ProviderEvent, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::frame::{agent_frame_from_events, AgentFrame, AgentFrameItem};
 use horizon_agent::persistence::event_log::{Appender, Record};
@@ -179,10 +179,7 @@ fn settle_interrupted_turn(
         // pair, so e.g. a call parked in `WaitingForApproval` doesn't
         // keep reading as pending in the resumed frame -- there is no
         // live provider left to eventually answer it.
-        let mut closing: Vec<Event> = outstanding_tool_call_ids(frame)
-            .into_iter()
-            .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
-            .collect();
+        let mut closing = cancel_unfinished_tool_calls(frame);
         closing.extend(outcomes);
         if frame.is_turn_in_flight() && appender.has_open_turn() {
             closing.push(Event::TurnEnded(TurnEndReason::Cancelled));
@@ -223,10 +220,7 @@ fn terminate_orphaned_exploration(
     session_id: SessionId,
     frame: &AgentFrame,
 ) {
-    let mut closing: Vec<Event> = outstanding_tool_call_ids(frame)
-        .into_iter()
-        .map(|call_id| Event::ToolCallFinished(cancelled_tool_call_result(call_id)))
-        .collect();
+    let mut closing = cancel_unfinished_tool_calls(frame);
     closing.push(Event::Error(AgentError {
         message: "Exploration session terminated on daemon restart: the `task` call \
                   waiting on it did not survive."
@@ -263,27 +257,17 @@ pub(super) fn session_is_dead(frame: &AgentFrame) -> bool {
                 .any(|item| matches!(item, AgentFrameItem::Exited(_))))
 }
 
-/// Every `ToolCallRequested` call id in `frame` that has no matching
-/// `ToolCallFinished` yet — i.e. genuinely still outstanding, whether it was
-/// waiting on approval, waiting on Horizon to run it, or already running.
-/// Used by [`resume_persisted_sessions`] to decide which calls need a
-/// synthetic cancelled result when their turn is committed as cancelled.
-fn outstanding_tool_call_ids(frame: &AgentFrame) -> Vec<ToolCallId> {
-    let mut outstanding = Vec::new();
-    for item in &frame.items {
-        match item {
-            AgentFrameItem::ToolCallRequested(request)
-                if !outstanding.contains(&request.call_id) =>
-            {
-                outstanding.push(request.call_id.clone());
-            }
-            AgentFrameItem::ToolCallFinished(result) => {
-                outstanding.retain(|call_id| call_id != &result.call_id);
-            }
-            _ => {}
-        }
-    }
-    outstanding
+/// Preserve each unfinished attempt's identity when settling durable history.
+fn cancel_unfinished_tool_calls(frame: &AgentFrame) -> Vec<Event> {
+    frame
+        .unfinished_tool_calls()
+        .into_iter()
+        .map(|request| {
+            let mut result = cancelled_tool_call_result(request.call_id.clone());
+            result.occurrence_id = request.occurrence_id.clone();
+            Event::ToolCallFinished(result)
+        })
+        .collect()
 }
 
 /// Explicit owner-triggered restoration of exactly one historical session.
@@ -661,8 +645,82 @@ mod delivery_tests {
 mod tests {
     use super::*;
     use crate::session::test_support::judge_test_state;
-    use horizon_agent::contract::Exit;
+    use horizon_agent::contract::{Exit, ToolCallId};
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn restart_closes_each_unfinished_retry_occurrence_in_durable_history() {
+        use horizon_agent::contract::{OccurrenceId, ToolCallRequest, ToolCallResult};
+        use horizon_agent::transcript::build_tool_call_views;
+        use serde_json::json;
+
+        for first_finished in [true, false] {
+            let (_dir, path, writer) = open_test_event_log("interrupted-retry");
+            let session_id = SessionId::new();
+            let mut appender = Appender::new(writer.clone(), session_id, None, None);
+            let request = |id: &str| {
+                Event::ToolCallRequested(ToolCallRequest {
+                    call_id: ToolCallId("same-call".into()),
+                    occurrence_id: Some(OccurrenceId(id.into())),
+                    tool_id: "bash".into(),
+                    input: json!({"command": "echo retry"}).into(),
+                })
+            };
+            let mut events = vec![request("first"), request("retry")];
+            if first_finished {
+                events.push(Event::ToolCallFinished(ToolCallResult::new(
+                    ToolCallId("same-call".into()),
+                    Some(OccurrenceId("first".into())),
+                    json!({"superseded_by_retry": true}),
+                )));
+            }
+            events.push(Event::StateChanged(SessionState::ToolRunning));
+            appender
+                .append_provider_events(events.iter().cloned().map(Into::into).collect())
+                .unwrap();
+            settle_interrupted_turn(
+                &mut appender,
+                session_id,
+                &agent_frame_from_events(&events),
+                &mut events,
+            );
+            writer.flush().unwrap();
+
+            let retained = persisted_events(&path, session_id);
+            assert_eq!(retained, events);
+            let frame = agent_frame_from_events(&retained);
+            let views = build_tool_call_views(&frame.items);
+            assert_eq!(views.len(), 2);
+            assert!(
+                views.iter().all(|view| view.finished),
+                "every attempt must close: {views:?}"
+            );
+            assert_eq!(views[0].superseded, first_finished);
+            let cancelled: Vec<_> = retained
+                .iter()
+                .filter_map(|event| match event {
+                    Event::ToolCallFinished(result)
+                        if result.output.get("cancelled") == Some(&json!(true)) =>
+                    {
+                        Some(result.occurrence_id.clone())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let expected = if first_finished {
+                vec!["retry"]
+            } else {
+                vec!["first", "retry"]
+            };
+            assert_eq!(
+                cancelled,
+                expected
+                    .into_iter()
+                    .map(|id| Some(OccurrenceId(id.into())))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
 
     fn open_test_event_log(label: &str) -> (tempfile::TempDir, PathBuf, WriterHandle) {
         let dir = tempfile::tempdir().expect("create event log directory");

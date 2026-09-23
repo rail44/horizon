@@ -1,6 +1,5 @@
-use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult};
-use crate::frame::{pending_approval_call_ids_in, AgentFrameItem};
-use serde_json::Value;
+use crate::contract::ToolCallId;
+use crate::frame::{pending_approval_call_ids_in, tool_call_occurrences, AgentFrameItem};
 
 use super::approval::{derive_approval_state, is_superseded_output};
 use super::classify::classify;
@@ -114,148 +113,19 @@ pub enum ApprovalState {
 /// with no matching `ToolCallFinished` yet (the running turn's
 /// in-flight calls) gets `finished: false` and no result summary.
 pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
-    struct Building<'a> {
-        call_id: ToolCallId,
-        request_index: usize,
-        result_index: Option<usize>,
-        /// Per-occurrence identity from the originating `ToolCallRequest`.
-        /// `None` for legacy / replayed logs that pre-date the field; the
-        /// matching logic below falls back to `.rev()`-by-call_id in that
-        /// case (the prior behavior, retained for replay correctness).
-        occurrence_id: Option<OccurrenceId>,
-        tool_id: &'a str,
-        input: &'a Value,
-        result: Option<&'a ToolCallResult>,
-        had_approval_request: bool,
-        started: bool,
-    }
-
-    let mut building: Vec<Building> = Vec::new();
-    for (index, item) in items.iter().enumerate() {
-        match item {
-            AgentFrameItem::ToolCallRequested(request) => {
-                building.push(Building {
-                    call_id: request.call_id.clone(),
-                    request_index: index,
-                    result_index: None,
-                    occurrence_id: request.occurrence_id.clone(),
-                    tool_id: &request.tool_id,
-                    input: &request.input,
-                    result: None,
-                    had_approval_request: false,
-                    started: false,
-                });
-            }
-            AgentFrameItem::ApprovalRequested(request) => {
-                // Attribute to the entry that shares this approval's
-                // `occurrence_id` first (the per-occurrence identity the
-                // agentd stamps on every reissue, see
-                // `session/approval.rs::begin_reissued_approval`). For
-                // legacy `None` approvals (or replayed pre-feature logs)
-                // fall back to the prior `.rev()`-by-call_id semantic --
-                // attribute to the most recently requested entry with this
-                // call_id, matching `AgentFrame::tool_call_request`'s
-                // convention (`frame.rs`). A provider can legitimately
-                // reuse a call_id for a second, distinct call after the
-                // first one's full request/approve/finish cycle already
-                // closed (observed 2026-07-18: a rig/Kimi-K2.7-Code turn
-                // re-requested `fs.edit` with the same id an
-                // already-finished call had used). Forward `.find()` would
-                // keep re-attributing every follow-up event to that stale
-                // first entry, leaving the real, currently-pending
-                // occurrence permanently unresolved (`ApprovalState::
-                // None`, no Approve/Deny row ever rendered -- the "session
-                // wedged on an empty edit call" report). The
-                // `occurrence_id` match wins on top of that for the
-                // sandbox-denial-retry shape (same call_id, two distinct
-                // `ApprovalRequested` events for the same conceptual
-                // call's two attempts).
-                let entry = match &request.occurrence_id {
-                    Some(occ) => building
-                        .iter_mut()
-                        .rev()
-                        .find(|entry| entry.occurrence_id.as_ref() == Some(occ)),
-                    None => building
-                        .iter_mut()
-                        .rev()
-                        .find(|entry| entry.call_id == request.call_id),
-                };
-                if let Some(entry) = entry {
-                    entry.had_approval_request = true;
-                }
-            }
-            AgentFrameItem::ToolCallStarted(call_id) => {
-                // `ToolCallStarted(ToolCallId)` carries no `occurrence_id`
-                // (it stays a unit-style variant to keep the wire change
-                // additive -- see `contract.rs`'s doc comment on
-                // `OccurrenceId`). It still uses the prior `.rev()`-
-                // by-call_id semantic; this is correct because the
-                // agentd never reissues the same call_id's started
-                // signal without reissuing the request first, so the most
-                // recently requested entry is always the right target.
-                if let Some(entry) = building
-                    .iter_mut()
-                    .rev()
-                    .find(|entry| &entry.call_id == call_id)
-                {
-                    entry.started = true;
-                }
-            }
-            AgentFrameItem::ToolCallFinished(result) => {
-                // Match by `occurrence_id` first -- this is the fix for
-                // both shapes the user observed:
-                //
-                // * provider-reuse: provider emits a fresh
-                //   `ToolCallRequested` with the same `call_id` as an
-                //   already-finished call. Each request gets its own
-                //   `Building` entry (with its own `occurrence_id`), and
-                //   the result lands on the entry whose `occurrence_id`
-                //   matches, not on the most recent request of that
-                //   call_id (which on provider-reuse is the *new* request,
-                //   the one the result does not answer to).
-                // * sandbox-denial-retry: agentd's
-                //   `begin_reissued_approval` reissues the request with
-                //   a fresh `occurrence_id` (see
-                //   `session/approval.rs`). The first attempt's result
-                //   (denied or otherwise) attaches to the first entry, the
-                //   second attempt's result to the second -- so the
-                //   transcript shows both attempts visible as one
-                //   conceptual call with two occurrences, as the user
-                //   requested.
-                //
-                // The `.rev()` fallback for `None` preserves replay
-                // correctness for events persisted before this field
-                // existed.
-                let entry = match &result.occurrence_id {
-                    Some(occ) => building
-                        .iter_mut()
-                        .rev()
-                        .find(|entry| entry.occurrence_id.as_ref() == Some(occ)),
-                    None => building
-                        .iter_mut()
-                        .rev()
-                        .find(|entry| entry.call_id == result.call_id),
-                };
-                if let Some(entry) = entry {
-                    entry.result = Some(result);
-                    entry.result_index = Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    building
+    tool_call_occurrences(items)
         .into_iter()
         .map(|entry| {
             let output = entry.result.map(|result| &result.output.0);
-            let (verb, target, result_summary, kind) = classify(entry.tool_id, entry.input, output);
-            let affected_files = affected_files(entry.tool_id, entry.input, output);
+            let (verb, target, result_summary, kind) =
+                classify(&entry.request.tool_id, &entry.request.input, output);
+            let affected_files =
+                affected_files(&entry.request.tool_id, &entry.request.input, output);
             ToolCallView {
-                call_id: entry.call_id,
+                call_id: entry.request.call_id.clone(),
                 request_index: entry.request_index,
                 result_index: entry.result_index,
-                tool_id: entry.tool_id.to_string(),
+                tool_id: entry.request.tool_id.clone(),
                 verb,
                 target,
                 result_summary: if entry.result.is_some() {

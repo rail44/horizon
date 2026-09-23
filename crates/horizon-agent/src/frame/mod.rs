@@ -10,6 +10,7 @@
 mod fold;
 mod queries;
 mod status;
+mod tool_calls;
 mod types;
 
 #[cfg(test)]
@@ -32,6 +33,7 @@ pub use queries::{
     actionable_pending_approval_call_ids_in, halted_awaiting_continue,
     state_indicates_turn_in_flight,
 };
+pub(crate) use tool_calls::tool_call_occurrences;
 
 #[cfg(test)]
 pub(crate) use test_support::{render_agent_transcript, StateEntry};
