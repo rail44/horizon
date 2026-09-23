@@ -6,7 +6,7 @@
 //! call that would need a human refused rather than parked, iteration cap
 //! with summarize-on-cap), and the same
 //! event fold that decides when its answer is final
-//! (`super::explore::fold_until_terminal`). Three differences:
+//! (`super::explore::watch_until_terminal`). Three differences:
 //!
 //! - There is no launching tool call, so nothing ties a proposer to its
 //!   requester through `ToolCallRequested`/`ToolCallFinished`. The pass
@@ -22,7 +22,6 @@
 //! in-progress state while proposers run.
 
 use std::collections::HashMap;
-use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crossbeam_channel::Sender;
@@ -203,16 +202,7 @@ pub(crate) fn launch(
         let events = started.events;
         let results_tx = results_tx.clone();
         std::thread::spawn(move || {
-            let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-                super::explore::fold_until_terminal(&events, &cancel_rx, &mut |_| {})
-            }))
-            .unwrap_or_else(|payload| super::explore::Outcome {
-                terminal: super::explore::Terminal::Panicked(super::explore::panic_message(
-                    &*payload,
-                )),
-                report: None,
-                error: None,
-            });
+            let outcome = super::explore::watch_until_terminal(&events, &cancel_rx, &mut |_| {});
             // `take_host`'s take-once semantics is what keeps this and
             // `MoaLaunch::abort` from terminating the same session twice.
             if let Some(host) = children::take_host(proposer.session_id) {

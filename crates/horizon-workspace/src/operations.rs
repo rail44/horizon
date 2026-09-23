@@ -209,16 +209,7 @@ impl Workspace {
         axis: SplitAxis,
         activate: bool,
     ) -> Option<SessionId> {
-        let target_pane_id = self
-            .panes
-            .iter()
-            .find(|pane| pane.session_id == Some(target_session_id))
-            .map(|pane| pane.id)?;
-        let tab_id = self
-            .tabs
-            .iter()
-            .find(|tab| tab.root.pane_ids().contains(&target_pane_id))
-            .map(|tab| tab.id)?;
+        let (tab_id, target_pane_id) = self.split_target_for_session(target_session_id)?;
         let session_id = SessionId::new();
         self.split_pane_in_tab(
             tab_id,
@@ -256,16 +247,7 @@ impl Workspace {
         axis: SplitAxis,
         activate: bool,
     ) -> Option<PaneId> {
-        let target_pane_id = self
-            .panes
-            .iter()
-            .find(|pane| pane.session_id == Some(target_session_id))
-            .map(|pane| pane.id)?;
-        let tab_id = self
-            .tabs
-            .iter()
-            .find(|tab| tab.root.pane_ids().contains(&target_pane_id))
-            .map(|tab| tab.id)?;
+        let (tab_id, target_pane_id) = self.split_target_for_session(target_session_id)?;
         Some(self.split_pane_in_tab(
             tab_id,
             Some(target_pane_id),

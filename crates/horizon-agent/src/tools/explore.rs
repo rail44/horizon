@@ -271,15 +271,8 @@ pub(crate) fn start(
                 );
             }
         };
-        let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| {
-            fold_until_terminal(&events, &cancel_rx, &mut |activity| {
-                emit(TaskProgressState::Running, activity)
-            })
-        }))
-        .unwrap_or_else(|payload| Outcome {
-            terminal: Terminal::Panicked(panic_message(&*payload)),
-            report: None,
-            error: None,
+        let outcome = watch_until_terminal(&events, &cancel_rx, &mut |activity| {
+            emit(TaskProgressState::Running, activity)
         });
         // The child reached *some* terminal state (or the watcher gave up):
         // retire the requester's live progress row. The durable completion
@@ -652,6 +645,24 @@ impl Outcome {
     }
 }
 
+/// Turns watcher failures into a terminal outcome so both task and MoA
+/// callers can still retire their child and publish its result. Termination
+/// and notification policy remain with the caller.
+pub(super) fn watch_until_terminal(
+    events: &Receiver<Event>,
+    cancel: &Receiver<()>,
+    on_activity: &mut dyn FnMut(Option<String>),
+) -> Outcome {
+    std::panic::catch_unwind(AssertUnwindSafe(|| {
+        fold_until_terminal(events, cancel, on_activity)
+    }))
+    .unwrap_or_else(|payload| Outcome {
+        terminal: Terminal::Panicked(panic_message(&*payload)),
+        report: None,
+        error: None,
+    })
+}
+
 /// Folds the child's event stream until it reaches a terminal state or the
 /// requesting session goes away. Pure over its receivers and the
 /// `on_activity` callback, so the whole decision table above is
@@ -660,7 +671,7 @@ impl Outcome {
 /// tool-running), the observation is handed to `on_activity` as the child's
 /// current activity (`None` = reasoning). Terminal emission is the caller's
 /// — the fold only reports running observations.
-pub(super) fn fold_until_terminal(
+fn fold_until_terminal(
     events: &Receiver<Event>,
     cancel: &Receiver<()>,
     on_activity: &mut dyn FnMut(Option<String>),
@@ -798,7 +809,7 @@ pub(super) fn fold_until_terminal(
     }
 }
 
-pub(super) fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     payload
         .downcast_ref::<&str>()
         .map(|message| (*message).to_string())

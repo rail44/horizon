@@ -125,7 +125,7 @@ async fn fetch(
             return Ok(FetchOutcome::DomainGrantRequired(vec![domain]));
         }
 
-        let mut response = client
+        let response = client
             .get(url.clone())
             .header(
                 ACCEPT,
@@ -156,90 +156,110 @@ async fn fetch(
             continue;
         }
 
-        if !response.status().is_success() {
-            let status = response.status();
-            let body = read_capped(&mut response, 8 * 1024)
-                .await
-                .unwrap_or_default();
-            let message = String::from_utf8_lossy(&body);
-            return Err(format!(
-                "web_fetch returned HTTP {status}: {}",
-                truncate_chars(message.trim(), 2_000).0
-            ));
-        }
-
-        if response
-            .headers()
-            .get(CONTENT_ENCODING)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(|encoding| !encoding.eq_ignore_ascii_case("identity"))
-        {
-            return Err("web_fetch refuses encoded response bodies".to_string());
-        }
-
-        if response
-            .headers()
-            .get(CONTENT_LENGTH)
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<usize>().ok())
-            .is_some_and(|length| length > MAX_BODY_BYTES)
-        {
-            return Err(format!(
-                "web_fetch response exceeded the {} byte limit",
-                MAX_BODY_BYTES
-            ));
-        }
-
-        let content_type = response
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .unwrap_or("application/octet-stream")
-            .split(';')
-            .next()
-            .unwrap_or_default()
-            .trim()
-            .to_ascii_lowercase();
-        if !supported_content_type(&content_type) {
-            return Err(format!(
-                "web_fetch refuses binary or unsupported content type `{content_type}`"
-            ));
-        }
-
-        let bytes = read_capped(&mut response, MAX_BODY_BYTES).await?;
-        let text = String::from_utf8(bytes)
-            .map_err(|_| "web_fetch response was not valid UTF-8 text".to_string())?;
-        let final_url = url.to_string();
-
-        return if is_html(&content_type) {
-            let extracted = extract_html(text, final_url.clone()).await?;
-            let (content, truncated) = truncate_chars(&extracted.content, max_characters);
-            let title = truncate_chars(&extracted.title, MAX_TITLE_CHARACTERS).0;
-            let byline = extracted
-                .byline
-                .map(|byline| truncate_chars(&byline, MAX_BYLINE_CHARACTERS).0);
-            Ok(FetchOutcome::Finished(json!({
-                "is_error": false,
-                "url": final_url,
-                "title": title,
-                "byline": byline,
-                "content_type": content_type,
-                "content": content,
-                "truncated": truncated,
-            })))
-        } else {
-            let (content, truncated) = truncate_chars(&text, max_characters);
-            Ok(FetchOutcome::Finished(json!({
-                "is_error": false,
-                "url": final_url,
-                "content_type": content_type,
-                "content": content,
-                "truncated": truncated,
-            })))
-        };
+        return read_response(response, url.to_string(), max_characters)
+            .await
+            .map(FetchOutcome::Finished);
     }
 
     Err("web_fetch redirect loop ended unexpectedly".to_string())
+}
+
+/// Validate the final HTTP response before decoding or running the HTML parser.
+async fn read_response(
+    mut response: reqwest::Response,
+    final_url: String,
+    max_characters: usize,
+) -> Result<Value, String> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = read_capped(&mut response, 8 * 1024)
+            .await
+            .unwrap_or_default();
+        let message = String::from_utf8_lossy(&body);
+        return Err(format!(
+            "web_fetch returned HTTP {status}: {}",
+            truncate_chars(message.trim(), 2_000).0
+        ));
+    }
+
+    if response
+        .headers()
+        .get(CONTENT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|encoding| !encoding.eq_ignore_ascii_case("identity"))
+    {
+        return Err("web_fetch refuses encoded response bodies".to_string());
+    }
+
+    if response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<usize>().ok())
+        .is_some_and(|length| length > MAX_BODY_BYTES)
+    {
+        return Err(format!(
+            "web_fetch response exceeded the {} byte limit",
+            MAX_BODY_BYTES
+        ));
+    }
+
+    let content_type = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if !supported_content_type(&content_type) {
+        return Err(format!(
+            "web_fetch refuses binary or unsupported content type `{content_type}`"
+        ));
+    }
+
+    let bytes = read_capped(&mut response, MAX_BODY_BYTES).await?;
+    let text = String::from_utf8(bytes)
+        .map_err(|_| "web_fetch response was not valid UTF-8 text".to_string())?;
+
+    format_content(text, final_url, content_type, max_characters).await
+}
+
+/// Convert accepted text to the tool's bounded output schema.
+async fn format_content(
+    text: String,
+    final_url: String,
+    content_type: String,
+    max_characters: usize,
+) -> Result<Value, String> {
+    if is_html(&content_type) {
+        let extracted = extract_html(text, final_url.clone()).await?;
+        let (content, truncated) = truncate_chars(&extracted.content, max_characters);
+        let title = truncate_chars(&extracted.title, MAX_TITLE_CHARACTERS).0;
+        let byline = extracted
+            .byline
+            .map(|byline| truncate_chars(&byline, MAX_BYLINE_CHARACTERS).0);
+        Ok(json!({
+            "is_error": false,
+            "url": final_url,
+            "title": title,
+            "byline": byline,
+            "content_type": content_type,
+            "content": content,
+            "truncated": truncated,
+        }))
+    } else {
+        let (content, truncated) = truncate_chars(&text, max_characters);
+        Ok(json!({
+            "is_error": false,
+            "url": final_url,
+            "content_type": content_type,
+            "content": content,
+            "truncated": truncated,
+        }))
+    }
 }
 
 struct ExtractedArticle {
@@ -313,6 +333,85 @@ fn supported_content_type(content_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn response_validation_rejects_unsafe_or_undecodable_bodies() {
+        for (status, header, value, body, expected) in [
+            (
+                403,
+                CONTENT_TYPE,
+                "text/plain",
+                b" forbidden ".to_vec(),
+                "HTTP 403 Forbidden: forbidden",
+            ),
+            (
+                200,
+                CONTENT_ENCODING,
+                "gzip",
+                Vec::new(),
+                "encoded response bodies",
+            ),
+            (
+                200,
+                CONTENT_LENGTH,
+                "2097153",
+                Vec::new(),
+                "2097152 byte limit",
+            ),
+            (
+                200,
+                CONTENT_TYPE,
+                "image/png",
+                Vec::new(),
+                "unsupported content type",
+            ),
+            (
+                200,
+                CONTENT_TYPE,
+                "text/plain",
+                vec![0xff],
+                "not valid UTF-8",
+            ),
+            (
+                200,
+                CONTENT_TYPE,
+                "text/plain",
+                vec![b'a'; MAX_BODY_BYTES + 1],
+                "2097152 byte limit",
+            ),
+        ] {
+            let response = http::Response::builder()
+                .status(status)
+                .header(header, value)
+                .body(body)
+                .unwrap();
+            let error = read_response(response.into(), "https://example.com/".into(), 100)
+                .await
+                .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+        }
+    }
+
+    #[tokio::test]
+    async fn text_response_preserves_final_url_and_truncates_by_characters() {
+        let response = http::Response::builder()
+            .header(CONTENT_TYPE, "Text/Plain; charset=utf-8")
+            .body("aé日".to_string())
+            .unwrap();
+        let output = read_response(response.into(), "https://example.com/final".into(), 2)
+            .await
+            .unwrap();
+        assert_eq!(
+            output,
+            json!({
+                "is_error": false,
+                "url": "https://example.com/final",
+                "content_type": "text/plain",
+                "content": "aé",
+                "truncated": true,
+            })
+        );
+    }
 
     #[test]
     fn input_domain_is_canonical_and_validation_is_fail_closed() {

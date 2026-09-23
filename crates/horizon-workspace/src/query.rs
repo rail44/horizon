@@ -1,10 +1,30 @@
 use super::types::{
-    Pane, PaneId, PaneKind, PaneSummary, SessionSummary, Tab, TabSummary, Workspace,
+    Pane, PaneId, PaneKind, PaneSummary, SessionSummary, Tab, TabId, TabSummary, Workspace,
     WorkspaceSession,
 };
 use crate::SessionId;
 
 impl Workspace {
+    /// Resolve placement before creating a pane or registering a session.
+    /// Both session and view splits use the target's own pane, independent
+    /// of tab focus; detached sessions have no split destination.
+    pub(crate) fn split_target_for_session(
+        &self,
+        session_id: SessionId,
+    ) -> Option<(TabId, PaneId)> {
+        let pane_id = self
+            .panes
+            .iter()
+            .find(|pane| pane.session_id == Some(session_id))
+            .map(|pane| pane.id)?;
+        let tab_id = self
+            .tabs
+            .iter()
+            .find(|tab| tab.root.pane_ids().contains(&pane_id))
+            .map(|tab| tab.id)?;
+        Some((tab_id, pane_id))
+    }
+
     pub(crate) fn visible_pane_id(&self, index: usize) -> Option<PaneId> {
         self.visible_pane_ids().get(index).copied()
     }

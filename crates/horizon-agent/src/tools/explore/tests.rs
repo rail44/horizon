@@ -872,3 +872,21 @@ fn fold_emits_activity_changes_only() {
         "the first observation and each activity change, deduplicated"
     );
 }
+
+#[test]
+fn a_panicking_activity_observer_becomes_a_failed_outcome() {
+    let (events_tx, events) = crossbeam_channel::unbounded();
+    let (_cancel_tx, cancel) = crossbeam_channel::bounded::<()>(1);
+    events_tx.send(user("prompt")).unwrap();
+    events_tx.send(tool_request("fs.grep")).unwrap();
+    let outcome = watch_until_terminal(&events, &cancel, &mut |_| {
+        panic!("observer failed");
+    });
+    assert!(!outcome.has_usable_report());
+    let output = outcome.into_output(SessionId::new(), "watcher");
+    assert_eq!(output["is_error"], true);
+    assert_eq!(
+        output["message"],
+        "the task waiter panicked: observer failed"
+    );
+}
