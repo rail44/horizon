@@ -153,3 +153,9 @@ compared only when unambiguous and otherwise remain added, removed, or
 ambiguous in `comparison.json`; moves and splits are never guessed. Changed
 scope/settings require a fresh baseline. Metrics alone do not prove an
 improvement. Raw reports and comparison artifacts remain under `target/`.
+
+For a deliberately reviewed family of same-named functions (for example,
+`cfg`-selected OS implementations), add `"variants": "all"` to that selector.
+Every variant contributes to the group's maxima and count; individual variants
+are not automatically paired. Ordinary selectors and review records still
+require exactly one match. Missing families and reused selectors are errors.

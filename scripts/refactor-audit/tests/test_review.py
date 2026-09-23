@@ -109,3 +109,24 @@ class ReviewTests(unittest.TestCase):
             after[field] = value
             with self.subTest(field=field), self.assertRaises(AuditError):
                 compare(before, after)
+
+    def test_explicit_variant_family_mapping_counts_every_variant_without_pairing(self):
+        before, after = report(), report()
+        original = before["functions"][0]
+        before["functions"].append({**original, "start": 20, "cognitive": 17})
+        after["functions"] = [{**f, "file": "src/moved.rs"} for f in before["functions"]]
+        mapping = [{"label": "OS variants", "before": [{**selector(original), "variants": "all"}],
+                    "after": [{**selector(after["functions"][0]), "variants": "all"}]}]
+        result = compare(before, after, mapping)
+        self.assertEqual(result["correspondences"][0]["max_after"]["functions"], 2)
+        self.assertEqual(result["correspondences"][0]["max_before"]["cognitive"], 17)
+        self.assertFalse(result["ambiguous"] or result["added"] or result["removed"])
+        with self.assertRaises(AuditError):
+            compare(before, after, mapping + mapping)
+        with self.assertRaises(AuditError):
+            select_function(before, mapping[0]["before"][0])
+        for change in ({"name": "absent"}, {"variants": "first"}, {"extra": True}):
+            invalid = deepcopy(mapping)
+            invalid[0]["before"][0].update(change)
+            with self.subTest(change=change), self.assertRaises(AuditError):
+                compare(before, after, invalid)

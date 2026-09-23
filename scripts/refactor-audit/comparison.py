@@ -2,7 +2,7 @@
 
 import json
 
-from reviews import identity, index_functions, read_report, select_function
+from reviews import IDENTITY, identity, index_functions, read_report, select_function
 from tooling import AuditError, write_json
 
 METRICS = ("physical_code_lines", "cyclomatic", "cognitive")
@@ -38,6 +38,20 @@ def measure(functions):
     }
 
 
+def select_correspondence(report, target):
+    """Select a named family only when the mapping explicitly requests all variants."""
+    if isinstance(target, dict) and target.get("variants") == "all":
+        if set(target) != set(IDENTITY) | {"variants"} or not all(
+            isinstance(target[key], str) for key in IDENTITY
+        ):
+            raise AuditError("Invalid all-variants selector")
+        found = index_functions(report).get(identity(target), [])
+        if not found:
+            raise AuditError(f"No functions for all-variants selector: {target}")
+        return found
+    return [select_function(report, target)]
+
+
 def compare(before, after, mappings=()):
     compatible(before, after)
     matched_before, matched_after = set(), set()
@@ -56,12 +70,14 @@ def compare(before, after, mappings=()):
             raise AuditError("Each correspondence needs a label and nonempty before/after selectors")
         sides = []
         for report, side, used in ((before, "before", matched_before), (after, "after", matched_after)):
-            functions = [select_function(report, target) for target in mapping[side]]
-            for row in functions:
-                key = identity(row)
+            functions = []
+            for target in mapping[side]:
+                selected = select_correspondence(report, target)
+                key = identity(selected[0])
                 if key in used:
                     raise AuditError(f"Function reused in correspondence: {key}")
                 used.add(key)
+                functions.extend(selected)
             sides.append(functions)
         groups.append({
             "label": mapping["label"], "before": sides[0], "after": sides[1],
