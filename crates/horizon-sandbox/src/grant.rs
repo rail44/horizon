@@ -91,7 +91,15 @@ pub fn home_dir() -> Option<PathBuf> {
 /// so a grant that stops being enforceable simply disappears instead of
 /// silently widening.
 pub fn revalidate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
-    if !grant.path.is_absolute() || is_protected(&grant.path) {
+    if !grant.path.is_absolute() {
+        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
+    }
+    validate_grant(grant)
+}
+
+/// Shared identity, scope and breadth checks for retained and applied grants.
+pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
+    if is_protected(&grant.path) {
         return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
     }
     if is_writable_tree(grant) && is_overbroad_tree(&grant.path, home_dir().as_deref()) {

@@ -11,7 +11,9 @@ use alacritty_terminal::vte::ansi::Rgb;
 use gpui::Hsla;
 use horizon_config::{RawConfig, RawThemeAnsiConfig, RawThemeConfig};
 
-use crate::theme::{self, hex, parse_hex, TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};
+use crate::theme::{self, hex, parse_hex};
+#[cfg(test)]
+use crate::theme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};
 
 /// `Rgb` (three `u8` channels) -> packed `0xRRGGBB`, matching every other
 /// packed-color representation this module and `theme.rs` share. `pub(crate)`
@@ -191,12 +193,7 @@ impl Seed {
             _ => AccentValue::Hex(fallback.accent),
         };
 
-        let text_contrast = raw
-            .theme
-            .text_contrast
-            .filter(|value| value.is_finite())
-            .unwrap_or(TEXT_CONTRAST_DEFAULT_FOR_SEED)
-            .clamp(TEXT_CONTRAST_FLOOR, TEXT_CONTRAST_CEIL);
+        let text_contrast = theme::resolve_text_contrast(raw.theme.text_contrast);
 
         Seed {
             surface_base,
@@ -213,11 +210,7 @@ impl Seed {
     /// than the full derivation ceiling of 21) never actually reaches the
     /// upper bound itself.
     pub(crate) fn clamp_contrast(value: f64) -> f64 {
-        if value.is_finite() {
-            value.clamp(TEXT_CONTRAST_FLOOR, TEXT_CONTRAST_CEIL)
-        } else {
-            TEXT_CONTRAST_DEFAULT_FOR_SEED
-        }
+        theme::resolve_text_contrast(Some(value))
     }
 
     /// Builds a `RawConfig`-shaped value that, fed through
@@ -254,16 +247,6 @@ impl Seed {
         self.accent.config_value()
     }
 }
-
-/// Duplicated from `theme::TEXT_CONTRAST_DEFAULT` rather than importing it:
-/// that constant is `pub(crate)` for its floor/ceiling siblings' sake, but
-/// importing the default too would blur which module owns "what happens
-/// when unset" -- here, unset always means "whatever's currently resolved
-/// and on screen" ([`Seed::from_current_config`]), never this literal
-/// number; it only matters as [`Seed::clamp_contrast`]'s fallback for a
-/// non-finite drag value, which should never happen via the stock
-/// `Slider`'s own min/max clamp in the first place.
-const TEXT_CONTRAST_DEFAULT_FOR_SEED: f64 = 15.0;
 
 #[cfg(test)]
 mod tests {
@@ -317,14 +300,8 @@ mod tests {
 
     #[test]
     fn clamp_contrast_falls_back_on_non_finite() {
-        assert_eq!(
-            Seed::clamp_contrast(f64::NAN),
-            TEXT_CONTRAST_DEFAULT_FOR_SEED
-        );
-        assert_eq!(
-            Seed::clamp_contrast(f64::INFINITY),
-            TEXT_CONTRAST_DEFAULT_FOR_SEED
-        );
+        assert_eq!(Seed::clamp_contrast(f64::NAN), 15.0);
+        assert_eq!(Seed::clamp_contrast(f64::INFINITY), 15.0);
     }
 
     #[test]

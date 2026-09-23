@@ -323,7 +323,7 @@ fn seed_is_configured(theme: &RawThemeConfig) -> bool {
 /// unset or non-finite (`nan`/`inf` are valid TOML float literals, so
 /// this still needs a check even though `RawThemeConfig::text_contrast`'s
 /// own lenient deserializer already screens out the wrong TOML *type*).
-fn resolve_text_contrast(raw: Option<f64>) -> f64 {
+pub(crate) fn resolve_text_contrast(raw: Option<f64>) -> f64 {
     match raw {
         Some(value) if value.is_finite() => value.clamp(TEXT_CONTRAST_FLOOR, TEXT_CONTRAST_CEIL),
         _ => TEXT_CONTRAST_DEFAULT,

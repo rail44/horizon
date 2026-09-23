@@ -12,7 +12,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use toml_edit::{DocumentMut, Item, Table};
+use toml_edit::{DocumentMut, Item, TableLike};
 
 use super::seed::{HueSlot, Seed};
 use crate::theme::hex;
@@ -25,6 +25,7 @@ pub(crate) enum SaveError {
     NoConfigPath,
     Io(io::Error),
     Parse(toml_edit::TomlError),
+    InvalidTable(&'static str),
 }
 
 impl std::fmt::Display for SaveError {
@@ -38,6 +39,7 @@ impl std::fmt::Display for SaveError {
             }
             SaveError::Io(error) => write!(f, "{error}"),
             SaveError::Parse(error) => write!(f, "could not parse existing config file: {error}"),
+            SaveError::InvalidTable(key) => write!(f, "{key} must be a TOML table"),
         }
     }
 }
@@ -63,27 +65,29 @@ fn save_to_path(seed: &Seed, path: &Path) -> Result<(), SaveError> {
         Err(error) => return Err(SaveError::Io(error)),
     };
     let mut document: DocumentMut = existing.parse().map_err(SaveError::Parse)?;
-    write_seed(&mut document, seed);
+    write_seed(&mut document, seed)?;
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(SaveError::Io)?;
     }
     std::fs::write(path, document.to_string()).map_err(SaveError::Io)
 }
 
-/// Sets exactly the seed's keys on `document`'s `[theme]`/`[theme.ansi]`
-/// tables, creating either table (as a bare `[theme]`/`[theme.ansi]`
-/// header, not inline) if it doesn't exist yet. Every other key, table,
-/// comment, and ordering already in `document` is left completely
-/// untouched -- this only ever touches the seed's own six `[theme.ansi]`
-/// keys plus `[theme]`'s three flat seed keys ([`set_value`]), never
-/// `clear`/replaces a table wholesale.
-fn write_seed(document: &mut DocumentMut, seed: &Seed) {
-    let theme = document
-        .as_table_mut()
-        .entry("theme")
+/// Retain existing table syntax and reject scalar or array section values.
+fn table_mut<'a>(
+    parent: &'a mut dyn TableLike,
+    key: &str,
+    name: &'static str,
+) -> Result<&'a mut dyn TableLike, SaveError> {
+    parent
+        .entry(key)
         .or_insert_with(toml_edit::table)
-        .as_table_mut()
-        .expect("[theme] parses as a table (RawThemeConfig's own shape)");
+        .as_table_like_mut()
+        .ok_or(SaveError::InvalidTable(name))
+}
+
+/// Set only the seed's keys, preserving other values, comments and table syntax.
+fn write_seed(document: &mut DocumentMut, seed: &Seed) -> Result<(), SaveError> {
+    let theme = table_mut(document.as_table_mut(), "theme", "theme")?;
 
     set_value(
         theme,
@@ -97,11 +101,7 @@ fn write_seed(document: &mut DocumentMut, seed: &Seed) {
     );
     set_value(theme, "text_contrast", toml_edit::value(seed.text_contrast));
 
-    let ansi = theme
-        .entry("ansi")
-        .or_insert_with(toml_edit::table)
-        .as_table_mut()
-        .expect("[theme.ansi] parses as a table (RawThemeAnsiConfig's own shape)");
+    let ansi = table_mut(theme, "ansi", "theme.ansi")?;
     for slot in HueSlot::ALL {
         set_value(
             ansi,
@@ -109,6 +109,7 @@ fn write_seed(document: &mut DocumentMut, seed: &Seed) {
             toml_edit::value(hex(seed.hue(slot))),
         );
     }
+    Ok(())
 }
 
 /// Sets `table[key]` to `item`, preserving the existing entry's decor
@@ -117,7 +118,7 @@ fn write_seed(document: &mut DocumentMut, seed: &Seed) {
 /// seed key's *value* doesn't also silently drop a comment sitting on that
 /// same line. A brand-new key (the no-file-yet / section-just-created
 /// case) gets no special treatment: there's no prior decor to preserve.
-fn set_value(table: &mut Table, key: &str, item: Item) {
+fn set_value(table: &mut dyn TableLike, key: &str, item: Item) {
     let decor = table
         .get(key)
         .and_then(Item::as_value)
@@ -152,6 +153,40 @@ mod tests {
             "horizon-theme-settings-save-test-{name}-{}.toml",
             std::process::id()
         ))
+    }
+
+    #[test]
+    fn invalid_theme_tables_fail_without_changing_the_file() {
+        let path = temp_path("invalid-tables");
+        for original in ["theme = 1\n", "[theme]\nansi = 1\n"] {
+            std::fs::write(&path, original).unwrap();
+            assert!(save_to_path(&sample_seed(), &path).is_err());
+            assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+        }
+        std::fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn updates_inline_theme_tables_and_preserves_other_values() {
+        let path = temp_path("inline-tables");
+        for theme in [
+            "theme = { accent = 'red', ansi = { red = '#aaaaaa', black = '#010203' } }",
+            "theme = { accent = 'red' }",
+            "[theme]\naccent = 'red'\nansi = { red = '#aaaaaa', black = '#010203' }",
+        ] {
+            let original = format!("{theme}\n[terminal]\nfont_size = 14.0\n");
+            std::fs::write(&path, &original).unwrap();
+            save_to_path(&sample_seed(), &path).expect("inline tables are valid theme config");
+            let contents = std::fs::read_to_string(&path).unwrap();
+            let doc: DocumentMut = contents.parse().unwrap();
+            assert_eq!(doc["theme"]["accent"].as_str(), Some("blue"));
+            assert_eq!(doc["theme"]["ansi"]["red"].as_str(), Some("#b03b4c"));
+            if original.contains("black") {
+                assert_eq!(doc["theme"]["ansi"]["black"].as_str(), Some("#010203"));
+            }
+            assert_eq!(doc["terminal"]["font_size"].as_float(), Some(14.0));
+        }
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]

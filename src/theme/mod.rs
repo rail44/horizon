@@ -112,4 +112,6 @@ pub use ansi::{resolve, terminal_color_scheme, to_hsla};
 pub use gpui_component::apply_gpui_component_theme;
 pub use palette::{hex, packed_from_hsla, parse_hex, readable_on, tint_over_background};
 pub use scheme::reload_from;
+#[cfg(not(target_family = "wasm"))]
+pub(crate) use scheme::resolve_text_contrast;
 pub use scheme::{TEXT_CONTRAST_CEIL, TEXT_CONTRAST_FLOOR};

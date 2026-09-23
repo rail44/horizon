@@ -122,7 +122,7 @@ fn apply_grant(
     mut caps: CapabilitySet,
     grant: &FilesystemGrant,
 ) -> Result<CapabilitySet, SandboxError> {
-    validate_grant(grant)?;
+    crate::grant::validate_grant(grant)?;
     let access = match grant.access {
         FilesystemGrantAccess::Read => AccessMode::Read,
         FilesystemGrantAccess::ReadWrite => AccessMode::ReadWrite,
@@ -191,52 +191,6 @@ fn network_capabilities(
             })
         }
     })
-}
-
-pub(crate) fn validate_grant(grant: &FilesystemGrant) -> Result<(), SandboxError> {
-    // The over-broad-tree clamp is re-applied here, immediately before the
-    // capability set is built, rather than trusted from wherever the grant
-    // was shaped or stored -- the design's "checked again ... before every
-    // queued spawn" rule.
-    if crate::grant::is_protected(&grant.path)
-        || (crate::grant::is_writable_tree(grant)
-            && crate::grant::is_overbroad_tree(&grant.path, crate::grant::home_dir().as_deref()))
-    {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
-    }
-    let resolved = grant
-        .path
-        .canonicalize()
-        .map_err(|source| SandboxError::InvalidRoot {
-            path: grant.path.clone(),
-            source,
-        })?;
-    if resolved != grant.path {
-        return Err(SandboxError::GrantChanged {
-            approved: grant.path.clone(),
-            resolved,
-        });
-    }
-    if crate::grant::is_protected(&resolved) {
-        return Err(SandboxError::UnsupportedGrantTarget(grant.path.clone()));
-    }
-    let metadata = resolved
-        .metadata()
-        .map_err(|source| SandboxError::InvalidRoot {
-            path: grant.path.clone(),
-            source,
-        })?;
-    let type_matches = match grant.scope {
-        FilesystemGrantScope::File => metadata.is_file(),
-        FilesystemGrantScope::DirectoryTree => metadata.is_dir(),
-    };
-    if !type_matches {
-        return Err(SandboxError::GrantTypeChanged {
-            path: grant.path.clone(),
-            scope: grant.scope,
-        });
-    }
-    Ok(())
 }
 
 fn validated_proxy_port(proxy_addr: SocketAddr) -> Result<u16, SandboxError> {
