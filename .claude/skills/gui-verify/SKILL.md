@@ -11,7 +11,7 @@ once at session spawn (`src/terminal/session.rs`):
 - `HORIZON_GPUI_DUMP=<path>` — mirrors every terminal frame to `<path>`
   on each update: the plain text, then a `--- spans ---` table with the
   cursor position and each span's text + logical fg/bg colors (see
-  `dump_frame` in `src/terminal/mod.rs`). Last writer wins when several
+  `dump_frame` in `src/terminal/diagnostics.rs`). Last writer wins when several
   sessions share the path — the tap is per-process, so drive the pane
   you assert on.
   A `{session_id}` placeholder in the path writes one dump per session;
@@ -26,7 +26,7 @@ once at session spawn (`src/terminal/session.rs`):
 - `HORIZON_INPUT_TRACE=1` (or a file path) — traces every hop of the
   real key/IME pipeline: winit's `KeyboardInput`/`Ime` arrival
   (`crates/horizon-winit-platform`), `TerminalView::handle_key`/
-  `replace_text_in_range` entry and verdict (`src/terminal/mod.rs`), and
+  `replace_text_in_range` entry and verdict (`src/terminal/keyboard.rs`), and
   the PTY-send decision. One `input-trace:`-prefixed line per event, key
   names and event kinds only — never the actual typed/composed text.
   Zero cost when unset.

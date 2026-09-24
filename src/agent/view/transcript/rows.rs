@@ -11,7 +11,7 @@ use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::Sizable as _;
 use horizon_agent::frame::AgentFrameItem;
 
-use super::super::turns;
+use super::super::super::turns;
 use crate::theme;
 
 use super::AgentTranscript;

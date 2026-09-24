@@ -8,7 +8,7 @@ use std::time::Instant;
 use gpui::*;
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
-use super::super::turns;
+use super::super::super::turns;
 
 use super::AgentTranscript;
 

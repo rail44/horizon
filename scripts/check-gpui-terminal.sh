@@ -10,7 +10,7 @@ set -euo pipefail
 #
 #   HORIZON_GPUI_DUMP=<path>    mirrors every terminal frame (plain text
 #                               plus a per-line span/color table -- see
-#                               src/terminal/mod.rs's dump_frame) to
+#                               src/terminal/diagnostics.rs's dump_frame) to
 #                               <path> on each update.
 #   HORIZON_GPUI_DRIVE=<bytes>  typed as raw PTY input into the first
 #                               session ~1.5s after startup.
@@ -101,7 +101,7 @@ terminald_binary="$(dirname "$binary")/horizon-terminald"
 
 marker="HORIZON_GPUI_CHECK_MARKER"
 # An OSC 8 hyperlink URI the driven printf emits; the dump's span table
-# records it as `url=<uri>` (see `dump_frame` in src/terminal/mod.rs).
+# records it as `url=<uri>` (see `dump_frame` in src/terminal/diagnostics.rs).
 hyperlink_url="url=https://example.com/horizon-check"
 # A single line, typed verbatim as PTY input (this script never
 # shell-escapes it further -- it becomes literal keystrokes at the pty's

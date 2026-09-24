@@ -4,7 +4,53 @@ use std::ops::Range;
 
 use horizon_agent::frame::AgentFrameItem;
 
-use super::super::turns;
+use super::super::super::turns;
+
+pub(super) struct TranscriptProjection {
+    pub(super) rows: Vec<TranscriptRow>,
+    pub(super) changes: Vec<turns::FileChange>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum RowUpdate {
+    Splice { old: Range<usize>, new_count: usize },
+    Remeasure(Range<usize>),
+    None,
+}
+
+impl TranscriptProjection {
+    pub(super) fn from_items(items: &[AgentFrameItem]) -> Self {
+        let (rows, _) = build_transcript_rows(items);
+        let calls = turns::build_tool_call_views(items);
+        Self {
+            rows,
+            changes: turns::aggregate_changes(&calls),
+        }
+    }
+
+    /// Retain measured prefix rows. Even unchanged descriptors can carry
+    /// growing streamed text, so the stable tail must still be remeasured.
+    pub(super) fn update_from(&self, previous: &Self) -> RowUpdate {
+        let stable_prefix = previous
+            .rows
+            .iter()
+            .zip(&self.rows)
+            .take_while(|(old, new)| old == new)
+            .count();
+        let old_len = previous.rows.len();
+        let next_len = self.rows.len();
+        if stable_prefix < old_len || stable_prefix < next_len {
+            RowUpdate::Splice {
+                old: stable_prefix..old_len,
+                new_count: next_len - stable_prefix,
+            }
+        } else if next_len > 0 {
+            RowUpdate::Remeasure(next_len - 1..next_len)
+        } else {
+            RowUpdate::None
+        }
+    }
+}
 
 /// One independently measured transcript row. Keeping only frame indices and
 /// owned presentation metadata lets GPUI's variable-height list construct the
@@ -128,10 +174,12 @@ mod tests {
     use horizon_agent::contract::TurnEndReason;
     use horizon_agent::frame::AgentFrameItem;
 
-    use super::super::super::turns::test_support::{
+    use super::super::super::super::turns::test_support::{
         assistant_delta, reasoning_delta, tool_finished, tool_requested, tool_started, user_message,
     };
-    use super::{build_transcript_rows, BurstPresentation, TranscriptRow};
+    use super::{
+        build_transcript_rows, BurstPresentation, RowUpdate, TranscriptProjection, TranscriptRow,
+    };
 
     fn turn_end() -> AgentFrameItem {
         AgentFrameItem::TurnEnded {
@@ -266,5 +314,75 @@ mod tests {
         let (rows, _) =
             build_transcript_rows(&[user_message("q"), reasoning_delta("hmm"), turn_end()]);
         assert_eq!(row_indices(&rows), vec![0], "ended thinking leaves no row");
+    }
+    #[test]
+    fn streamed_content_remeasures_the_tail_without_replacing_rows() {
+        let before = TranscriptProjection::from_items(&[user_message("q"), assistant_delta("a")]);
+        let after = TranscriptProjection::from_items(&[
+            user_message("q"),
+            assistant_delta("a longer answer"),
+        ]);
+        assert_eq!(after.update_from(&before), RowUpdate::Remeasure(1..2));
+    }
+
+    #[test]
+    fn later_turn_changes_preserve_the_completed_prefix() {
+        let mut items = vec![user_message("first"), assistant_delta("done"), turn_end()];
+        let completed = TranscriptProjection::from_items(&items);
+        items.push(user_message("next"));
+        let next = TranscriptProjection::from_items(&items);
+        assert_eq!(
+            next.update_from(&completed),
+            RowUpdate::Splice {
+                old: 2..2,
+                new_count: 1
+            }
+        );
+        items.push(tool_requested(
+            "a",
+            "fs.read",
+            serde_json::json!({"path":"a.rs"}),
+        ));
+        let running = TranscriptProjection::from_items(&items);
+        assert_eq!(
+            running.update_from(&next),
+            RowUpdate::Splice {
+                old: 2..3,
+                new_count: 2
+            }
+        );
+        items.push(tool_finished("a", serde_json::json!({"contents":"ok"})));
+        items.push(turn_end());
+        let finished = TranscriptProjection::from_items(&items);
+        assert_eq!(
+            finished.update_from(&running),
+            RowUpdate::Splice {
+                old: 2..4,
+                new_count: 2
+            }
+        );
+        assert!(matches!(
+            &finished.rows[3],
+            TranscriptRow::Burst {
+                receipt_key: 4,
+                presentation: BurstPresentation::Final(_),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn removing_the_history_clears_rows_and_empty_updates_do_nothing() {
+        let populated =
+            TranscriptProjection::from_items(&[user_message("q"), assistant_delta("a")]);
+        let empty = TranscriptProjection::from_items(&[]);
+        assert_eq!(
+            empty.update_from(&populated),
+            RowUpdate::Splice {
+                old: 0..2,
+                new_count: 0
+            }
+        );
+        assert_eq!(empty.update_from(&empty), RowUpdate::None);
     }
 }
