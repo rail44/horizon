@@ -78,7 +78,11 @@ impl ProviderRegistry {
     #[cfg(test)]
     pub(crate) fn builtin() -> Self {
         Self::builtin_with_config(
-            AgentConfig::from_env_and_provider(None, None),
+            AgentConfig::from_env_and_providers(
+                vec![crate::config::NamedProviderConfig::default()],
+                "default".into(),
+                Vec::new(),
+            ),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )
     }
@@ -265,6 +269,7 @@ mod tests {
     #[test]
     fn two_entries_register_independently_of_each_others_key_presence() {
         let agent_config = crate::config::AgentConfig {
+            auxiliary: None,
             rig: crate::config::RigAgentConfig {
                 api_key_present: true,
                 model: "test-model".to_string(),

@@ -51,6 +51,7 @@ use render::SplitDrag;
 use session_creation::{PendingAgentSpawn, PendingTerminalSpawn};
 
 pub(crate) fn init(cx: &mut App) {
+    crate::agent::auxiliary::reload(horizon_config::load(), cx);
     bindings::apply_bindings(cx, horizon_config::load());
 }
 

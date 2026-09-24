@@ -118,12 +118,8 @@ impl SessionEnvironment<'_> {
             None
         };
 
-        // Enforcing judge (`docs/agent-approval-design.md`'s "Judge design"): a
-        // second model id on this process's *same* provider/`base_url`, reusing
-        // the process's own event-log writer for the verdict record. `None`
-        // preserves human approval whenever `OPENAI_API_KEY` isn't set or no
-        // writer is configured -- see `JudgeHandle::new`.
-        let judge = JudgeHandle::new(agent_config.rig.base_url.clone(), state.writer());
+        // A session's judge retains the auxiliary connection accepted at spawn.
+        let judge = JudgeHandle::new(agent_config.auxiliary.as_ref(), state.writer());
 
         // `task`'s daemon capability (`docs/agent-explore-design.md`).
         // Withheld from an exploration session itself: its role allowlist
@@ -148,7 +144,7 @@ impl SessionEnvironment<'_> {
         // boundary crossing and never reaches the judge or a human. Live
         // sessions are unaffected by later config edits; `Reload Session
         // Runtime` picks changes up for new ones, same lifecycle as
-        // `[provider]`.
+        // `[[providers]]`.
         let mut filesystem_grants = configured_filesystem_grants(state, workspace_root.as_deref());
         for grant in retained_grants {
             if !filesystem_grants.contains(grant) {

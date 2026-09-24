@@ -28,3 +28,7 @@ all = { level = "warn", priority = -1 }
 
 [dev-dependencies]
 uuid = { version = "1.18", features = ["v4"] }
+
+[[example]]
+name = "migrate-provider-config"
+test = true

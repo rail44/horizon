@@ -99,8 +99,10 @@ fn load_from_path_parses_a_well_formed_file() {
     std::fs::write(
         &path,
         r##"
-            [provider]
-            model = "gpt-test"
+            auxiliary_provider = "default"
+            [[providers]]
+            name = "default"
+            default_model = "gpt-test"
             base_url = "https://example.invalid/v1"
 
             [terminal]
@@ -118,9 +120,12 @@ fn load_from_path_parses_a_well_formed_file() {
     let loaded = load_from_path(Some(&path));
 
     assert_eq!(loaded.terminal.font_size, Some(14.0));
-    assert_eq!(loaded.provider.model.as_deref(), Some("gpt-test"));
     assert_eq!(
-        loaded.provider.base_url.as_deref(),
+        loaded.providers[0].default_model.as_deref(),
+        Some("gpt-test")
+    );
+    assert_eq!(
+        loaded.providers[0].base_url.as_deref(),
         Some("https://example.invalid/v1")
     );
     assert_eq!(
@@ -266,7 +271,7 @@ fn a_file_with_only_some_knobs_set_leaves_the_rest_none() {
     let loaded = load_from_path(Some(&path));
 
     assert_eq!(loaded.terminal.font_size, Some(14.0));
-    assert_eq!(loaded.provider.model, None);
+    assert!(loaded.providers.is_empty());
     assert_eq!(loaded.ui, crate::RawUiConfig::default());
     assert!(loaded.keybindings.is_empty());
     assert_eq!(loaded.theme, crate::RawThemeConfig::default());
@@ -492,7 +497,7 @@ fn text_contrast_wrong_type_falls_back_to_none_without_failing_the_whole_file() 
     );
 }
 
-// --- [[providers]] + legacy [provider] resolution ----------------------------
+// --- Named provider resolution ----------------------------
 //
 // All pure: driven through `parse` + `resolved_providers` /
 // `provider_config_warnings`, never through `load`/`reload` (which are
@@ -578,29 +583,9 @@ fn default_provider_selects_a_named_entry_and_a_stale_name_falls_back() {
 }
 
 #[test]
-fn legacy_provider_table_folds_in_as_one_implicit_default_entry() {
-    let config =
-        parse("[provider]\nmodel = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n")
-            .unwrap();
-    let resolution = config.resolved_providers();
-    assert_eq!(resolution.providers.len(), 1);
-    assert_eq!(resolution.providers[0].name, LEGACY_PROVIDER_NAME);
-    assert_eq!(
-        resolution.providers[0].kind,
-        RawProviderKind::OpenAiCompatible
-    );
-    assert_eq!(
-        resolution.providers[0].base_url.as_deref(),
-        Some("https://example.invalid")
-    );
-    // The legacy model becomes the implicit entry's default_model, so a
-    // `[provider]`-only file keeps its configured model byte-for-byte.
-    assert_eq!(
-        resolution.providers[0].default_model.as_deref(),
-        Some("gpt-test")
-    );
-    assert_eq!(resolution.default_name, LEGACY_PROVIDER_NAME);
-    assert!(provider_config_warnings(&config).is_empty());
+fn retired_provider_table_requires_explicit_conversion() {
+    let error = parse("[provider]\nmodel = \"gpt-test\"\n").unwrap_err();
+    assert!(error.contains("convert it to [[providers]]"));
 }
 
 #[test]
@@ -611,30 +596,52 @@ fn no_provider_config_at_all_resolves_one_implicit_default_entry() {
     let config = RawConfig::default();
     let resolution = config.resolved_providers();
     assert_eq!(resolution.providers.len(), 1);
-    assert_eq!(resolution.providers[0].name, LEGACY_PROVIDER_NAME);
+    assert_eq!(resolution.providers[0].name, DEFAULT_PROVIDER_NAME);
     assert!(resolution.providers[0].default_model.is_none());
     assert_eq!(resolution.providers[0].api_key_env, "OPENAI_API_KEY");
     assert!(provider_config_warnings(&config).is_empty());
 }
 
 #[test]
-fn named_entries_win_and_the_legacy_table_warns_as_ignored() {
+fn mixed_old_and_new_provider_tables_are_rejected_without_partial_application() {
+    assert!(parse("[provider]\nmodel = \"old\"\n[[providers]]\nname = \"new\"\n").is_err());
+}
+
+#[test]
+fn auxiliary_provider_selection_is_independent_and_never_uses_anthropic() {
     let config = parse(
-        "[provider]\nmodel = \"gpt-legacy\"\nbase_url = \"https://legacy.invalid\"\n\
-         [[providers]]\nname = \"synthetic\"\ndefault_model = \"gpt-5.2\"\n",
+        r#"
+        default_provider = "chat"
+        auxiliary_provider = "helper"
+        [[providers]]
+        name = "chat"
+        kind = "anthropic"
+        [[providers]]
+        name = "helper"
+        base_url = "https://helpers.invalid/v1"
+        api_key_env = "HELPER_KEY"
+    "#,
     )
     .unwrap();
-    let resolution = config.resolved_providers();
-    // [[providers]] wins; the legacy table is folded nowhere.
-    assert_eq!(resolution.providers.len(), 1);
-    assert_eq!(resolution.providers[0].name, "synthetic");
+    let auxiliary = config.resolved_auxiliary_provider().unwrap();
+    assert_eq!(config.resolved_providers().default_name, "chat");
+    assert_eq!(auxiliary.name, "helper");
+    assert_eq!(auxiliary.api_key_env, "HELPER_KEY");
+    for invalid in [Some("chat"), Some("missing"), None] {
+        let mut invalid_config = config.clone();
+        invalid_config.auxiliary_provider = invalid.map(str::to_owned);
+        assert!(invalid_config.resolved_auxiliary_provider().is_err());
+        assert!(provider_config_warnings(&invalid_config)
+            .iter()
+            .any(|w| w.contains("auxiliary_provider")));
+    }
     assert_eq!(
-        resolution.providers[0].default_model.as_deref(),
-        Some("gpt-5.2")
+        RawConfig::default()
+            .resolved_auxiliary_provider()
+            .unwrap()
+            .name,
+        DEFAULT_PROVIDER_NAME
     );
-    assert!(provider_config_warnings(&config)
-        .iter()
-        .any(|warning| warning.contains("[provider]: ignored because [[providers]] is set")));
 }
 
 #[test]
@@ -805,4 +812,20 @@ proposers = [{ provider = "missing", model = "m" }]
         "[[moa]]: entry \"empty\" lists no proposers — the aggregator will answer alone",
         "[[moa]]: entry \"all-invalid\" proposer 0 names no [[providers]] entry (\"missing\"), dropping that proposer",
     ]);
+}
+
+#[test]
+fn reload_refuses_legacy_configuration_without_partial_application() {
+    let path = std::env::temp_dir().join(format!(
+        "horizon-config-retired-{}.toml",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::write(
+        &path,
+        "[provider]\nmodel = 'old'\n[terminal]\nfont_size = 99",
+    )
+    .unwrap();
+    let error = reload_from_path(Some(&path)).unwrap_err();
+    assert!(error.contains("[provider] was removed"));
+    std::fs::remove_file(path).unwrap();
 }

@@ -30,21 +30,18 @@ pub struct JudgeHandle {
 }
 
 impl JudgeHandle {
-    /// Builds the judge handle for a session, or `None` if the judge can't
-    /// actually run: no `OPENAI_API_KEY` (mirrors `RigAgentConfig::
-    /// api_key_present` -- the judge is a second model on the *same*
-    /// provider, never a separate endpoint/credential), or no event-log
-    /// writer configured (a verdict nobody could ever record is pointless
-    /// to compute). `base_url` is the session's already-resolved provider
-    /// base URL (`config::RigAgentConfig::base_url`) -- reused as-is, never
-    /// re-resolved, since the judge is a second model id on the current
-    /// provider, not a new endpoint.
-    pub fn new(base_url: Option<String>, writer: Option<WriterHandle>) -> Option<Arc<Self>> {
+    /// A session retains the explicitly selected auxiliary connection. Missing
+    /// credentials or persistence leave the existing human approval path active.
+    pub fn new(
+        connection: Option<&crate::auxiliary::AuxiliaryConfig>,
+        writer: Option<WriterHandle>,
+    ) -> Option<Arc<Self>> {
         let writer = writer?;
-        std::env::var_os(config::OPENAI_API_KEY_VAR)?;
+        let connection = connection?;
+        std::env::var_os(&connection.api_key_env)?;
         Some(Arc::new(Self {
             model: config::resolve_judge_model(std::env::var(config::JUDGE_MODEL_VAR).ok()),
-            client: Arc::new(RigModelClient::new(base_url)),
+            client: Arc::new(RigModelClient::new(connection.clone())),
             limiter: RateLimiter::judge_default(),
             writer,
             timeout: JUDGE_TIMEOUT,

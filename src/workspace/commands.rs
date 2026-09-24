@@ -478,11 +478,12 @@ impl WorkspaceShell {
             }
             CommandId::ReloadConfig => match horizon_config::reload() {
                 Ok(raw) => {
+                    crate::agent::auxiliary::reload(&raw, cx);
                     theme::live::apply_scheme(&raw, cx);
                     super::bindings::apply_bindings(cx, &raw);
                     window.refresh();
                     self.broadcast_terminal_color_scheme();
-                    // `[provider]` is the daemon-owned half of the config:
+                    // Provider sessions use the daemon-owned configuration:
                     // push it live without a `Reload Agent Runtime` (which
                     // is now scoped to agent-code reloads -- see
                     // `docs/terminald-split-design.md` decision 2). Fire-and-

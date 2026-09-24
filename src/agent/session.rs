@@ -214,6 +214,9 @@ impl AgentSession {
             return;
         };
         self.title_refine_attempted = true;
+        let Some(connection) = super::auxiliary::title_client(cx) else {
+            return;
+        };
         let session_id = self.session_id;
         let title_tx = self.title_tx.clone();
         cx.background_executor()
@@ -223,10 +226,8 @@ impl AgentSession {
                 // collapse, 40-char clamp) every other title source runs
                 // through, so a chatty or over-long reply can never reach
                 // the tab strip unclamped.
-                let summary = horizon_agent::summarize::summarize_session_title(
-                    title_base_url().as_deref(),
-                    &first_message,
-                );
+                let summary =
+                    horizon_agent::summarize::summarize_session_title(&connection, &first_message);
                 if let Some(title) = summary.and_then(|text| derive_session_title(&text)) {
                     let _ = title_tx.unbounded_send((session_id, Some(title)));
                 }
@@ -386,20 +387,6 @@ fn first_user_message_text(items: &[AgentFrameItem]) -> Option<String> {
 /// no such message exists yet.
 fn derive_title_from_items(items: &[AgentFrameItem]) -> Option<String> {
     first_user_message_text(items).and_then(|text| derive_session_title(&text))
-}
-
-/// The base URL for the title summarizer's provider call, resolved with
-/// the same precedence the agent runtime itself uses
-/// (`crates/horizon-agent/src/config.rs`'s `resolve_base_url`):
-/// `OPENAI_BASE_URL` wins over the config file's `[provider].base_url`;
-/// `None` lets rig use its own default. The app-side twin of what
-/// `horizon-agentd` feeds `JudgeHandle::new` -- the summarizer runs in
-/// this process, and agentd inherits this same environment, so both see
-/// the same provider.
-fn title_base_url() -> Option<String> {
-    std::env::var("OPENAI_BASE_URL")
-        .ok()
-        .or_else(|| horizon_config::load().provider.base_url.clone())
 }
 
 #[cfg(test)]

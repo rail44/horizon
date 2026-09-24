@@ -1,6 +1,7 @@
 //! The GPUI shell's agent model and pane view. Shared agentd transport
 //! ownership lives in `crate::agentd`.
 
+pub(crate) mod auxiliary;
 mod session;
 mod turns;
 mod view;

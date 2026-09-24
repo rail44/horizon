@@ -8,59 +8,14 @@
 //! relevant to them and apply their own env-var precedence and built-in
 //! defaults on top (env var > this file > built-in default).
 //!
-//! The 2026-07-18 config-narrowing wave cut the surface
-//! to exactly: `[provider]` `model`/`base_url`; `[terminal]` `font_size`;
-//! `[ui]` `font_family`; `[keybindings]`; `[theme]`'s seed plus
-//! `[theme.ansi]`'s six hues. Everything that used to be tunable beyond
-//! that (the entire former `[agent]` section, `[provider]`
-//! `temperature`/`max_tokens`, `[terminal]` `line_height`/`term`/`shell`/
-//! `shell_args`/`scrollback_lines`, `[ui]` `window_width`/`window_height`)
-//! is now a fixed built-in default or constant in the crate that owns it
-//! (`horizon-agent`'s `config` module for the former `[agent]` knobs; the
-//! shell crate's `terminal`/`main` modules for the rest) — this crate no
-//! longer parses any of them into a field at all, and carries no separate
-//! retired-key compatibility warning either: a
-//! config file that still sets one of those names gets
-//! [`warnings::warn`]'s ordinary "probable typo" treatment, the same as
-//! any other unrecognized key.
-//!
-//!
-//! **The surface below is deliberately re-extended, not frozen.** The
-//! 2026-07-18 narrowing's single-`[provider]` shape assumed one rig-backed
-//! provider; the owner-agreed multi-provider wave (2026-10, board task #1)
-//! re-extends the declared surface with the `[[providers]]` array and
-//! `default_provider` -- and keeps the legacy `[provider]` table as a
-//! backward-compatible alias for exactly that one implicit provider (see
-//! [`RawConfig::resolved_providers`]). Everything else the narrowing wave
-//! retired stays retired: the re-extension adds provider entries, it does
-//! not reopen any other knob.
-//! Design choices:
-//! - **One location, no layered merging.** Unlike tools that merge a
-//!   system/user/project config chain, Horizon reads exactly one file:
-//!   `$XDG_CONFIG_HOME/horizon/config.toml`, falling back to
-//!   `~/.config/horizon/config.toml`, overridable wholesale via
-//!   `HORIZON_CONFIG` (mainly for tests and for running more than one
-//!   Horizon configuration side by side). Simpler to reason about at this
-//!   project's size than a merged chain.
-//! - **Never crash on a bad file.** A missing file is the common case
-//!   (defaults apply, silently); a present-but-unparsable file falls back
-//!   to defaults with a warning on stderr — the same "warn and skip, never
-//!   fail startup" policy [`warnings`] and the shell crate's `theme` module
-//!   apply per-entry to an unrecognized keybinding, theme color, or (as of
-//!   this wave) any other section's key.
-//! - **Applied at startup only, except `[theme]`/`[keybindings]`.** Nothing
-//!   here watches the file for changes. The `Reload Config` command (the
-//!   `CommandId::ReloadConfig` arm in the shell crate's `workspace.rs`,
-//!   fed by [`reload`]) re-reads the file and applies `[theme]`
-//!   (`theme::reload_from`) and `[keybindings]` (`workspace::apply_bindings`)
-//!   live. `[provider]` picks up on `Reload Agent Runtime` (a fresh
-//!   `horizon-agentd` process re-reads the file, no full UI restart
-//!   needed); `[terminal]`/`[ui]` need a full UI restart.
-//! - **Secrets stay out.** Nothing under `[provider]` or `[[providers]]`
-//!   accepts an API key — the config file records at most an environment
-//!   variable **name** (`[provider]`'s `OPENAI_API_KEY`, `[[providers]]`'s
-//!   `api_key_env`; any future provider secret likewise) and the key itself
-//!   is environment-only.
+//! Named `[[providers]]` entries are the only file-based provider surface.
+//! `default_provider` selects conversation sessions; `auxiliary_provider`
+//! selects one OpenAI-compatible entry for titles and approval judgments.
+//! No provider entries means the built-in OpenAI-compatible `default` entry.
+//! Environment values override file values; secrets remain environment-only.
+//! A missing file uses defaults. Invalid files warn at startup; reload errors
+//! retain the previously applied configuration. Reload applies provider changes
+//! to new sessions and title calls, alongside theme and keybindings.
 
 pub mod grants;
 mod moa;
@@ -94,18 +49,16 @@ const HOME_VAR: &str = "HOME";
 #[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct RawConfig {
-    pub provider: RawProviderConfig,
-    /// `[[providers]]`: named rig-backed provider entries — the
-    /// owner-agreed re-extension of the narrowing wave's single-`[provider]`
-    /// surface (see the module doc). Empty unless the file sets it; the
-    /// legacy `[provider]` table folds in through
-    /// [`RawConfig::resolved_providers`] rather than here.
+    /// Named provider entries in file order.
     pub providers: Vec<RawNamedProviderConfig>,
     /// Which `[[providers]]` `name` runs when nothing else selected it.
     /// `None` means the first effective entry's name
     /// ([`RawConfig::resolved_providers`] owns that rule). A stale name that
     /// matches no entry is warned about and falls back to the first entry.
     pub default_provider: Option<String>,
+    /// OpenAI-compatible provider used by titles and automatic approval. Required
+    /// when named providers are configured; no-file defaults use `default`.
+    pub auxiliary_provider: Option<String>,
     pub terminal: RawTerminalConfig,
     pub ui: RawUiConfig,
     /// Key chord string (e.g. `"ctrl+shift+t"`) to `CommandId` string (e.g.
@@ -141,18 +94,6 @@ pub struct RawConfig {
     pub moa: Vec<RawMoaConfig>,
 }
 
-/// `[provider]`: model selection and base URL for the built-in rig/OpenAI
-/// provider. Never a place for secrets — see the module doc. `temperature`/
-/// `max_tokens` were retired in the 2026-07-18 config-narrowing wave (see
-/// the module doc) — a file that still sets either now gets a
-/// [`warnings`] warning instead of the field silently doing nothing.
-#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
-#[serde(default)]
-pub struct RawProviderConfig {
-    pub model: Option<String>,
-    pub base_url: Option<String>,
-}
-
 /// Which rig-backed provider *client* an entry builds: the first-scope kinds
 /// (owner-agreed: `openai-compatible` + `anthropic`). `openai-compatible`
 /// (the default) is any endpoint speaking OpenAI's chat-completions wire
@@ -162,6 +103,7 @@ pub struct RawProviderConfig {
 #[serde(rename_all = "kebab-case")]
 pub enum RawProviderKind {
     #[default]
+    #[serde(rename = "openai-compatible")]
     OpenAiCompatible,
     Anthropic,
 }
@@ -202,7 +144,7 @@ pub struct RawNamedProviderConfig {
 }
 
 /// One resolved provider entry — [`RawConfig::resolved_providers`]'s output:
-/// every `Option` collapsed, the legacy `[provider]` table folded in, and
+/// entry defaults applied and
 /// nameless entries dropped. This is the shape `horizon-agentd` hands to
 /// `horizon_agent::config`, which owns the env-var precedence on top
 /// (`HORIZON_RIG_MODEL`/`OPENAI_API_KEY`/`OPENAI_BASE_URL`/`ANTHROPIC_API_KEY`
@@ -214,8 +156,7 @@ pub struct ResolvedProviderConfig {
     pub base_url: Option<String>,
     pub api_key_env: String,
     /// The model this entry runs when nothing else selected one
-    /// ([`RawNamedProviderConfig::default_model`], or the legacy
-    /// `[provider].model`). `None` means the kind's own built-in default.
+    /// ([`RawNamedProviderConfig::default_model`]). `None` means the kind's own built-in default.
     pub default_model: Option<String>,
 }
 
@@ -227,50 +168,23 @@ pub struct ProvidersResolution {
     pub default_name: String,
 }
 
-/// The name the legacy `[provider]` table folds in as, when the file has no
-/// named `[[providers]]` entries. Deliberately plain: for a single-provider
-/// config the picker showing one provider is not improved by renaming it
-/// from the file, and `[provider]`-only files must keep working
-/// byte-for-byte.
-pub const LEGACY_PROVIDER_NAME: &str = "default";
+/// The implicit entry used when no providers are configured.
+pub const DEFAULT_PROVIDER_NAME: &str = "default";
 
 impl RawConfig {
-    /// Folds the legacy `[provider]` table and the `[[providers]]` array
-    /// into one effective provider list plus a default name. Pure (the
-    /// value-level warnings live in [`provider_config_warnings`], run once
-    /// per parse beside the name-walking [`warnings::warn`]):
-    ///
-    /// - `[[providers]]` entries set → those entries, in file order
-    ///   (nameless ones dropped — warned). The legacy `[provider]` table is
-    ///   IGNORED in this case: a file that names providers has already left
-    ///   the single-provider surface, and merging an unnamed entry into a
-    ///   named list would make the effective list unreadable from the file.
-    /// - No named `[[providers]]` entries (the legacy case, including a file
-    ///   with no provider config at all) → one implicit entry named
-    ///   [`LEGACY_PROVIDER_NAME`] carrying `[provider]`'s `base_url` and,
-    ///   when `[provider].model` is set, that model as its `default_model`.
-    ///   This is what keeps pre-`[[providers]]` behavior intact:
-    ///   same entry count, same knobs, same env precedence (which
-    ///   `horizon_agent::config` resolves on top).
-    /// - Every entry's `kind`/`api_key_env` `Option`s collapse to their
-    ///   defaults ([`RawProviderKind::default`]/[`RawProviderKind::
-    ///   default_api_key_env`]).
-    /// - Default name: `default_provider` when it names one of the effective
-    ///   entries; a stale name falls back to the first entry's name (the
-    ///   fallback keeps a renamed or dropped provider from breaking startup —
-    ///   the same never-fail-on-a-typo policy the file's other sections
-    ///   follow), else the first entry's name.
+    /// Apply entry defaults, drop nameless entries, and select the conversation
+    /// default. An empty file surface yields the built-in OpenAI-compatible entry.
     pub fn resolved_providers(&self) -> ProvidersResolution {
         let mut providers: Vec<ResolvedProviderConfig> = Vec::new();
         if self.providers.is_empty() {
             providers.push(ResolvedProviderConfig {
-                name: LEGACY_PROVIDER_NAME.to_string(),
+                name: DEFAULT_PROVIDER_NAME.to_string(),
                 kind: RawProviderKind::OpenAiCompatible,
-                base_url: self.provider.base_url.clone(),
+                base_url: None,
                 api_key_env: RawProviderKind::OpenAiCompatible
                     .default_api_key_env()
                     .to_string(),
-                default_model: self.provider.model.clone(),
+                default_model: None,
             });
         } else {
             for entry in &self.providers {
@@ -295,37 +209,43 @@ impl RawConfig {
             _ => providers
                 .first()
                 .map(|p| p.name.clone())
-                .unwrap_or_else(|| LEGACY_PROVIDER_NAME.to_string()),
+                .unwrap_or_else(|| DEFAULT_PROVIDER_NAME.to_string()),
         };
         ProvidersResolution {
             providers,
             default_name,
         }
     }
+
+    /// Select auxiliary AI explicitly, independent of conversation selection.
+    /// An invalid selection never redirects an OpenAI request to another entry.
+    pub fn resolved_auxiliary_provider(&self) -> Result<ResolvedProviderConfig, String> {
+        let name = self.auxiliary_provider.as_deref().or_else(|| {
+            self.providers.is_empty().then_some(DEFAULT_PROVIDER_NAME)
+        }).ok_or("auxiliary_provider: select an OpenAI-compatible [[providers]] entry for titles and approval judgments")?;
+        let entry = self
+            .resolved_providers()
+            .providers
+            .into_iter()
+            .find(|entry| entry.name == name)
+            .ok_or_else(|| format!("auxiliary_provider: {name:?} names no provider"))?;
+        if entry.kind != RawProviderKind::OpenAiCompatible {
+            return Err(format!(
+                "auxiliary_provider: {name:?} must be openai-compatible"
+            ));
+        }
+        Ok(entry)
+    }
 }
 
 /// Value-level warnings for the provider sections, beside the name-walking
 /// [`warnings::warn`] (same warn-and-continue policy, never fail startup).
-/// Pure: collected here, printed by [`read_config`] once per successful
-/// parse. Covers what a name walk can't see:
-/// - a file that sets BOTH `[[providers]]` and the legacy `[provider]`
-///   table — `[[providers]]` wins and the legacy table is dead weight the
-///   reader should drop;
-/// - a `default_provider` naming no effective entry;
-/// - a `[[providers]]` entry with no `name` (it would resolve as an unnamed
-///   provider nothing can select);
-/// - a duplicate `[[providers]]` `name` (the later entry is shadowed for
-///   selection).
+/// Collected once per parse alongside key-name warnings.
 pub fn provider_config_warnings(config: &RawConfig) -> Vec<String> {
     let resolution = config.resolved_providers();
     let mut warnings = Vec::new();
-    if !config.providers.is_empty()
-        && (config.provider.model.is_some() || config.provider.base_url.is_some())
-    {
-        warnings.push(
-            "[provider]: ignored because [[providers]] is set — [[providers]] wins; drop the legacy [provider] table"
-                .to_string(),
-        );
+    if let Err(error) = config.resolved_auxiliary_provider() {
+        warnings.push(error);
     }
     if let Some(name) = &config.default_provider {
         if !resolution.providers.iter().any(|p| &p.name == name) {
@@ -624,7 +544,7 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
     };
     match parse(&contents) {
         Ok(config) => {
-            // Retired/unrecognized-key warnings (`[agent]`/`[provider]`/
+            // Retired/unrecognized-key warnings (`[agent]`/`[[providers]]`/
             // `[terminal]`/`[ui]`/`[grants]` -- see `warnings`' module doc)
             // run here, once per successful parse, so both
             // `load_from_path` (startup) and `reload_from_path` (`Reload
@@ -636,9 +556,8 @@ fn read_config(path: Option<&Path>) -> ConfigRead {
             for warning in grants::resolve(&config.grants.project, home_dir().as_deref()).1 {
                 eprintln!("horizon config: {warning}");
             }
-            // The provider sections' *value* warnings (the
-            // `[provider]`/`[[providers]]` coexistence rule, a stale
-            // `default_provider`, nameless/duplicate entries) are likewise
+            // Provider value warnings (invalid selections and nameless or
+            // duplicate entries) are likewise
             // name-walk-invisible, off the same successful parse.
             for warning in provider_config_warnings(&config) {
                 eprintln!("horizon config: {warning}");
@@ -718,8 +637,15 @@ pub fn reload() -> Result<RawConfig, String> {
     }
 }
 
-fn parse(contents: &str) -> Result<RawConfig, toml::de::Error> {
-    toml::from_str(contents)
+/// Parse the current file contract. Legacy configuration is converted offline.
+pub fn parse(contents: &str) -> Result<RawConfig, String> {
+    let root = toml::from_str::<toml::Table>(contents).map_err(|error| error.to_string())?;
+    if root.contains_key("provider") {
+        return Err("[provider] was removed; convert it to [[providers]] using the procedure in docs/provider-configuration.md".into());
+    }
+    toml::Value::Table(root)
+        .try_into()
+        .map_err(|error: toml::de::Error| error.to_string())
 }
 
 #[cfg(test)]

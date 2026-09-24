@@ -587,7 +587,7 @@ mod tests {
     use crate::theme::test_support::{
         config_with, config_with_and_contrast, config_with_ansi, owner_seeded_light_scheme,
     };
-    use horizon_config::{RawProviderConfig, RawUiConfig};
+    use horizon_config::RawUiConfig;
 
     #[test]
     fn default_scheme_matches_agent_views_pre_existing_hex_values() {
@@ -1130,7 +1130,7 @@ mod tests {
         // default worth showing as "live" -- see the file's own comments):
         // must still parse to nothing rather than an accidental leaked
         // personal-preference value.
-        assert_eq!(example.provider, RawProviderConfig::default());
+        assert!(example.providers.is_empty());
         assert_eq!(example.ui, RawUiConfig::default());
         assert!(example.keybindings.is_empty());
         assert!(example.theme.colors.is_empty());

@@ -234,7 +234,7 @@ impl SessionHub for Hub {
         std::process::exit(0);
     }
 
-    /// Re-reads `[provider]` and rebuilds the registry in place -- see
+    /// Re-reads `[[providers]]` and rebuilds the registry in place -- see
     /// [`crate::session::AgentdState::reload_provider_config`]. A config
     /// parse error leaves the previous registry in place and is logged
     /// daemon-side (the call still succeeds from the client's view: the
@@ -321,7 +321,6 @@ pub(crate) fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
 mod tests {
     use super::*;
     use crate::session::AgentdState;
-    use horizon_agent::config::AgentConfig;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
     use horizon_agent::registry::ProviderRegistry;
     use horizon_agent::wire::agent_client_hello;
@@ -401,10 +400,11 @@ mod tests {
 
         let dir = tempfile::tempdir().expect("tempdir");
         let config = dir.path().join("config.toml");
-        std::fs::write(&config, "[provider]\nmodel = \"before-model\"\n").unwrap();
+        std::fs::write(&config, "auxiliary_provider = \"default\"\n[[providers]]\nname = \"default\"\ndefault_model = \"before-model\"\n").unwrap();
 
-        let agent_config =
-            AgentConfig::from_env_and_provider(Some("before-model".to_string()), None);
+        let agent_config = crate::providers::agent_config(
+            &horizon_config::reload_from_path(Some(&config)).unwrap(),
+        );
         let providers = ProviderRegistry::builtin_with_config(
             agent_config.clone(),
             SharedDuckdbStore::unavailable(),
@@ -434,7 +434,7 @@ mod tests {
             Some("before-model".to_string()),
         );
 
-        std::fs::write(&config, "[provider]\nmodel = \"after-model\"\n").unwrap();
+        std::fs::write(&config, "auxiliary_provider = \"default\"\n[[providers]]\nname = \"default\"\ndefault_model = \"after-model\"\n").unwrap();
         hub.reload_provider_config().await.expect("reload");
 
         assert_eq!(

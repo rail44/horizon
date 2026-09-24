@@ -51,7 +51,7 @@ pub(crate) struct AgentdState {
     pub(super) lifecycle: Mutex<()>,
     board_projects: Mutex<std::collections::HashSet<PathBuf>>,
     pub(crate) providers: Mutex<ProviderRegistry>,
-    /// Same swap story as `providers`: `[provider]`'s `base_url` is read at
+    /// Same swap story as `providers`: `[[providers]]`'s `base_url` is read at
     /// spawn time for the enforcing judge (see `run_session`), so a live
     /// reload updates it for new sessions.
     pub(crate) agent_config: Mutex<AgentConfig>,
@@ -181,7 +181,7 @@ impl AgentdState {
         self.writer.lock().unwrap().clone()
     }
 
-    /// Re-reads `[provider]` from the config file at [`Self::config_path`] and
+    /// Re-reads `[[providers]]` from the config file at [`Self::config_path`] and
     /// rebuilds both the provider registry and the agent config in place, so
     /// a `Reload Config` can push a model/base-URL change to a running daemon
     /// without a `Reload Agent Runtime` (which exists for agent-code reloads
@@ -194,19 +194,7 @@ impl AgentdState {
     /// explicit model switch resolves the newly loaded catalog.
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
-        // The same seam `main` uses at startup (`crate::providers`), so a
-        // reload resolves the surface exactly like a fresh process would —
-        // `[[providers]]` when set, the legacy `[provider]` fold-in
-        // otherwise.
-        let (provider_entries, provider_default) = crate::providers::named_provider_configs(&raw);
-        // `[[moa]]` reloads with `[[providers]]` — same rule, same seam:
-        // new sessions see the change (`docs/agent-moa-design.md`
-        // decision 9).
-        let new_agent_config = AgentConfig::from_env_and_providers(
-            provider_entries,
-            provider_default,
-            crate::providers::moa_configs(&raw),
-        );
+        let new_agent_config = crate::providers::agent_config(&raw);
         let new_providers = ProviderRegistry::builtin_with_config(
             new_agent_config.clone(),
             self.duckdb_cell.clone(),

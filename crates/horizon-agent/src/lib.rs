@@ -11,6 +11,7 @@
 //! config-file loading, the `workspace.snapshot` host tool) — see that
 //! module for the seam.
 
+pub mod auxiliary;
 pub mod config;
 pub mod contract;
 pub mod frame;

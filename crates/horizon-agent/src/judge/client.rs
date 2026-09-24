@@ -14,12 +14,9 @@
 //! comment); it only ever sends `reasoning_effort`/`logprobs`/
 //! `top_logprobs` this way.
 
-use std::sync::OnceLock;
-
 use async_trait::async_trait;
 use rig_core::client::CompletionClient;
 use rig_core::completion::{AssistantContent, CompletionModel, Message};
-use rig_core::providers::openai;
 
 /// One stage's completion request, already assembled by
 /// `judge::prompt`/`judge::run_judge` -- everything a [`ModelClient`] needs
@@ -92,50 +89,17 @@ pub(super) fn stage2_additional_params() -> serde_json::Value {
     })
 }
 
-/// Real judge model client: a pooled rig OpenAI-completions client reused
-/// across every judge call in this process (a fresh client would mean a
-/// fresh `reqwest::Client`, i.e. a fresh connection pool -- the ~0.5s warm
-/// latency the research doc's provider probe measured depends on reusing
-/// the same pooled connection, not redialing per call).
+/// A pooled connection retained by this session's judge handle.
 pub(super) struct RigModelClient {
-    base_url: Option<String>,
+    client: crate::auxiliary::AuxiliaryClient,
 }
 
 impl RigModelClient {
-    pub(super) fn new(base_url: Option<String>) -> Self {
-        Self { base_url }
+    pub(super) fn new(config: crate::auxiliary::AuxiliaryConfig) -> Self {
+        Self {
+            client: crate::auxiliary::AuxiliaryClient::new(config),
+        }
     }
-}
-
-/// Lazily builds (once per process) and hands back clones of the shared
-/// judge `CompletionsClient` -- `openai::CompletionsClient` wraps a
-/// `reqwest::Client` internally and is cheap to clone (an `Arc`-backed
-/// connection pool underneath), so every judge call reuses the same pooled
-/// connection regardless of which session fired it. `base_url` is only
-/// consulted on the *first* call in a process's lifetime (this crate's
-/// config is process-wide already -- see `config::RigAgentConfig::
-/// base_url`'s own doc comment -- so this mirrors that, rather than
-/// supporting a base URL that changes mid-process).
-fn shared_client(base_url: Option<&str>) -> anyhow::Result<openai::CompletionsClient> {
-    static CLIENT: OnceLock<Option<openai::CompletionsClient>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| build_client(base_url))
-        .clone()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "judge model client unavailable ({} unset, or client build failed)",
-                crate::config::OPENAI_API_KEY_VAR
-            )
-        })
-}
-
-fn build_client(base_url: Option<&str>) -> Option<openai::CompletionsClient> {
-    let api_key = std::env::var(crate::config::OPENAI_API_KEY_VAR).ok()?;
-    let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
-    if let Some(base_url) = base_url {
-        builder = builder.base_url(base_url);
-    }
-    builder.build().ok()
 }
 
 #[async_trait]
@@ -145,7 +109,7 @@ impl ModelClient for RigModelClient {
         model: &str,
         request: RawCompletionRequest,
     ) -> anyhow::Result<RawCompletionResponse> {
-        let client = shared_client(self.base_url.as_deref())?;
+        let client = self.client.completion_client()?;
         let completion_model = client.completion_model(model);
         let response = completion_model
             .completion_request(Message::user(request.user_content))
@@ -201,5 +165,117 @@ mod tests {
             params.get("logprobs").is_none(),
             "only stage 1 derives a confidence signal"
         );
+    }
+    #[test]
+    fn auxiliary_clients_keep_their_selected_endpoint_and_credentials() {
+        use crate::auxiliary::{AuxiliaryClient, AuxiliaryConfig};
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        fn endpoint(requests: usize) -> (String, mpsc::Receiver<String>) {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let url = format!("http://{}/v1", listener.local_addr().unwrap());
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                for incoming in listener.incoming().take(requests) {
+                    let mut socket = incoming.unwrap();
+                    socket
+                        .set_read_timeout(Some(Duration::from_secs(5)))
+                        .unwrap();
+                    let mut bytes = Vec::new();
+                    loop {
+                        let mut buffer = [0u8; 1024];
+                        let count = socket.read(&mut buffer).unwrap();
+                        assert_ne!(count, 0);
+                        bytes.extend_from_slice(&buffer[..count]);
+                        if let Some(end) = bytes.windows(4).position(|s| s == b"\r\n\r\n") {
+                            let head = String::from_utf8_lossy(&bytes[..end]).to_ascii_lowercase();
+                            let length = head
+                                .lines()
+                                .find_map(|line| line.strip_prefix("content-length:"))
+                                .unwrap()
+                                .trim()
+                                .parse::<usize>()
+                                .unwrap();
+                            if bytes.len() >= end + 4 + length {
+                                break;
+                            }
+                        }
+                    }
+                    tx.send(String::from_utf8(bytes).unwrap()).unwrap();
+                    let body = serde_json::json!({
+                        "id": "aux-response", "object": "chat.completion", "created": 0,
+                        "model": "helper-model",
+                        "choices": [{"index": 0, "message": {"role": "assistant", "content": "A"},
+                            "finish_reason": "stop", "logprobs": null}],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    })
+                    .to_string();
+                    write!(socket, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+                }
+            });
+            (url, rx)
+        }
+
+        let (first_url, first_requests) = endpoint(3);
+        let (second_url, second_requests) = endpoint(2);
+        std::env::set_var("OPENAI_API_KEY", "wrong-conversation-key");
+        std::env::set_var("HORIZON_TEST_AUX_FIRST_KEY", "first-helper-key");
+        std::env::set_var("HORIZON_TEST_AUX_SECOND_KEY", "second-helper-key");
+        std::env::set_var("OPENAI_BASE_URL", &first_url);
+        let first = AuxiliaryConfig::from_env(
+            Some("https://unused.invalid".into()),
+            "HORIZON_TEST_AUX_FIRST_KEY".into(),
+        );
+        assert_eq!(first.base_url.as_deref(), Some(first_url.as_str()));
+        std::env::remove_var("OPENAI_BASE_URL");
+        let second =
+            AuxiliaryConfig::from_env(Some(second_url), "HORIZON_TEST_AUX_SECOND_KEY".into());
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let first_title = AuxiliaryClient::new(first.clone());
+        assert_eq!(
+            crate::summarize::summarize_session_title(&first_title, "first"),
+            Some("A".into())
+        );
+        for config in [first, second.clone()] {
+            let judge = RigModelClient::new(config);
+            let response = runtime
+                .block_on(judge.complete(
+                    "judge-model",
+                    RawCompletionRequest {
+                        system_prompt: "Judge".into(),
+                        user_content: "Approve?".into(),
+                        max_tokens: 16,
+                        additional_params: serde_json::json!({}),
+                    },
+                ))
+                .unwrap();
+            assert_eq!(response.text, "A");
+        }
+        assert_eq!(
+            crate::summarize::summarize_session_title(&AuxiliaryClient::new(second), "second"),
+            Some("A".into())
+        );
+        // A captured handle retains its first endpoint after the config changes.
+        assert_eq!(
+            crate::summarize::summarize_session_title(&first_title, "still first"),
+            Some("A".into())
+        );
+        for (requests, key, count) in [
+            (first_requests, "first-helper-key", 3),
+            (second_requests, "second-helper-key", 2),
+        ] {
+            for _ in 0..count {
+                let request = requests
+                    .recv_timeout(Duration::from_secs(5))
+                    .unwrap()
+                    .to_ascii_lowercase();
+                assert!(request.starts_with("post /v1/chat/completions "));
+                assert!(request.contains(&format!("authorization: bearer {key}")));
+                assert!(!request.contains("wrong-conversation-key"));
+            }
+        }
     }
 }

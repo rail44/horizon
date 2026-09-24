@@ -658,9 +658,11 @@ refactoring wave folds into this item.
      Rust constant (`config::DEFAULT_JUDGE_MODEL`), overridable via
      `HORIZON_AGENT_JUDGE_MODEL` -- env-only, mirroring
      `HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`'s no-file-key
-     treatment (the config surface stays frozen). Reuses the session's
-     already-resolved `[provider].base_url` and `OPENAI_API_KEY` -- a
-     second model on the same provider, never a new endpoint/credential.
+     treatment. The session captures the explicitly selected
+     `auxiliary_provider` entry's base URL and key-variable name, shared with
+     title generation and independent of the conversation provider. Reload
+     affects new sessions; existing judges retain their captured connection.
+     See [provider configuration](provider-configuration.md).
    - **Stage 2 also stays Plan B.** The judge-prompt research doc's own
      "native structured output vs. loose JSON mode" fork wasn't resolved
      in this provider's favor either way (the appendix's probe never

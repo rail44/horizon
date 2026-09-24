@@ -19,6 +19,7 @@ pub(crate) fn test_config() -> AgentConfig {
     };
     let rig = RigAgentConfig::default();
     AgentConfig {
+        auxiliary: None,
         providers: ProvidersTable {
             entries: vec![NamedProviderConfig {
                 name: "default".into(),

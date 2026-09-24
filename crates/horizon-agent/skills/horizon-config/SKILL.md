@@ -50,9 +50,11 @@ this file -- never write one there even if the user asks.
 ## Apply timing
 
 `[theme]` and `[keybindings]` changes take effect automatically as soon as
-the user approves a `config.write` -- no restart needed. `[provider]`
-changes take effect on "Reload Agent Runtime" (no full restart needed
-either, just a fresh `horizon-agentd`). `[terminal]`/`[ui]` only take
+the user approves a `config.write` -- no restart needed. `[[providers]]`,
+`default_provider`, `auxiliary_provider`, and `[[moa]]` apply through "Reload
+Config" to new sessions and future title calls. `auxiliary_provider` must select
+one OpenAI-compatible entry for titles and automatic approval judgments. The
+removed `[provider]` table is not accepted; see `docs/provider-configuration.md`. `[terminal]`/`[ui]` only take
 effect the next time Horizon starts, so tell the user a restart is needed
 if you change one of those. There is no `[agent]` section any more -- it
 was retired 2026-07-18; tool caps and turn-loop guards are fixed built-in

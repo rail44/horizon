@@ -66,7 +66,7 @@ fn resolve_and_announce_session_model(
 
 /// The `(provider, model)` display selection for a session spawned directly on
 /// `provider_id`, in the vocabulary the picker and `set_session_model` use: the
-/// config entry name (the legacy `[provider]` fold-in resolves as `default`)
+/// config entry name (the built-in default resolves as `default`)
 /// plus the model the session runs. `None` for an id with no config entry (e.g.
 /// the mock provider), where the chip falls back to the resolved model id.
 fn selection_for_provider_id(

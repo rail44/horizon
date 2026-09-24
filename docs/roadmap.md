@@ -74,7 +74,11 @@ execution identity changes is tracked in the
 [unification record](research/refactoring-spec-unification-2026-09-25.md).
 The inert DuckDB migration state and old command aliases have been removed.
 Explicit model switches now resolve current config once and publish only after
-application; provider file syntax and execution identity are still in progress.
+application. Tool execution identity is now required throughout the lifecycle
+(agent wire v23, event-log v2), with offline conversion and strict preflight.
+Provider configuration uses named entries and a separate auxiliary-provider
+selection; see [configuration and conversion](provider-configuration.md).
+Integration does not activate old user data automatically.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

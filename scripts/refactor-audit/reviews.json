@@ -26,15 +26,15 @@
         "name": "rebuild_and_open_duckdb_projection",
         "partition": "production"
       },
-      "sha256": "079e85e43db4a30f0e8b2268ffce595f2222039dd47b86f38025fe7fd250c03d",
+      "sha256": "6a53502e60293338994f61206c9f628597d0df6589d3737c4330e343cdc6b424",
       "related": {
-        "crates/horizon-agent/src/persistence/projection/duckdb/append.rs": "2a5173df9979d303c4dd65904dc7bb9aaa439169651b44d63d0bffd6fa4c8d86",
-        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "0c2ffa49c147d5f72d9f33af181ffb7852d8062608d50ed9848f4ab79a5f6588",
-        "crates/horizon-agent/src/persistence/projection/duckdb/shared_store.rs": "3986cb9729cf313ca5645e748b05ac4bbfde6239dd0dbca138ba8319efdacb18"
+        "crates/horizon-agent/src/persistence/event_log/mod.rs": "933bf3b8c0c178f6861d61c12bdd4bff37080b2acf872b46ce5eee2a97fbe92a",
+        "crates/horizon-agent/src/persistence/mod.rs": "5fcd95b754a790684fbf2818980ef77405a10ae7d1aa7c2b3781af705b0cad40",
+        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "a06cab5a4bfa626e856670564ac7537a678a20d578bbc0d7ef3f1d922cd2ddba"
       },
       "decision": "preserve",
-      "reason": "Current, incremental catch-up and full rebuild are distinct recovery paths. Keep their fallback and shared-store ownership; live and rebuild appends now share the same atomic write implementation.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Current projection, incremental catch-up and full rebuild remain distinct recovery paths. The inert schema migration flag and branch are removed. JSONL remains authoritative; format-v2 cutover rebuilds a fresh projection offline and validates every row before activation.",
+      "commit": "06a52e22c620c0dc7b4d7f7d5d8c00b9db4af060"
     },
     {
       "target": {
@@ -81,17 +81,14 @@
       },
       "sha256": "c8dd0ea855ab2648d307a5ab03cbbcaf7e466840bc728187e49016bd20ab81b2",
       "related": {
-        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
-        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
-        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "880be1dabdfd28048c04fc26269dcf4f7c3fdbb2544984a9180bc67265f9a0a3",
-        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "4f450f383acbe07262f4aecee992d53c36799cdd2c78bc2954789d5bd3e49b9b",
-        "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912",
-        "src/agent/turns/tool_call.rs": "3308101382d5dacbde5ed895b2ecf340c139c544c22c51d4c841017f3fad3bbd",
-        "src/agent/view/transcript/rows.rs": "5d3531d1f5d7fc86806b7ecfa35ebc925d54300ac9d7815027273c9e390de634"
+        "crates/horizon-agent/src/contract.rs": "09926b287a7fb787f5cf819fe496021b850fc05185ca25191d8e7fc599ceb2d2",
+        "crates/horizon-agent/src/frame/queries.rs": "193c4916a3a7d46c59721cc12a86c29ed1c22575521ff94eb3901cdfbd37a6d3",
+        "crates/horizon-agent/src/frame/tool_calls.rs": "bdabf31ad39ce79ed5e394836424db977d7ae2132b2637b824a749fe9fb36b91",
+        "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs": "bcf5811dd9ddf0cc1ad904af007e094992badcba2af72813f0770e7294859b41"
       },
       "decision": "preserve",
-      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate. Retry metadata now belongs to contract. Display classification returns explicit recognition and named data; the UI no longer infers recognition from wording. Per-occurrence transcript rows and historical denial display remain distinct from provider replay. Transcript row modules moved under their entity; tool occurrence and approval rendering contracts are unchanged.",
-      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
+      "reason": "The frame layer now correlates required call and occurrence identities exactly; latest-preceding fallback is removed. This function owns tool and approval presentation, preserving request order, per-execution rows and source indices. Provider replay still answers one logical call across retries; that responsibility stays separate.",
+      "commit": "06a52e22c620c0dc7b4d7f7d5d8c00b9db4af060"
     },
     {
       "target": {

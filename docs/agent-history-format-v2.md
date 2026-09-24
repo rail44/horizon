@@ -1,7 +1,7 @@
 # Agent history format v2
 
-Implementation is in progress on the specification-unification branch. Do not
-activate a converted log until that branch has passed the workspace gate.
+The format change is integrated on main (`06a52e22`) and passed the workspace
+gate. Existing user logs still require explicit offline conversion before restart.
 
 Every tool request, start, approval, approval decision, and result names both
 `call_id` and `occurrence_id`. A retry keeps the provider's call ID and gets a

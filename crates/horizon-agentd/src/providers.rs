@@ -1,9 +1,4 @@
-//! The `horizon_config` → `horizon_agent::config` provider seam: the one
-//! translation of `horizon_config`'s resolved `[[providers]]` entries (or
-//! the legacy `[provider]` fold-in) into `horizon_agent::config::NamedProviderConfig`s. `main` (startup) and `AgentdState::
-//! reload_provider_config` (reload) both call through here so the two
-//! callers cannot drift — and so Horizon's env precedence stays where
-//! `horizon_agent::config` owns it (this module never reads env itself).
+//! Translate the accepted file configuration into runtime configuration.
 use horizon_agent::config::{MoaEntry, MoaMember, NamedProviderConfig, ProviderKind};
 
 /// Translates the resolved `[[moa]]` surface out of the same config file
@@ -51,4 +46,62 @@ pub(crate) fn named_provider_configs(
         })
         .collect();
     (entries, resolution.default_name)
+}
+
+/// Startup and reload share one translation, including the auxiliary provider.
+pub(crate) fn agent_config(raw: &horizon_config::RawConfig) -> horizon_agent::config::AgentConfig {
+    let (entries, default_name) = named_provider_configs(raw);
+    let mut config = horizon_agent::config::AgentConfig::from_env_and_providers(
+        entries,
+        default_name,
+        moa_configs(raw),
+    );
+    config.auxiliary = raw.resolved_auxiliary_provider().ok().map(|entry| {
+        horizon_agent::auxiliary::AuxiliaryConfig::from_env(entry.base_url, entry.api_key_env)
+    });
+    config
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conversation_and_auxiliary_providers_resolve_independently() {
+        std::env::remove_var("OPENAI_BASE_URL");
+        let raw = horizon_config::parse(
+            r#"
+            default_provider = "chat"
+            auxiliary_provider = "helper"
+            [[providers]]
+            name = "chat"
+            kind = "anthropic"
+            api_key_env = "CHAT_KEY"
+            [[providers]]
+            name = "helper"
+            kind = "openai-compatible"
+            base_url = "https://helper.invalid/v1"
+            api_key_env = "HELPER_KEY"
+        "#,
+        )
+        .unwrap();
+        let before = agent_config(&raw);
+        assert_eq!(before.rig.kind, ProviderKind::Anthropic);
+        let auxiliary = before.auxiliary.as_ref().unwrap();
+        assert_eq!(auxiliary.api_key_env, "HELPER_KEY");
+        assert_eq!(
+            auxiliary.base_url.as_deref(),
+            Some("https://helper.invalid/v1")
+        );
+        let mut changed = raw.clone();
+        changed.providers[1].base_url = Some("https://new.invalid/v1".into());
+        let after = agent_config(&changed);
+        assert_ne!(before.auxiliary, after.auxiliary);
+        assert_eq!(
+            auxiliary.base_url.as_deref(),
+            Some("https://helper.invalid/v1")
+        );
+        changed.auxiliary_provider = Some("chat".into());
+        assert!(agent_config(&changed).auxiliary.is_none());
+    }
 }

@@ -143,6 +143,7 @@ mod tests {
         use horizon_agent::registry::ProviderRegistry;
 
         let agent_config = AgentConfig {
+            auxiliary: None,
             rig: RigAgentConfig {
                 api_key_present: false,
                 model: "m-solo".to_string(),

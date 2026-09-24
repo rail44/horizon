@@ -64,7 +64,7 @@ impl Connection {
     /// Every configured provider with its default model and availability —
     /// the model picker's data. Reads the agent config (the same table the
     /// registry was built from), so it reflects the loaded `[[providers]]`
-    /// surface, or the legacy `[provider]` fold-in when the file has none;
+    /// surface, or the built-in default when the file has none;
     /// entries run in the config file's order. `available` is the
     /// build-time-resolved key presence — the same rule the registry itself
     /// follows; a mid-session environment change is honored by a *switch*,
@@ -553,6 +553,7 @@ mod tests {
             },
         ];
         let agent_config = horizon_agent::config::AgentConfig {
+            auxiliary: None,
             rig: horizon_agent::config::RigAgentConfig {
                 api_key_present: true,
                 model: "test-model".to_string(),

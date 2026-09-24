@@ -201,21 +201,20 @@ Horizon reads one optional TOML file: `$XDG_CONFIG_HOME/horizon/config.toml`
 existing env vars keep winning. Secrets (`OPENAI_API_KEY`, `EXA_API_KEY`) are
 environment-only and never read from the file.
 
-As of the 2026-07-18 config-narrowing wave (owner decision), the surface is
-exactly: `[provider]` `model`/`base_url`; `[[providers]]` plus
-`default_provider`; `[[moa]]`; `[terminal]` `font_size`; `[ui]`
-`font_family`; `[keybindings]`; `[theme]`'s seed plus `[theme.ansi]`'s six
-hues. Everything the file used to also cover (the whole former `[agent]`
-section — bash/fs tool caps, turn-loop guard thresholds, event/state DB
-paths, stream-flush cadence, history/instructions budgets — plus
-`[provider]` `temperature`/`max_tokens`, `[terminal]`
-`line_height`/`term`/`shell`/`shell_args`/`scrollback_lines`, `[ui]`
-`window_width`/`window_height`) is now a fixed built-in default or
-constant; a config file that still sets one of those retired keys gets the
-same "probable typo" warning on stderr as any other unrecognized key in a
-*known* section (this project carries no separate retired-key compat
-warning — owner decision 2026-08-03) — implemented once, in
-`crates/horizon-config`, so every process that loads the file gets it.
+Provider file configuration uses `[[providers]]`, `default_provider`, and
+`auxiliary_provider`. The last selects one named OpenAI-compatible provider
+for both AI titles and automatic approval judgments, independently of the
+conversation provider. With no entries, the built-in OpenAI-compatible
+`default` entry serves both. Named configurations must select the auxiliary
+entry explicitly. Each entry's `api_key_env` names an environment variable;
+keys themselves never go in TOML. The removed `[provider]` table requires
+one-time conversion: see `docs/provider-configuration.md`.
+
+The remaining surface includes `[[moa]]`, `[terminal] font_size`, `[ui]
+font_family`, `[keybindings]`, `[theme]`, `[grants]`, and `trusted_projects`.
+Retired tool caps, turn-loop thresholds, history budgets, and rendering knobs
+remain built-in constants or the documented environment-only overrides.
+Unknown keys inside known sections warn on stderr through `horizon-config`.
 `crates/horizon-agent`'s event log/DuckDB-projection
 paths keep an environment-only override
 (`HORIZON_AGENT_EVENT_LOG`/`HORIZON_AGENT_STATE_DB`) with no file key at
@@ -238,16 +237,13 @@ Config is applied at startup only, with these exceptions: `Reload Config`
 re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
 derived terminal colors), `[keybindings]` (built-in defaults plus every
 chord/command override, unbinding whatever the previous apply's chords
-were first — see `workspace::apply_bindings`), and `[provider]` all live;
-`[provider]` is pushed to the running `horizon-agentd` over the session
-hub's `reload_provider_config` rtc call (no respawn; `[[providers]]` and
-`[[moa]]` reload with it), so a model/base-URL
-change takes effect for the next session — a running session keeps its
-spawn-time provider for its whole lifetime. `Reload Agent Runtime` is
-now scoped to agent-code reloads (a fresh `horizon-agentd` process
-re-reads the file; no full UI restart needed) and no longer the way to
-pick up a `[provider]` edit. `[terminal]`/`[ui]` are read once at
-UI startup and need a full restart -- with one runtime exception: the
+were first — see `workspace::apply_bindings`), and provider configuration.
+The shell updates future title calls; `reload_provider_config` pushes the
+provider reload to `horizon-agentd` without respawning it. New sessions use the
+new conversation and judge settings. Existing sessions retain their judge
+connection; explicit model switching resolves the latest conversation catalog.
+`Reload Agent Runtime` applies agent-code changes. `[terminal]`/`[ui] need a
+full restart, with one runtime exception: the
 `Increase/Decrease/Reset Font Size` commands (palette / `increase-font-size`
 et al. keybinding ids / built-in `secondary+=`/`secondary+-`/`secondary+0`
 chords -- cmd on macOS, ctrl on Linux/Windows) move the
@@ -256,7 +252,7 @@ without touching the file; `Reset Font Size` restores the startup-configured
 value. See `config.example.toml` at the repo
 root for every knob, and `crates/horizon-config` for the loader (the
 single file-schema/parse/path-resolution owner; `horizon-agentd` depends
-on it directly, and `horizon-agent` takes the resolved `[provider]` values
+on it directly, and `horizon-agent` takes resolved named provider values
 as plain arguments rather than parsing the file itself — see that crate's
 `config` module doc).
 

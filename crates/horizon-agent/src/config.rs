@@ -11,17 +11,10 @@
 //!
 //! **Crate boundary.** This crate has no dependency on `horizon-config` (or
 //! on Horizon) and so cannot parse or locate Horizon's config file itself.
-//! As of the 2026-07-18 config-narrowing wave, the only file-sourced
-//! values this crate's config varied on were `[provider]`
-//! `model`/`base_url` -- [`AgentConfig::from_env_and_provider`] takes
-//! those two as plain `Option<String>` arguments; the caller
-//! (`horizon-agentd`'s `main`, which owns the real `horizon_config::
-//! load()` call) resolves them from the file first. The owner-agreed
-//! multi-provider wave re-extends that seam by the named `[[providers]]`
-//! entries: the caller translates each resolved entry into a
-//! [`NamedProviderConfig`] and hands the whole table to
-//! [`AgentConfig::from_env_and_providers`]; the legacy two-argument
-//! constructor is the same path with the single implicit entry. Every other former
+//! The caller translates `[[providers]]` entries into [`NamedProviderConfig`]
+//! and passes them to [`AgentConfig::from_env_and_providers`]. Auxiliary AI
+//! configuration is resolved separately, independent of the conversation
+//! default. Every other former
 //! `[agent]`/`[provider]` file knob (tool caps, turn-loop guard
 //! thresholds, stream-flush cadence, history/instructions budgets,
 //! `max_tokens`) is now a fixed built-in constant -- see each `DEFAULT_*`
@@ -69,14 +62,14 @@ pub(crate) const ANTHROPIC_BASE_URL_VAR: &str = "ANTHROPIC_BASE_URL";
 pub(crate) const EXA_API_KEY_VAR: &str = "EXA_API_KEY";
 
 /// Overrides the rig completion model id. Falls back to the config file's
-/// `[provider].model`, then [`openai::GPT_4O_MINI`].
+/// `[[providers]].default_model`, then [`openai::GPT_4O_MINI`].
 const RIG_MODEL_VAR: &str = "HORIZON_RIG_MODEL";
 
 /// Rig/OpenAI's own base-URL env var (already honored implicitly by
 /// `openai::CompletionsClient::from_env()`); kept authoritative here too so
-/// it wins over `[provider].base_url` in the config file, per Horizon's
+/// it wins over `[[providers]].base_url` in the config file, per Horizon's
 /// "existing env vars keep working and win" precedence rule.
-const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
+pub(crate) const OPENAI_BASE_URL_VAR: &str = "OPENAI_BASE_URL";
 
 /// Overrides the path of the append-only agent event log (JSONL). Falls
 /// back to `$XDG_DATA_HOME/horizon/agent-events.jsonl` (see
@@ -293,6 +286,7 @@ fn default_fs_traversal_max_files() -> usize {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentConfig {
+    pub auxiliary: Option<crate::auxiliary::AuxiliaryConfig>,
     pub rig: RigAgentConfig,
     /// The whole effective provider surface ([`ProvidersTable`]). The
     /// default entry's resolved view is what `rig` carries, so everything
@@ -307,36 +301,8 @@ pub struct AgentConfig {
 }
 
 impl AgentConfig {
-    /// Builds this crate's whole config from environment variables plus the
-    /// two `[provider]` values the caller already resolved from Horizon's
-    /// config file — see the module doc for why this crate can't resolve
-    /// them itself. `None` for either means the file didn't set it, same as
-    /// an absent key. The legacy two-argument path: one implicit
-    /// openai-compatible entry (see [`NamedProviderConfig`]) whose resolved
-    /// view is `rig`.
-    pub fn from_env_and_provider(model: Option<String>, base_url: Option<String>) -> Self {
-        let entry = NamedProviderConfig {
-            name: LEGACY_PROVIDER_NAME.to_string(),
-            kind: ProviderKind::OpenAiCompatible,
-            base_url,
-            api_key_env: OPENAI_API_KEY_VAR.to_string(),
-            // Resolved centrally by `from_env_and_providers` below.
-            api_key_present: false,
-            default_model: model,
-        };
-        Self::from_env_and_providers(vec![entry], LEGACY_PROVIDER_NAME.to_string(), Vec::new())
-    }
-
-    /// Builds the whole config from the environment plus the resolved
-    /// `[[providers]]` table the caller translated from the config file —
-    /// the multi-provider generalization of [`Self::from_env_and_provider`]
-    /// (same crate boundary: the caller owns the `horizon_config` seam).
-    /// Every entry resolves its own rig view ([`NamedProviderConfig::resolved`]);
-    /// the default entry's view is what `rig` carries, so everything that
-    /// used to read `rig` keeps reading the default provider unchanged (the
-    /// judge included). An empty entry list yields the no-config shape —
-    /// [`RigAgentConfig::default`] and a surface with nothing to select —
-    /// never a failure: the file's own never-fail-on-a-typo policy holds.
+    /// Build provider sessions from named entries already resolved by the file
+    /// loader, applying environment precedence once for the accepted catalog.
     pub fn from_env_and_providers(
         entries: Vec<NamedProviderConfig>,
         default_name: String,
@@ -380,6 +346,7 @@ impl AgentConfig {
             })
             .collect();
         Self {
+            auxiliary: None,
             rig,
             providers,
             moa: MoaTable { entries: moa },
@@ -556,9 +523,22 @@ pub struct NamedProviderConfig {
     /// target), not by this value.
     pub api_key_present: bool,
     /// The model this entry runs when nothing else selected one — the
-    /// file's `default_model` (or the legacy `[provider].model`). `None`
+    /// file's `default_model`. `None`
     /// leaves the kind's own built-in default in place.
     pub default_model: Option<String>,
+}
+
+impl Default for NamedProviderConfig {
+    fn default() -> Self {
+        Self {
+            name: DEFAULT_PROVIDER_NAME.into(),
+            kind: ProviderKind::OpenAiCompatible,
+            base_url: None,
+            api_key_env: OPENAI_API_KEY_VAR.into(),
+            api_key_present: false,
+            default_model: None,
+        }
+    }
 }
 
 impl NamedProviderConfig {
@@ -644,8 +624,7 @@ impl NamedProviderConfig {
 }
 
 /// The whole effective provider surface: one entry per resolved
-/// `[[providers]]` entry (or the single implicit legacy entry — see
-/// [`AgentConfig::from_env_and_provider`]), plus which entry is the
+/// `[[providers]]` entry (or the built-in default), plus which entry is the
 /// default. Mirrors `horizon_config`'s `ProvidersResolution` shape without
 /// depending on that crate.
 #[derive(Clone, Debug, PartialEq)]
@@ -673,12 +652,12 @@ impl ProvidersTable {
     }
 }
 
-/// The name the legacy two-argument path resolves to. Mirrors
-/// `horizon_config::LEGACY_PROVIDER_NAME` (this crate has no dependency on
+/// The no-file default provider name. Mirrors
+/// `horizon_config::DEFAULT_PROVIDER_NAME` (this crate has no dependency on
 /// `horizon-config` — the two literals must agree).
-pub(crate) const LEGACY_PROVIDER_NAME: &str = "default";
+pub(crate) const DEFAULT_PROVIDER_NAME: &str = "default";
 
-/// Rig provider configuration: model/base-URL selection (`[provider]`, plus
+/// Rig provider configuration: model/base-URL selection (`[[providers]]`, plus
 /// the env vars above), the turn-loop guard's fixed thresholds
 /// (`iteration_cap`/`doom_loop_window`, always [`DEFAULT_ITERATION_CAP`]/
 /// [`DEFAULT_DOOM_LOOP_WINDOW`] -- see `providers::rig::session`'s
@@ -700,7 +679,7 @@ pub struct RigAgentConfig {
     pub kind: ProviderKind,
     /// The environment variable **name** this config's API key is read
     /// from (never a value — the module doc's secrets-stay-out rule). The
-    /// legacy path's variable is [`OPENAI_API_KEY_VAR`]; a `[[providers]]`
+    /// default variable is [`OPENAI_API_KEY_VAR`]; a `[[providers]]`
     /// entry's is its own `api_key_env`.
     pub api_key_env: String,
     /// Completion model id passed to `rig_core`'s OpenAI client.
@@ -751,7 +730,7 @@ pub struct RigAgentConfig {
     pub clearing_threshold_pct: u32,
     /// Restricts which tool ids `providers::rig::completion::
     /// rig_tool_definitions` advertises to the provider. `None` (the only
-    /// value [`Self::from_env_and_provider`] itself ever produces -- this
+    /// value [`AgentConfig::from_env_and_providers`] itself ever produces -- this
     /// field is process-wide config, not per-session) means "no
     /// restriction, every tool in `tools::definitions()`" -- current
     /// behavior, unchanged. This back-compatible extension point
@@ -875,7 +854,7 @@ pub(crate) fn resolve_clearing_threshold_pct(env_value: Option<String>) -> u32 {
 }
 
 /// Pure precedence resolution for the rig model id: env var wins, then the
-/// config file's `[provider].model` (already resolved by the caller — see
+/// config file's `[[providers]].default_model` (already resolved by the caller — see
 /// the module doc), then rig's own default model. Kept free of I/O (env
 /// reads happen at the call site) so precedence is unit-testable without
 /// mutating process environment — `cargo test` runs tests in parallel
@@ -1177,7 +1156,11 @@ mod tests {
 
     #[test]
     fn rig_agent_config_falls_back_to_built_in_defaults_when_provider_values_are_none() {
-        let config = AgentConfig::from_env_and_provider(None, None);
+        let config = AgentConfig::from_env_and_providers(
+            vec![NamedProviderConfig::default()],
+            DEFAULT_PROVIDER_NAME.into(),
+            Vec::new(),
+        );
 
         assert_eq!(config.rig.iteration_cap, DEFAULT_ITERATION_CAP);
         assert_eq!(config.rig.doom_loop_window, DEFAULT_DOOM_LOOP_WINDOW);
@@ -1196,17 +1179,20 @@ mod tests {
             DEFAULT_AGENT_MAX_OUTPUT_TOKENS
         );
         assert_eq!(config.rig.allowed_tool_ids, None);
-        // The legacy path still resolves to exactly one implicit default
-        // entry (see the implicit-default-entry test below for the full
-        // shape).
+        // The file loader supplies one built-in entry for an empty file.
         assert_eq!(config.providers.entries.len(), 1);
     }
 
     #[test]
     fn rig_agent_config_reads_model_and_base_url_from_the_resolved_provider_values() {
-        let config = AgentConfig::from_env_and_provider(
-            Some("provider-model".to_string()),
-            Some("https://provider.invalid".to_string()),
+        let config = AgentConfig::from_env_and_providers(
+            vec![NamedProviderConfig {
+                default_model: Some("provider-model".into()),
+                base_url: Some("https://provider.invalid".into()),
+                ..Default::default()
+            }],
+            DEFAULT_PROVIDER_NAME.into(),
+            Vec::new(),
         );
 
         assert_eq!(config.rig.model, "provider-model");

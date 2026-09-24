@@ -26,10 +26,6 @@ struct Section {
 
 const SECTIONS: &[Section] = &[
     Section {
-        name: "provider",
-        known_keys: &["model", "base_url"],
-    },
-    Section {
         name: "terminal",
         known_keys: &["font_size"],
     },
@@ -248,10 +244,9 @@ mod tests {
     fn warning_allowlists_match_deserialized_fields() {
         use crate::{
             RawGrantsConfig, RawMoaConfig, RawMoaMember, RawNamedProviderConfig, RawProjectGrant,
-            RawProviderConfig, RawTerminalConfig, RawUiConfig,
+            RawTerminalConfig, RawUiConfig,
         };
         for (section, accepted) in [
-            ("provider", accepted_fields::<RawProviderConfig>()),
             ("terminal", accepted_fields::<RawTerminalConfig>()),
             ("ui", accepted_fields::<RawUiConfig>()),
             ("grants", accepted_fields::<RawGrantsConfig>()),
@@ -293,7 +288,7 @@ mod tests {
     #[test]
     fn provider_known_keys_warn_about_nothing() {
         let warnings = collect_warnings(
-            "[provider]\nmodel = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n",
+            "[[providers]]\nname = \"default\"\ndefault_model = \"gpt-test\"\nbase_url = \"https://example.invalid\"\n",
         );
         assert!(warnings.is_empty(), "warnings = {warnings:?}");
     }
@@ -323,7 +318,8 @@ mod tests {
 
     #[test]
     fn provider_unrecognized_key_warns_as_a_probable_typo() {
-        let warnings = collect_warnings("[provider]\nmodle = \"typo\"\n");
+        let warnings =
+            collect_warnings("[[providers]]\nname = \"default\"\ndefault_modle = \"typo\"\n");
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("modle"));
         assert!(warnings[0].contains("unrecognized"));

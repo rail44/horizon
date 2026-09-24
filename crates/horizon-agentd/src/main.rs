@@ -101,24 +101,9 @@ async fn main() -> anyhow::Result<()> {
     let socket_path = daemon::socket_path_from_args(std::env::args().skip(1))
         .unwrap_or_else(default_agentd_socket_path);
 
-    // `horizon-agentd` is now the one process that reads Horizon's config
-    // file directly (see `docs/agent-runtime-split-design.md`'s "the child
-    // owns the event log and DuckDB projection", extended by the
-    // 2026-07-18 config-narrowing wave's consolidation onto
-    // `horizon-config`, and re-extended (owner-agreed multi-provider wave)
-    // by the `[[providers]]` array / `default_provider` — the legacy
-    // `[provider]` table folds in via `horizon_config::RawConfig::
-    // resolved_providers`, so a `[provider]`-only file keeps today's
-    // behavior. Everything else former `[agent]` knobs became fixed
-    // built-in constants in `horizon_agent::config` (see that module's
-    // doc).
+    // One accepted snapshot supplies conversation and auxiliary providers.
     let raw_config = horizon_config::load();
-    let (provider_entries, provider_default) = providers::named_provider_configs(raw_config);
-    let agent_config = AgentConfig::from_env_and_providers(
-        provider_entries,
-        provider_default,
-        providers::moa_configs(raw_config),
-    );
+    let agent_config = providers::agent_config(raw_config);
     // Resolved once at startup and handed to every session's
     // `ToolSessionState` (see `AgentdState::config_path`/`run_session`):
     // the `config.read`/`config.write` agent tools' one and only target.

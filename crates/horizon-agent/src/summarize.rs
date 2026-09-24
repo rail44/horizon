@@ -1,17 +1,10 @@
 //! One-off LLM calls that distill an agent session's first user message
 //! into a short tab title.
 //!
-//! This is the title-summarizing sibling of `judge`'s auxiliary-model
-//! plumbing: same provider (the OpenAI-completions client over
-//! `OPENAI_API_KEY`), same pooled-client discipline (`shared_client`'s
-//! process-wide `OnceLock`, so the ~0.5s warm-connection latency is paid
-//! once per process, not per call), same dedicated lazily-started tokio
-//! runtime so a caller's own thread never blocks on the network. It
-//! deliberately does **not** share `judge`'s client internals: those are
-//! `pub(super)`-scoped to the approval gate's seam (`ModelClient` and its
-//! mock), and a title call needs none of that mockability -- every
-//! failure path is a graceful `None` that leaves the raw first-message
-//! title showing.
+//! Titles and approval judgments share the explicitly selected auxiliary
+//! provider. The shell retains a pooled client until configuration reload;
+//! each in-flight title call captures its own handle. Any failure leaves the
+//! raw first-message title showing.
 //!
 //! The default model id is [`crate::config::DEFAULT_JUDGE_MODEL`]
 //! (`syn:small:text`, the provider-maintained small-model alias) for the
@@ -31,7 +24,6 @@ use std::time::Duration;
 
 use rig_core::client::CompletionClient;
 use rig_core::completion::{AssistantContent, CompletionModel, Message};
-use rig_core::providers::openai;
 
 use crate::config;
 
@@ -110,50 +102,25 @@ fn runtime() -> &'static tokio::runtime::Runtime {
     })
 }
 
-/// Process-wide pooled client, built only when `OPENAI_API_KEY` is set --
-/// same shape and rationale as `judge::client`'s `shared_client` (which
-/// this cannot reuse: that one is `pub(super)` and carries the judge's
-/// own error text).
-fn shared_client(base_url: Option<&str>) -> anyhow::Result<openai::CompletionsClient> {
-    static CLIENT: OnceLock<Option<openai::CompletionsClient>> = OnceLock::new();
-    CLIENT
-        .get_or_init(|| build_client(base_url))
-        .clone()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "title summarizer client unavailable ({} unset, or client build failed)",
-                config::OPENAI_API_KEY_VAR
-            )
-        })
-}
-
-fn build_client(base_url: Option<&str>) -> Option<openai::CompletionsClient> {
-    let api_key = std::env::var(config::OPENAI_API_KEY_VAR).ok()?;
-    let mut builder = openai::CompletionsClient::builder().api_key(&api_key);
-    if let Some(base_url) = base_url {
-        builder = builder.base_url(base_url);
-    }
-    builder.build().ok()
-}
-
 /// Asks the small model for a concise tab title for a session whose first
 /// user message is `first_message`. Blocking (runs to completion on the
 /// dedicated runtime, bounded by [`TITLE_TIMEOUT`]); call from a
-/// background thread. `base_url` follows the same resolution the agent
-/// runtime uses (`OPENAI_BASE_URL` env, else the config file's
-/// `[provider].base_url`; `None` = rig's own default) -- the caller
-/// resolves it, since this crate never reads the config file.
+/// background thread. The caller captures the accepted auxiliary connection
+/// before starting work, so reload affects future calls without redirecting one
+/// already in progress.
 ///
 /// `None` on every failure -- no API key, client build failure, timeout,
 /// transport error, empty/quote-only reply -- never `Err`: the caller's
 /// fallback (keep the raw first-message title) is always the right move,
 /// and there is nothing to distinguish between the failure modes.
-pub fn summarize_session_title(base_url: Option<&str>, first_message: &str) -> Option<String> {
-    std::env::var_os(config::OPENAI_API_KEY_VAR)?;
+pub fn summarize_session_title(
+    connection: &crate::auxiliary::AuxiliaryClient,
+    first_message: &str,
+) -> Option<String> {
     let model = resolve_title_model(std::env::var(TITLE_MODEL_VAR).ok());
     let user_content = prompt_input(first_message);
     runtime().block_on(async move {
-        let client = shared_client(base_url).ok()?;
+        let client = connection.completion_client().ok()?;
         let completion_model = client.completion_model(&model);
         let response = tokio::time::timeout(TITLE_TIMEOUT, async move {
             completion_model
