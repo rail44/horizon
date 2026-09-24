@@ -206,13 +206,13 @@
       "related": {
         "crates/horizon-terminal-core/src/session_loop/channels.rs": "7dc493492e77ef6b938f9bad8de21d2e36b8990a59213b865c06046008e1e9fc",
         "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
-        "crates/horizon-terminald/src/terminal.rs": "adde69f8aa069b46253390ea0dd38f0da3c1cee2a3429c3205781bd7273af638",
+        "crates/horizon-terminald/src/terminal.rs": "d207a2772bdfc17276f3eb126d670ec1afe0e07e6836faa9e3a351bb315b1fe7",
         "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
         "src/terminal/session.rs": "c34066f4f220329e4c52a513a1e4c0c82085969f4536f61627310379506e2e3d"
       },
       "decision": "preserve",
-      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved. Channel pairs are now constructed inside terminal-core and shared by the host and tests. Receiver fields are internal; disconnecting either input owner still terminates the core, with the other input retained in regression coverage. Key, committed text and paste now share one ordered CoreInput FIFO after a GUI repro exposed cross-channel reordering. Bounded PTY-query priority, encoding-only notification behavior and paste notification remain unchanged.",
-      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
+      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved. Channel pairs are now constructed inside terminal-core and shared by the host and tests. Receiver fields are internal; disconnecting either input owner still terminates the core, with the other input retained in regression coverage. Key, committed text and paste now share one ordered CoreInput FIFO after a GUI repro exposed cross-channel reordering. Bounded PTY-query priority, encoding-only notification behavior and paste notification remain unchanged. Terminal subscriber registration and failed-create cleanup now share attachment ownership; the core queue, snapshot and exit contracts are unchanged.",
+      "commit": "d934f7ee44043331996e11ca783a03cbbb5fe005"
     },
     {
       "target": {

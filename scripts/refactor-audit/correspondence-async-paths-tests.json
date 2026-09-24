@@ -1,0 +1,1024 @@
+[
+  {
+    "label": "Route replacement and stale publications",
+    "before": [
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "register",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "exit_retires_all_channels_after_delivering_the_exit",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "a_closed_frame_or_event_consumer_retires_the_whole_route",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "connection_failure_keeps_diagnostics_and_closes_commands",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "register",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "exit_retires_all_channels_after_delivering_the_exit",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "a_closed_frame_or_event_consumer_retires_the_whole_route",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "connection_failure_keeps_diagnostics_and_closes_commands",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_an_old_agent_registration_keeps_the_replacement",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing/tests.rs",
+        "owner": "<free>",
+        "name": "stale_terminal_updates_and_cleanup_leave_the_replacement_live",
+        "partition": "tests",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Runtime wire attachment replacement",
+    "before": [
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "spec",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "TerminalCall",
+        "name": "fmt",
+        "partition": "tests",
+        "variant": "trait:std::fmt::Debug"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "AgentCall",
+        "name": "fmt",
+        "partition": "tests",
+        "variant": "trait:std::fmt::Debug"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "terminal_attachment",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "agent_attachment",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "rejected_hello",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "hello",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "list_terminals",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "create_terminal",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "attach_terminal",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "drain",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_providers",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_provider_models",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "set_session_model",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "hello",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_agents",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "new_agent",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "attach_agent",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "drain",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "reload_provider_config",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "serve_fake_terminal_hub",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "serve_fake_session_hub",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "next_terminal_call",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "next_agent_call",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "expect_terminald_handshake",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "recv_frame",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "local_terminal_frame_route_collapses_a_burst_to_its_latest_snapshot",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_agent_runtime_failure_does_not_touch_terminal_routes",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "start_returns_before_the_connection_and_a_queued_create_arrives_after",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "draining_the_agent_runtime_leaves_the_terminal_runtime_untouched",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "incoming_workspace_root_resolved_reaches_its_own_channel",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "concurrent_terminal_lists_each_get_their_own_reply",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "terminal_batch_attach_keeps_attached_sessions_and_drops_not_found",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_clean_exit_retires_the_pane_even_when_the_frames_watch_closes_first",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "attach_reseeds_a_large_retained_frame_within_the_reply_cap",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_large_clipboard_event_reaches_the_pane",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_the_runtime_does_not_send_drain",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_the_terminal_runtime_does_not_send_drain",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "stopping_before_the_daemon_answers_cancels_the_runtime",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "established_disconnect_reports_errors_without_reconnecting",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_established_terminald_disconnect_reports_errors_without_reconnecting",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_rejected_hello_on_a_test_stream_is_a_terminal_failure",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_terminald_that_fails_the_call_after_hello_is_refused_by_name",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "stub_socket_paths",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "bind_stub_listener",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "read_until_closed",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "hold_silently",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopted",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "two_transient_failures_do_not_consume_the_recovery_budget",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_connection_drop_during_hello_is_retried_not_fatal",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_oversized_rtc_request_fails_the_op_and_stops_the_runtime",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "organizer_request_uses_existing_agent_connection",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "spec",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "TerminalCall",
+        "name": "fmt",
+        "partition": "tests",
+        "variant": "trait:std::fmt::Debug"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "AgentCall",
+        "name": "fmt",
+        "partition": "tests",
+        "variant": "trait:std::fmt::Debug"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "terminal_attachment",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "agent_attachment",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "rejected_hello",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "hello",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "list_terminals",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "create_terminal",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "attach_terminal",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeTerminalHub",
+        "name": "drain",
+        "partition": "tests",
+        "variant": "trait:TerminalHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_providers",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_provider_models",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "set_session_model",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "hello",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "list_agents",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "new_agent",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "attach_agent",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "drain",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "FakeSessionHub",
+        "name": "reload_provider_config",
+        "partition": "tests",
+        "variant": "trait:SessionHub"
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "serve_fake_terminal_hub",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "serve_fake_session_hub",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "next_terminal_call",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "next_agent_call",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "expect_terminald_handshake",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "recv_frame",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "local_terminal_frame_route_collapses_a_burst_to_its_latest_snapshot",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_agent_runtime_failure_does_not_touch_terminal_routes",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "start_returns_before_the_connection_and_a_queued_create_arrives_after",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "draining_the_agent_runtime_leaves_the_terminal_runtime_untouched",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "incoming_workspace_root_resolved_reaches_its_own_channel",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "concurrent_terminal_lists_each_get_their_own_reply",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "terminal_batch_attach_keeps_attached_sessions_and_drops_not_found",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_clean_exit_retires_the_pane_even_when_the_frames_watch_closes_first",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "attach_reseeds_a_large_retained_frame_within_the_reply_cap",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_large_clipboard_event_reaches_the_pane",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_the_runtime_does_not_send_drain",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_the_terminal_runtime_does_not_send_drain",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "stopping_before_the_daemon_answers_cancels_the_runtime",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "established_disconnect_reports_errors_without_reconnecting",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_established_terminald_disconnect_reports_errors_without_reconnecting",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_rejected_hello_on_a_test_stream_is_a_terminal_failure",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_terminald_that_fails_the_call_after_hello_is_refused_by_name",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "stub_socket_paths",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "bind_stub_listener",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "read_until_closed",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "hold_silently",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_looping",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_range_rejecting_remoc_daemon_is_drained_via_rtc_and_the_respawn_adopted",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_range_rejecting_terminald_is_drained_via_rtc_and_the_respawn_adopted",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "broadcast_terminal_color_scheme_targets_exactly_the_attached_sessions",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "two_transient_failures_do_not_consume_the_recovery_budget",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "a_connection_drop_during_hello_is_retried_not_fatal",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "an_oversized_rtc_request_fails_the_op_and_stops_the_runtime",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "organizer_request_uses_existing_agent_connection",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "replacing_an_agent_handle_keeps_the_new_wire_attachment_live",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/tests.rs",
+        "owner": "<free>",
+        "name": "replacing_a_terminal_handle_keeps_the_new_wire_attachment_live",
+        "partition": "tests",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Terminal host registration and exit lifecycle",
+    "before": [
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "FakeKiller",
+        "name": "kill",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:ChildKiller"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "FakeKiller",
+        "name": "clone_killer",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:ChildKiller"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "fake_session",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "install_if_vacant_installs_the_first_session_for_a_fresh_id",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "install_if_vacant_discards_and_kills_a_late_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "read_pty_emits_exited_when_pty_receiver_is_gone_mid_read",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "forward_updates_reaps_session_and_subscriber_when_update_channel_closes",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "FakeKiller",
+        "name": "kill",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:ChildKiller"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "FakeKiller",
+        "name": "clone_killer",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:ChildKiller"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "fake_session",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "a_failed_create_cannot_remove_a_newer_subscription",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "a_failed_attach_preserves_the_subscription_of_a_starting_terminal",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "install_if_vacant_installs_the_first_session_for_a_fresh_id",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "install_if_vacant_discards_and_kills_a_late_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "read_pty_emits_exited_when_pty_receiver_is_gone_mid_read",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "forward_updates_reaps_session_and_subscriber_when_update_channel_closes",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  }
+]

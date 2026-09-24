@@ -1,0 +1,247 @@
+[
+  {
+    "label": "Attachment registration, publication and cleanup",
+    "before": [
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "register_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "unregister_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "send_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "route_agent_event",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "host_tool_request",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "agent_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "connection_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "register_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "unregister_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "broadcast_terminal_command",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_frame",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_update",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "terminal_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "connection_failed",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "RouteKey<I>",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "RouteKey<I>",
+        "name": "session_id",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "register_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "unregister_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "send_agent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "route_agent_event",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "host_tool_request",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "agent_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "AgentRoutes",
+        "name": "connection_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "register_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "unregister_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "broadcast_terminal_command",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_frame",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "route_terminal_update",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "terminal_failed",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/runtime/routing.rs",
+        "owner": "TerminalRoutes",
+        "name": "connection_failed",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  }
+]

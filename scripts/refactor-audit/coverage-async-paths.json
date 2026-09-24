@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "438aa4f318d58c0811d39b8603296e7ca15e202d",
+  "reviewed_commit": "d934f7ee44043331996e11ca783a03cbbb5fe005",
+  "profile": "profiles/non-board.json",
+  "scope": "Eight asynchronous path and ownership reviews. Not an exhaustive line-by-line or all-interleavings proof. Board-specific directories, functions and mixed-file branches are unchanged.",
+  "groups": [
+    {
+      "id": "agent_accept_execute_publish",
+      "scenario": "Accept input or approval, run tools and publish a durable result.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Keep command acceptance and durable input/outbox events in agentd, provider scheduling in the rig session, and frame reduction before publication. Synchronous tool-triggered commands drain before their result releases the next provider round. Approval resolution remains idempotent; occurrence checks reject obsolete asynchronous judgments and completions. Do not merge durable and ordinary diagnostic publication.",
+      "files": {
+        "crates/horizon-agentd/src/session/approval.rs": "ce574125bee5c0d35883f3f8a75f18a05e450083d72a69de3c4e5c2ed78597ad",
+        "crates/horizon-agentd/src/session/completion.rs": "9e8fbd7a18f6576ca734c4689298f7eebbb76ff2ad456e904fa02078cc3d3fd0",
+        "crates/horizon-agentd/src/session/completion/tests.rs": "c503e45d15638d3e2983e729f641f2f39df3ad5a7f62dee22b485fa2135bcfb6",
+        "crates/horizon-agentd/src/session/events.rs": "5a09e28684fdba6c792b54c264e0860108117c1701b56fad4c54f8ae71ff01ae",
+        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
+        "crates/horizon-agentd/src/session/input/tests.rs": "f41e372e6c4617efa229a1f8165fd525582ba41209e86fee05afc9c87a4af676",
+        "crates/horizon-agentd/src/session/run.rs": "ac4cdee8c63b0e6993b1fe417104b84ab3ffa6660428b878d9b1aa67a7286097"
+      },
+      "validation": [
+        "Existing activation-before-result, flush-before-delivery, input deduplication, duplicate approval and stale completion variant tests in both workspace gates."
+      ]
+    },
+    {
+      "id": "agent_cancel_and_completion",
+      "scenario": "Cancellation meets pending inputs, approval, provider retry or a partial tool batch.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Keep lifecycle control priority before queued work, paused pending inputs after cancel, cancellation tokens during provider waits, and cancelled tool results in provider history. agentd filters obsolete occurrence identities; the provider drops results with no pending call and resumes only after the batch completes. Independent producer arrival is not a global FIFO promise.",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/session/input.rs": "858952299be0bd53c9a82fc25ee6a1cdaa7dd3cc99fef83bb7aa57b74099d586",
+        "crates/horizon-agent/src/providers/rig/session/interaction.rs": "213cc7ea4f6fe964a079023a15b9fbc907bd001961390155308ed9f07fcf43d7",
+        "crates/horizon-agent/src/providers/rig/session/state.rs": "7762b94427902fa2b212af3e1eb4c578c665183d47323ebc5828cf84e49e5644",
+        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "b6b15b29b41da67a7834d40a91443626dc1e7302fd068f5f71398ef1262b684f",
+        "crates/horizon-agent/src/providers/rig/session/turn.rs": "5374a8d52e7a39c6ff5550cf5184c070309330f9bbd607a2f8d5b466eb4456fb",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "ace4b544bbbce4ec417b2dd81a6d8a90e3a44a1acc00fb2b1a761cc46e638448"
+      },
+      "validation": [
+        "Existing cancel-during-backoff/deadline, cancel-mid-batch, late-result silence, reused call ID, paused queued input and lifecycle-priority regressions. No live provider requests."
+      ]
+    },
+    {
+      "id": "agent_projection_and_pumps",
+      "scenario": "Deliver events to the view while an attachment is replaced.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Give each local registration an opaque RouteKey carried by its handle, queued RPC and incoming event pump. Cleanup, failures and event delivery compare that key under the route lock, including workspace-root publication. Keep the view attachment-generation check for events already queued to an old consumer. Fold state before coalescing repaint notifications. The identity stays local and does not cancel already accepted commands.",
+      "files": {
+        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
+        "src/runtime/agent.rs": "a35e05907552649016dbe1d99ecd91944c0def3e02537d9dd0bafe339ed04cfe",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/mod.rs": "578624c2903e170dc79851e5b4074076d443a9e96a2a116a4635613a26d8aa46",
+        "src/runtime/notify.rs": "d1c264bb875b64fbde9de6fceccf31ab7289c5b7901050431a189c92d94f56b5",
+        "src/runtime/routing.rs": "d59e9872e3094e91fe9debac8aed51df6d06eac8046926b155038738f41b4265",
+        "src/runtime/routing/tests.rs": "561f72148ee0f8b118640a34e168d323917d0c645f6b3817323edfb5bc9deea4",
+        "src/runtime/tests.rs": "ab3bbef7021712f1fd841cbb6fa296340450d17bedb1291b9c009aab90b7d250"
+      },
+      "validation": [
+        "Three deterministic old-route regressions failed before the change and passed after it; remoc agent and terminal replacement tests also verify fresh inbound and outbound channels after old handle drop. Default gate executes the runtime integration module excluded by the sandboxed profile. Board-only code is untouched."
+      ]
+    },
+    {
+      "id": "terminal_input_and_output",
+      "scenario": "Type keys, text or paste while PTY bytes and screen updates arrive.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Retain the prior CoreInput FIFO for key/text/paste, bounded PTY-query priority and input-specific notification rules. Resize, mouse, focus, selection and raw byte input retain their distinct paths. Full snapshots can collapse on wire/local watches; title, bell, clipboard, error and exit remain event streams. Pre-watch daemon bridges are still unbounded; no claim of end-to-end bounded buffering or cross-channel total order.",
+      "files": {
+        "crates/horizon-terminal-core/src/session_loop.rs": "16d4babc4880bca994d88d14f8da6f71ae92c545e5601a3af506d824ae6f47fa",
+        "crates/horizon-terminal-core/src/session_loop/channels.rs": "7dc493492e77ef6b938f9bad8de21d2e36b8990a59213b865c06046008e1e9fc",
+        "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
+        "crates/horizon-terminald/src/hub.rs": "fa9c5c702463147fb83951259f8e2d0d8ed5956bc8450ec312e9f644f313a9e9",
+        "crates/horizon-terminald/src/terminal.rs": "d207a2772bdfc17276f3eb126d670ec1afe0e07e6836faa9e3a351bb315b1fe7",
+        "src/runtime/terminal.rs": "e05e7ee4ad233e0c9e5fe67a0ed004af4cfa165f9a98ba0cb069f9f32b9c315f",
+        "src/terminal/session.rs": "c34066f4f220329e4c52a513a1e4c0c82085969f4536f61627310379506e2e3d"
+      },
+      "validation": [
+        "Existing mixed-input FIFO, query priority, frame-collapse, clipboard and frame-close-before-exit tests; isolated X11 typing/Enter/Tab and frame marker/color/OSC8 checks."
+      ]
+    },
+    {
+      "id": "terminal_subscriber_lifecycle",
+      "scenario": "Attach while create is pending, then observe a late create failure or session exit.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Check live-session existence and install the subscriber under one lock; a missing attach does not overwrite the optimistic create subscription. Bind failed-create cleanup to the registration carried by its returned channels. Preserve first-wins PTY installation, session removal before Exited delivery, frames-close parking, and connection-wide cleanup under the existing serialized client-connection contract.",
+      "files": {
+        "crates/horizon-terminald/src/hub.rs": "fa9c5c702463147fb83951259f8e2d0d8ed5956bc8450ec312e9f644f313a9e9",
+        "crates/horizon-terminald/src/main.rs": "6b1fe1329bab39b13457e08aa0895469aa555de6d0912a8c6f70b813785c1894",
+        "crates/horizon-terminald/src/terminal.rs": "d207a2772bdfc17276f3eb126d670ec1afe0e07e6836faa9e3a351bb315b1fe7"
+      },
+      "validation": [
+        "Two deterministic regressions failed before the change: missing attach erased a starting subscription; old create cleanup erased its replacement. Both pass after it. Existing duplicate-spawn, reader exit and update-channel closure tests remain green; default gate covers real PTYs."
+      ]
+    },
+    {
+      "id": "runtime_queues_disconnect_reload",
+      "scenario": "Queue calls before hello, time out a waiter, lose a connection or reload one daemon.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Each call owns its reply; timeout stops waiting without cancelling accepted work. Ops dispatch in queue order but independent RPC tasks can finish out of order. Preserve pre-hello retry, bounded mismatch recovery, sticky established failure without automatic reconnect, last-handle cancellation and per-domain drain. Session registrations now protect local results/cleanup, not remote side-effect ordering. Workspace retains runtime identity guards for asynchronous restore/reload results.",
+      "files": {
+        "src/runtime/agent.rs": "a35e05907552649016dbe1d99ecd91944c0def3e02537d9dd0bafe339ed04cfe",
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/mod.rs": "578624c2903e170dc79851e5b4074076d443a9e96a2a116a4635613a26d8aa46",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/terminal.rs": "e05e7ee4ad233e0c9e5fe67a0ed004af4cfa165f9a98ba0cb069f9f32b9c315f",
+        "src/runtime/tests.rs": "ab3bbef7021712f1fd841cbb6fa296340450d17bedb1291b9c009aab90b7d250",
+        "src/workspace/restore.rs": "7abed676a459c0eb4504d6bfad6d2f3800c04def28bff3155d759befd43b5852",
+        "src/workspace/runtime_reload.rs": "8491ac9aed02ed47702a8a8f26742d66e346c788a66c3f884c6797b77fe25aa2",
+        "src/workspace/session_events.rs": "bb6b512b222df11465a0c7b90a264003c5f4c475eefc535c0e07dc91ec89f2ec"
+      },
+      "validation": [
+        "Existing request timeout/disconnection, concurrent replies, pre-hello recovery, stop-during-hello, no drain on drop, established failure and independent agent/terminal reload tests. Isolated UI restart restores two tabs, a split and the same three terminal IDs."
+      ]
+    },
+    {
+      "id": "preview_artifact_to_host",
+      "scenario": "Replace or retarget a WASM artifact while a load is pending.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "The directory watcher survives artifact replacement, filters access-only events and debounces content bursts. The pane owns watcher/load/name tasks; reload drops old tasks and host/root before awaiting a new load. The pinned PluginHost::load implementation owns background construction through cancellable GPUI tasks. Already-running synchronous compilation may finish in the background; dropping the owner prevents its result from attaching to the pane. Keep these lifetimes beside the pane instead of adding another generation registry.",
+      "files": {
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/pane/tests.rs": "7840d6120b9bbe4201be854f5d37fd488e6be046190f3bb93dec30140a16e682",
+        "src/preview/watch.rs": "558d44f3242bc8df57060f59031885dbc1ad09329da6501706e0d8de13b4a9ec"
+      },
+      "validation": [
+        "Existing deterministic quiet-period/cancellation and stale preview-name receipt tests; real WASM sample preview load/theme/reload check. Board previews excluded from targeted e2e."
+      ]
+    },
+    {
+      "id": "preview_publication_and_teardown",
+      "scenario": "Publish names/theme and drop or replace the mounted plugin.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Keep theme source and host root entity-owned; fresh attachment mounts its own surface and name receipt. Old name responses cannot update replacement status once the pane drops its task. No new notification bus, persistence or protocol state is needed.",
+      "files": {
+        "src/preview/e2e.rs": "55004171516533f18c43510fa91fcf59f24feda7399ab9e4d19a67722a26ad44",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/pane/tests.rs": "7840d6120b9bbe4201be854f5d37fd488e6be046190f3bb93dec30140a16e682"
+      },
+      "validation": [
+        "Existing unavailable/stale name receipt regressions and real component glyph-stream/theme/reload assertions. This is not a pixel-color or physical IME test."
+      ]
+    }
+  ],
+  "removed_files": {}
+}
