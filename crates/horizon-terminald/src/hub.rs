@@ -67,6 +67,7 @@ impl Hub {
             seed,
             frames: mut local_frames,
             events: mut local_events,
+            ..
         } = channels;
 
         // Frames: a watch seeded with the retained latest frame. Only the
@@ -167,11 +168,11 @@ impl TerminalHub for Hub {
         match spawned {
             Ok(Ok(())) => Ok(self.terminal_attachment(session_id, channels)),
             Ok(Err(error)) => {
-                self.terminals.unsubscribe(session_id);
+                self.terminals.unsubscribe(session_id, &channels);
                 Err(HubError::TerminalSpawnFailed(error))
             }
             Err(join_error) => {
-                self.terminals.unsubscribe(session_id);
+                self.terminals.unsubscribe(session_id, &channels);
                 Err(HubError::TerminalSpawnFailed(join_error.to_string()))
             }
         }

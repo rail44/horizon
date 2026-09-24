@@ -52,6 +52,7 @@ struct HostedTerminal {
 /// baseline: since wire v11 the frame path is a snapshot-valued signal, so
 /// there is nothing per-attachment to diff against.
 struct Subscriber {
+    registration: Uuid,
     frames: UnboundedSender<TerminalFrame>,
     events: UnboundedSender<TerminalUpdate>,
 }
@@ -61,6 +62,7 @@ struct Subscriber {
 /// freshly-created session) plus the local receiving halves the hub pumps
 /// into the attachment's remote `frames` watch and `events` mpsc.
 pub(crate) struct SubscriberChannels {
+    registration: Uuid,
     pub(crate) seed: TerminalFrame,
     pub(crate) frames: UnboundedReceiver<TerminalFrame>,
     pub(crate) events: UnboundedReceiver<TerminalUpdate>,
@@ -94,7 +96,8 @@ impl TerminalHost {
     /// requirement, because the hub subscribes *before* spawning the PTY
     /// so the session's very first frames are never lost.
     pub(crate) fn subscribe_for_create(&self, session_id: Uuid) -> SubscriberChannels {
-        self.install_subscriber(session_id).1
+        self.install_subscriber(session_id, false)
+            .expect("create subscriptions do not require an existing session")
     }
 
     /// [`Self::install_subscriber`] for the attach path: `None` when no
@@ -103,18 +106,12 @@ impl TerminalHost {
     /// that just died" cannot happen: the exit either lands before the
     /// check (→ `None`) or reaches the freshly installed subscriber.
     pub(crate) fn attach_subscribe(&self, session_id: Uuid) -> Option<SubscriberChannels> {
-        let (exists, channels) = self.install_subscriber(session_id);
-        if exists {
-            Some(channels)
-        } else {
-            self.subscribers.lock().unwrap().remove(&session_id);
-            None
-        }
+        self.install_subscriber(session_id, true)
     }
 
     /// Installs a fresh subscriber for `session_id` (replacing any
-    /// previous attachment's) and returns whether a live session existed
-    /// at install time, plus the [`SubscriberChannels`] the hub uses to
+    /// previous attachment's). A missing session on the attach path leaves
+    /// any in-progress create subscription intact. Returns the channels used to
     /// wire the attachment. The session's retained latest frame (or an
     /// empty frame, for a freshly created session) becomes the watch
     /// *seed*: since wire v11 the frame path is a snapshot-valued signal,
@@ -130,38 +127,49 @@ impl TerminalHost {
     /// stale-seed/TOCTOU window: an exit concurrent with an install is
     /// either visible to the existence check here, or delivers `Exited` to
     /// the subscriber this just installed.
-    fn install_subscriber(&self, session_id: Uuid) -> (bool, SubscriberChannels) {
+    fn install_subscriber(
+        &self,
+        session_id: Uuid,
+        require_existing: bool,
+    ) -> Option<SubscriberChannels> {
         let (frame_tx, frame_rx) = unbounded_channel();
         let (event_tx, event_rx) = unbounded_channel();
         let mut subscribers = self.subscribers.lock().unwrap();
-        let (exists, latest) = {
+        let latest = {
             let sessions = self.sessions.lock().unwrap();
             match sessions.get(&session_id) {
-                Some(session) => (true, session.latest_frame.lock().unwrap().clone()),
-                None => (false, None),
+                Some(session) => session.latest_frame.lock().unwrap().clone(),
+                None if require_existing => return None,
+                None => None,
             }
         };
+        let registration = Uuid::new_v4();
         subscribers.insert(
             session_id,
             Subscriber {
+                registration,
                 frames: frame_tx,
                 events: event_tx,
             },
         );
-        (
-            exists,
-            SubscriberChannels {
-                seed: latest.unwrap_or_else(TerminalFrame::empty),
-                frames: frame_rx,
-                events: event_rx,
-            },
-        )
+        Some(SubscriberChannels {
+            registration,
+            seed: latest.unwrap_or_else(TerminalFrame::empty),
+            frames: frame_rx,
+            events: event_rx,
+        })
     }
 
-    /// Removes `session_id`'s subscriber — the hub's cleanup when a
-    /// `create_terminal` fails after having subscribed optimistically.
-    pub(crate) fn unsubscribe(&self, session_id: Uuid) {
-        self.subscribers.lock().unwrap().remove(&session_id);
+    /// Removes only this call's optimistic create subscription. A late spawn
+    /// failure must not remove a newer create or attach's channels.
+    pub(crate) fn unsubscribe(&self, session_id: Uuid, channels: &SubscriberChannels) {
+        let mut subscribers = self.subscribers.lock().unwrap();
+        if subscribers
+            .get(&session_id)
+            .is_some_and(|subscriber| subscriber.registration == channels.registration)
+        {
+            subscribers.remove(&session_id);
+        }
     }
 
     /// Drops every subscriber — called when the client connection ends, so
@@ -719,6 +727,31 @@ mod tests {
     }
 
     #[test]
+    fn a_failed_create_cannot_remove_a_newer_subscription() {
+        let host = TerminalHost::new();
+        let id = Uuid::new_v4();
+        let old = host.subscribe_for_create(id);
+        let mut current = host.subscribe_for_create(id);
+        host.unsubscribe(id, &old);
+        host.send_event(id, TerminalUpdate::Error("current diagnostic".into()));
+        assert!(
+            matches!(current.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic")
+        );
+    }
+
+    #[test]
+    fn a_failed_attach_preserves_the_subscription_of_a_starting_terminal() {
+        let host = TerminalHost::new();
+        let id = Uuid::new_v4();
+        let mut creating = host.subscribe_for_create(id);
+        assert!(host.attach_subscribe(id).is_none());
+        host.send_event(id, TerminalUpdate::Error("spawn diagnostic".into()));
+        assert!(
+            matches!(creating.events.try_recv().unwrap(), TerminalUpdate::Error(message) if message == "spawn diagnostic")
+        );
+    }
+
+    #[test]
     fn install_if_vacant_installs_the_first_session_for_a_fresh_id() {
         let host = TerminalHost::new();
         let session_id = Uuid::new_v4();
@@ -800,11 +833,7 @@ mod tests {
 
         let (session, _command_rx, _killed) = fake_session();
         assert!(host.install_if_vacant(session_id, session));
-        let (exists, channels) = host.install_subscriber(session_id);
-        assert!(
-            exists,
-            "the session must be present for the subscriber to attach"
-        );
+        let channels = host.attach_subscribe(session_id).expect("live session");
         let mut events = channels.events;
 
         // Empty, already-closed frame channel; the update channel is the
