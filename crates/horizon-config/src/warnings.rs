@@ -46,7 +46,7 @@ const SECTIONS: &[Section] = &[
 /// Keys a single `[[grants.project]]` entry recognizes. Checked separately
 /// from [`SECTIONS`], which only walks a top-level table's own keys and so
 /// can't see inside an array of tables.
-const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network"];
+const PROJECT_GRANT_KEYS: &[&str] = &["root", "trees", "network", "mach_services"];
 
 /// Keys a single `[[providers]]` entry recognizes — checked the same way
 /// [`PROJECT_GRANT_KEYS`] is: `SECTIONS` can't see inside an array of
@@ -206,6 +206,89 @@ pub(crate) fn warn(contents: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Capture the field names serde's derived deserializer actually accepts.
+    // This independently checks the diagnostic allowlists, including renames
+    // and aliases, without adding reflection to production config loading.
+    fn accepted_fields<T: serde::de::DeserializeOwned>() -> &'static [&'static str] {
+        struct Fields<'a>(&'a std::cell::Cell<&'static [&'static str]>);
+        impl<'de> serde::Deserializer<'de> for Fields<'_> {
+            type Error = serde::de::value::Error;
+
+            fn deserialize_any<V: serde::de::Visitor<'de>>(
+                self,
+                _visitor: V,
+            ) -> Result<V::Value, Self::Error> {
+                Err(serde::de::Error::custom("expected a derived struct"))
+            }
+
+            fn deserialize_struct<V: serde::de::Visitor<'de>>(
+                self,
+                _name: &'static str,
+                fields: &'static [&'static str],
+                _visitor: V,
+            ) -> Result<V::Value, Self::Error> {
+                self.0.set(fields);
+                Err(serde::de::Error::custom("field capture complete"))
+            }
+
+            serde::forward_to_deserialize_any! {
+                bool i8 i16 i32 i64 u8 u16 u32 u64 f32 f64 char str string
+                bytes byte_buf option unit unit_struct newtype_struct seq
+                tuple tuple_struct map enum identifier ignored_any
+            }
+        }
+        let fields = std::cell::Cell::new(&[][..]);
+        let _ = T::deserialize(Fields(&fields));
+        assert!(!fields.get().is_empty(), "expected struct fields");
+        fields.get()
+    }
+
+    #[test]
+    fn warning_allowlists_match_deserialized_fields() {
+        use crate::{
+            RawGrantsConfig, RawMoaConfig, RawMoaMember, RawNamedProviderConfig, RawProjectGrant,
+            RawProviderConfig, RawTerminalConfig, RawUiConfig,
+        };
+        for (section, accepted) in [
+            ("provider", accepted_fields::<RawProviderConfig>()),
+            ("terminal", accepted_fields::<RawTerminalConfig>()),
+            ("ui", accepted_fields::<RawUiConfig>()),
+            ("grants", accepted_fields::<RawGrantsConfig>()),
+        ] {
+            let warning = SECTIONS.iter().find(|entry| entry.name == section).unwrap();
+            assert_same_keys(section, warning.known_keys, accepted);
+        }
+        for (section, warning, accepted) in [
+            (
+                "grants.project",
+                PROJECT_GRANT_KEYS,
+                accepted_fields::<RawProjectGrant>(),
+            ),
+            (
+                "providers",
+                PROVIDER_ENTRY_KEYS,
+                accepted_fields::<RawNamedProviderConfig>(),
+            ),
+            ("moa", MOA_ENTRY_KEYS, accepted_fields::<RawMoaConfig>()),
+            (
+                "moa member",
+                MOA_MEMBER_KEYS,
+                accepted_fields::<RawMoaMember>(),
+            ),
+        ] {
+            assert_same_keys(section, warning, accepted);
+        }
+    }
+
+    fn assert_same_keys(section: &str, warning: &[&str], accepted: &[&str]) {
+        use std::collections::BTreeSet;
+        assert_eq!(
+            warning.iter().collect::<BTreeSet<_>>(),
+            accepted.iter().collect::<BTreeSet<_>>(),
+            "[{section}] warnings must recognize exactly the deserialized keys",
+        );
+    }
 
     #[test]
     fn provider_known_keys_warn_about_nothing() {

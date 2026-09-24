@@ -75,9 +75,10 @@ pub fn to_request(
     resolved_split: Option<&str>,
     issuer: Option<&str>,
 ) -> Request {
+    let command_name = external_name(subcommand);
     match subcommand {
         Subcommand::NewTerminal { activate, .. } => invoke(
-            "new-terminal",
+            command_name,
             create_session_args(resolved_split, *activate, None, None, None, issuer),
         ),
         Subcommand::NewAgent {
@@ -87,7 +88,7 @@ pub fn to_request(
             share,
             ..
         } => invoke(
-            "new-agent",
+            command_name,
             create_session_args(
                 resolved_split,
                 *activate,
@@ -103,26 +104,26 @@ pub fn to_request(
             activate,
             ..
         } => invoke(
-            "preview",
+            command_name,
             preview_args(path, name.as_deref(), resolved_split, *activate),
         ),
         Subcommand::Attach {
             session_id,
             activate,
         } => invoke(
-            "attach",
+            command_name,
             serde_json::json!({ "session_id": session_id, "activate": activate }),
         ),
         Subcommand::TerminateSession { session_id } => invoke(
-            "terminate-session",
+            command_name,
             serde_json::json!({ "session_id": session_id }),
         ),
-        Subcommand::TerminateAllDetached => invoke("terminate-all-detached", serde_json::json!({})),
+        Subcommand::TerminateAllDetached => invoke(command_name, serde_json::json!({})),
         Subcommand::Approve {
             session_id,
             call_id,
         } => invoke(
-            "approve",
+            command_name,
             serde_json::json!({ "session_id": session_id, "call_id": call_id }),
         ),
         Subcommand::Deny {
@@ -135,25 +136,25 @@ pub fn to_request(
             // absence decodes as `None` (mirrors the `send` arm's text
             // omission).
             Some(reason) => invoke(
-                "deny",
+                command_name,
                 serde_json::json!({ "session_id": session_id, "call_id": call_id, "reason": reason }),
             ),
             None => invoke(
-                "deny",
+                command_name,
                 serde_json::json!({ "session_id": session_id, "call_id": call_id }),
             ),
         },
         Subcommand::CancelTurn { session_id } => invoke(
-            "cancel-turn",
+            command_name,
             serde_json::json!({ "session_id": session_id }),
         ),
         Subcommand::ContinueTurn { session_id } => invoke(
-            "continue-turn",
+            command_name,
             serde_json::json!({ "session_id": session_id }),
         ),
         Subcommand::Send { session_id, text } => match text {
             Some(text) => invoke(
-                "send",
+                command_name,
                 serde_json::json!({ "session_id": session_id, "text": text }),
             ),
             // Pre-resolution state: `text` is `None` only between `parse`
@@ -161,33 +162,32 @@ pub fn to_request(
             // called with `None` in production. Omitting the key lets the
             // server's own validation reject it (defensive -- see
             // `required_string_arg`).
-            None => invoke("send", serde_json::json!({ "session_id": session_id })),
+            None => invoke(
+                command_name,
+                serde_json::json!({ "session_id": session_id }),
+            ),
         },
         Subcommand::SetModel {
             session_id,
             provider,
             model,
         } => invoke(
-            "set-model",
+            command_name,
             serde_json::json!({
                 "session_id": session_id,
                 "provider": provider,
                 "model": model
             }),
         ),
-        Subcommand::ReloadAgentRuntime => invoke("reload-agent-runtime", serde_json::json!({})),
-        Subcommand::ReloadTerminalRuntime => {
-            invoke("reload-terminal-runtime", serde_json::json!({}))
-        }
-        Subcommand::ReloadConfig => invoke("reload-config", serde_json::json!({})),
-        Subcommand::OpenTerminalInSessionDirectory => {
-            invoke("open-terminal-in-session-directory", serde_json::json!({}))
-        }
+        Subcommand::ReloadAgentRuntime => invoke(command_name, serde_json::json!({})),
+        Subcommand::ReloadTerminalRuntime => invoke(command_name, serde_json::json!({})),
+        Subcommand::ReloadConfig => invoke(command_name, serde_json::json!({})),
+        Subcommand::OpenTerminalInSessionDirectory => invoke(command_name, serde_json::json!({})),
         Subcommand::Sessions => Request::Query(Query {
-            what: "sessions".to_string(),
+            what: command_name.to_string(),
         }),
         Subcommand::State => Request::Query(Query {
-            what: "state".to_string(),
+            what: command_name.to_string(),
         }),
     }
 }
