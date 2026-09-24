@@ -103,14 +103,14 @@
         "crates/horizon-agent/src/tools/explore.rs": "ae4e37947f24707fa1b6c5ff234e2ea345afbf966a8341da3e6f9ed5fd3bf010",
         "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
         "crates/horizon-agentd/src/session/environment.rs": "71745c4e475eda5f5b87aabb50cdcdf3b85f0413e2e578ea6957816ee5b8b60a",
-        "crates/horizon-agentd/src/session/events.rs": "391fbdf5b64bd4d730f9977f2536662502adc939cc10b7727dafef78877f00b3",
+        "crates/horizon-agentd/src/session/events.rs": "5a09e28684fdba6c792b54c264e0860108117c1701b56fad4c54f8ae71ff01ae",
         "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
-        "crates/horizon-agentd/src/session/resume.rs": "cb0cd155ad04ae0ab1b8b05bd954f35341efda7e52ca83497163142c5bdd07b4",
+        "crates/horizon-agentd/src/session/resume.rs": "b8d4461c7e2d39d7c5372782fc1b468e9c7918d99f7d52fc139cd3fbc36f885f",
         "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c"
       },
       "decision": "preserve",
-      "reason": "Keep the session loop as owner of command priority, environment readiness and provider/completion ordering. Appender now acknowledges durable input/outbox and recovery records before live folding, publication or resume. Async completions are admitted by dispatch occurrence. Task children and MoA watchers retain their distinct lifetimes. Initial capabilities are now installed through ToolSessionBuilder before sharing; shared wire conversion preserves ephemeral feedback without changing those ordering and lifetime rules.",
-      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
+      "reason": "Keep the session loop as owner of command priority, environment readiness and provider/completion ordering. Appender now acknowledges durable input/outbox and recovery records before live folding, publication or resume. Async completions are admitted by dispatch occurrence. Task children and MoA watchers retain their distinct lifetimes. Initial capabilities are now installed through ToolSessionBuilder before sharing; shared wire conversion preserves ephemeral feedback without changing those ordering and lifetime rules. In-memory daemon fixtures now resolve no host settings; production session order and configuration loading are unchanged.",
+      "commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b"
     },
     {
       "target": {
@@ -155,13 +155,14 @@
       "sha256": "b5b1e28b68fb603be7e69c6421eba6a1e550b5edb2f031539419b7885be201d0",
       "related": {
         "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
-        "crates/horizon-terminald/src/terminal.rs": "4dbe95294a4d1328afae52dc1114f83731e5a38367a451d41094e80ebcd9267a",
+        "crates/horizon-terminald/src/terminal.rs": "7d7f48c9e388e3d293d17c8a126731dff0431055e1f585d3a1187202a84d96c6",
         "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
-        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57"
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
+        "crates/horizon-terminal-core/src/session_loop/channels.rs": "19588d3ffdd9b4d59ed8980ae871ca908476cbc57dc0f09b495d1552673b2283"
       },
       "decision": "preserve",
-      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved.",
-      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
+      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved. Channel pairs are now constructed inside terminal-core and shared by the host and tests. Receiver fields are internal; disconnecting either input owner still terminates the core, with the other input retained in regression coverage.",
+      "commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b"
     },
     {
       "target": {
@@ -194,8 +195,8 @@
         "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5"
       },
       "decision": "preserve",
-      "reason": "Directory watching survives artifact replacement, content filtering avoids reload loops, and dropping the owner cancels the quiet-period task. Preserve this watcher beside pane-owned load and receipt tasks.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Directory watching survives artifact replacement, content filtering avoids reload loops, and dropping the owner cancels the quiet-period task. Preserve this watcher beside pane-owned load and receipt tasks. GPUI virtual-clock tests now exercise the real quiet-period loop across bursts and cancellation, replacing a constant-only timing assertion.",
+      "commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b"
     },
     {
       "target": {

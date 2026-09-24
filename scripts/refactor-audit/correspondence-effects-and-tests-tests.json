@@ -1,0 +1,349 @@
+[
+  {
+    "label": "Explicit daemon fixture configuration",
+    "before": [
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "judge_test_state",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "state_with_rig_config",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "state_with_trusted_projects",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "test_state",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "test_config",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "state_from_config",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "state_with_rig_config",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "state_with_trusted_projects",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/test_support.rs",
+        "owner": "<free>",
+        "name": "session_fixtures_do_not_read_host_provider_or_persistence_settings",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Owned discovery directories independent of production instructions",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/instructions.rs",
+        "owner": "<free>",
+        "name": "non_repository_test_dir",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/instructions.rs",
+        "owner": "<free>",
+        "name": "temp_dir",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/skills.rs",
+        "owner": "<free>",
+        "name": "temp_repo",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/test_support.rs",
+        "owner": "<free>",
+        "name": "non_repository_test_dir",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/instructions.rs",
+        "owner": "<free>",
+        "name": "temp_dir",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/skills.rs",
+        "owner": "<free>",
+        "name": "temp_repo",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Retry outcomes and cancellation under a paused clock",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_transient_rejection_is_retried_and_the_second_attempt_wins",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_failure_after_durable_output_emitted_ends_the_turn_without_retrying",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_cancel_during_backoff_wins_over_the_pending_retry",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_429_retries_past_the_attempt_budget",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_5xx_exhausts_the_attempt_budget_and_fails",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_transient_rejection_is_retried_and_the_second_attempt_wins",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_failure_after_durable_output_emitted_ends_the_turn_without_retrying",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_cancel_during_backoff_wins_over_the_pending_retry",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_429_retries_past_the_attempt_budget",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "a_5xx_exhausts_the_attempt_budget_and_fails",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "cancellation_wins_when_the_backoff_deadline_is_also_ready",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Exercise preview quiet periods and cancellation instead of checking a constant",
+    "before": [
+      {
+        "file": "src/preview/tests.rs",
+        "owner": "<free>",
+        "name": "the_debounce_outlasts_a_cargo_unlink_relink_pair",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/preview/watch/tests.rs",
+        "owner": "<free>",
+        "name": "start_debounce",
+        "partition": "tests"
+      },
+      {
+        "file": "src/preview/watch/tests.rs",
+        "owner": "<free>",
+        "name": "a_burst_reloads_once_after_the_last_event_and_accepts_later_bursts",
+        "partition": "tests"
+      },
+      {
+        "file": "src/preview/watch/tests.rs",
+        "owner": "<free>",
+        "name": "closing_the_watch_source_discards_a_pending_reload",
+        "partition": "tests"
+      },
+      {
+        "file": "src/preview/watch/tests.rs",
+        "owner": "<free>",
+        "name": "dropping_the_watch_task_discards_a_pending_reload",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Core scenarios use real paired channels and verify input-owner shutdown",
+    "before": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "sync_update_failsafe_flushes_a_stuck_window_after_the_deadline",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "key_input_alone_never_triggers_a_snapshot_notification",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_forwards_osc52_clipboard_writes_as_updates",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_forwards_osc_notifications_as_updates",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_serves_a_scroll_window_without_touching_the_live_frame",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_writes_selection_to_primary_on_start",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_reports_focus_only_once_mode_1004_is_enabled",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_repushes_the_color_scheme_to_a_running_session",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "pending_query_is_answered_before_a_queued_keystroke_is_forwarded",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "sync_update_failsafe_flushes_a_stuck_window_after_the_deadline",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "key_input_alone_never_triggers_a_snapshot_notification",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "mid_sync_buffering_chunk_does_not_trigger_a_snapshot_notification",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_forwards_osc52_clipboard_writes_as_updates",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_forwards_osc_notifications_as_updates",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_serves_a_scroll_window_without_touching_the_live_frame",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_writes_selection_to_primary_on_start",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_reports_focus_only_once_mode_1004_is_enabled",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "run_terminal_core_repushes_the_color_scheme_to_a_running_session",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "pending_query_is_answered_before_a_queued_keystroke_is_forwarded",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "disconnecting_pty_or_command_inputs_stops_the_core_with_the_other_input_alive",
+        "partition": "tests"
+      }
+    ]
+  }
+]

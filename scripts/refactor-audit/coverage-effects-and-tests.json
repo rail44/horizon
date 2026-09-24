@@ -1,0 +1,168 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "6e8efdfa950623b92427dc654af18824963fef4c",
+  "reviewed_commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b",
+  "profile": "profiles/non-board.json",
+  "scope": "Nine responsibility reviews across agent, daemon, runtime, workspace, config, terminal and preview, considering production and tests together. Evidence files identify reviewed boundaries and relevant checks, not a new line-by-line audit. Board-specific directories, functions and mixed-file behavior remain excluded.",
+  "groups": [
+    {
+      "id": "daemon_fixtures",
+      "scenario": "Run in-memory daemon session tests with host provider, retry and persistence environment variables set.",
+      "decision": "refactor",
+      "reason": "Build a complete explicit fixture config once and override only scenario properties. Keep real environment resolution in production and configuration-reload tests. Reuse the fixture in completion and hub tests; no new production configuration abstraction.",
+      "validation": [
+        "The host-environment regression failed before the change and passes now. Session, approval, completion, activation, resume and real daemon tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agentd/src/hub.rs": "5cd5de7fe768b36a7624c102917322df9821cbae494ebd086356f058026a2568",
+        "crates/horizon-agentd/src/main.rs": "9c18aac347c89317e7a8604adc72e14ac75eddb59f370c2f4e76e6dfc24816fb",
+        "crates/horizon-agentd/src/session/approval.rs": "ce574125bee5c0d35883f3f8a75f18a05e450083d72a69de3c4e5c2ed78597ad",
+        "crates/horizon-agentd/src/session/completion/tests.rs": "c503e45d15638d3e2983e729f641f2f39df3ad5a7f62dee22b485fa2135bcfb6",
+        "crates/horizon-agentd/src/session/connection.rs": "ba0190bd3c864be01913a7cf434d1277379e132ed96a41d2e65c4e6d377b4044",
+        "crates/horizon-agentd/src/session/environment/tests.rs": "024a5717d6315fc2c3d58caaa47ab7fd4775b5aa0d9ca1559f80ae098cb6bfc2",
+        "crates/horizon-agentd/src/session/events.rs": "5a09e28684fdba6c792b54c264e0860108117c1701b56fad4c54f8ae71ff01ae",
+        "crates/horizon-agentd/src/session/exploration.rs": "9602cfa713af7a664230133a5089a96907e7446931cb4d9319f181eb67b25596",
+        "crates/horizon-agentd/src/session/input/tests.rs": "f41e372e6c4617efa229a1f8165fd525582ba41209e86fee05afc9c87a4af676",
+        "crates/horizon-agentd/src/session/panic.rs": "a8dc40d115c3d032cd93ca693cd31ddc3da91c6a5bc677ef803f8c7df5f25e2b",
+        "crates/horizon-agentd/src/session/resume.rs": "b8d4461c7e2d39d7c5372782fc1b468e9c7918d99f7d52fc139cd3fbc36f885f",
+        "crates/horizon-agentd/src/session/run.rs": "ac4cdee8c63b0e6993b1fe417104b84ab3ffa6660428b878d9b1aa67a7286097",
+        "crates/horizon-agentd/src/session/test_support.rs": "0bfa5799a1007a273c0e914c7b14300cd89536d8449e727d4de76db0ebdba8fd"
+      }
+    },
+    {
+      "id": "discovery_fixture_lifetimes",
+      "scenario": "Discover instructions, skills and files inside and outside a checkout; fail an assertion before normal cleanup.",
+      "decision": "refactor",
+      "reason": "Test-only filesystem ownership belongs to test_support, not production instructions. Use TempDir lifetime cleanup, preserving canonical non-repository roots even when /tmp has .git. Embedded-skill tests construct the embedded registry directly. Keep asynchronous tool/process fixture lifetimes and real filesystem discovery separate.",
+      "validation": [
+        "Instruction/skill cases and all three real no-repository boundary cases pass. tempfile is already locked and is added only as a direct dev dependency; no custom cleanup framework."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/instructions.rs": "d976384d777c3e657dc2f9c81c849aed35a6be8c315e86aaead92b21b3389dd5",
+        "crates/horizon-agent/src/lib.rs": "00982047dd5b3b82a242841e2b1c50f1a6f62a58fd54455e37a8b5a0676dd4c7",
+        "crates/horizon-agent/src/skills.rs": "72521ea0b49eb408485164fbd153f457528f593f85f32959133ef391f12d1b51",
+        "crates/horizon-agent/src/test_support.rs": "01b4b2781bb44947d1e21ec59b737c0bda84b6d20184a3391d14f5afb9b39271",
+        "crates/horizon-agent/src/tools/tests.rs": "a7571007b382903106f5633adc215f4dc606b55e5bc0f343450fb1d5645f3944"
+      }
+    },
+    {
+      "id": "provider_retry_clock",
+      "scenario": "Retry pre-generation failures, exhaust the 5xx budget, retry 429 beyond it, cancel during backoff or at its ready deadline.",
+      "decision": "refactor",
+      "reason": "Retry classification and delay calculation already accept explicit inputs. Preserve production retry semantics, jitter and the no-durable-output-retry rule. Use Tokio test time at the existing async wait boundary; no injected production clock or virtualized real sockets.",
+      "validation": [
+        "Five loop scenarios run with a paused clock. Mid-backoff cancellation verifies one attempt and exactly 50 ms of virtual time; the competing-ready test verifies cancellation priority."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/completion.rs": "43dec757679763d9bec9fcb9e26b16a2c49fd125cd46b2175cf33e1470221a3d",
+        "crates/horizon-agent/src/providers/rig/retry.rs": "72c216a251a46b66fe189f91e01fd8f4ffcce0c94a4395e5c1675a4e91a2824b",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "ace4b544bbbce4ec417b2dd81a6d8a90e3a44a1acc00fb2b1a761cc46e638448"
+      }
+    },
+    {
+      "id": "terminal_channel_ownership",
+      "scenario": "Start a core from a PTY host, exercise command inputs, then disconnect either input owner while retaining the other.",
+      "decision": "refactor",
+      "reason": "Create paired channels inside terminal-core and keep receiver fields internal. Daemon and ten core scenarios use that constructor, avoiding unrelated per-command assembly in every test. Retain every sender for the fixture lifetime. Keep the explicit core select loop, query priority, actual synchronized-update timer and PTY ownership.",
+      "validation": [
+        "Core regressions and real terminald tests pass. The new test joins the core after either PTY or command disconnection while the other input remains alive. Isolated terminal and workspace-restore GUI checks verify the integrated binary."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-terminal-core/src/lib.rs": "0ae9c7f856a8b46a5fb86deef521155ccd91e9256f2ffd7cfdddf71ff6db46ef",
+        "crates/horizon-terminal-core/src/session_loop.rs": "06807a6a86114ee85403cccbc0fe2d920690e2623e9be0bdd2b0c551be0b840d",
+        "crates/horizon-terminal-core/src/session_loop/channels.rs": "19588d3ffdd9b4d59ed8980ae871ca908476cbc57dc0f09b495d1552673b2283",
+        "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
+        "crates/horizon-terminald/src/terminal.rs": "7d7f48c9e388e3d293d17c8a126731dff0431055e1f585d3a1187202a84d96c6",
+        "crates/horizon-terminald/tests/e2e.rs": "1735f1970cd5c2b09c0e5a9f911c97d296af1fe107441a4aa87536b6aa39ea7e"
+      }
+    },
+    {
+      "id": "preview_quiet_period",
+      "scenario": "Receive unlink/relink bursts, reach a quiet period, receive another burst, close the source or drop the watch task.",
+      "decision": "refactor",
+      "reason": "The native watcher already separates path/content decisions from event delivery and pane-owned tasks. Keep that production boundary. Replace a constant-only assertion with deterministic GPUI executor tests of the real debounce loop, without a clock interface or OS watcher mock.",
+      "validation": [
+        "Three new tests verify delayed single reloads, subsequent bursts and both cancellation paths. Existing path/content and stale receipt tests plus the WASM gate pass. Native notify delivery is not simulated by the virtual-clock tests."
+      ],
+      "status": "reviewed",
+      "files": {
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/pane/tests.rs": "7840d6120b9bbe4201be854f5d37fd488e6be046190f3bb93dec30140a16e682",
+        "src/preview/tests.rs": "3d0df04eb1075da448c421cecdda0cf531008a14d7fc734e9ee25e7031158003",
+        "src/preview/watch.rs": "558d44f3242bc8df57060f59031885dbc1ad09329da6501706e0d8de13b4a9ec",
+        "src/preview/watch/tests.rs": "5ff73b4c3c9dbdd43015244fbdc990cdad34dba2fd735042ada5612a0f379c9c"
+      }
+    },
+    {
+      "id": "durable_failure_and_activation",
+      "scenario": "Queue writes during startup, encounter a failed writer, activate a worktree, and fail persistence before acknowledgement.",
+      "decision": "preserve",
+      "reason": "Writer startup, retained write errors and durable acknowledgements already have focused seams. Activation owns lifecycle locking, persistence before publication, and rollback; pulling these effects apart would obscure ordering. Keep real signal, process and filesystem checks. The SIGTERM test still uses a real 750 ms startup delay and is not a deterministic scheduler proof.",
+      "validation": [
+        "Existing barrier-based startup ordering, injected write/flush failures, activation rollback and real crash/resume tests pass in the full gate."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "ab350d92f035d248f93cc97e612ed908e4d2947370805ece2b593224c8509593",
+        "crates/horizon-agentd/src/main.rs": "9c18aac347c89317e7a8604adc72e14ac75eddb59f370c2f4e76e6dfc24816fb",
+        "crates/horizon-agentd/src/session/environment.rs": "71745c4e475eda5f5b87aabb50cdcdf3b85f0413e2e578ea6957816ee5b8b60a",
+        "crates/horizon-agentd/src/session/environment/tests.rs": "024a5717d6315fc2c3d58caaa47ab7fd4775b5aa0d9ca1559f80ae098cb6bfc2",
+        "crates/horizon-agentd/tests/e2e.rs": "33f003209f3ed1cc4866e6c8e5db53d66a983b43a7b8dcb99a4be2660fa7ccb6"
+      }
+    },
+    {
+      "id": "runtime_reconnection",
+      "scenario": "Time out a queued operation, disconnect one view consumer, reconnect to a replacement peer, and drain one runtime.",
+      "decision": "preserve",
+      "reason": "Request waiting, typed daemon outcomes, route retirement and connection recovery already have separate owners. Keep timeout distinct from cancellation and real transport errors distinct from daemon replies. Unit-test connectors only retry explicit stubs; process isolation tests retain real OS scheduling and child cleanup.",
+      "validation": [
+        "Request lifecycle and route tests pass; default-profile stub-recovery recorder and daemon integration tests exercise actual socket/process behavior."
+      ],
+      "status": "reviewed",
+      "files": {
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/runtime/routing/tests.rs": "07a3a45533ed1fdf00e001812c1213b4512a7f9b323edda3d7c27a8900c55253",
+        "src/runtime/tests/spawn_isolation.rs": "09decaaebb95989829ee1b15fa844b76fadd1ea0dce714b3fb52e134202558be"
+      }
+    },
+    {
+      "id": "workspace_restore",
+      "scenario": "Receive conflicting inventories, fail one inventory, attach only surviving sessions, and invalidate results after runtime reload.",
+      "decision": "preserve",
+      "reason": "RestoreCandidates handles selection, RestoreRuntimes owns inventory/attachment effects, and the model validates all identities before mutation. Preserve generation checks and fail-closed persistence readiness. Agent attachment remains asynchronous while terminal attachment has its existing acknowledgement; do not flatten the difference.",
+      "validation": [
+        "Existing conflict and metadata tests, model validation/reconciliation tests and isolated UI restart preserving session IDs pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-workspace/src/persistence.rs": "7a5d82599059aeef514180ca31c539fbfcf74cdffc9821bf49eccd9b76bbaff6",
+        "crates/horizon-workspace/src/persistence/validation.rs": "9c7932db278cc71273ffe57a7dd8323621e8c1689e26e2e551bf9f9b80298233",
+        "src/workspace/restore.rs": "7abed676a459c0eb4504d6bfad6d2f3800c04def28bff3155d759befd43b5852"
+      }
+    },
+    {
+      "id": "configuration_resolution",
+      "scenario": "Resolve defaults/file/environment, reject malformed reloads, expand grants against an explicit home, and translate provider settings.",
+      "decision": "preserve",
+      "reason": "Path selection, parsing, precedence and grant validation already have explicit value inputs; startup default fallback and reload failure intentionally differ. Preserve production env readers, accepted current-daemon versus startup-provider settings, and live grant revalidation. Only the daemon unit fixture stops invoking production config resolution.",
+      "validation": [
+        "Existing path/precedence, malformed reload, provider translation/selection and grant tests pass. No production setting or permission is changed."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/config.rs": "3302dbf02113744aa2dbeb62adee863a1059e00b568a207bc18887f7e34baa0c",
+        "crates/horizon-agentd/src/providers.rs": "e038e0acf103b4277dec083723979b8e848a86275bd2d2c7e7377b9abf6449a3",
+        "crates/horizon-config/src/grants/resolution.rs": "750f333618733346ea8263823d0f30c2ceba734be843f057dc5e8d988381719f",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/tests.rs": "80f227ef80a19571965dffce89ea038e3cf2648f4fa4e272f855e939adb3b149"
+      }
+    }
+  ]
+}

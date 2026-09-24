@@ -1,0 +1,27 @@
+[
+  {
+    "label": "Terminal core owns paired command channel construction",
+    "before": [
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "spawn_terminal",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "spawn_terminal",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop/channels.rs",
+        "owner": "<free>",
+        "name": "core_channels",
+        "partition": "production"
+      }
+    ]
+  }
+]
