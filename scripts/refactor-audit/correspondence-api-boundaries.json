@@ -1,0 +1,632 @@
+[
+  {
+    "label": "Denial result contract",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ToolCallResult",
+        "name": "denied",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ToolCallResult",
+        "name": "denied",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Ephemeral feedback through processing, storage and wire",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "LiveState",
+        "name": "extend_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "State",
+        "name": "extend_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/appender.rs",
+        "owner": "Appender",
+        "name": "append_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/processing.rs",
+        "owner": "<free>",
+        "name": "process_agent_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "handle_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/session.rs",
+        "owner": "AgentSession",
+        "name": "new_attachment",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "owner": "ProviderEvent",
+        "name": "is_ephemeral",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "LiveState",
+        "name": "extend_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/live.rs",
+        "owner": "State",
+        "name": "extend_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/event_log/appender.rs",
+        "owner": "Appender",
+        "name": "append_provider_events",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/processing.rs",
+        "owner": "<free>",
+        "name": "process_agent_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/wire.rs",
+        "owner": "AgentWireEvent",
+        "name": "from",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/run.rs",
+        "owner": "<free>",
+        "name": "handle_provider_event",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/session.rs",
+        "owner": "AgentSession",
+        "name": "new_attachment",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "One identity for completed retries",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/result.rs",
+        "owner": "<free>",
+        "name": "complete",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_tool_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_filesystem_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_mach_service_denied",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec.rs",
+        "owner": "<free>",
+        "name": "domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/result.rs",
+        "owner": "<free>",
+        "name": "complete",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "fold_tool_completion",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_domain_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_filesystem_denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/completion/retry.rs",
+        "owner": "<free>",
+        "name": "fold_mach_service_denied",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "PTY and emulation geometry",
+    "before": [
+      {
+        "file": "crates/horizon-terminal-core/src/core.rs",
+        "owner": "TerminalCore",
+        "name": "resize",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/core.rs",
+        "owner": "TerminalCore",
+        "name": "with_scrollback",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "run_writer",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "spawn_terminal",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminal-core/src/core.rs",
+        "owner": "TerminalCore",
+        "name": "resize",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/core.rs",
+        "owner": "TerminalCore",
+        "name": "with_scrollback",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/types/size.rs",
+        "owner": "TerminalSize",
+        "name": "normalized",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "run_writer",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminald/src/terminal.rs",
+        "owner": "<free>",
+        "name": "spawn_terminal",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Tool construction before sharing",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "for_current_dir",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "for_root",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_config_path",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_domain_policy",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_exploration_host",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_filesystem_grants",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_isolated_worktree",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_judge",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_loopback_connect",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_mach_services",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_network_proxy",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_root",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_skills",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "with_unattended",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/environment.rs",
+        "owner": "SessionEnvironment<'_>",
+        "name": "prepare",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/setup.rs",
+        "owner": "<free>",
+        "name": "tool_session_state_for",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "for_current_dir",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state.rs",
+        "owner": "ToolSessionState",
+        "name": "for_root",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "build",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "for_current_dir",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "for_root",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_config_path",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_domain_policy",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_exploration_host",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_filesystem_grants",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_isolated_worktree",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_judge",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_loopback_connect",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_mach_services",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_network_proxy",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_root",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_skills",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/state/builder.rs",
+        "owner": "ToolSessionBuilder",
+        "name": "with_unattended",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/environment.rs",
+        "owner": "SessionEnvironment<'_>",
+        "name": "prepare",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agentd/src/session/setup.rs",
+        "owner": "<free>",
+        "name": "tool_session_builder_for",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Workspace session and view operations",
+    "before": [
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "open_tab",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "open_tab_with_new_session_activated",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/persistence.rs",
+        "owner": "Workspace",
+        "name": "reconcile_session_inventory",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/session.rs",
+        "owner": "Workspace",
+        "name": "register_detached_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "new_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "parse",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/mod.rs",
+        "owner": "<free>",
+        "name": "ensure_workspace_has_pane",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "register_daemon_agent_summary",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "create_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "open_terminal_in_directory",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_terminal_resume",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "open_tab",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "open_tab_with_new_session_activated",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/operations.rs",
+        "owner": "Workspace",
+        "name": "split_session_with_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/persistence.rs",
+        "owner": "Workspace",
+        "name": "reconcile_session_inventory",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-workspace/src/session.rs",
+        "owner": "Workspace",
+        "name": "register_detached_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "new_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/control_plane/invoke.rs",
+        "owner": "<free>",
+        "name": "parse",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/mod.rs",
+        "owner": "<free>",
+        "name": "ensure_workspace_has_pane",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "register_daemon_agent_summary",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_new_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "create_session",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "open_terminal_in_directory",
+        "partition": "production"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "spawn_terminal_resume",
+        "partition": "production"
+      }
+    ]
+  }
+]

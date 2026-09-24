@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "5c6ea7c21e2231d1bb6d33cc6c7988d79990d253",
+  "reviewed_commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4",
+  "profile": "profiles/non-board.json",
+  "scope": "Ten API and dependency responsibility reviews across the non-board codebase. File hashes identify the evidence and related tests; this is not a fresh line-by-line review of every file. Board directories, named functions and board-only mixed-file behavior remain excluded.",
+  "groups": [
+    {
+      "id": "completed_retry_identity",
+      "scenario": "Finish a sandboxed attempt with an egress, filesystem or Mach-service denial; accept or reject retry while provider IDs may be reused.",
+      "decision": "refactor",
+      "reason": "Result-bearing completions use result.call_id for admission and retry lookup. Remove the second independently supplied identity. A pre-execution domain grant still carries call and occurrence IDs because it has no result. Keep occurrence checks and prior-result behavior.",
+      "validation": [
+        "Existing completion, retry, cancellation and stale-occurrence tests pass; producers and all daemon consumers compile with one identity."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/bash/exec.rs": "a7e10aef44d725cbb57466bad26e63ee9b766dafd2dd6931a11c86cf287b769f",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/result.rs": "9c664971a5a1d2ff597483994b9d66a2b2d9e0d16bdac6eb96d349861daeed8e",
+        "crates/horizon-agent/src/tools/bash/tests.rs": "d0a7612af48dce063c38c51a541fccd56ef3c2e1cf04506210423a554f4281f1",
+        "crates/horizon-agent/src/tools/completion.rs": "24611d5c81efad490971858ab7e1142cf18f439ddbba31cbb019d2b9b2ed8dc5",
+        "crates/horizon-agentd/src/session/completion.rs": "9e8fbd7a18f6576ca734c4689298f7eebbb76ff2ad456e904fa02078cc3d3fd0",
+        "crates/horizon-agentd/src/session/completion/retry.rs": "95f8dcbba7c90c1d8fca2596be0312f6bcf4b28a254dba417ef24b88d2eabddc",
+        "crates/horizon-agentd/src/session/completion/tests.rs": "e0fff499586b06bebc1fdca18ffdb9bb6b3b31273699a5e625673105d00e2202"
+      }
+    },
+    {
+      "id": "tool_construction",
+      "scenario": "Resolve a session root, install capabilities and configured grants, share the state, then grant authority or activate a new environment.",
+      "decision": "refactor",
+      "reason": "ToolSessionBuilder owns initial state and consumes it into the Rc-backed ToolSessionState. Initial setters can no longer silently fail after a clone. Shared runtime grants and cwd remain mutable through their owners. Board-host installation remains excluded and unchanged.",
+      "validation": [
+        "Compiler probes reject cloning the builder or calling initial setters on shared state, and accept build then use. Existing trust, grant, approval, exploration and real containment tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/judge/mod.rs": "beb479b244ae7f0b894e337df5b3b8044369d1541c9089b2c100cc65540bfa12",
+        "crates/horizon-agent/src/policy.rs": "9d9c6c076dbe3bfbbfe1a4bb8332aae99dcf5a84ac3a6d33a857b1113b3e9a07",
+        "crates/horizon-agent/src/tools/explore.rs": "ae4e37947f24707fa1b6c5ff234e2ea345afbf966a8341da3e6f9ed5fd3bf010",
+        "crates/horizon-agent/src/tools/explore/tests.rs": "274e132fa1461422f06fa02485f97104db85de37e76130b5a9fcd2a7475e042a",
+        "crates/horizon-agent/src/tools/mod.rs": "6c647cf933aa755aa857fb53851919f0d49c2d417a0bf796551994a19228611f",
+        "crates/horizon-agent/src/tools/state.rs": "84ed24f402b613eaf2e6531c3e08c316b8d6a2ad20c793eded6a63e9b8434735",
+        "crates/horizon-agent/src/tools/state/builder.rs": "c0d9ac49dfca3d665c4f90a7876b6a946cfa6c022b17e5bcd1f2a51960beac08",
+        "crates/horizon-agent/src/tools/tests.rs": "7be0abaddbe00e20c7c26a5d6958699e4c650493a2181e161d69438fa835bfbd",
+        "crates/horizon-agent/tests/tier1_network_containment.rs": "d2e28a6bbd5a44a0de930ce9327228bec4fe6136ce16c58e149caab68f27813c",
+        "crates/horizon-agentd/src/session/approval.rs": "2688a5a07f5ae25f33a4557e03c69a55d4390f50132c49a7b75120d92b7ad1e8",
+        "crates/horizon-agentd/src/session/environment.rs": "71745c4e475eda5f5b87aabb50cdcdf3b85f0413e2e578ea6957816ee5b8b60a",
+        "crates/horizon-agentd/src/session/exploration.rs": "53f2f20932d4843a6e6f316934bbe4b560c53318218bba8c248c8ade99068d6f",
+        "crates/horizon-agentd/src/session/setup.rs": "0ff45a0b5b245945cd384a5fe90eae4d33f2a6c17a85c57860187a8f5da5a1bf"
+      }
+    },
+    {
+      "id": "event_and_history_boundary",
+      "scenario": "Feed tool progress, model, selection and task progress through direct append, ordinary live updates, acknowledged persistence and provider processing.",
+      "decision": "refactor",
+      "reason": "Appender alone excludes all ephemeral feedback from JSONL and turn tracking. LiveState keeps only relevant sidecars, while processing and wire conversion retain each notification kind. Keep the existing event envelope and wire formats, canonical history, asynchronous streaming writes and acknowledged durable commits.",
+      "validation": [
+        "Two regressions failed before the fix and pass for direct, live and durable APIs plus processing. Existing daemon streaming-progress and replay tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/contract.rs": "bc8736e133167e936dd861b26edbe0b6c89149f3d071103804f0c0a765f1f748",
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
+        "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "c01204c63279520c1356efccd3c2bdfc2b7d7048bca5be7e5bcb3c1dca3c2319",
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "ab350d92f035d248f93cc97e612ed908e4d2947370805ece2b593224c8509593",
+        "crates/horizon-agent/src/tools/processing.rs": "0e125a865e71fb968decbb7c6ed22af24dc8376b06aaafe4b026a43386dbc1ef",
+        "crates/horizon-agent/src/tools/tests.rs": "7be0abaddbe00e20c7c26a5d6958699e4c650493a2181e161d69438fa835bfbd",
+        "crates/horizon-agent/src/wire.rs": "e8fec936267c0b7d1c164f5e5677b2da05bea8c2a4951ffb535b4b3fe2f497bb",
+        "crates/horizon-agentd/src/session/resume.rs": "cb0cd155ad04ae0ab1b8b05bd954f35341efda7e52ca83497163142c5bdd07b4",
+        "crates/horizon-agentd/src/session/run.rs": "24f1882ea5bb40ac44f6f72e84226d1eaa8654681df9f8bf2a68dcd74ebc44b2",
+        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b"
+      }
+    },
+    {
+      "id": "workspace_owner",
+      "scenario": "Create a session or view from the chooser/CLI, split an explicit target, adopt detached sessions, restore, and close or terminate.",
+      "decision": "refactor",
+      "reason": "Workspace collections, cursor and counters become crate-local. Existing query and operation APIs suffice without mutable accessors. Session APIs take SessionKind and view APIs take ViewKind; the shell converts its chooser choice once. Preserve activation, issuer/source selection, restore validation and detach versus terminate.",
+      "validation": [
+        "Compiler probes reject direct collection mutation and a view passed as a session kind; valid operations compile. Workspace and CLI tests pass. An isolated GUI restores two tabs, a split and identical three session IDs."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-workspace/src/layout.rs": "343d44fff1f9371791a08921031dc039abd9fea4500d9fbf236edc47e6077e0e",
+        "crates/horizon-workspace/src/mode.rs": "6caa0161337b99cee703ca316e71842882c503678447d6d9a50a8bc3cb71929d",
+        "crates/horizon-workspace/src/operations.rs": "e527b192678eaefaa4195573519ed963b36a5e62fb66ba1e39449c60d620c67c",
+        "crates/horizon-workspace/src/persistence.rs": "7a5d82599059aeef514180ca31c539fbfcf74cdffc9821bf49eccd9b76bbaff6",
+        "crates/horizon-workspace/src/session.rs": "719e8582aea813fe9869cd52f9ea4318a906d987f8322d9ceb186db2776dde30",
+        "crates/horizon-workspace/src/tests.rs": "a74c0a674fba03515af0d8f69a33ef1765639e508d5fe8c636e03d8ff1e64490",
+        "crates/horizon-workspace/src/types/entity.rs": "66a5e79c65ee2d9ef3e0846958ea3618d8ab6dfc246f0725cd83dcf97d5b39aa",
+        "src/control_plane/invoke.rs": "16f0d317c1ea8a56c340cfdd04b6a165bdc424c729f85042bb672b4c3287552d",
+        "src/workspace/commands.rs": "ff71d09fb720a3cb24627cc2be07676f968c720ca72d38367d3d249b72de7024",
+        "src/workspace/mod.rs": "2c58e0f3e38359f12a8422290af1af8b961db9ad4bef2ba48b61abddd1894952",
+        "src/workspace/restore.rs": "7abed676a459c0eb4504d6bfad6d2f3800c04def28bff3155d759befd43b5852",
+        "src/workspace/session_lifecycle.rs": "2d2fd115771ce04f8443db45380e4552f1c5a6ad32f57abb7ecf5d8f7cc6eab0"
+      }
+    },
+    {
+      "id": "terminal_geometry",
+      "scenario": "Start or resize a terminal to zero rows/columns or one column, write a wide character, query geometry, and return to an ordinary size.",
+      "decision": "refactor",
+      "reason": "TerminalSize centralizes the engine minima and both PTY and core apply them at entry. Keep wire DTOs public, one valid row and independent pixel dimensions, and the UI layout minimum distinct. Core emulation remains internal to its runtime crate.",
+      "validation": [
+        "Both construction and resize panicked before the fix. Regressions now verify wide cells, frames and character/pixel replies; real terminald stty reports the same effective initial and resized geometry."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-terminal-core/src/core.rs": "d03629724ca8ad668b31cd2bdb6b34576d5f13097c0155fb20bc72d99d47dfaf",
+        "crates/horizon-terminal-core/src/lib.rs": "2e7eb727438db7c079cde48212d3e0c2142b53d1d71d421b4997e96fd5f1184d",
+        "crates/horizon-terminal-core/src/session_loop.rs": "65a9c739121c0bcb94aec00ba4507f100c57e50a7631f3c124dcff818e287945",
+        "crates/horizon-terminal-core/src/tests.rs": "95d48a1ca21a8d2b92cc743a9940ddcdaf9d05850f896607fe6e4b7f540a59fa",
+        "crates/horizon-terminal-core/src/types/size.rs": "c363dc0c2b38c02288d98eebd446b59eac943d039719a52e01d2275b559c72d7",
+        "crates/horizon-terminald/src/terminal.rs": "4dbe95294a4d1328afae52dc1114f83731e5a38367a451d41094e80ebcd9267a",
+        "crates/horizon-terminald/tests/e2e.rs": "1735f1970cd5c2b09c0e5a9f911c97d296af1fe107441a4aa87536b6aa39ea7e",
+        "src/terminal/mod.rs": "ddab8e6642937cf2bfe732e1cecae5221608765dccd1f9034fecb907eea80ea7"
+      }
+    },
+    {
+      "id": "tool_result_contract",
+      "scenario": "Create a denied result whose payload omits is_error or sets it false, then project tool outcomes.",
+      "decision": "refactor",
+      "reason": "The denial constructor enforces its documented is_error contract independently of tool JSON. Preserve payload, call identity and occurrence identity. Keep ordinary error derivation and pre-marker transcript fallback distinct; public result/frame fields are snapshots and wire data, not access to live mutable owners.",
+      "validation": [
+        "A missing payload error flag reproduced the contract violation. The regression covers absent and false flags while preserving output. Existing result round-trip and transcript denial tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/contract.rs": "bc8736e133167e936dd861b26edbe0b6c89149f3d071103804f0c0a765f1f748",
+        "crates/horizon-agent/src/frame/queries.rs": "dc3f92fd32ba2cf76210ce5dbfddeb8c97f6c3c9c56c4b845e91bce696d86468",
+        "crates/horizon-agent/src/tests.rs": "628bda968ec1c2eb9829530b246b1c2ecaf8f1ad1df6ae73e4f7f640bb4b4ac0",
+        "crates/horizon-agent/src/tools/approval.rs": "d364c502b44552b08e601856c4b323930b2817f3407a7025a795142025d367e6",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
+        "crates/horizon-agent/src/transcript/tool_call/tests.rs": "fad075bd517b8adcac78e85a1610daa14cdde76c7097ed63902c6d284f413a68"
+      }
+    },
+    {
+      "id": "configuration_translation",
+      "scenario": "Load defaults/file/env, translate provider and MoA entries at startup/reload, select a model and restore grants.",
+      "decision": "preserve",
+      "reason": "The config loader owns file syntax/resolution, agent config owns env/runtime semantics, and daemon providers.rs is the single translation adapter. Keep separate DTOs to avoid a config-to-agent dependency. ResolvedModelSelection borrows a validated catalog. Preserve accepted current-daemon versus startup-provider generation differences and live filesystem revalidation.",
+      "validation": [
+        "Reviewed adapters and consumers; existing provider/selection/grant tests and workspace build pass. cargo metadata confirms dependency directions."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/config.rs": "3302dbf02113744aa2dbeb62adee863a1059e00b568a207bc18887f7e34baa0c",
+        "crates/horizon-agent/src/config/selection.rs": "ce2b481416dec992fc4017a91f3f3cc64075bfd6f6ce6e05a7110310dbbe4bbd",
+        "crates/horizon-agentd/src/providers.rs": "e038e0acf103b4277dec083723979b8e848a86275bd2d2c7e7377b9abf6449a3",
+        "crates/horizon-agentd/src/session/setup.rs": "0ff45a0b5b245945cd384a5fe90eae4d33f2a6c17a85c57860187a8f5da5a1bf",
+        "crates/horizon-config/src/grants/resolution.rs": "750f333618733346ea8263823d0f30c2ceba734be843f057dc5e8d988381719f",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/moa.rs": "a6b6c6e8582234fc684de9b8c1d70b3c079d735bed8ba4c6fe8ec133f75c0b8f"
+      }
+    },
+    {
+      "id": "runtime_dependencies",
+      "scenario": "Queue a request before connection, time out, disconnect, reload one runtime, and retire a view attachment.",
+      "decision": "preserve",
+      "reason": "Runtime internals and typed operations/replies are already private. Keep transport failure separate from daemon replies and timeout separate from cancellation. Per-daemon routes/lifetimes, explicit UUID domain adapters and read-only frame projections avoid cross-domain state ownership. terminald uses agent only in dev-dependencies; the wire foundation has no domain dependency.",
+      "validation": [
+        "Read request/link/routing and callers; existing request lifetime and real daemon independence tests pass. Used locked cargo metadata and cargo-modules 0.26.0 host/default-cfg agent graph; this graph does not cover WASM or every feature."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-wire/src/lib.rs": "95780c6f87f36c4687e841f6defddb32ca98b2e47dfacfd9f27ef0e1b48355ee",
+        "crates/horizon-wire/src/negotiate.rs": "655da73c95d06ef1c53acd8f236e0efa240d5d203291bf6e1aaab106c7384701",
+        "src/runtime/common.rs": "55871c0296210d0bbb40ffeb9145fc0ee40c817e7a36d04b908794181418dc83",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/mod.rs": "052b6b05dda545eb076f1e6f1c036ea1eb280c4f4fd437f8faacfc3beb0b80dd",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/workspace/session_lifecycle.rs": "2d2fd115771ce04f8443db45380e4552f1c5a6ad32f57abb7ecf5d8f7cc6eab0"
+      }
+    },
+    {
+      "id": "roles_skills_and_discovery",
+      "scenario": "Resolve a launchable or internal role, compose trusted repository skills, enforce approval, and discover content outside a repository.",
+      "decision": "refactor",
+      "reason": "Preserve the existing public registration seams, private registry contents, trust gates and judge fallback. Unknown roles remain errors. External board definitions/registration behavior are excluded. Only the no-repository test fixture changes: select a genuinely non-repository temp root because /tmp has .git; no product discovery rule or global TMPDIR override changes.",
+      "validation": [
+        "No-repository instruction, skill and fs.glob cases pass with the shared test-only fixture. Role, trusted discovery and judge tests pass in the full gate."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/instructions.rs": "6236a42aa0b84e011606247fb4fb0ee89ab293dc2eccfe5788fbc006a3b0a472",
+        "crates/horizon-agent/src/judge/handle.rs": "40411fa3347123534d95340673b42ad87c09b5a3f6859a42d35d2481f8a55c8b",
+        "crates/horizon-agent/src/judge/mod.rs": "beb479b244ae7f0b894e337df5b3b8044369d1541c9089b2c100cc65540bfa12",
+        "crates/horizon-agent/src/providers/rig/session/environment.rs": "e4887d447f3c39d938decabbf827aad1ca14bd360a9fc988fe4cbd0224dbea33",
+        "crates/horizon-agent/src/roles.rs": "6e20cb339cef8afbb779a9b1ac7cb2d390f187a0b4959e9ea5da8debf013b6ab",
+        "crates/horizon-agent/src/skills.rs": "67f1e1ebd63a9e005b08eb993da259bc92613b46df4ede025decef05ae8334d9",
+        "crates/horizon-agent/src/tools/tests.rs": "7be0abaddbe00e20c7c26a5d6958699e4c650493a2181e161d69438fa835bfbd",
+        "crates/horizon-agentd/src/session/run.rs": "24f1882ea5bb40ac44f6f72e84226d1eaa8654681df9f8bf2a68dcd74ebc44b2"
+      }
+    },
+    {
+      "id": "preview_public_surface",
+      "scenario": "Build a WASM guest, select a named preview, publish host theme input and apply it in the guest.",
+      "decision": "preserve",
+      "reason": "Preview registry/sample/schema and guest entry are legitimately public for the plugin crate; native host/pane/watch stay private. Shared RawThemeConfig and the theme resolver avoid duplicate interpretation. Keep explicit native/WASM cfg boundaries rather than adding a generic UI abstraction.",
+      "validation": [
+        "Read the guest/schema/host boundary and consumers; preview/theme tests and the wasm32-wasip2 gate pass. GUI frame probes do not claim pixel or physical keyboard/IME coverage."
+      ],
+      "status": "reviewed",
+      "files": {
+        "preview-plugin/src/lib.rs": "85792febb6e5ccfd7811eb57be0e7f7ac3e3658626aee04dc2fcdb2b0c459a54",
+        "src/preview/guest.rs": "51935d66f8aebd4592fd1a03d09fa4e330159adad91154d64528019afea77eba",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/mod.rs": "6c19edd9d37ddd76a1aec04ecbdf8d2270573c816d43e8fdd0b90ef536976dc9",
+        "src/preview/registry.rs": "e5ae850696cde8f0c8874ddf0712320e54a2c68bda5165238d0889c1d393c062",
+        "src/preview/schema.rs": "3ecc880178f1bd5f4a0077ab05ea4bae5cfe3b8c91506154765e413602753740",
+        "src/theme/mod.rs": "7a7b2b2ff5d7996ea3d1ecbba5a5bec4d8d04982ad80b2ef01082d11e77575bb"
+      }
+    }
+  ]
+}

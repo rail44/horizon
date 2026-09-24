@@ -11,13 +11,13 @@
       "sha256": "049f83f1ceb7f7dd95df7ad5b30540cd69984e7de331ca4ace604c42bb119217",
       "related": {
         "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
-        "crates/horizon-agent/src/live.rs": "14886440cbb5da77a2e22aab54809595460efda3469154aefcd1550891a5b9d5",
-        "src/agent/session.rs": "8e2761f23dd45297dcc584318d36d8ad99d811ff84d5dd0650fc5b9b2dbbdab0",
+        "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
+        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
         "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b"
       },
       "decision": "preserve",
-      "reason": "Event reduction owns delta promotion and turn boundaries. Preserve its exhaustive match and ephemeral sidecars. Durable input/outbox records enter LiveState after acknowledged commit; ordinary streaming retains asynchronous appends. UI row projection remains a separate owner.",
-      "commit": "0d6186ec783dfcf08d0003f066d74fecfb316ddd"
+      "reason": "Event reduction owns delta promotion and turn boundaries. Preserve its exhaustive match and ephemeral sidecars. Durable input/outbox records enter LiveState after acknowledged commit; ordinary streaming retains asynchronous appends. UI row projection remains a separate owner. Appender now excludes every ephemeral notification at its own API boundary; direct live and durable paths preserve the same sidecar/history separation.",
+      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
     },
     {
       "target": {
@@ -100,17 +100,17 @@
       },
       "sha256": "4a695b463ececdbf825280b34fa53c631614b77f85c893aeceb282da81ed37d6",
       "related": {
-        "crates/horizon-agent/src/tools/explore.rs": "2457067facd61d07a060aea3397413fe9f32136db9427b8433e053ed6d7f6f49",
+        "crates/horizon-agent/src/tools/explore.rs": "ae4e37947f24707fa1b6c5ff234e2ea345afbf966a8341da3e6f9ed5fd3bf010",
         "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
-        "crates/horizon-agentd/src/session/environment.rs": "6b758694c7448a77072959015a6de3a5d3d0c2b37535174a8e8cc5845ba1ff44",
+        "crates/horizon-agentd/src/session/environment.rs": "71745c4e475eda5f5b87aabb50cdcdf3b85f0413e2e578ea6957816ee5b8b60a",
         "crates/horizon-agentd/src/session/events.rs": "391fbdf5b64bd4d730f9977f2536662502adc939cc10b7727dafef78877f00b3",
         "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
         "crates/horizon-agentd/src/session/resume.rs": "cb0cd155ad04ae0ab1b8b05bd954f35341efda7e52ca83497163142c5bdd07b4",
         "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c"
       },
       "decision": "preserve",
-      "reason": "Keep the session loop as owner of command priority, environment readiness and provider/completion ordering. Appender now acknowledges durable input/outbox and recovery records before live folding, publication or resume. Async completions are admitted by dispatch occurrence. Task children and MoA watchers retain their distinct lifetimes.",
-      "commit": "0d6186ec783dfcf08d0003f066d74fecfb316ddd"
+      "reason": "Keep the session loop as owner of command priority, environment readiness and provider/completion ordering. Appender now acknowledges durable input/outbox and recovery records before live folding, publication or resume. Async completions are admitted by dispatch occurrence. Task children and MoA watchers retain their distinct lifetimes. Initial capabilities are now installed through ToolSessionBuilder before sharing; shared wire conversion preserves ephemeral feedback without changing those ordering and lifetime rules.",
+      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
     },
     {
       "target": {
@@ -155,13 +155,13 @@
       "sha256": "b5b1e28b68fb603be7e69c6421eba6a1e550b5edb2f031539419b7885be201d0",
       "related": {
         "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
-        "crates/horizon-terminald/src/terminal.rs": "eb82fe5e65fec5b596f6de7ca379e254eaf4ccbca089d7c9fe11070308b0a6a9",
+        "crates/horizon-terminald/src/terminal.rs": "4dbe95294a4d1328afae52dc1114f83731e5a38367a451d41094e80ebcd9267a",
         "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
         "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57"
       },
       "decision": "preserve",
-      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved.",
+      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
     },
     {
       "target": {
