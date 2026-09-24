@@ -6,31 +6,12 @@
 //! layout truth; this module only renders it and translates GPUI actions
 //! into model operations.
 //!
-//! The key bindings registered by [`init`] (via `bindings::derive_bindings`) are
-//! M2 stand-ins wired straight to model calls — M3 replaces them with the
-//! command model (`CommandId` + keymap config), at which point every
-//! handler here becomes a binding to a command instead.
-//! `bindings::derive_bindings`'s `[keybindings]` layer (`keymap::resolve_keybindings`/
-//! `keymap::workspace_mode_keystroke`) is the first piece of that:
-//! config-bound chords dispatch through [`RunCommand`] to
-//! [`WorkspaceShell::execute`] instead of a model-call handler.
-//! `Reload Config` (`CommandId::ReloadConfig`) re-derives and re-applies
-//! this same binding set live — see `bindings::apply_bindings`'s doc comment for
-//! how a stale chord gets unbound.
-//!
-//! Split (2026-07-18) into responsibility-focused submodules -- a pure
-//! move, no behavior change: [`bindings`] (keybinding derivation/apply),
-//! [`session_lifecycle`] (session creation, agentd resume/reload,
-//! `reconcile`), [`commands`] (`execute`/`execute_control_plane` and the
-//! session-targeted `control_plane_*` family), [`modals`] (the palette/
-//! session-manager/view-chooser lifecycles), and [`render`]
-//! (`render_tab_strip`/`render_node`/the `Render` impl, plus the
-//! pane-chrome pure functions). This file keeps the `WorkspaceShell`
-//! struct, its constructor, `init`, and the cross-cutting glue methods
-//! every submodule calls into (`reconcile`'s sibling helpers like
-//! `focus_active`/`persist_workspace`) -- the same shape `src/theme/`
-//! and `src/agent/turns/` already split into. No call site outside
-//! `src/workspace/` changed.
+//! `commands` owns command dispatch; `session_creation` resolves spawn intent;
+//! `session_events` routes asynchronous notifications; `runtime_reload` keeps
+//! the two daemon replacement contracts separate. `session_lifecycle` adopts
+//! sessions and reconciles views; `restore` owns persisted workspace recovery.
+//! `preview` handles session-less preview targets. The shell retains model,
+//! session and pane ownership, focus coordination and persistence.
 
 use std::collections::HashMap;
 
@@ -57,12 +38,17 @@ use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
 mod bindings;
 mod commands;
 mod modals;
+mod navigation;
+mod preview;
 mod render;
 mod restore;
+mod runtime_reload;
+mod session_creation;
+mod session_events;
 mod session_lifecycle;
 
 use render::SplitDrag;
-use session_lifecycle::{PendingAgentSpawn, PendingTerminalSpawn};
+use session_creation::{PendingAgentSpawn, PendingTerminalSpawn};
 
 pub(crate) fn init(cx: &mut App) {
     bindings::apply_bindings(cx, horizon_config::load());

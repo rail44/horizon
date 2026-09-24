@@ -1,8 +1,7 @@
 //! The command-model dispatch point (`execute`/`execute_control_plane`)
 //! plus the session-targeted `control_plane_*` family the CLI control
 //! plane drives (everything but `control_plane_new_session`, which pairs
-//! with `create_session` in `session_lifecycle` instead -- see that
-//! module's doc comment).
+//! with `create_session` in `session_creation` instead).
 
 use crossbeam_channel::Sender;
 use gpui::*;
