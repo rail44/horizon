@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "73e2244648c820ca4105ace73a96a529c4a421d4",
+  "reviewed_commit": "7d289bcaf08a9cdebb8b58d63b9f557ff52c70eb",
+  "profile": "profiles/non-board.json",
+  "scope": "Four representative implemented changes, not exhaustive future-change coverage. Trial-only features remain on probe branches. Board-specific code is excluded.",
+  "groups": [
+    {
+      "id": "tool_extension",
+      "scenario": "Add an optional bounded fs.read character budget and show the applied budget.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "Schema, execution and display each own a different decision. Root escape classification and approved/auto execution already carry the same input. Keep these owners; a generic schema-to-executor or presentation abstraction would not remove duplicated business decisions.",
+      "files": {
+        "crates/horizon-agent/src/tools/catalog.rs": "f678dfc9bafd591511eca41840fb20173ab748d742eb08ec6452e6af46c63f80",
+        "crates/horizon-agent/src/tools/fs/mod.rs": "250484954e2a66e875b1dd5949eb85143e2f750fde3e02eede99ee06a2b2119f",
+        "crates/horizon-agent/src/tools/fs/read.rs": "9270a46b5d1bd2ddd93402129ddeddeb0db1a770582d078a26ad04c00bd5da4d",
+        "crates/horizon-agent/src/tools/tests.rs": "b518390d29eb044d47e17f0210fe5841bfcb498fb895239e1c481e7845bc6c88",
+        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "4f450f383acbe07262f4aecee992d53c36799cdd2c78bc2954789d5bd3e49b9b"
+      },
+      "validation": [
+        "The same trial passed before and after. Removing the new schema entry fails its cross-path test. This exercises the root classifier and approved/auto filesystem paths, not the human approval UI."
+      ]
+    },
+    {
+      "id": "workspace_operation",
+      "scenario": "Expose the existing ResetFontSize command through the CLI; compare with keybinding and palette operation identity.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "The CLI already has one exhaustive external_name match but repeated the same request name in to_request. Request construction now obtains the name from that match; argument construction remains explicit. Preserve the distinct CLI parser, control-plane translation, keybinding vocabulary and workspace command definitions.",
+      "files": {
+        "crates/horizon-cli/src/cli.rs": "8b979531a2b5c4a081e6077370dd13267c90da7bad1ca68a3a49b7736d0b711e",
+        "crates/horizon-cli/src/commands.rs": "5a324998b2e8fa0d25b66e59cb2822dae6b795ca7f8a57b1bbc13939e6eba798",
+        "crates/horizon-workspace/src/commands.rs": "3fee99fdbed39c2cfd64e1c11b068e5838b582f0db7e457d8a7aef7d4a240200",
+        "src/control_plane/invoke.rs": "16f0d317c1ea8a56c340cfdd04b6a165bdc424c729f85042bb672b4c3287552d",
+        "src/keymap.rs": "3b768ee675737bcbf5ce4bd897d0334f6c9f2a40ac45aecd306f2b5d427d6f80",
+        "src/workspace/commands.rs": "408f1110c4ceac78d8c4783ebc9721a0f89c1c154a91a40da53f732345d2cea4"
+      },
+      "validation": [
+        "Before/after trial tests agree on ResetFontSize and argument rejection. A deliberately misspelled request-name copy fails before; that independent copy is absent after. Isolated X11 verifies keyboard size increase and CLI reset."
+      ]
+    },
+    {
+      "id": "reloadable_config",
+      "scenario": "Add terminal.font_size_step with default, finite/range validation and Reload Config application.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Preserve config parsing and view-owned resolution/application. Keep runtime diagnostic allowlists explicit, but compare all eight struct-backed lists against the field names supplied by derived serde deserializers in a test. This caught the existing mach_services false warning; recognize that already accepted key without changing grants or enforcement. Flattened theme and dynamic keybindings remain separately validated.",
+      "files": {
+        "crates/horizon-config/src/grants.rs": "39896b97d0b94019a24ef1fe9b9c6e7ea3633c2f659de339b570b7eade7e7ab0",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/moa.rs": "a6b6c6e8582234fc684de9b8c1d70b3c079d735bed8ba4c6fe8ec133f75c0b8f",
+        "crates/horizon-config/src/warnings.rs": "e0df8010fc4a9165e7cd4b5aa638ff0d0f497891cb32b51c062223dfd0f71377",
+        "src/terminal/font.rs": "140a96de29bb142e2bd421e4fc1d2536fb5fb58e49ba4099cb4b97bca7623a55",
+        "src/terminal/mod.rs": "3a1eb23efb28ec03470ed614c46b958f35efcb1451e5b4457399cea2c6e1d90b",
+        "src/workspace/commands.rs": "408f1110c4ceac78d8c4783ebc9721a0f89c1c154a91a40da53f732345d2cea4"
+      },
+      "validation": [
+        "Dropping font_size_step from the warning list leaves existing baseline config tests green. The permanent invariant fails for that omission after the change. The completed trial passes default/clamp/parse-error/apply/reload checks. Isolated X11 verifies reloaded step changes PTY geometry and CLI reset restores it."
+      ]
+    },
+    {
+      "id": "agent_information",
+      "scenario": "Infer tool failure from a nested error.message when the explicit flag is absent.",
+      "status": "reviewed",
+      "decision": "preserve",
+      "reason": "The envelope constructor owns interpretation; LiveState, the durable log, replay, DuckDB projection and recall consume the existing typed is_error. One production edit reaches all observed consumers; keep the explicit envelope instead of reinterpreting JSON downstream. No wire or persistence shape change.",
+      "files": {
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
+        "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs": "657e45c10129eb068ec572d895629cd50e4b11e4784427b5360f238b229fdb56",
+        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "bf2348db85d92d827795cf5961eb32eed387f1b232c54e11c4af3cebce9b186b",
+        "crates/horizon-agent/src/persistence/projection/duckdb/tests.rs": "370c44d2cc3ac31c3a68ab0b07068c761de28ff2c29014a013768599a5ce418a",
+        "crates/horizon-agent/src/transcript/tool_call/mod.rs": "65e6b61870730c562cb23233536a3e79b10c6f717b0e5176860f1bfe0d06eae9"
+      },
+      "validation": [
+        "Before/after trial checks live tool views, durable event equality, replayed views, projected results, history and search both before and after projection rebuild. Restoring the old constructor fails the trial. No external provider request was made."
+      ]
+    }
+  ],
+  "removed_files": {}
+}

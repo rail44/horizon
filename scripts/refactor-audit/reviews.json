@@ -223,13 +223,13 @@
       },
       "sha256": "b02e380c2cc59e8cd20dcb3f6149dd15c1a4ea159f7a00d8206a04800501141e",
       "related": {
-        "crates/horizon-cli/src/commands.rs": "0a2b75afb0545b83ea3bc261444387d1225a06a9a21715d791d8baa5dd5e3065",
+        "crates/horizon-cli/src/commands.rs": "5a324998b2e8fa0d25b66e59cb2822dae6b795ca7f8a57b1bbc13939e6eba798",
         "crates/horizon-workspace/src/commands.rs": "3fee99fdbed39c2cfd64e1c11b068e5838b582f0db7e457d8a7aef7d4a240200",
         "src/palette.rs": "e003b4bc916c2c54d5458c7610e1ff990a6d1bbc62e00cc9db6c7665a955263f"
       },
       "decision": "preserve",
-      "reason": "Key bindings map the internal CommandId vocabulary; CLI requests expose a different wire vocabulary. Preserve these tables instead of unifying distinct operation surfaces.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Key bindings map the internal CommandId vocabulary; CLI requests expose a different wire vocabulary. Preserve these tables instead of unifying distinct operation surfaces. The CLI request name is now read from its own external_name table instead of copied in request construction; internal and external command vocabularies remain distinct.",
+      "commit": "7d289bcaf08a9cdebb8b58d63b9f557ff52c70eb"
     },
     {
       "target": {

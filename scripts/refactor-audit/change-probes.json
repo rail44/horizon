@@ -1,0 +1,155 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "73e2244648c820ca4105ace73a96a529c4a421d4",
+  "implementation_commit": "7d289bcaf08a9cdebb8b58d63b9f557ff52c70eb",
+  "revisions": {
+    "before": "4e654c5a5b9bb0b3547f4c973b601175cd8bcd33",
+    "after": "032e16596d276bf844b972676977a7a6b1a82e6e"
+  },
+  "scope": "Implemented temporary features are retained only on probe branches. Source file counts exclude test-only files but include colocated tests. Counts are observations, not acceptance targets.",
+  "trials": [
+    {
+      "id": "tool_extension",
+      "change": "Optional fs.read max_chars and displayed content_char_limit",
+      "production_files_before": 3,
+      "production_files_after": 3,
+      "owners": [
+        "schema",
+        "execution budget",
+        "display summary"
+      ],
+      "decision": "preserve",
+      "before_commit": "50813ea2e20b4a821f0b5c32ee1e9694ffd83ec3",
+      "probe_test": "change_probe_read_budget_crosses_schema_approval_execution_and_display"
+    },
+    {
+      "id": "workspace_operation",
+      "change": "CLI exposure of existing ResetFontSize",
+      "production_files_before": 3,
+      "production_files_after": 3,
+      "duplicated_request_name_definitions_before": 2,
+      "duplicated_request_name_definitions_after": 1,
+      "decision": "refactor",
+      "before_commit": "41909c28bad589314fd08482431c058144f7262a",
+      "probe_tests": [
+        "change_probe_reset_font_cli_uses_the_shared_operation_name",
+        "change_probe_cli_keybinding_and_palette_select_the_same_font_command"
+      ]
+    },
+    {
+      "id": "reloadable_config",
+      "change": "Reloadable terminal.font_size_step with default and clamp",
+      "production_files_before": 5,
+      "production_files_after": 5,
+      "warning_key_omission_detected_by_existing_tests_before": false,
+      "warning_key_omission_detected_by_existing_tests_after": true,
+      "decision": "refactor",
+      "before_commit": "b2191eb6ff10673f3c6c428147ea8a3d0c413e3d",
+      "probe_tests": [
+        "change_probe_font_step_is_a_recognized_config_key",
+        "change_probe_font_step_load_validate_apply_and_reload"
+      ]
+    },
+    {
+      "id": "agent_information",
+      "change": "Nested error.message failure fallback in ToolCallResult::new",
+      "production_files_before": 1,
+      "production_files_after": 1,
+      "owners": [
+        "typed result envelope"
+      ],
+      "decision": "preserve",
+      "before_commit": "4e654c5a5b9bb0b3547f4c973b601175cd8bcd33",
+      "probe_test": "change_probe_structured_errors_agree_live_durable_replayed_and_recalled"
+    }
+  ],
+  "omission_results": {
+    "before": [
+      {
+        "label": "config-existing",
+        "expression": "package(horizon-config) & !test(change_probe)",
+        "exit_code": 0,
+        "log": "/tmp/horizon-sixteenth-before-omit-config-existing.log"
+      },
+      {
+        "label": "config-probe",
+        "expression": "test(change_probe_font_step_is_a_recognized_config_key)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-before-omit-config-probe.log"
+      },
+      {
+        "label": "tool-schema",
+        "expression": "test(change_probe_read_budget)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-before-omit-tool-schema.log"
+      },
+      {
+        "label": "cli-name-copy",
+        "expression": "test(change_probe_reset_font_cli)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-before-omit-cli-name-copy.log"
+      },
+      {
+        "label": "agent-envelope",
+        "expression": "test(change_probe_structured_errors)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-before-omit-agent-envelope.log"
+      },
+      {
+        "label": "restored",
+        "expression": "test(change_probe) | test(warning_allowlists_match_deserialized_fields)",
+        "exit_code": 0,
+        "log": "/tmp/horizon-sixteenth-before-omit-restored.log"
+      }
+    ],
+    "after": [
+      {
+        "label": "config-existing",
+        "expression": "package(horizon-config) & !test(change_probe)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-after-omit-config-existing.log"
+      },
+      {
+        "label": "config-probe",
+        "expression": "test(change_probe_font_step_is_a_recognized_config_key)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-after-omit-config-probe.log"
+      },
+      {
+        "label": "tool-schema",
+        "expression": "test(change_probe_read_budget)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-after-omit-tool-schema.log"
+      },
+      {
+        "label": "cli-name-copy",
+        "result": "independent name copy eliminated; request uses external_name"
+      },
+      {
+        "label": "agent-envelope",
+        "expression": "test(change_probe_structured_errors)",
+        "exit_code": 100,
+        "log": "/tmp/horizon-sixteenth-after-omit-agent-envelope.log"
+      },
+      {
+        "label": "restored",
+        "expression": "test(change_probe) | test(warning_allowlists_match_deserialized_fields)",
+        "exit_code": 0,
+        "log": "/tmp/horizon-sixteenth-after-omit-restored.log"
+      }
+    ]
+  },
+  "reproduction": [
+    "Use a separate worktree at revisions.before or revisions.after; never merge probe branches into main.",
+    "cargo nextest run --profile sandboxed --workspace --locked -E 'test(change_probe) | test(warning_allowlists_match_deserialized_fields)'",
+    "Omit font_size_step from the terminal diagnostic allowlist, run horizon-config tests excluding change_probe, then restore. Baseline passes; improved invariant fails.",
+    "Restore baseline fs.read catalog or ToolCallResult constructor independently and run the matching probe test; each must fail, then restore and rerun all probes.",
+    "Before only: misspell the ResetFontSize request literal in to_request and run its probe; it must fail. After: there is no independent request-name literal."
+  ],
+  "artifacts": {
+    "main_gui": "/tmp/horizon-sixteenth-gui.log",
+    "trial_gui": "/tmp/hzn-sixteenth-probe-{before,after}/result.json",
+    "logs": "/tmp/horizon-sixteenth-*.log",
+    "audit": "target/refactor-audit/sixteenth-{baseline,reviewed,final}{,-tests}/"
+  }
+}

@@ -1,0 +1,58 @@
+[
+  {
+    "label": "Config diagnostic schema contract",
+    "before": [
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "<free>",
+        "name": "provider_known_keys_warn_about_nothing",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "<free>",
+        "name": "accepted_fields",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "Fields<'_>",
+        "name": "deserialize_any",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / fn:accepted_fields / trait:serde::Deserializer<'de>"
+      },
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "Fields<'_>",
+        "name": "deserialize_struct",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / fn:accepted_fields / trait:serde::Deserializer<'de>"
+      },
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "<free>",
+        "name": "warning_allowlists_match_deserialized_fields",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "<free>",
+        "name": "assert_same_keys",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-config/src/warnings.rs",
+        "owner": "<free>",
+        "name": "provider_known_keys_warn_about_nothing",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  }
+]

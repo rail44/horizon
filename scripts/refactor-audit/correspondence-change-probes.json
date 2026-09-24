@@ -1,0 +1,37 @@
+[
+  {
+    "label": "CLI request name ownership",
+    "before": [
+      {
+        "file": "crates/horizon-cli/src/commands.rs",
+        "owner": "<free>",
+        "name": "external_name",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-cli/src/commands.rs",
+        "owner": "<free>",
+        "name": "to_request",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-cli/src/commands.rs",
+        "owner": "<free>",
+        "name": "external_name",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-cli/src/commands.rs",
+        "owner": "<free>",
+        "name": "to_request",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  }
+]
