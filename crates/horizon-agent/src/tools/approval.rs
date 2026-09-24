@@ -368,7 +368,6 @@ fn resolve_synchronous_tool(
 /// sandboxed — an approval buys scoped, contained access, never an
 /// unconfined execution. Only [`ApprovalKind::Standard`] still runs on the
 /// host, which is what that kind has always meant.
-/// The legacy [`ApprovalKind::SandboxDenialRetry`] is rejected fail-closed.
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
@@ -417,12 +416,6 @@ fn resolve_bash(
         ApprovalKind::GitOperation { writable_roots } => {
             resolve_git_operation(session_id, runtime, request, decision, writable_roots)
         }
-        ApprovalKind::SandboxDenialRetry => synchronous_result(
-            runtime,
-            &request.call_id,
-            error_output("This containment denial does not name a safe narrow grant; retrying without the sandbox is disabled."),
-            false,
-        ),
         ApprovalKind::DomainGrant { .. } => synchronous_result(
             runtime,
             &request.call_id,
@@ -617,11 +610,11 @@ fn begin_execution(
     let mut events = Vec::new();
     if let Some(prior) = prior_result {
         events.push(Event::ToolCallFinished(
-            prior.superseded_by_retry(request.occurrence_id.as_ref()),
+            prior.superseded_by_retry(&request.occurrence_id),
         ));
     }
     events.push(Event::StateChanged(SessionState::ToolRunning));
-    events.push(Event::ToolCallStarted(request.call_id.clone()));
+    events.push(Event::ToolCallStarted(request.identity()));
     let frame = runtime
         .live_state
         .extend_provider_events(events.clone().into_iter().map(Into::into));
@@ -635,7 +628,18 @@ fn begin_execution(
 /// settled on. Unchanged by backlog 55 -- it was already the path that
 /// closed the first row.
 fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) -> ApprovalOutcome {
-    let events = vec![Event::ToolCallFinished(prior_result.clone())];
+    let mut events = vec![Event::ToolCallFinished(prior_result.clone())];
+    if let Some(request) = runtime
+        .live_state
+        .frame()
+        .tool_call_request(&prior_result.call_id)
+    {
+        if request.occurrence_id != prior_result.occurrence_id {
+            events.push(Event::ToolCallFinished(request.identity().result(
+                serde_json::json!({"cancelled": true, "message": "retry was not executed"}),
+            )));
+        }
+    }
     let frame = runtime
         .live_state
         .extend_provider_events(events.clone().into_iter().map(Into::into));
@@ -773,12 +777,15 @@ fn unstarted_error(
     // already has the request -- `unstarted_error` is only called when the
     // approval gate decided to skip the start, which it could only do
     // because the request is sitting in the frame.
-    let occurrence_id = runtime
+    let Some(identity) = runtime
         .live_state
         .frame()
         .tool_call_request(call_id)
-        .and_then(|request| request.occurrence_id.clone());
-    let result = ToolCallResult::new(call_id.clone(), occurrence_id, error_output(message));
+        .map(ToolCallRequest::identity)
+    else {
+        return ApprovalOutcome::AlreadyResolved;
+    };
+    let result = identity.result(error_output(message));
     forward_prior_result(runtime, result)
 }
 
@@ -806,21 +813,24 @@ fn synchronous_result(
     // request's `occurrence_id` from the live frame so the transcript and
     // analytics attribute this result to the right occurrence of a
     // possibly-reused `call_id`.
-    let occurrence_id = runtime
+    let Some(identity) = runtime
         .live_state
         .frame()
         .tool_call_request(call_id)
-        .and_then(|request| request.occurrence_id.clone());
+        .map(ToolCallRequest::identity)
+    else {
+        return ApprovalOutcome::AlreadyResolved;
+    };
     let result = if ran {
-        ToolCallResult::new(call_id.clone(), occurrence_id, output)
+        identity.result(output)
     } else {
-        ToolCallResult::denied(call_id.clone(), occurrence_id, output)
+        ToolCallResult::denied(call_id.clone(), identity.occurrence_id.clone(), output)
     };
 
     let mut events = Vec::new();
     if ran {
         events.push(Event::StateChanged(SessionState::ToolRunning));
-        events.push(Event::ToolCallStarted(call_id.clone()));
+        events.push(Event::ToolCallStarted(identity));
     }
     events.push(Event::ToolCallFinished(result.clone()));
     // No `StateChanged(WaitingForUser)` here: like `execution::

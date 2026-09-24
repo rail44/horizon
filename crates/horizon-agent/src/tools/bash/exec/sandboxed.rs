@@ -67,6 +67,7 @@ mod result;
 #[allow(clippy::too_many_arguments)]
 pub(in crate::tools::bash) fn run_sandboxed(
     registration: &Registration,
+    identity: &crate::contract::ToolCallIdentity,
     input: &Value,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
@@ -75,23 +76,22 @@ pub(in crate::tools::bash) fn run_sandboxed(
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
     config: &BashToolConfig,
 ) -> BashCompletion {
-    let call_id = registration.call_id();
     let Some(command) = input.get("command").and_then(Value::as_str) else {
         return finished(
-            call_id,
+            identity,
             failed_output("bash requires a `command` string argument", None, config),
         );
     };
     if command.trim().is_empty() {
         return finished(
-            call_id,
+            identity,
             failed_output("bash requires a non-empty `command` string", None, config),
         );
     }
     if let Some(message) =
         crate::tools::bash::cargo::shared_cache_clean_refusal(command, workspace_root)
     {
-        return finished(call_id, failed_output(message, None, config));
+        return finished(identity, failed_output(message, None, config));
     }
 
     let timeout = resolve_timeout(input, config);
@@ -119,7 +119,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
         Ok(sandboxed) => sandboxed,
         Err(error) => {
             return finished(
-                call_id,
+                identity,
                 failed_output(
                     &format!("failed to start sandboxed bash: {error}"),
                     None,
@@ -137,7 +137,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
         started_at,
     ) {
         Ok(captured) => captured,
-        Err(value) => return finished(call_id, value),
+        Err(value) => return finished(identity, value),
     };
     // Read after the child exits, regardless of its exit code. Early spawn
     // or report failures retain their original failure without draining this.
@@ -145,7 +145,7 @@ pub(in crate::tools::bash) fn run_sandboxed(
         .map(SessionNetworkProxy::drain_denied_hosts)
         .unwrap_or_default();
     result::complete(
-        call_id,
+        identity,
         captured,
         denied_domains,
         timeout,

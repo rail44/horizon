@@ -1,6 +1,5 @@
 use crate::contract::{Command, Event, ProviderEvent, SessionId};
 use crate::policy::horizon_events_for_provider_event;
-use crate::tools::bash;
 use crate::tools::state::ToolSessionState;
 use crate::tools::{execution::execute_agent_tool, Execution, HostTools};
 
@@ -48,8 +47,7 @@ pub fn process_agent_provider_event(
     // session itself ending (`tools::explore::cancel_session`, reached from
     // `unregister_session_runtime`).
     if let Event::ToolCallFinished(result) = &event {
-        bash::cancel_call(session_id, &result.call_id);
-        crate::tools::web::cancel_if_running(session_id, &result.call_id);
+        super::cancel_tool_execution(session_id, &result.call_id);
     }
 
     let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)

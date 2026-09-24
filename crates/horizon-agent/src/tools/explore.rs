@@ -478,7 +478,7 @@ impl Input {
 fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
     Execution::Auto(vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
         Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
             request.occurrence_id.clone(),

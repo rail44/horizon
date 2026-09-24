@@ -7,10 +7,6 @@ use rig_core::completion::{
     AssistantContent, Message,
 };
 
-use crate::{contract::ToolCallId, tools::cancelled_tool_call_result};
-
-use super::rig_tool_result_message;
-
 /// Makes a rebuilt history satisfy the tool-call pairing invariant strict
 /// chat templates enforce, so a resumed session can't be killed by a shape
 /// only the *rebuild* can produce. Same family as
@@ -168,9 +164,10 @@ impl PairingRepair {
     /// Close calls that will never be answered where their results would sit.
     fn close_unanswered_calls(&mut self) {
         for (call_id, tool_name) in self.unanswered.drain(..) {
-            self.repaired.push(rig_tool_result_message(
-                &cancelled_tool_call_result(ToolCallId(call_id.clone())),
+            self.repaired.push(Message::tool_result(
+                call_id.clone(),
                 &tool_name,
+                serde_json::json!({"cancelled": true}).to_string(),
             ));
             self.synthesized.push(call_id);
         }
@@ -271,13 +268,15 @@ mod tests {
                         AssistantContent::text("Still checking.")
                     ],
                 },
-                rig_tool_result_message(
-                    &cancelled_tool_call_result(ToolCallId("first".to_string())),
-                    "fs.read"
+                Message::tool_result(
+                    "first",
+                    "fs.read",
+                    serde_json::json!({"cancelled": true}).to_string()
                 ),
-                rig_tool_result_message(
-                    &cancelled_tool_call_result(ToolCallId("second".to_string())),
-                    "bash"
+                Message::tool_result(
+                    "second",
+                    "bash",
+                    serde_json::json!({"cancelled": true}).to_string()
                 ),
                 Message::user("Stop."),
             ]
@@ -299,9 +298,10 @@ mod tests {
             repaired,
             vec![
                 request,
-                rig_tool_result_message(
-                    &cancelled_tool_call_result(ToolCallId("call-1".to_string())),
-                    "fs.read"
+                Message::tool_result(
+                    "call-1",
+                    "fs.read",
+                    serde_json::json!({"cancelled": true}).to_string()
                 ),
             ]
         );

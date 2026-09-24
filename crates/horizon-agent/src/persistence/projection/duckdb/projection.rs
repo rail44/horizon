@@ -1,5 +1,5 @@
 use anyhow::Result;
-use duckdb::{params, OptionalExt};
+use duckdb::params;
 
 #[cfg(test)]
 use crate::contract::SessionId;
@@ -84,18 +84,9 @@ impl Store {
             // pending (`outcome IS NULL`); a call with no approval row at
             // all (never gated) simply matches nothing.
             //
-            // `ToolCallStarted(ToolCallId)` carries no `occurrence_id`
-            // (it stays a unit-style variant to keep the wire change
-            // additive, see `contract::OccurrenceId`'s doc comment), so
-            // this falls through to the most-recent-pending lookup in
-            // `mark_approval_outcome` -- which is still the correct
-            // target because `ToolCallStarted` always fires after the
-            // matching `ApprovalRequested`, so any later-reissued
-            // approval for the same `call_id` is also still pending and
-            // comes after this one's approval row by `sequence`.
-            Event::ToolCallStarted(call_id) => {
-                self.mark_approval_outcome(session_id, &call_id.0, None, "approved")
-            }
+            Event::ToolCallStarted(identity) => self.mark_approval_outcome(
+                session_id, &identity.call_id.0, &identity.occurrence_id.0, "approved",
+            ),
             Event::ToolCallFinished(result) => {
                 self.insert_tool_result(event_id, session_id, sequence, result)
             }
@@ -209,7 +200,7 @@ impl Store {
                 session_id,
                 sequence,
                 &request.call_id.0,
-                request.occurrence_id.as_ref().map(|o| o.0.as_str()),
+                request.occurrence_id.0.as_str(),
                 &request.tool_id,
                 serde_json::to_string(&request.input)?,
             ],
@@ -239,7 +230,7 @@ impl Store {
                 session_id,
                 sequence,
                 &result.call_id.0,
-                result.occurrence_id.as_ref().map(|o| o.0.as_str()),
+                result.occurrence_id.0.as_str(),
                 serde_json::to_string(&result.output)?,
                 result.is_error,
             ],
@@ -251,18 +242,11 @@ impl Store {
         // case in `project_event`'s `ToolCallStarted` arm. A no-op if there
         // was no approval row (never gated) or it's already resolved.
         //
-        // The result's `occurrence_id` (when present, stamped by the
-        // agent's tool executor at fold time from the originating
-        // request) lets `mark_approval_outcome` target the specific
-        // approval row this result answers to, instead of the
-        // most-recent-pending-with-this-call_id fallback below -- which
-        // would otherwise flip an unrelated pending approval's outcome
-        // for a reused `call_id` (provider-reuse or sandbox-denial-retry,
-        // see `backlog 42 / 55`).
+        // A terminal result closes only its own still-pending approval.
         self.mark_approval_outcome(
             session_id,
             &result.call_id.0,
-            result.occurrence_id.as_ref().map(|o| o.0.as_str()),
+            result.occurrence_id.0.as_str(),
             "denied",
         )?;
         Ok(())
@@ -283,7 +267,7 @@ impl Store {
                 session_id,
                 sequence,
                 &request.call_id.0,
-                request.occurrence_id.as_ref().map(|o| o.0.as_str()),
+                request.occurrence_id.0.as_str(),
                 &request.reason,
             ],
         )?;
@@ -296,106 +280,22 @@ impl Store {
     /// why outcome is derived from event order rather than any string
     /// match.
     ///
-    /// When `occurrence_id` is `Some`, this targets the specific approval
-    /// row it was stamped on (the agentd's
-    /// `begin_reissued_approval` mints a fresh one per reissue, see
-    /// `session/approval.rs`) and nothing else. When it is `None` --
-    /// the `ToolCallStarted` arm, which carries no occurrence, and
-    /// legacy / replayed pre-feature events -- this instead falls back
-    /// to the *most recent* pending approval for this `call_id`, the
-    /// order-derived
-    /// counterpart of the order-derived resolution (a deny short-circuits
-    /// without ever emitting `ToolCallStarted`, so a result landing on a
-    /// still-pending approval means the human denied it; a
-    /// `ToolCallStarted` landing on a still-pending approval means the
-    /// human approved it). That most-recent row is picked by a separate
-    /// `ORDER BY sequence DESC LIMIT 1` lookup rather than folded into the
-    /// `UPDATE` as a `sequence = (SELECT MAX(sequence) ...)` scalar
-    /// subquery, which is what this used to be -- see
-    /// [`Self::most_recent_pending_approval`] for why that shape had to
-    /// go. Either way exactly one row is picked, avoiding the pre-
-    /// `occurrence_id` behavior's bug where multiple pending rows for the
-    /// same `call_id` (provider-reuse, sandbox-denial-retry) would all
-    /// flip to the same outcome.
-    ///
-    /// Matches zero rows harmlessly when the call was never gated by an
-    /// approval, or its outcome is already resolved.
+    /// Exactly identifies one execution; starts and finishes never resolve an
+    /// unrelated pending approval that happens to reuse the provider call id.
     fn mark_approval_outcome(
         &self,
         session_id: &str,
         call_id: &str,
-        occurrence_id: Option<&str>,
+        occurrence_id: &str,
         outcome: &str,
     ) -> Result<()> {
-        if let Some(occ) = occurrence_id {
-            self.conn.execute(
-                "UPDATE agent_approvals SET outcome = ?
-                 WHERE session_id = ? AND call_id = ? AND occurrence_id = ?
-                   AND outcome IS NULL",
-                params![outcome, session_id, call_id, occ],
-            )?;
-        } else {
-            // Fallback / `ToolCallStarted` arm (which has no
-            // `occurrence_id`): most-recent-pending for this call_id.
-            // Deliberately `else`, not a second unconditional statement:
-            // running both would resolve the targeted row *and* the most
-            // recent pending one, so with two pending approvals sharing a
-            // call_id, resolving either would silently stamp the other with
-            // the same outcome -- the exact collapse `occurrence_id` exists
-            // to prevent.
-            if let Some(event_id) = self.most_recent_pending_approval(session_id, call_id)? {
-                // `event_id` is `agent_approvals`'s primary key, so this
-                // updates exactly the row the lookup picked.
-                self.conn.execute(
-                    "UPDATE agent_approvals SET outcome = ? WHERE event_id = ?",
-                    params![outcome, &event_id],
-                )?;
-            }
-        }
+        self.conn.execute(
+            "UPDATE agent_approvals SET outcome = ?
+             WHERE session_id = ? AND call_id = ? AND occurrence_id = ?
+               AND outcome IS NULL",
+            params![outcome, session_id, call_id, occurrence_id],
+        )?;
         Ok(())
-    }
-
-    /// `event_id` of the highest-`sequence` still-pending approval for
-    /// `(session_id, call_id)`, or `None` when there is none.
-    ///
-    /// Split out of [`Self::mark_approval_outcome`]'s single statement --
-    /// which used to select the same row inline via `sequence = (SELECT
-    /// MAX(sequence) FROM agent_approvals WHERE ... outcome IS NULL)` --
-    /// because that shape crashes DuckDB. An aggregate over a scan whose
-    /// filter the optimizer can *statically prove* selects nothing (min/max
-    /// column statistics rule the `call_id` out, or the null count rules
-    /// `outcome IS NULL` out) fails during statistics propagation with
-    /// `INTERNAL Error: Attempted to access index 0 within vector of size 0`
-    /// -- but only while the table carries transaction-local, uncommitted
-    /// rows. That is why it never showed up on the live per-event append
-    /// path, whose one-record transaction covers a single event and so
-    /// never both inserts an approval row and calls this, and instead took
-    /// down the whole batched rebuild, where every approval inserted so
-    /// far in the batch is still uncommitted.
-    /// Reproduced down to `SELECT MAX(sequence) FROM agent_approvals WHERE
-    /// call_id = <absent>` on both libduckdb 1.5.0 (the system library
-    /// here) and 1.5.4 (libduckdb-sys 1.10504.0's bundled build), so this
-    /// is not the version skew AGENTS.md "Build setup" warns about -- see
-    /// `docs/tasks/backlog.md` 69. The same query is fine once those rows
-    /// are committed, and dropping the aggregate (this `ORDER BY`/`LIMIT`
-    /// lookup) is fine on both versions either way. Prefer a top-N lookup
-    /// over an aggregate anywhere a filter may select nothing.
-    fn most_recent_pending_approval(
-        &self,
-        session_id: &str,
-        call_id: &str,
-    ) -> Result<Option<String>> {
-        Ok(self
-            .conn
-            .query_row(
-                "SELECT event_id FROM agent_approvals
-                 WHERE session_id = ? AND call_id = ? AND outcome IS NULL
-                 ORDER BY sequence DESC
-                 LIMIT 1",
-                params![session_id, call_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()?)
     }
 
     /// Turn-level bookkeeping row for a `TurnEnded` event -- see
@@ -435,8 +335,6 @@ fn turn_end_reason_text(reason: TurnEndReason) -> &'static str {
         // nothing queries a finer distinction here today; the specific
         // guard kind is a UI-rendering concern (`TurnEndReason`'s own doc
         // comment), not a `agent_turns` query one.
-        TurnEndReason::Halted
-        | TurnEndReason::HaltedByIterationCap
-        | TurnEndReason::HaltedByDoomLoop => "halted",
+        TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop => "halted",
     }
 }

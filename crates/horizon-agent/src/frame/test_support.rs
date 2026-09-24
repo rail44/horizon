@@ -71,7 +71,7 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
                 ));
             }
             Event::ToolCallStarted(call_id) => {
-                lines.push(format!("tool started: {}", call_id.0));
+                lines.push(format!("tool started: {}", call_id.call_id.0));
             }
             Event::ToolCallFinished(result) => {
                 lines.push(format!(

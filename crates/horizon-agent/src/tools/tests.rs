@@ -235,7 +235,7 @@ fn processing_preserves_provider_payload_on_original_event_only() {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".to_string(),
                 input: json!({}).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
             payload.clone(),
         ),
@@ -297,7 +297,7 @@ fn fs_read_out_of_root_routes_to_approval() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: json!({ "path": outside_file.display().to_string() }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
     );
 
@@ -321,7 +321,7 @@ fn fs_read_in_root_auto_executes() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: json!({ "path": file.display().to_string() }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
     );
 
@@ -368,7 +368,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             call_id: ToolCallId("call-grep".to_string()),
             tool_id: "fs.grep".to_string(),
             input: input.clone().into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-grep".to_string()),
         },
     );
     assert_eq!(execution, Execution::RequiresApproval);
@@ -381,7 +381,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             call_id: ToolCallId("call-glob".to_string()),
             tool_id: "fs.glob".to_string(),
             input: json!({ "base_path": outside.display().to_string(), "pattern": "*.txt" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-glob".to_string()),
         },
     );
     assert_eq!(execution, Execution::RequiresApproval);
@@ -438,7 +438,7 @@ fn read_request(call_id: &str, tool_id: &str, input: serde_json::Value) -> ToolC
         call_id: ToolCallId(call_id.to_string()),
         tool_id: tool_id.to_string(),
         input: input.into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
     }
 }
 
@@ -675,7 +675,7 @@ fn fs_read_missing_path_arg_does_not_route_to_approval() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: json!({}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         },
     );
 
@@ -794,7 +794,7 @@ fn execute_agent_tool_dispatches_fs_read_through_auto_execution() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.read".to_string(),
         input: json!({ "path": target.display().to_string() }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let output = tool_output(execute_agent_tool(
@@ -826,7 +826,7 @@ fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "write".to_string(),
         input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let Execution::Unknown(events) =
@@ -865,7 +865,7 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
             call_id: call_id.clone(),
             tool_id: "write".to_string(),
             input: json!({}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }),
     );
 
@@ -1730,7 +1730,7 @@ fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value
             call_id: call_id.clone(),
             tool_id: tool_id.to_string(),
             input: input.into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }));
     frame
 }
@@ -1765,7 +1765,7 @@ fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
             call_id: call_id.clone(),
             reason: "test".to_string(),
             kind: ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         },
     };
 
@@ -1810,12 +1810,8 @@ fn resolve_approval_executes_fs_write_on_approve() {
     let target = root.join("new.txt");
     let tool_state = ToolSessionState::new(root);
     let session_id = SessionId::new();
-    register_session_runtime(
-        session_id,
-        tool_state,
-        LiveState::new(),
-        dummy_bash_results(),
-    );
+    let live = LiveState::new();
+    register_session_runtime(session_id, tool_state, live.clone(), dummy_bash_results());
 
     let call_id = ToolCallId("call-1".to_string());
     let frame = requested_frame(
@@ -1823,6 +1819,11 @@ fn resolve_approval_executes_fs_write_on_approve() {
         "fs.write",
         json!({ "path": target.display().to_string(), "content": "approved content" }),
     );
+
+    live.extend_provider_events([Event::ToolCallRequested(
+        frame.tool_call_request(&call_id).unwrap().clone(),
+    )
+    .into()]);
 
     let outcome = resolve_approval(
         &frame,
@@ -1862,7 +1863,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
             call_id: ToolCallId("dispatch".into()),
             tool_id: "fs.write".into(),
             input: json!({"path":target, "content":"approved content"}).into(),
-            occurrence_id: Some(crate::contract::OccurrenceId::new()),
+            occurrence_id: crate::contract::OccurrenceId::new(),
         };
         let approval = ApprovalRequest {
             call_id: request.call_id.clone(),
@@ -1943,15 +1944,16 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     fs::write(&target, "hello world").unwrap();
     let tool_state = ToolSessionState::new(root);
     let session_id = SessionId::new();
-    register_session_runtime(
-        session_id,
-        tool_state,
-        LiveState::new(),
-        dummy_bash_results(),
-    );
+    let live = LiveState::new();
+    register_session_runtime(session_id, tool_state, live.clone(), dummy_bash_results());
 
     let call_id = ToolCallId("call-1".to_string());
     let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
+
+    live.extend_provider_events([Event::ToolCallRequested(
+        frame.tool_call_request(&call_id).unwrap().clone(),
+    )
+    .into()]);
 
     let outcome = resolve_approval(
         &frame,
@@ -1986,17 +1988,18 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     fs::write(&target, "hello world").unwrap();
     let tool_state = ToolSessionState::new(root);
     let session_id = SessionId::new();
-    register_session_runtime(
-        session_id,
-        tool_state,
-        LiveState::new(),
-        dummy_bash_results(),
-    );
+    let live = LiveState::new();
+    register_session_runtime(session_id, tool_state, live.clone(), dummy_bash_results());
 
     let call_id = ToolCallId("call-1".to_string());
     // No prior `fs.read` for this path -- `fs.edit` requires one, so this
     // approve runs the tool (it's not a denial) but the tool itself fails.
     let frame = requested_frame(&call_id, "fs.edit", one_edit(&target, "world", "there"));
+
+    live.extend_provider_events([Event::ToolCallRequested(
+        frame.tool_call_request(&call_id).unwrap().clone(),
+    )
+    .into()]);
 
     let outcome = resolve_approval(
         &frame,
@@ -2042,7 +2045,7 @@ fn resolve_approval_second_approve_is_noop() {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "first" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let first = resolve_approval(
@@ -2094,7 +2097,7 @@ fn resolve_approval_deny_then_approve_is_noop() {
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "should never land" })
             .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let denied = resolve_approval(
@@ -2157,7 +2160,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         call_id: call_id.clone(),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target_a.display().to_string(), "content": "first" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId::new(),
     })]);
     let first = resolve_approval(
         &frame,
@@ -2178,7 +2181,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
             call_id: call_id.clone(),
             tool_id: "fs.write".to_string(),
             input: json!({ "path": target_b.display().to_string(), "content": "second" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId::new(),
         })]);
 
     let second = resolve_approval(
@@ -2209,7 +2212,7 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -2218,7 +2221,7 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     };
     assert!(events
         .iter()
-        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.call_id)));
+        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity())));
     let output = events
         .into_iter()
         .find_map(|event| match event {
@@ -2252,7 +2255,7 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.edit".to_string(),
         input: one_edit(&target, "before", "after").into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -2272,7 +2275,7 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "fs.write".to_string(),
         input: json!({ "path": target.display().to_string(), "content": "hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -2290,7 +2293,7 @@ fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_f
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
             input: json!({ "path": "/tmp/x", "content": "hi" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
         &tool_state,
         SessionId::new(),
@@ -2308,7 +2311,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
         call_id: ToolCallId("web-fetch-invalid".to_string()),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": "file:///etc/passwd" }).into(),
-        occurrence_id: Some(crate::contract::OccurrenceId::new()),
+        occurrence_id: crate::contract::OccurrenceId::new(),
     };
 
     assert!(matches!(
@@ -2348,7 +2351,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: Some(crate::contract::OccurrenceId::new()),
+        occurrence_id: crate::contract::OccurrenceId::new(),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -2357,7 +2360,7 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
     };
     assert!(events
         .iter()
-        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.call_id)));
+        .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &request.identity())));
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2394,7 +2397,7 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let started = std::time::Instant::now();
@@ -2469,7 +2472,7 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": format!("echo outside > {}", host_target.display()) }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
@@ -2574,7 +2577,7 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
         call_id: ToolCallId("call-1".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
@@ -2607,7 +2610,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
         call_id: ToolCallId("sandboxed-git-status".to_string()),
         tool_id: "bash".to_string(),
         input: json!({ "command": "git status --short" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("sandboxed-git-status".to_string()),
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &status_request),
@@ -2634,7 +2637,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
                         git -c core.hooksPath=/dev/null commit -m horizon-sandbox-test"
         })
         .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
     assert_eq!(
@@ -2744,7 +2747,7 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": command }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
     // The compound command includes `git commit` → requires_metadata_write
@@ -2819,77 +2822,6 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     fs::remove_dir_all(fixture_root).unwrap();
 }
 
-/// Historical event logs can still contain the pre-narrow-grant retry kind.
-/// It must remain deserializable but can never turn an approval into an
-/// unsandboxed execution.
-#[test]
-fn resolve_approval_rejects_a_legacy_sandbox_denial_retry_fail_closed() {
-    let tool_state = dummy_tool_state();
-    let session_id = SessionId::new();
-    let live_state = LiveState::new();
-    register_session_runtime(
-        session_id,
-        tool_state,
-        live_state.clone(),
-        dummy_bash_results(),
-    );
-
-    let call_id = ToolCallId("bash-retry".to_string());
-
-    // First (sandboxed) attempt: requested, started -- never finished (the
-    // sandboxed job detected a denial instead of completing normally).
-    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
-        call_id: call_id.clone(),
-        tool_id: "bash".to_string(),
-        input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: None,
-    })]);
-    let after_started = live_state.extend_events([Event::ToolCallStarted(call_id.clone())]);
-    assert!(after_started.has_tool_call_started(&call_id));
-    assert!(!after_started.has_tool_call_finished(&call_id));
-
-    // The reissue: a fresh `ToolCallRequested` for the same call_id, then
-    // the normal approval-request events -- exactly what
-    // `fold_bash_retry_without_sandbox` folds in `horizon-agentd`.
-    let after_retry_request = live_state.extend_events([
-        Event::ToolCallRequested(ToolCallRequest {
-            call_id: call_id.clone(),
-            tool_id: "bash".to_string(),
-            input: json!({ "command": "echo hi" }).into(),
-            occurrence_id: None,
-        }),
-        Event::ApprovalRequested(crate::contract::ApprovalRequest {
-            call_id: call_id.clone(),
-            reason: "sandboxed run looked denied".to_string(),
-            kind: crate::contract::ApprovalKind::SandboxDenialRetry,
-            occurrence_id: None,
-        }),
-    ]);
-    assert!(
-        !after_retry_request.has_tool_call_started(&call_id),
-        "the reissue must reset the started/finished scope, or the retry's \
-         own approve would be misclassified as AlreadyResolved"
-    );
-
-    let outcome = resolve_approval(
-        &after_retry_request,
-        session_id,
-        call_id,
-        ApprovalDecision::Approve,
-    );
-    let ApprovalOutcome::Executed { command, .. } = outcome else {
-        panic!("legacy retry must resolve synchronously and fail closed: {outcome:?}");
-    };
-    let Command::ToolCallResult(result) = command else {
-        panic!("expected a ToolCallResult");
-    };
-    assert_eq!(result.output["is_error"], true);
-    assert!(result.output["message"]
-        .as_str()
-        .unwrap()
-        .contains("retrying without the sandbox is disabled"));
-}
-
 // --- approval wiring: filesystem-denial retry ----------------------------
 
 /// The 2026-07-26 replacement for the host-execution retry
@@ -2956,12 +2888,12 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             "command": format!("printf approved > {}", written.display())
         })
         .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let prior_result = ToolCallResult::new(
         call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(call_id.0.clone()),
         json!({ "is_error": true, "filesystem_denied": true }),
     );
     let approval = ApprovalRequest {
@@ -2972,7 +2904,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             grants: grants.clone(),
             prior_result,
         },
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
@@ -3014,7 +2946,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
             "command": format!("printf later > {}", ungranted.display())
         })
         .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("bash-filesystem-later".to_string()),
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &later_request),
@@ -3074,7 +3006,7 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
             "command": format!("printf granted > {}", inside.display())
         })
         .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("bash-configured-grant".to_string()),
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
@@ -3100,7 +3032,11 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
             "command": format!("printf nope > {}", outside.display())
         })
         .into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(
+            (ToolCallId("bash-configured-grant-other".to_string()))
+                .0
+                .clone(),
+        ),
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &other_request),
@@ -3132,7 +3068,7 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo must-not-run" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
     // Exactly the shape a request persisted by the host-execution-era build
     // deserializes into: denials, but no grants.
@@ -3146,11 +3082,11 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
                 grants: Vec::new(),
                 prior_result: ToolCallResult::new(
                     call_id.clone(),
-                    None,
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     json!({ "is_error": true }),
                 ),
             },
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }),
     ]);
 
@@ -3180,19 +3116,25 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
     register_session_runtime(session_id, tool_state, live_state.clone(), bash_results_tx);
     let call_id = ToolCallId("bash-filesystem-denied-by-user".to_string());
-    let request = ToolCallRequest {
+    let first = ToolCallRequest {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo must-not-run" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId("first-attempt".into()),
+    };
+    let request = ToolCallRequest {
+        occurrence_id: crate::contract::OccurrenceId("declined-retry".into()),
+        ..first.clone()
     };
     let prior_result = ToolCallResult::new(
         call_id.clone(),
-        None,
+        first.occurrence_id.clone(),
         json!({ "is_error": true, "filesystem_denied": true }),
     );
     let frame = live_state.extend_events([
-        Event::ToolCallRequested(request),
+        Event::ToolCallRequested(first.clone()),
+        Event::ToolCallStarted(first.identity()),
+        Event::ToolCallRequested(request.clone()),
         Event::ApprovalRequested(ApprovalRequest {
             call_id: call_id.clone(),
             reason: "host execution required".to_string(),
@@ -3201,7 +3143,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
                 grants: Vec::new(),
                 prior_result: prior_result.clone(),
             },
-            occurrence_id: None,
+            occurrence_id: request.occurrence_id.clone(),
         }),
     ]);
 
@@ -3212,8 +3154,19 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
-        ApprovalOutcome::Executed { command, .. } => {
+        ApprovalOutcome::Executed {
+            command,
+            frame,
+            events,
+        } => {
             assert_eq!(command, Command::ToolCallResult(prior_result));
+            assert!(frame.unfinished_tool_calls().is_empty());
+            assert!(frame.pending_approval_call_ids().is_empty());
+            assert!(
+                matches!(events.last(), Some(Event::ToolCallFinished(result))
+                if result.occurrence_id == request.occurrence_id
+                    && result.output["cancelled"] == true)
+            );
         }
         other => panic!("deny must forward the first sandbox result: {other:?}"),
     }
@@ -3273,7 +3226,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     // first attempt's genuine outcome, stamped with its own occurrence.
     let prior_result = ToolCallResult::new(
         call_id.clone(),
-        Some(abandoned.clone()),
+        abandoned.clone(),
         json!({ "is_error": true, "filesystem_denied": true }),
     );
     let frame = live_state.extend_events([
@@ -3281,14 +3234,17 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
             input: input.clone().into(),
-            occurrence_id: Some(abandoned.clone()),
+            occurrence_id: abandoned.clone(),
         }),
-        Event::ToolCallStarted(call_id.clone()),
+        Event::ToolCallStarted(crate::contract::ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: abandoned.clone(),
+        }),
         Event::ToolCallRequested(ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
             input: input.into(),
-            occurrence_id: Some(retry.clone()),
+            occurrence_id: retry.clone(),
         }),
         Event::ApprovalRequested(ApprovalRequest {
             call_id: call_id.clone(),
@@ -3298,7 +3254,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
                 grants,
                 prior_result,
             },
-            occurrence_id: Some(retry.clone()),
+            occurrence_id: retry.clone(),
         }),
     ]);
 
@@ -3314,7 +3270,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     let Some(Event::ToolCallFinished(superseded)) = events.first() else {
         panic!("the abandoned attempt must be closed before the retry starts: {events:?}");
     };
-    assert_eq!(superseded.occurrence_id, Some(abandoned));
+    assert_eq!(superseded.occurrence_id, abandoned);
     assert_eq!(superseded.output[SUPERSEDED_BY_RETRY], json!(true));
     assert_eq!(
         superseded.output["retry_occurrence_id"],
@@ -3342,12 +3298,9 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     assert_eq!(result.output["exit_code"], 0);
     assert_eq!(fs::read_to_string(&written).unwrap(), "approved");
 
-    // Folding the retry's result the way `fold_finished_bash_result` does
-    // (stamping the live request's occurrence) leaves two closed rows.
-    let frame = live_state.extend_events([Event::ToolCallFinished(ToolCallResult {
-        occurrence_id: Some(retry),
-        ..result
-    })]);
+    // The worker must retain its dispatch identity without post-hoc stamping.
+    assert_eq!(result.occurrence_id, retry);
+    let frame = live_state.extend_events([Event::ToolCallFinished(result)]);
     assert!(
         !should_fold_completion(&frame, &call_id),
         "the live occurrence is resolved once its own result folds"
@@ -3413,12 +3366,12 @@ fn domain_denial_retry_frame(
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "curl https://example.com" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let prior_result = ToolCallResult::new(
         call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(call_id.0.clone()),
         json!({ "is_error": true, "denied_domains": domains, "exit_code": 0 }),
     );
     let frame =
@@ -3429,7 +3382,7 @@ fn domain_denial_retry_frame(
                 domains: vec!["example.com".to_string()],
                 prior_result: prior_result.clone(),
             },
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         })]);
     (frame, prior_result)
 }
@@ -3439,7 +3392,7 @@ fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str
         call_id: call_id.clone(),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": format!("https://{domain}/") }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
     live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
         call_id: call_id.clone(),
@@ -3447,7 +3400,7 @@ fn domain_grant_frame(live_state: &LiveState, call_id: &ToolCallId, domain: &str
         kind: crate::contract::ApprovalKind::DomainGrant {
             domains: vec![domain.to_string()],
         },
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })])
 }
 
@@ -3494,7 +3447,7 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
         call_id: call_id.clone(),
         tool_id: "web_fetch".to_string(),
         input: json!({ "url": "https://example.com/" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let approval = ApprovalRequest {
@@ -3503,7 +3456,7 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
         kind: ApprovalKind::DomainGrant {
             domains: vec!["example.com".to_string()],
         },
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
@@ -3619,7 +3572,7 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo hi" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let outcome = resolve_approval(
@@ -3635,7 +3588,7 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
     assert!(frame
         .items
         .iter()
-        .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id == &call_id)));
+        .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id.call_id == call_id)));
     assert!(!frame.has_tool_call_finished(&call_id));
 
     // The command actually ran on a background thread and its result
@@ -3666,7 +3619,7 @@ fn resolve_approval_denies_bash_without_running_it() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo should-never-run" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let outcome = resolve_approval(
@@ -3719,7 +3672,7 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         call_id: call_id.clone(),
         tool_id: "bash".to_string(),
         input: json!({ "command": "echo first" }).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
     let first = resolve_approval(

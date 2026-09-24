@@ -141,6 +141,7 @@ impl<'a> ResponseCollector<'a> {
         self.requested_tool_calls.insert(
             request.call_id.clone(),
             ToolCallDescriptor {
+                identity: request.identity(),
                 tool_id: request.tool_id.clone(),
                 args: request.input.0.clone(),
             },

@@ -43,10 +43,6 @@ impl Registration {
         Self { key, state }
     }
 
-    pub(super) fn call_id(&self) -> &ToolCallId {
-        &self.key.1
-    }
-
     pub(super) fn is_cancelled(&self) -> bool {
         lock(&self.state).cancelled
     }

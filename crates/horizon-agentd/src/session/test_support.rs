@@ -61,14 +61,14 @@ pub(super) fn judge_candidate(call_id: &str) -> ApprovalCandidate {
         call_id: ToolCallId(call_id.to_string()),
         tool_id: "mock.approval_required".to_string(),
         input: serde_json::json!({}).into(),
-        occurrence_id: None,
+        occurrence_id: horizon_agent::contract::OccurrenceId(call_id.to_string()),
     };
     ApprovalCandidate {
         approval: ApprovalRequest {
             call_id: request.call_id.clone(),
             reason: "test approval".to_string(),
             kind: ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: horizon_agent::contract::OccurrenceId(request.call_id.0.clone()),
         },
         request,
     }
@@ -124,5 +124,13 @@ fn session_fixtures_do_not_read_host_provider_or_persistence_settings() {
         assert!(config.persistence.event_log_path.as_os_str().is_empty());
         assert_eq!(config.persistence.duckdb_path, None);
         assert!(!config.providers.entries[0].api_key_present);
+    }
+}
+
+/// Single-execution fixtures use the call label as their occurrence label.
+pub(super) fn tool_identity(call_id: &ToolCallId) -> horizon_agent::contract::ToolCallIdentity {
+    horizon_agent::contract::ToolCallIdentity {
+        call_id: call_id.clone(),
+        occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
     }
 }

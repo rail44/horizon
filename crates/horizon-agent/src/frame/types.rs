@@ -17,7 +17,7 @@ pub enum AgentFrameItem {
     ReasoningDelta(MessageDelta),
     AssistantTextDelta(MessageDelta),
     ToolCallRequested(ToolCallRequest),
-    ToolCallStarted(ToolCallId),
+    ToolCallStarted(ToolCallIdentity),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
     /// Ephemeral tool-call-argument-streaming progress (see

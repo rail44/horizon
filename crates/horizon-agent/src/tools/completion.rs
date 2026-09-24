@@ -11,7 +11,7 @@ use crate::frame::AgentFrame;
 /// via `fold_bash_completion`.
 #[derive(Clone, Debug)]
 // Same justification as `ApprovalKind` in `contract.rs` -- adding
-// `occurrence_id: Option<OccurrenceId>` to `ToolCallResult` pushed the
+// `occurrence_id: OccurrenceId` to `ToolCallResult` pushed the
 // `Finished(ToolCallResult)` variant just past the 200-byte threshold
 // the lint compares against, and the variants are not constructed in a
 // hot loop.
@@ -44,7 +44,7 @@ pub enum ToolCompletion {
     /// an approval retries the same tool call from its original URL.
     DomainGrantRequired {
         call_id: ToolCallId,
-        occurrence_id: Option<OccurrenceId>,
+        occurrence_id: OccurrenceId,
         domains: Vec<String>,
     },
     FilesystemDenied {
@@ -69,8 +69,7 @@ pub enum ToolCompletion {
 pub type BashCompletion = ToolCompletion;
 
 impl ToolCompletion {
-    /// An explicit origin must still name the live request. Untagged legacy
-    /// completions retain call-ID matching; new workers bind at dispatch time.
+    /// A completion must name the current execution, including its occurrence.
     pub fn matches_live_request(&self, frame: &AgentFrame) -> bool {
         let (call_id, occurrence_id) = match self {
             Self::ApprovalJudged(judgment) => (
@@ -88,26 +87,9 @@ impl ToolCompletion {
             | Self::MachServiceDenied { result, .. } => (&result.call_id, &result.occurrence_id),
         };
         should_fold_completion(frame, call_id)
-            && occurrence_id.as_ref().is_none_or(|origin| {
-                frame
-                    .tool_call_request(call_id)
-                    .and_then(|request| request.occurrence_id.as_ref())
-                    == Some(origin)
-            })
-    }
-
-    /// Bind normal, denied, redirected, and panic outcomes to their dispatch.
-    pub(crate) fn with_occurrence(mut self, occurrence_id: Option<OccurrenceId>) -> Self {
-        if let Self::DomainGrantRequired {
-            occurrence_id: origin,
-            ..
-        } = &mut self
-        {
-            *origin = occurrence_id;
-        } else if let Some(result) = self.result_mut() {
-            result.occurrence_id = occurrence_id;
-        }
-        self
+            && frame
+                .tool_call_request(call_id)
+                .is_some_and(|request| &request.occurrence_id == occurrence_id)
     }
 
     pub(crate) fn result_mut(&mut self) -> Option<&mut ToolCallResult> {

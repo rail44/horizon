@@ -10,6 +10,9 @@ use super::{
 
 impl SessionLoopState {
     pub(super) async fn handle_tool_result(&mut self, result: ToolCallResult) {
+        // The daemon validates execution identity before delivery. A declined
+        // retry deliberately answers the provider call with the prior attempt's
+        // real result, so the provider's pending key remains its call ID.
         let Some(descriptor) = self.pending_tool_calls.remove(&result.call_id) else {
             // Unsolicited (duplicate or stale) result: no pending
             // tool call under this id. Running a turn from it would
@@ -123,12 +126,13 @@ mod tests {
     async fn a_new_provider_batch_can_reuse_an_id_from_cancelled_work() {
         let reused = ToolCallId("reused-after-cancel".into());
         let sibling = ToolCallId("still-outstanding".into());
-        let descriptor = || ToolCallDescriptor {
+        let descriptor = |call_id: &ToolCallId| ToolCallDescriptor {
+            identity: crate::test_support::tool_identity(call_id),
             tool_id: "fs.read".into(),
             args: serde_json::json!({"path": "file"}),
         };
         let mut state = SessionLoopState {
-            pending_tool_calls: HashMap::from([(reused.clone(), descriptor())]),
+            pending_tool_calls: HashMap::from([(reused.clone(), descriptor(&reused))]),
             guard: super::super::TurnLoopGuard::new(20, 10),
             ..SessionLoopState::default()
         };
@@ -136,8 +140,8 @@ mod tests {
         state.apply_turn_outcome(TurnCompletion {
             requested_tool_call_ids: vec![reused.clone(), sibling.clone()],
             requested_tool_calls: HashMap::from([
-                (reused.clone(), descriptor()),
-                (sibling.clone(), descriptor()),
+                (reused.clone(), descriptor(&reused)),
+                (sibling.clone(), descriptor(&sibling)),
             ]),
             ..Default::default()
         });
@@ -145,7 +149,7 @@ mod tests {
         state
             .handle_tool_result(ToolCallResult::new(
                 reused.clone(),
-                Some(crate::contract::OccurrenceId::new()),
+                crate::contract::OccurrenceId::new(),
                 serde_json::json!({"content": "new result"}),
             ))
             .await;

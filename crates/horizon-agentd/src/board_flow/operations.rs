@@ -49,15 +49,7 @@ pub(crate) async fn operate(
 ) -> Result<(Value, Vec<Event>), String> {
     let operation: Operation =
         serde_json::from_value(request.input.clone().into()).map_err(|e| e.to_string())?;
-    let source = format!(
-        "tool:{}:{}",
-        caller.as_uuid(),
-        request
-            .occurrence_id
-            .as_ref()
-            .map(|id| id.0.as_str())
-            .unwrap_or(&request.call_id.0)
-    );
+    let source = format!("tool:{}:{}", caller.as_uuid(), request.occurrence_id.0);
     match operation {
         Operation::Consult { id, text } => {
             let target = task_session(&state, store, root, id, false).await?;

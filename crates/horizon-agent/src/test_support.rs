@@ -20,3 +20,14 @@ pub(crate) fn non_repository_test_dir() -> tempfile::TempDir {
         .tempdir_in(base)
         .expect("create a directory outside the repository")
 }
+
+/// Identity for fixtures containing one execution per call ID. Retry/reuse tests
+/// supply distinct occurrence IDs explicitly instead of using this helper.
+pub(crate) fn tool_identity(
+    call_id: &crate::contract::ToolCallId,
+) -> crate::contract::ToolCallIdentity {
+    crate::contract::ToolCallIdentity {
+        call_id: call_id.clone(),
+        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+    }
+}

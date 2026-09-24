@@ -317,6 +317,15 @@ fn handle_provider_event(
     session_id: SessionId,
     provider_event: ProviderEvent,
 ) {
+    if !provider_event.is_ephemeral() {
+        if let Event::ToolCallFinished(result) = &provider_event.event {
+            if !horizon_agent::tools::ToolCompletion::Finished(result.clone())
+                .matches_live_request(&live_state.frame())
+            {
+                return;
+            }
+        }
+    }
     let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
     gate_processing_approval(
         tool_state,
@@ -422,7 +431,7 @@ mod tests {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".into(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: None,
+                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
             })
             .into(),
         );

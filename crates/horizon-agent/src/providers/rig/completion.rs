@@ -114,8 +114,9 @@ impl Drop for ProviderRequestSpan {
 /// doc, so distinct calls that happen to produce identical output (e.g.
 /// greps for different patterns, each with zero matches) are not mistaken
 /// for a loop.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub(super) struct ToolCallDescriptor {
+    pub(super) identity: crate::contract::ToolCallIdentity,
     pub(super) tool_id: String,
     pub(super) args: serde_json::Value,
 }
@@ -838,6 +839,7 @@ fn tool_call_requests_from_events(
             Event::ToolCallRequested(request) => Some((
                 request.call_id.clone(),
                 ToolCallDescriptor {
+                    identity: request.identity(),
                     tool_id: request.tool_id.clone(),
                     args: request.input.0.clone(),
                 },

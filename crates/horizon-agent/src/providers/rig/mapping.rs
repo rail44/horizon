@@ -191,7 +191,7 @@ pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
         // transcript, approval, and analytics each follow; a UUID v4 is
         // globally unique without coordination across resumed sessions
         // and replayed logs, which a per-process counter would not be.
-        occurrence_id: Some(OccurrenceId::new()),
+        occurrence_id: OccurrenceId::new(),
     }
 }
 

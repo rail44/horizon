@@ -65,9 +65,7 @@ impl AgentTranscript {
                 };
                 let halted = matches!(
                     end.reason,
-                    TurnEndReason::Halted
-                        | TurnEndReason::HaltedByIterationCap
-                        | TurnEndReason::HaltedByDoomLoop
+                    TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop
                 );
                 (Some((status.text, color)), end.model.clone(), halted)
             }

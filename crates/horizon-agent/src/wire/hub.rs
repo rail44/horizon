@@ -127,13 +127,18 @@ use crate::contract::{Command, SessionId};
 ///   is why this is not a mere append: a stale peer must be drained and
 ///   respawned rather than decode a shape it never had.
 ///
+/// - **v23 — required execution identity**: tool starts carry both IDs;
+///   requests, approvals, decisions, and results require occurrence IDs.
+///   Retired generic halt and sandbox-retry variants are removed. Restart
+///   both shell and agentd; terminald keeps its independent protocol.
+///
 /// Additive since v19, no bump (the v12 precedent): **live background-task
 /// progress** — `AgentWireEvent::TaskProgress` (`contract::TaskProgress`),
 /// the daemon-side task watcher mirroring what a `task` child is doing
 /// (current tool, reasoning vs tool-running) onto the requester's
 /// attachment channel. Ephemeral UI feedback: never persisted, dropped
 /// while no client is attached, not replayed on attach.
-pub const AGENT_PROTOCOL_VERSION: u32 = 22;
+pub const AGENT_PROTOCOL_VERSION: u32 = 23;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -143,7 +148,7 @@ pub const AGENT_PROTOCOL_VERSION: u32 = 22;
 /// interop, they need honest restart, so a mismatched `hello` is rejected
 /// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
 /// adoption-design.md` §3/§6) rather than bridged by gate constants.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 22;
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 23;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -325,7 +330,7 @@ mod tests {
     /// builds. The terminal protocol evolves independently.
     #[test]
     fn board_routing_requires_the_current_agent_protocol() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 22);
+        assert_eq!(AGENT_PROTOCOL_VERSION, 23);
         assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, AGENT_PROTOCOL_VERSION);
     }
 

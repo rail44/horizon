@@ -132,6 +132,12 @@ impl Default for SessionLoopState {
 }
 
 impl SessionLoopState {
+    pub(super) fn note_tool_call_reissued(&mut self, identity: crate::contract::ToolCallIdentity) {
+        if let Some(descriptor) = self.pending_tool_calls.get_mut(&identity.call_id) {
+            descriptor.identity = identity;
+        }
+    }
+
     /// Constructs the state `run_session_loop` needs, doing the async init
     /// (clearing-state discovery, command bridging, wake registration) that
     /// must happen inside the loop's own runtime.
@@ -214,6 +220,9 @@ impl SessionLoopState {
             };
 
             match command {
+                Command::ToolCallReissued(identity) => {
+                    self.note_tool_call_reissued(identity);
+                }
                 Command::ApplySessionModel(selection) => {
                     self.handle_set_session_model(&selection).await;
                 }

@@ -5,7 +5,7 @@ use super::{
     SandboxedApprovalOrigin,
 };
 use crate::config::BashToolConfig;
-use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::contract::{SessionId, ToolCallIdentity, ToolCallRequest};
 use crate::policy::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
@@ -21,8 +21,7 @@ use std::sync::{Arc, Mutex};
 /// handle stays shared so a queued command observes earlier commands' `cd`.
 pub(crate) struct BashJob {
     session_id: SessionId,
-    call_id: ToolCallId,
-    occurrence_id: Option<OccurrenceId>,
+    identity: ToolCallIdentity,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
@@ -38,8 +37,7 @@ impl BashJob {
     ) -> Self {
         Self {
             session_id,
-            call_id: request.call_id.clone(),
-            occurrence_id: request.occurrence_id.clone(),
+            identity: request.identity(),
             input: request.input.0.clone(),
             cwd: tools.bash_cwd_handle(),
             config: tools.bash_config(),
@@ -56,7 +54,8 @@ impl BashJob {
             + std::panic::UnwindSafe
             + 'static,
     ) {
-        let registration = registry::Registration::new(self.session_id, self.call_id.clone());
+        let registration =
+            registry::Registration::new(self.session_id, self.identity.call_id.clone());
         let work_guard = crate::tools::work_boundary::begin(self.session_id);
         registry::enqueue(
             self.session_id,
@@ -67,8 +66,7 @@ impl BashJob {
                 }
                 run_job_body(
                     self.session_id,
-                    self.call_id.clone(),
-                    self.occurrence_id.clone(),
+                    self.identity.clone(),
                     &self.result_tx,
                     || {
                         let completion = work(&self, &registration);
@@ -130,6 +128,7 @@ fn run_sandboxed_job(
     let mut completion = match sandbox.validated_grants() {
         Ok(grants) => exec::run_sandboxed(
             registration,
+            &job.identity,
             &job.input,
             &job.cwd,
             &sandbox.workspace_root,
@@ -143,7 +142,7 @@ fn run_sandboxed_job(
                 "Git metadata grant validation failed before execution: {error}"
             ));
             annotate_sandboxed(&mut output, false);
-            BashCompletion::Finished(ToolCallResult::new(job.call_id.clone(), None, output))
+            BashCompletion::Finished(job.identity.result(output))
         }
     };
     if let (Some(roots), Some(result)) = (
@@ -204,7 +203,7 @@ impl SandboxedApprovalOrigin {
 #[cfg(test)]
 pub(super) fn spawn(
     session_id: SessionId,
-    call_id: ToolCallId,
+    call_id: crate::contract::ToolCallId,
     input: Value,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
@@ -213,8 +212,7 @@ pub(super) fn spawn(
     spawn_host(
         BashJob {
             session_id,
-            call_id,
-            occurrence_id: None,
+            identity: crate::test_support::tool_identity(&call_id),
             input,
             cwd,
             config,
@@ -250,7 +248,7 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
                 );
             }
         }
-        BashCompletion::Finished(ToolCallResult::new(job.call_id.clone(), None, output))
+        BashCompletion::Finished(job.identity.result(output))
     });
 }
 
@@ -287,8 +285,7 @@ pub(crate) fn spawn_sandboxed(job: BashJob, sandbox: SandboxedRun) {
 /// retry-without-sandbox prompt) -- a harness panic isn't a sandbox denial.
 pub(super) fn run_job_body(
     session_id: SessionId,
-    call_id: ToolCallId,
-    occurrence_id: Option<OccurrenceId>,
+    identity: ToolCallIdentity,
     result_tx: &Sender<BashCompletion>,
     work: impl FnOnce() -> BashCompletion + std::panic::UnwindSafe,
 ) {
@@ -303,15 +300,15 @@ pub(super) fn run_job_body(
             // silently miss. Deref first so the trait object is built from
             // the actual payload.
             let message = panic_payload_message(&*payload);
-            eprintln!("bash worker panicked (session {session_id:?}, call {call_id:?}): {message}");
-            BashCompletion::Finished(ToolCallResult::new(
-                call_id,
-                None,
-                exec::panic_output(&format!("bash worker panicked: {message}")),
-            ))
+            eprintln!(
+                "bash worker panicked (session {session_id:?}, execution {identity:?}): {message}"
+            );
+            BashCompletion::Finished(identity.result(exec::panic_output(&format!(
+                "bash worker panicked: {message}"
+            ))))
         }
     };
-    let _ = result_tx.send(completion.with_occurrence(occurrence_id));
+    let _ = result_tx.send(completion);
 }
 
 /// Extracts a human-readable message from a caught panic's payload. Panic
@@ -334,6 +331,7 @@ fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> String {
 mod tests {
     use super::*;
     use crate::config::AgentToolsConfig;
+    use crate::contract::ToolCallId;
     use crate::tools::{session_tool_work_settled, RecallContext};
     use crossbeam_channel::unbounded;
     use std::time::{Duration, Instant};
@@ -350,8 +348,8 @@ mod tests {
         );
         let session_id = SessionId::new();
         let request = |id: &str| ToolCallRequest {
-            call_id: ToolCallId(id.into()),
-            occurrence_id: None,
+            call_id: (ToolCallId(id.into())).clone(),
+            occurrence_id: crate::contract::OccurrenceId((ToolCallId(id.into())).0.clone()),
             tool_id: "bash".into(),
             input: serde_json::json!({"command": "pwd"}).into(),
         };

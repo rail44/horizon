@@ -2,8 +2,8 @@ use crate::tools::bash;
 use serde_json::{json, Value};
 
 use crate::contract::{
-    Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallId, ToolCallRequest,
-    ToolCallResult, ToolPermission,
+    Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallRequest, ToolCallResult,
+    ToolPermission,
 };
 use crate::policy::{
     annotate_auto_approval, boundary_disposition, classify_call, BoundaryDisposition,
@@ -164,7 +164,7 @@ fn execute_boundary_tool(
     };
     let events = vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
     ];
     crate::tools::web::spawn(
         session_id,
@@ -213,7 +213,7 @@ fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) ->
 
     Execution::Auto(vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
         Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
             request.occurrence_id.clone(),
@@ -277,7 +277,7 @@ fn execute_tier1_bash(
             annotate_auto_approval(&mut output, "contained", "isolated worktree session");
             return Execution::Auto(vec![
                 Event::StateChanged(SessionState::ToolRunning),
-                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallStarted(request.identity()),
                 Event::ToolCallFinished(ToolCallResult::new(
                     call_id,
                     request.occurrence_id.clone(),
@@ -289,7 +289,7 @@ fn execute_tier1_bash(
 
     let events = vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
     ];
 
     bash::spawn_sandboxed(
@@ -337,7 +337,7 @@ fn execute_auto_tool(
 
     vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
         Event::ToolCallFinished(ToolCallResult::new(
             request.call_id.clone(),
             request.occurrence_id.clone(),
@@ -365,16 +365,14 @@ pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
     })
 }
 
-/// A synthetic tool result marking a pending tool call as cancelled, so a
-/// pending approval belonging to a cancelled turn resolves to a terminal
-/// (non-error) outcome instead of hanging forever. `occurrence_id` is `None`
-/// because a cancellation is a session-wide event with no per-occurrence
-/// reference available at the call site -- and unlike the asynchronous
-/// executors' results, this one never passes through the agentd's
-/// `fold_finished_bash_result` (the session loop synthesizes it directly),
-/// so nothing stamps it later either. Consumers fall back to call_id
-/// matching for `None`, the same legacy path replayed pre-feature logs
-/// already take.
-pub fn cancelled_tool_call_result(call_id: ToolCallId) -> ToolCallResult {
-    ToolCallResult::new(call_id, None, json!({ "cancelled": true }))
+/// Finish one cancelled execution with the identity of its original request.
+pub fn cancelled_tool_call_result(identity: crate::contract::ToolCallIdentity) -> ToolCallResult {
+    identity.result(json!({ "cancelled": true }))
+}
+
+/// Stop turn-owned asynchronous work before recording its cancellation. Task
+/// children are session-owned and deliberately remain running.
+pub fn cancel_tool_execution(session_id: SessionId, call_id: &crate::contract::ToolCallId) {
+    crate::tools::bash::cancel_call(session_id, call_id);
+    crate::tools::web::cancel_if_running(session_id, call_id);
 }

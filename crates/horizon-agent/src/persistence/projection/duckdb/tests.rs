@@ -28,17 +28,17 @@ fn stores_events_and_rebuilds_agent_frame() {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "needs approval".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({ "tab_count": 1 }),
                 )),
             ],
@@ -70,17 +70,17 @@ fn exposes_queryable_message_tool_and_approval_projections() {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
                     input: serde_json::json!({ "include": "tabs" }).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "approval".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({ "ok": true }),
                 )),
             ],
@@ -216,11 +216,11 @@ fn file_backed_store_reopens_persisted_events_and_projections() {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
                         input: serde_json::json!({}).into(),
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
-                        call_id,
-                        None,
+                        call_id.clone(),
+                        crate::contract::OccurrenceId(call_id.0.clone()),
                         serde_json::json!({ "tab_count": 1 }),
                     )),
                 ],
@@ -279,13 +279,13 @@ fn file_backed_store_reopens_session_snapshots_for_restore_read_model() {
                         call_id: call_id.clone(),
                         tool_id: "workspace.snapshot".to_string(),
                         input: serde_json::json!({}).into(),
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "approval".to_string(),
                         kind: ApprovalKind::Standard,
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                 ],
             )
@@ -350,17 +350,17 @@ fn rebuilds_query_projections_from_durable_events() {
                     call_id: call_id.clone(),
                     tool_id: "workspace.snapshot".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "approval".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({ "tab_count": 1 }),
                 )),
             ],
@@ -473,14 +473,14 @@ fn rebuilds_store_from_agent_event_log_records() {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".to_string(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }))
             .to_string(),
             event: Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
                 tool_id: "workspace.snapshot".to_string(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
             provider_payload: None,
             created_at_unix_ms: 2,
@@ -497,13 +497,13 @@ fn rebuilds_store_from_agent_event_log_records() {
             session_context: None,
             event_kind: event_kind(&Event::ToolCallFinished(ToolCallResult::new(
                 call_id.clone(),
-                None,
+                crate::contract::OccurrenceId(call_id.0.clone()),
                 serde_json::json!({ "ok": true }),
             )))
             .to_string(),
             event: Event::ToolCallFinished(ToolCallResult::new(
-                call_id,
-                None,
+                call_id.clone(),
+                crate::contract::OccurrenceId(call_id.0.clone()),
                 serde_json::json!({ "ok": true }),
             )),
             provider_payload: None,
@@ -711,7 +711,7 @@ fn live_and_rebuilt_tool_results_preserve_explicit_denial_errors() {
                 None,
                 Event::ToolCallFinished(ToolCallResult::denied(
                     ToolCallId(format!("call-{index}")),
-                    Some(OccurrenceId(format!("occurrence-{index}"))),
+                    OccurrenceId(format!("occurrence-{index}")),
                     output.clone(),
                 )),
                 index as u64 + 1,
@@ -753,22 +753,22 @@ fn tool_result_is_error_reflects_the_output_jsons_own_flag() {
                     call_id: ok_call.clone(),
                     tool_id: "fs.read".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(ok_call.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    ok_call,
-                    None,
+                    ok_call.clone(),
+                    crate::contract::OccurrenceId(ok_call.0.clone()),
                     serde_json::json!({ "ok": true }),
                 )),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: err_call.clone(),
                     tool_id: "fs.read".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(err_call.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    err_call,
-                    None,
+                    err_call.clone(),
+                    crate::contract::OccurrenceId(err_call.0.clone()),
                     serde_json::json!({ "is_error": true, "message": "nope" }),
                 )),
             ],
@@ -802,18 +802,18 @@ fn approval_outcome_is_approved_when_tool_call_started_follows_the_request() {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "needs approval".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
-                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallStarted(crate::test_support::tool_identity(&call_id)),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({ "ok": true }),
                 )),
             ],
@@ -839,20 +839,20 @@ fn approval_outcome_is_denied_when_finished_arrives_with_no_prior_started() {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "needs approval".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 // A deny short-circuits: `ToolCallFinished` arrives with
                 // no `ToolCallStarted` in between (`tools::approval::
                 // synchronous_result(ran=false)`).
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({
                         "is_error": true,
                         "message": "denied by user"
@@ -888,32 +888,32 @@ fn resolving_one_occurrence_leaves_a_sibling_pending_approval_untouched() {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: Some(occ_a.clone()),
+                    occurrence_id: occ_a.clone(),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "first occurrence".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: Some(occ_a.clone()),
+                    occurrence_id: occ_a.clone(),
                 }),
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: call_id.clone(),
                     tool_id: "bash.exec".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: Some(occ_b.clone()),
+                    occurrence_id: occ_b.clone(),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "second occurrence".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: Some(occ_b.clone()),
+                    occurrence_id: occ_b.clone(),
                 }),
                 // The first occurrence is denied (finished with no
                 // preceding `ToolCallStarted`); the second is still
                 // waiting on the human.
                 Event::ToolCallFinished(ToolCallResult::denied(
                     call_id.clone(),
-                    Some(occ_a.clone()),
+                    occ_a.clone(),
                     serde_json::json!({ "is_error": true, "message": "denied by user" }),
                 )),
             ],
@@ -950,7 +950,7 @@ fn a_superseded_close_does_not_steal_the_retrys_pending_approval_outcome() {
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
             input: serde_json::json!({}).into(),
-            occurrence_id: Some(occurrence.clone()),
+            occurrence_id: occurrence.clone(),
         })
     };
 
@@ -961,23 +961,29 @@ fn a_superseded_close_does_not_steal_the_retrys_pending_approval_outcome() {
             [
                 // Tier-1 auto-approved: started with no approval row.
                 requested(&abandoned),
-                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallStarted(crate::contract::ToolCallIdentity {
+                    call_id: call_id.clone(),
+                    occurrence_id: abandoned.clone(),
+                }),
                 // The denial fold's reissue and its retry prompt.
                 requested(&retry),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "grant the cache tree and retry".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: Some(retry.clone()),
+                    occurrence_id: retry.clone(),
                 }),
                 // Approve: the abandoned attempt closes, then the retry
                 // starts.
                 Event::ToolCallFinished(ToolCallResult::new(
                     call_id.clone(),
-                    Some(abandoned),
+                    abandoned,
                     serde_json::json!({ "superseded_by_retry": true }),
                 )),
-                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallStarted(crate::contract::ToolCallIdentity {
+                    call_id: call_id.clone(),
+                    occurrence_id: retry.clone(),
+                }),
             ],
         )
         .expect("append events");
@@ -992,7 +998,7 @@ fn a_superseded_close_does_not_steal_the_retrys_pending_approval_outcome() {
 }
 
 #[test]
-fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
+fn turn_ended_projects_a_row_for_each_ordinary_end_reason() {
     let store = Store::open_in_memory().expect("store");
     let session_id = SessionId::new();
 
@@ -1000,7 +1006,6 @@ fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
         (TurnEndReason::Completed, "completed"),
         (TurnEndReason::Cancelled, "cancelled"),
         (TurnEndReason::Failed, "failed"),
-        (TurnEndReason::Halted, "halted"),
     ];
     for (index, (reason, _)) in reasons.iter().enumerate() {
         store
@@ -1016,7 +1021,7 @@ fn turn_ended_projects_a_row_for_each_of_the_four_end_reasons() {
     }
 
     let turns = store.turns_for_session(session_id).expect("turns");
-    assert_eq!(turns.len(), 4);
+    assert_eq!(turns.len(), reasons.len());
     for (index, (_, expected)) in reasons.iter().enumerate() {
         let turn = turns
             .iter()
@@ -1068,7 +1073,7 @@ fn rebuild_and_live_append_produce_identical_label_rows() {
                 call_id: call_id.clone(),
                 tool_id: "bash.exec".to_string(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
             1,
         ),
@@ -1082,7 +1087,7 @@ fn rebuild_and_live_append_produce_identical_label_rows() {
                 call_id: call_id.clone(),
                 reason: "needs approval".to_string(),
                 kind: ApprovalKind::Standard,
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
             2,
         ),
@@ -1092,7 +1097,7 @@ fn rebuild_and_live_append_produce_identical_label_rows() {
             session_id,
             Some("turn-1"),
             Some("assistant.default"),
-            Event::ToolCallStarted(call_id.clone()),
+            Event::ToolCallStarted(crate::test_support::tool_identity(&call_id)),
             3,
         ),
         label_record(
@@ -1102,8 +1107,8 @@ fn rebuild_and_live_append_produce_identical_label_rows() {
             Some("turn-1"),
             Some("assistant.default"),
             Event::ToolCallFinished(ToolCallResult::new(
-                call_id,
-                None,
+                call_id.clone(),
+                crate::contract::OccurrenceId(call_id.0.clone()),
                 serde_json::json!({ "ok": true }),
             )),
             4,
@@ -1273,13 +1278,9 @@ fn live_projection_reflects_writer_thread_appends_through_the_shared_handle() {
     let _ = std::fs::remove_file(&duckdb_path);
 }
 
-/// The `occurrence_id`-less fallback in `mark_approval_outcome` picks
-/// the *most recent* pending approval for a `call_id`, not all of them
-/// -- the property the old `sequence = (SELECT MAX(sequence) ...)`
-/// subquery provided and the `ORDER BY sequence DESC LIMIT 1` lookup
-/// that replaced it must still provide.
+/// A start can resolve an earlier execution without consuming a newer approval.
 #[test]
-fn occurrence_less_resolution_targets_only_the_most_recent_pending_approval() {
+fn out_of_order_start_resolves_only_its_exact_approval() {
     let store = Store::open_in_memory().expect("store");
     let session_id = SessionId::new();
     let call_id = ToolCallId("call-1".to_string());
@@ -1293,15 +1294,18 @@ fn occurrence_less_resolution_targets_only_the_most_recent_pending_approval() {
                     call_id: call_id.clone(),
                     reason: "older pending".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId("older".into()),
                 }),
                 Event::ApprovalRequested(ApprovalRequest {
                     call_id: call_id.clone(),
                     reason: "newer pending".to_string(),
                     kind: ApprovalKind::Standard,
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId("newer".into()),
                 }),
-                Event::ToolCallStarted(call_id.clone()),
+                Event::ToolCallStarted(crate::contract::ToolCallIdentity {
+                    call_id,
+                    occurrence_id: crate::contract::OccurrenceId("older".into()),
+                }),
             ],
         )
         .expect("append events");
@@ -1309,12 +1313,9 @@ fn occurrence_less_resolution_targets_only_the_most_recent_pending_approval() {
     let approvals = store.approvals_for_session(session_id).expect("approvals");
     assert_eq!(approvals.len(), 2);
     assert_eq!(approvals[0].reason, "older pending");
-    assert_eq!(
-        approvals[0].outcome, None,
-        "only the most recent pending approval may be resolved"
-    );
+    assert_eq!(approvals[0].outcome.as_deref(), Some("approved"));
     assert_eq!(approvals[1].reason, "newer pending");
-    assert_eq!(approvals[1].outcome.as_deref(), Some("approved"));
+    assert_eq!(approvals[1].outcome, None);
 }
 
 /// The exact record sequence that killed the rebuild, minimized: an
@@ -1336,7 +1337,7 @@ fn ungated_tool_call_started_records(
                 call_id: gated.clone(),
                 reason: "needs approval".to_string(),
                 kind: ApprovalKind::Standard,
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(gated.0.clone()),
             }),
             1,
         ),
@@ -1346,7 +1347,7 @@ fn ungated_tool_call_started_records(
             session_id,
             None,
             None,
-            Event::ToolCallStarted(gated),
+            Event::ToolCallStarted(crate::test_support::tool_identity(&gated)),
             2,
         ),
         // Never gated: no approval row carries this call_id, so the
@@ -1357,7 +1358,7 @@ fn ungated_tool_call_started_records(
             session_id,
             None,
             None,
-            Event::ToolCallStarted(ungated),
+            Event::ToolCallStarted(crate::test_support::tool_identity(&ungated)),
             3,
         ),
     ]

@@ -159,6 +159,13 @@ async fn main() -> anyhow::Result<()> {
     run(listener, &socket_path, state).await
 }
 
+struct PersistenceStartup {
+    writer: Option<WriterHandle>,
+    records: Vec<Record>,
+    skipped_lines_summary: Option<String>,
+    duckdb_ready_rx: crossbeam_channel::Receiver<Option<DuckdbStoreHandle>>,
+}
+
 /// Opens this process's own event log writer, resumes every session found
 /// in it, and marks `state` ready -- all on a background task that races
 /// the accept loop `main` starts right after this returns, per the
@@ -186,8 +193,20 @@ fn spawn_resume_task(
         if let Some(delay) = test_resume_delay() {
             std::thread::sleep(delay);
         }
-        let (writer, records, skipped_lines_summary, duckdb_ready_rx) =
-            open_persistence(&agent_config);
+        let PersistenceStartup {
+            writer,
+            records,
+            skipped_lines_summary,
+            duckdb_ready_rx,
+        } = match open_persistence(&agent_config) {
+            Ok(persistence) => persistence,
+            Err(error) => {
+                // No sessions have passed the readiness gate yet. Refuse
+                // this format rather than presenting an empty history.
+                eprintln!("horizon-agentd: startup refused: {error}");
+                std::process::exit(1);
+            }
+        };
         state.set_writer(writer);
         state.set_skipped_lines_summary(skipped_lines_summary);
         // Step 4: "agentd restart = read own log, rebuild rig_history, mark
@@ -247,14 +266,7 @@ fn test_resume_delay() -> Option<Duration> {
 /// only consumer). A disconnected channel (writer startup itself failed)
 /// is indistinguishable from -- and handled the same as -- an explicit
 /// `None`.
-fn open_persistence(
-    agent_config: &AgentConfig,
-) -> (
-    Option<WriterHandle>,
-    Vec<Record>,
-    Option<String>,
-    crossbeam_channel::Receiver<Option<DuckdbStoreHandle>>,
-) {
+fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceStartup> {
     let (writer, init_rx, duckdb_rx) = WriterHandle::open_silently(
         &agent_config.persistence.event_log_path,
         agent_config.persistence.duckdb_path.clone(),
@@ -268,20 +280,38 @@ fn open_persistence(
                     agent_config.persistence.event_log_path.display()
                 );
             }
-            (Some(writer), report.records, skipped_summary, duckdb_rx)
+            Ok(PersistenceStartup {
+                writer: Some(writer),
+                records: report.records,
+                skipped_lines_summary: skipped_summary,
+                duckdb_ready_rx: duckdb_rx,
+            })
         }
         Ok(WriterInit::Failed(error)) => {
+            if error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>() {
+                return Err(error);
+            }
             eprintln!(
                 "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
             );
-            (None, Vec::new(), None, duckdb_rx)
+            Ok(PersistenceStartup {
+                writer: None,
+                records: Vec::new(),
+                skipped_lines_summary: None,
+                duckdb_ready_rx: duckdb_rx,
+            })
         }
         Err(_) => {
             eprintln!(
                 "horizon-agentd: event log writer thread exited before reporting startup status; \
                  persistence disabled for this run"
             );
-            (None, Vec::new(), None, duckdb_rx)
+            Ok(PersistenceStartup {
+                writer: None,
+                records: Vec::new(),
+                skipped_lines_summary: None,
+                duckdb_ready_rx: duckdb_rx,
+            })
         }
     }
 }
@@ -343,10 +373,28 @@ mod tests {
     /// log file is still empty when the assertion below reads it.
     const GATED_STARTUP_READ: Duration = Duration::from_millis(750);
 
+    #[test]
+    fn unsupported_log_format_cannot_fall_back_to_a_persistence_disabled_daemon() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut record = state_record(horizon_agent::contract::SessionId::new(), 7);
+        record.version = 1;
+        let original = format!("{}\n", serde_json::to_string(&record).unwrap());
+        std::fs::write(&path, &original).unwrap();
+        let mut config = session::test_support::test_config();
+        config.persistence.event_log_path = path.clone();
+        let error = match open_persistence(&config) {
+            Ok(_) => panic!("old format must refuse startup"),
+            Err(error) => error,
+        };
+        assert!(error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
         Record {
             schema: "horizon.agent.event_log".to_string(),
-            version: 1,
+            version: 2,
             event_id: uuid::Uuid::new_v4().to_string(),
             sequence,
             session_id,

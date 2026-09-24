@@ -57,9 +57,10 @@ CREATE TABLE IF NOT EXISTS agent_tool_calls (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
-    occurrence_id TEXT,
+    occurrence_id TEXT NOT NULL,
     tool_id TEXT NOT NULL,
-    input_json TEXT NOT NULL
+    input_json TEXT NOT NULL,
+    UNIQUE (session_id, occurrence_id)
 );
 
 CREATE TABLE IF NOT EXISTS agent_tool_results (
@@ -67,7 +68,7 @@ CREATE TABLE IF NOT EXISTS agent_tool_results (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
-    occurrence_id TEXT,
+    occurrence_id TEXT NOT NULL,
     output_json TEXT NOT NULL,
     -- Copied from ToolCallResult's explicit outcome. Its constructor owns
     -- interpretation of the tool output; denial can be an error even when
@@ -80,7 +81,7 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
     session_id TEXT NOT NULL,
     sequence BIGINT NOT NULL,
     call_id TEXT NOT NULL,
-    occurrence_id TEXT,
+    occurrence_id TEXT NOT NULL,
     reason TEXT NOT NULL,
     -- NULL while the approval is still pending; then 'approved' or
     -- 'denied', derived from event *order* rather than any string match

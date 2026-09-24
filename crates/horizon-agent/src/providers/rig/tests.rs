@@ -821,7 +821,7 @@ fn rig_tool_call_request_mints_a_distinct_occurrence_per_call() {
     let second = mint();
 
     assert_eq!(first.call_id, second.call_id);
-    assert!(first.occurrence_id.is_some());
+    assert!(!first.occurrence_id.0.is_empty());
     assert_ne!(
         first.occurrence_id, second.occurrence_id,
         "two calls sharing a provider call_id must still be separable"
@@ -889,11 +889,11 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "workspace.snapshot".to_string(),
             input: serde_json::json!({}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
         Event::ToolCallFinished(ToolCallResult::new(
             ToolCallId("call-1".to_string()),
-            None,
+            crate::contract::OccurrenceId("call-1".to_string()),
             serde_json::json!({ "tab_count": 1 }),
         )),
         Event::MessageCommitted(AgentMessage {
@@ -1084,10 +1084,10 @@ fn horizon_mediated_tool_result_can_continue_as_rig_history() {
         other => panic!("expected tool request, got {other:?}"),
     };
 
-    events.push(Event::ToolCallStarted(request.call_id.clone()));
+    events.push(Event::ToolCallStarted(request.identity()));
     events.push(Event::ToolCallFinished(ToolCallResult::new(
         request.call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(request.call_id.0.clone()),
         serde_json::json!({
             "tab_count": 1,
             "active_title": "Agent #1",
@@ -1234,14 +1234,14 @@ fn tool_call_request(call_id: &str) -> Event {
         call_id: ToolCallId(call_id.to_string()),
         tool_id: "workspace.snapshot".to_string(),
         input: serde_json::json!({}).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
     })
 }
 
 fn tool_call_finished(call_id: &str) -> Event {
     Event::ToolCallFinished(ToolCallResult::new(
         ToolCallId(call_id.to_string()),
-        None,
+        crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
         serde_json::json!({ "tab_count": 1 }),
     ))
 }
@@ -1407,6 +1407,7 @@ fn appends_cancelled_tool_results_after_assistant_tool_call_message() {
     let pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
         call_id.clone(),
         ToolCallDescriptor {
+            identity: crate::test_support::tool_identity(&call_id),
             tool_id: "workspace.snapshot".to_string(),
             args: serde_json::json!({}),
         },
@@ -1617,13 +1618,13 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::Value::String("{\"path\":\"/tmp/x\"}".to_string()).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         }),
         Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-2".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::Value::String("not json at all".to_string()).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-2".to_string()),
         }),
     ];
 
@@ -1935,12 +1936,17 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     let pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
         id_b.clone(),
         ToolCallDescriptor {
+            identity: crate::test_support::tool_identity(&id_b),
             tool_id: "fs.read".to_string(),
             args: serde_json::json!({ "path": "/x" }),
         },
     )]);
     let pending_halt_result: Option<(ToolCallResult, String)> = None;
-    let arrived = ToolCallResult::new(id_a.clone(), None, serde_json::json!({ "tab_count": 2 }));
+    let arrived = ToolCallResult::new(
+        id_a.clone(),
+        crate::contract::OccurrenceId(id_a.0.clone()),
+        serde_json::json!({ "tab_count": 2 }),
+    );
     let mut guard = TurnLoopGuard::new(TEST_ITERATION_CAP, TEST_DOOM_LOOP_WINDOW);
     for _ in 0..=TEST_ITERATION_CAP {
         guard.record_tool_turn();
@@ -2158,7 +2164,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     for i in 0..TEST_ITERATION_CAP {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2178,7 +2184,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // ToolCallFinished may be emitted for it.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(
@@ -2208,7 +2214,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // completes normally, proving the resumed session is fully healthy.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2292,7 +2298,7 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     for i in 0..cap {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2309,7 +2315,7 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     // through to its plain-text reply, which becomes the report.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        None,
+        crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2398,7 +2404,7 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
     // message to rig_history) and must not advance the loop guards.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         ToolCallId("never-requested".to_string()),
-        None,
+        crate::contract::OccurrenceId("never-requested".to_string()),
         serde_json::json!({ "ok": true }),
     )));
     assert!(
@@ -2505,6 +2511,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         (
             call_a.clone(),
             ToolCallDescriptor {
+                identity: crate::test_support::tool_identity(&call_a),
                 tool_id: "fs.read".to_string(),
                 args: serde_json::json!({ "path": "/a" }),
             },
@@ -2512,6 +2519,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         (
             call_b.clone(),
             ToolCallDescriptor {
+                identity: crate::test_support::tool_identity(&call_b),
                 tool_id: "fs.read".to_string(),
                 args: serde_json::json!({ "path": "/b" }),
             },
@@ -2519,6 +2527,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         (
             call_c.clone(),
             ToolCallDescriptor {
+                identity: crate::test_support::tool_identity(&call_c),
                 tool_id: "fs.read".to_string(),
                 args: serde_json::json!({ "path": "/c" }),
             },
@@ -2528,8 +2537,11 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // First of three: two more calls are still outstanding, so the result
     // is folded directly into history (in arrival order) and no turn runs.
     pending.remove(&call_a);
-    let result_a =
-        ToolCallResult::new(call_a.clone(), None, serde_json::json!({ "contents": "a" }));
+    let result_a = ToolCallResult::new(
+        call_a.clone(),
+        crate::contract::OccurrenceId(call_a.0.clone()),
+        serde_json::json!({ "contents": "a" }),
+    );
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_a, "fs.read"),
         BatchStep::Continue
@@ -2538,8 +2550,11 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
 
     // Second of three: same story.
     pending.remove(&call_b);
-    let result_b =
-        ToolCallResult::new(call_b.clone(), None, serde_json::json!({ "contents": "b" }));
+    let result_b = ToolCallResult::new(
+        call_b.clone(),
+        crate::contract::OccurrenceId(call_b.0.clone()),
+        serde_json::json!({ "contents": "b" }),
+    );
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_b, "fs.read"),
         BatchStep::Continue
@@ -2552,8 +2567,11 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
     // (`run_cancellable_turn`/`complete_rig_turn`) appends it right before
     // the resulting assistant message.
     pending.remove(&call_c);
-    let result_c =
-        ToolCallResult::new(call_c.clone(), None, serde_json::json!({ "contents": "c" }));
+    let result_c = ToolCallResult::new(
+        call_c.clone(),
+        crate::contract::OccurrenceId(call_c.0.clone()),
+        serde_json::json!({ "contents": "c" }),
+    );
     assert_eq!(
         fold_batched_tool_result(&mut history, &pending, &result_c, "fs.read"),
         BatchStep::RunTurn
@@ -2608,7 +2626,7 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     for call_id in &call_ids[..call_ids.len() - 1] {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "ok": true }),
         )));
         assert!(
@@ -2621,8 +2639,8 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     // The batch's last result completes it: exactly one follow-up
     // completion fires.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_ids[call_ids.len() - 1].clone(),
-        None,
+        (call_ids[call_ids.len() - 1].clone()).clone(),
+        crate::contract::OccurrenceId((call_ids[call_ids.len() - 1].clone()).0.clone()),
         serde_json::json!({ "ok": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2715,8 +2733,8 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
     // ignored rather than rejoining the new turn's normalized batch.
     for call_id in old_call_ids {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id,
-            None,
+            call_id.clone(),
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "late": true }),
         )));
     }
@@ -2727,8 +2745,8 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
     );
 
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        new_call_id,
-        None,
+        new_call_id.clone(),
+        crate::contract::OccurrenceId(new_call_id.0.clone()),
         serde_json::json!({ "ok": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -2772,8 +2790,8 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
 
     // Only the first of the batch resolves before the user cancels.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_ids[0].clone(),
-        None,
+        (call_ids[0].clone()).clone(),
+        crate::contract::OccurrenceId((call_ids[0].clone()).0.clone()),
         serde_json::json!({ "ok": true }),
     )));
     assert!(
@@ -2811,7 +2829,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     for call_id in remaining {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "ok": true }),
         )));
     }
@@ -2895,7 +2913,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
             };
             let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
                 call_id.clone(),
-                None,
+                crate::contract::OccurrenceId(call_id.0.clone()),
                 output,
             )));
             if is_last {
@@ -2923,7 +2941,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
         let is_last = index == call_ids.len() - 1;
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "index": index }),
         )));
         if !is_last {
@@ -3682,8 +3700,8 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
     deliver_task(session_id, "list the consumers", "Consumed at frame.rs:88.");
 
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_id,
-        None,
+        call_id.clone(),
+        crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -3944,8 +3962,8 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
 
     // Resolving the call is what lets it through.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-        call_id,
-        None,
+        call_id.clone(),
+        crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
@@ -3984,8 +4002,8 @@ fn identified_input_additions_wait_for_tool_results_and_keep_answer_destinations
         .unwrap();
     for call in calls {
         tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call,
-            None,
+            call.clone(),
+            crate::contract::OccurrenceId(call.0.clone()),
             serde_json::json!({"ok":true}),
         )))
         .unwrap();
@@ -4025,7 +4043,7 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
     for call in &calls[..calls.len() - 1] {
         tx.send(Command::ToolCallResult(ToolCallResult::new(
             call.clone(),
-            None,
+            crate::contract::OccurrenceId(call.0.clone()),
             serde_json::json!({"ok":true}),
         )))
         .unwrap();
@@ -4034,8 +4052,8 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
         .recv_timeout(std::time::Duration::from_millis(100))
         .is_err());
     tx.send(Command::ToolCallResult(ToolCallResult::new(
-        calls.last().unwrap().clone(),
-        None,
+        (calls.last().unwrap().clone()).clone(),
+        crate::contract::OccurrenceId((calls.last().unwrap().clone()).0.clone()),
         serde_json::json!({"ok":true}),
     )))
     .unwrap();
@@ -4154,8 +4172,8 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
     .unwrap();
     for call in calls {
         tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call,
-            None,
+            call.clone(),
+            crate::contract::OccurrenceId(call.0.clone()),
             serde_json::json!({"ok":true}),
         )))
         .unwrap();

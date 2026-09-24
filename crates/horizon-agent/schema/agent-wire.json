@@ -146,11 +146,6 @@
           "type": "string"
         },
         {
-          "const": "SandboxDenialRetry",
-          "description": "Legacy event-log compatibility for containment denials which did not\nname a narrow grant. New execution never emits this kind, and an old\npending request fails closed instead of retrying without containment.",
-          "type": "string"
-        },
-        {
           "additionalProperties": false,
           "description": "A tier-1 sandboxed `bash` call's network egress was refused by the\nallowlist proxy for one or more domains (`bash::BashCompletion::\nDomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving\nadds `domains` to this session's own allowlist and reruns the SAME\ncall, still sandboxed; denying forwards `prior_result` as-is -- the\ncall already ran to completion, so a deny\nleaves that real, already-failed-on-its-own-terms outcome as the\nfinal one rather than synthesizing a fresh \"denied by user\" marker.",
           "properties": {
@@ -301,14 +296,7 @@
           "description": "Which kind of approval this is -- see [`ApprovalKind`]."
         },
         "occurrence_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OccurrenceId"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/OccurrenceId",
           "description": "Per-occurrence identity -- see [`OccurrenceId`]. Stamped by the\nagentd on every approval it emits (initial + every reissue) so the\napproval attaches to the specific occurrence the user is deciding,\nnot just to a call_id that may have already been resolved by an\nearlier occurrence."
         },
         "reason": {
@@ -317,6 +305,7 @@
       },
       "required": [
         "call_id",
+        "occurrence_id",
         "reason",
         "kind"
       ],
@@ -332,18 +321,12 @@
           "$ref": "#/$defs/ApprovalDecisionPayload"
         },
         "occurrence_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OccurrenceId"
-            },
-            {
-              "type": "null"
-            }
-          ]
+          "$ref": "#/$defs/OccurrenceId"
         }
       },
       "required": [
         "call_id",
+        "occurrence_id",
         "decision"
       ],
       "type": "object"
@@ -644,7 +627,7 @@
       ]
     },
     "ContinueTurnRequested": {
-      "description": "Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`\nof the most recent `TurnEnded` event in this session's frame at the\nmoment the human resumed, recovered via\n[`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows\nwhich guard's halt the operator overrode (`HaltedByIterationCap` /\n`HaltedByDoomLoop` / the legacy bare `Halted`). `None` when no\npreceding `TurnEnded` exists — the no-op-replay / idle-session case\n(see the `Event::ContinueTurnRequested` doc comment for why that\ndistinction still matters operationally).",
+      "description": "Payload for [`Event::ContinueTurnRequested`]. Carries the `TurnEndReason`\nof the most recent `TurnEnded` event in this session's frame at the\nmoment the human resumed, recovered via\n[`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows\nwhich guard's halt the operator overrode (`HaltedByIterationCap` /\n`HaltedByDoomLoop`). `None` when no\npreceding `TurnEnded` exists — the no-op-replay / idle-session case\n(see the `Event::ContinueTurnRequested` doc comment for why that\ndistinction still matters operationally).",
       "properties": {
         "resumed_from": {
           "anyOf": [
@@ -873,7 +856,7 @@
           "additionalProperties": false,
           "properties": {
             "ToolCallStarted": {
-              "$ref": "#/$defs/ToolCallId"
+              "$ref": "#/$defs/ToolCallIdentity"
             }
           },
           "required": [
@@ -1587,7 +1570,7 @@
       "type": "object"
     },
     "OccurrenceId": {
-      "description": "Per-occurrence identity for a tool call: a string Horizon mints on its own\nside of the boundary (the rig provider never sees it, satisfying the\nconstraint that a provider knows only its own `call_id`).\n\nA single provider `call_id` can be reused across two distinct shapes --\n\n* provider reuse: the rig provider (or a backend it fronts) emits a fresh\n  tool call with the same `call_id` as an earlier, fully resolved one\n  (`docs/tasks/backlog.md`'s item 42, recorded from the 2026-07-18\n  reused-call_id fix `1d86521`; the `functions.fs.edit:66` incident in\n  session 05254b6a). Without a second key, every consumer -- transcript,\n  approval, analytics -- collapses the two onto the same row.\n* denial retry: every sandbox-denial retry deliberately reissues\n  `ToolCallRequested` under the same `call_id`, so one conceptual bash\n  call renders as two transcript rows, the first stuck forever as\n  started-but-never-finished (a cosmetic defect the user sees daily).\n\n`OccurrenceId` is the second key. It is stamped on every\n`ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows\nout of Horizon. `#[serde(default)]` on the field sites means a peer (older\nagentd, replayed pre-feature log) that never minted one decodes cleanly\nwith `None`, and the consumers fall back to call_id + position scanning\n(`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is\nadditive and needs no `SESSION_PROTOCOL_VERSION` bump.\n\nThe string itself is a UUID v4 minted at the first emission point in\n`providers::rig::mapping::rig_tool_call_request` (and at\n`horizon_agentd::session::approval::begin_reissued_approval` for reissues) --\nnot the provider-supplied `call_id`, not a per-process counter, so a\nresumed session and a replayed log line up on the same value without any\nshared counter to coordinate.",
+      "description": "Per-occurrence identity for a tool call: a string Horizon mints on its own\nside of the boundary (the rig provider never sees it, satisfying the\nconstraint that a provider knows only its own `call_id`).\n\nA single provider `call_id` can be reused across two distinct shapes --\n\n* provider reuse: the rig provider (or a backend it fronts) emits a fresh\n  tool call with the same `call_id` as an earlier, fully resolved one\n  (`docs/tasks/backlog.md`'s item 42, recorded from the 2026-07-18\n  reused-call_id fix `1d86521`; the `functions.fs.edit:66` incident in\n  session 05254b6a). Without a second key, every consumer -- transcript,\n  approval, analytics -- collapses the two onto the same row.\n* denial retry: every sandbox-denial retry deliberately reissues\n  `ToolCallRequested` under the same `call_id`, so one conceptual bash\n  call renders as two transcript rows, the first stuck forever as\n  started-but-never-finished (a cosmetic defect the user sees daily).\n\n`OccurrenceId` is the second key. It is stamped on every\n`ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows\nout of Horizon, including start and cancellation notifications. Published\nevents require this identity; old logs must be converted before replay.\n\nThe string itself is a UUID v4 minted at the first emission point in\n`providers::rig::mapping::rig_tool_call_request` (and at\n`horizon_agentd::session::approval::begin_reissued_approval` for reissues) --\nnot the provider-supplied `call_id`, not a per-process counter, so a\nresumed session and a replayed log line up on the same value without any\nshared counter to coordinate.",
       "type": "string"
     },
     "ProviderId": {
@@ -1962,6 +1945,22 @@
     "ToolCallId": {
       "type": "string"
     },
+    "ToolCallIdentity": {
+      "description": "The request identity carried through start, completion and cancellation.",
+      "properties": {
+        "call_id": {
+          "$ref": "#/$defs/ToolCallId"
+        },
+        "occurrence_id": {
+          "$ref": "#/$defs/OccurrenceId"
+        }
+      },
+      "required": [
+        "call_id",
+        "occurrence_id"
+      ],
+      "type": "object"
+    },
     "ToolCallProgress": {
       "description": "Tool-call-argument-streaming progress observed mid-turn, before the\nprovider's tool call is complete (rig's\n`StreamedAssistantContent::ToolCallDelta`). Purely a UI feedback signal:\nnever folded into conversation history and never persisted — see\n[`ProviderEvent::tool_call_progress`].",
       "properties": {
@@ -1999,15 +1998,8 @@
           "$ref": "#/$defs/JsonValue"
         },
         "occurrence_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OccurrenceId"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "description": "Per-occurrence identity -- see [`OccurrenceId`]. `None` when the\noriginating request is not in scope (synthetic results); consumers\nfall back to `call_id` + positional `.rev()` scanning in that case."
+          "$ref": "#/$defs/OccurrenceId",
+          "description": "Identity of this execution attempt, minted when the request is emitted."
         },
         "tool_id": {
           "type": "string"
@@ -2016,7 +2008,8 @@
       "required": [
         "call_id",
         "tool_id",
-        "input"
+        "input",
+        "occurrence_id"
       ],
       "type": "object"
     },
@@ -2034,14 +2027,7 @@
           "type": "boolean"
         },
         "occurrence_id": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OccurrenceId"
-            },
-            {
-              "type": "null"
-            }
-          ],
+          "$ref": "#/$defs/OccurrenceId",
           "description": "Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the\n`ToolCallRequest` field it answers to."
         },
         "output": {
@@ -2050,6 +2036,7 @@
       },
       "required": [
         "call_id",
+        "occurrence_id",
         "output",
         "is_error",
         "denied"
@@ -2065,11 +2052,6 @@
             "Cancelled",
             "Failed"
           ],
-          "type": "string"
-        },
-        {
-          "const": "Halted",
-          "description": "Legacy: every guard halt used this bare variant before the above\nresolution. Kept only so a pre-existing persisted event log with\nthis reason still deserializes on replay; no current code path\nproduces it. Renders the same calm \"paused\" treatment as the two\nvariants below, just without a specific guard-kind sentence.",
           "type": "string"
         },
         {
@@ -2261,5 +2243,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 22
+  "x-session-protocol-version": 23
 }

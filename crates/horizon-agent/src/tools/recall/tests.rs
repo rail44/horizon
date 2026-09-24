@@ -411,7 +411,7 @@ fn search_filters_by_turn_outcome() {
         session_id,
         "turn-halted",
         "widget beta",
-        TurnEndReason::Halted,
+        TurnEndReason::HaltedByIterationCap,
     );
 
     let recall = RecallContext {
@@ -456,7 +456,7 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
                 call_id: call_id.clone(),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({ "path": "widget.txt" }).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }),
             provider_payload: None,
         })
@@ -468,8 +468,8 @@ fn search_hits_carry_is_error_and_turn_outcome_labels() {
             provider_id: None,
             role_id: None,
             event: Event::ToolCallFinished(ToolCallResult::new(
-                call_id,
-                None,
+                call_id.clone(),
+                crate::contract::OccurrenceId(call_id.0.clone()),
                 serde_json::json!({ "is_error": true, "message": "widget not found" }),
             )),
             provider_payload: None,
@@ -548,7 +548,7 @@ fn search_without_query_but_with_turn_outcome_lists_matches() {
         session_id,
         "turn-halted",
         "widget beta",
-        TurnEndReason::Halted,
+        TurnEndReason::HaltedByIterationCap,
     );
 
     let recall = RecallContext {
@@ -629,11 +629,11 @@ fn read_entries_carry_is_error_on_tool_results() {
                     call_id: call_id.clone(),
                     tool_id: "fs.read".to_string(),
                     input: serde_json::json!({}).into(),
-                    occurrence_id: None,
+                    occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                 }),
                 Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({ "is_error": true, "message": "nope" }),
                 )),
             ],

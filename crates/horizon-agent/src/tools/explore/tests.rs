@@ -153,7 +153,9 @@ impl Requester {
                 call_id: ToolCallId(call_id.to_string()),
                 tool_id: tool_id.to_string(),
                 input: input.into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(
+                    (ToolCallId(call_id.to_string())).0.clone(),
+                ),
             })),
         );
         let output = processing
@@ -482,7 +484,9 @@ fn cancelling_the_requesters_turn_leaves_children_running_and_results_queued() {
     // What a cancelled turn produces: a synthetic result for every call the
     // provider still had outstanding, then the turn's own end.
     requester.provider_event(Event::ToolCallFinished(
-        crate::tools::cancelled_tool_call_result(ToolCallId("some-other-call".to_string())),
+        crate::tools::cancelled_tool_call_result(crate::test_support::tool_identity(&ToolCallId(
+            "some-other-call".to_string(),
+        ))),
     ));
     requester.provider_event(Event::TurnEnded(TurnEndReason::Cancelled));
 
@@ -764,10 +768,12 @@ fn task_output_rejects_a_malformed_session_id() {
 /// live-progress activity signal.
 fn tool_request(tool_id: &str) -> Event {
     Event::ToolCallRequested(ToolCallRequest {
-        call_id: ToolCallId(format!("child-{tool_id}")),
+        call_id: (ToolCallId(format!("child-{tool_id}"))).clone(),
         tool_id: tool_id.to_string(),
         input: json!({}).into(),
-        occurrence_id: None,
+        occurrence_id: crate::contract::OccurrenceId(
+            (ToolCallId(format!("child-{tool_id}"))).0.clone(),
+        ),
     })
 }
 

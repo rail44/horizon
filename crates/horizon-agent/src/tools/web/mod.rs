@@ -14,7 +14,7 @@ use reqwest::Url;
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
-use crate::contract::{SessionId, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::contract::{SessionId, ToolCallId, ToolCallRequest};
 use crate::policy::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
@@ -75,7 +75,7 @@ pub(crate) fn spawn(
     result_tx: Sender<ToolCompletion>,
 ) {
     let call_id = request.call_id.clone();
-    let occurrence_id = request.occurrence_id.clone();
+    let identity = request.identity();
     let input = request.input.0.clone();
     let token = CancellationToken::new();
     let generation = next_generation();
@@ -97,7 +97,7 @@ pub(crate) fn spawn(
     web_runtime().spawn(async move {
         let _work_guard = work_guard;
         let work = AssertUnwindSafe(run(
-            call_id.clone(),
+            identity.clone(),
             &tool_id,
             input,
             domains,
@@ -108,9 +108,7 @@ pub(crate) fn spawn(
             _ = token.cancelled() => None,
             result = work => Some(match result {
                 Ok(completion) => completion,
-                Err(payload) => ToolCompletion::Finished(ToolCallResult::new(
-                    call_id.clone(),
-                    None,
+                Err(payload) => ToolCompletion::Finished(identity.result(
                     error_output(format!("{tool_id} worker panicked: {}", panic_message(&*payload))),
                 )),
             }),
@@ -121,14 +119,14 @@ pub(crate) fn spawn(
                 if matches!(completion, ToolCompletion::Finished(_)) {
                     clear_approved_domains(session_id, &call_id);
                 }
-                let _ = result_tx.send(completion.with_occurrence(occurrence_id));
+                let _ = result_tx.send(completion);
             }
         }
     });
 }
 
 async fn run(
-    call_id: ToolCallId,
+    identity: crate::contract::ToolCallIdentity,
     tool_id: &str,
     input: Value,
     domains: Arc<Allowlist>,
@@ -146,7 +144,7 @@ async fn run(
             "unknown asynchronous web tool `{tool_id}`"
         ))),
     };
-    with_call_id(call_id, outcome, tool_id, origin)
+    with_identity(identity, outcome, tool_id, origin)
 }
 
 enum WebOutcome {
@@ -154,8 +152,8 @@ enum WebOutcome {
     DomainGrantRequired(Vec<String>),
 }
 
-fn with_call_id(
-    call_id: ToolCallId,
+fn with_identity(
+    identity: crate::contract::ToolCallIdentity,
     outcome: WebOutcome,
     tool_id: &str,
     origin: &WebApprovalOrigin,
@@ -176,11 +174,11 @@ fn with_call_id(
                     annotate_domain_approval(&mut output, domains)
                 }
             }
-            ToolCompletion::Finished(ToolCallResult::new(call_id, None, output))
+            ToolCompletion::Finished(identity.result(output))
         }
         WebOutcome::DomainGrantRequired(domains) => ToolCompletion::DomainGrantRequired {
-            call_id,
-            occurrence_id: None,
+            call_id: identity.call_id,
+            occurrence_id: identity.occurrence_id,
             domains,
         },
     }
@@ -310,7 +308,7 @@ mod tests {
             let tools = ToolSessionState::without_root();
             let request = ToolCallRequest {
                 call_id: ToolCallId("web-attempt".into()),
-                occurrence_id: Some(crate::contract::OccurrenceId::new()),
+                occurrence_id: crate::contract::OccurrenceId::new(),
                 tool_id: "web_fetch".into(),
                 input: serde_json::json!({"url": url}).into(),
             };

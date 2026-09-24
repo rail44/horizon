@@ -51,14 +51,22 @@ impl Provider for MockProvider {
             // that hasn't yet received a `Command::ToolCallResult` — this is
             // what `Command::Cancel` cancels when nothing is actively
             // streaming. Only one is ever outstanding at a time in v1.
-            let mut pending_tool_call: Option<ToolCallId> = None;
+            let mut pending_tool_call: Option<ToolCallIdentity> = None;
             // Call ids cancelled while pending, so a late `ToolCallResult`
             // for them is accepted and silently dropped rather than
             // producing a (now meaningless) acknowledgement.
-            let mut cancelled_call_ids: HashSet<ToolCallId> = HashSet::new();
+            let mut cancelled_occurrences: HashSet<OccurrenceId> = HashSet::new();
 
             while let Ok(command) = commands_rx.recv() {
                 match command {
+                    Command::ToolCallReissued(identity) => {
+                        if pending_tool_call
+                            .as_ref()
+                            .is_some_and(|pending| pending.call_id == identity.call_id)
+                        {
+                            pending_tool_call = Some(identity);
+                        }
+                    }
                     Command::Initialize(_) => {
                         let _ = events_tx
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
@@ -76,7 +84,7 @@ impl Provider for MockProvider {
                         }
                     }
                     Command::Cancel { .. } => {
-                        let Some(call_id) = pending_tool_call.take() else {
+                        let Some(identity) = pending_tool_call.take() else {
                             let _ = events_tx.send(
                                 Event::MessageCommitted(Message {
                                     role: MessageRole::Assistant,
@@ -86,23 +94,30 @@ impl Provider for MockProvider {
                             );
                             continue;
                         };
-                        cancelled_call_ids.insert(call_id.clone());
+                        cancelled_occurrences.insert(identity.occurrence_id.clone());
                         let _ = events_tx.send(
-                            Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into(),
+                            Event::ToolCallFinished(cancelled_tool_call_result(identity)).into(),
                         );
                         let _ = events_tx.send(Event::StateChanged(SessionState::Cancelled).into());
                         let _ = events_tx
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::ApproveToolCall { call_id } => {
+                        let Some(identity) = pending_tool_call
+                            .as_ref()
+                            .filter(|pending| pending.call_id == call_id)
+                            .cloned()
+                        else {
+                            continue;
+                        };
                         pending_tool_call = None;
                         let _ =
                             events_tx.send(Event::StateChanged(SessionState::ToolRunning).into());
-                        let _ = events_tx.send(Event::ToolCallStarted(call_id.clone()).into());
+                        let _ = events_tx.send(Event::ToolCallStarted(identity.clone()).into());
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
                                 call_id.clone(),
-                                None,
+                                identity.occurrence_id,
                                 serde_json::json!({
                                     "approved": true,
                                     "result": "mock tool completed",
@@ -121,11 +136,18 @@ impl Provider for MockProvider {
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::DenyToolCall { call_id, reason } => {
+                        let Some(identity) = pending_tool_call
+                            .as_ref()
+                            .filter(|pending| pending.call_id == call_id)
+                            .cloned()
+                        else {
+                            continue;
+                        };
                         pending_tool_call = None;
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
                                 call_id.clone(),
-                                None,
+                                identity.occurrence_id,
                                 serde_json::json!({
                                     "approved": false,
                                     "reason": reason,
@@ -144,12 +166,17 @@ impl Provider for MockProvider {
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::ToolCallResult(result) => {
-                        if cancelled_call_ids.remove(&result.call_id) {
+                        if cancelled_occurrences.remove(&result.occurrence_id) {
                             // Accepted and silently dropped: this result
                             // belongs to a call whose turn was cancelled.
                             continue;
                         }
-                        if pending_tool_call.as_ref() == Some(&result.call_id) {
+                        // The daemon validates worker identity. A declined retry
+                        // answers the provider call with its prior real result.
+                        if pending_tool_call
+                            .as_ref()
+                            .is_some_and(|pending| pending.call_id == result.call_id)
+                        {
                             pending_tool_call = None;
                         }
                         let _ = events_tx.send(tool_result_message(&result).into());
@@ -213,7 +240,7 @@ fn respond_to_user_message(
     commands_rx: &Receiver<Command>,
     events_tx: &Sender<ProviderEvent>,
     text: String,
-    pending_tool_call: &mut Option<ToolCallId>,
+    pending_tool_call: &mut Option<ToolCallIdentity>,
 ) -> ControlFlow<()> {
     let _ = events_tx.send(Event::StateChanged(SessionState::Running).into());
     let _ = events_tx.send(
@@ -235,7 +262,11 @@ fn respond_to_user_message(
         // transcript "preparing a tool call…" feedback is
         // exercisable without a network provider.
         let call_id = ToolCallId("mock-streaming-tool-1".to_string());
-        *pending_tool_call = Some(call_id.clone());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
         for (bytes, tool_id) in [
             (0usize, Some("mock.approval_required".to_string())),
             (64, None),
@@ -253,7 +284,7 @@ fn respond_to_user_message(
                 call_id,
                 tool_id: "mock.approval_required".to_string(),
                 input: serde_json::json!({ "message": text }).into(),
-                occurrence_id: None,
+                occurrence_id,
             })
             .into(),
         );
@@ -261,13 +292,17 @@ fn respond_to_user_message(
     }
     if lower_text.contains("snapshot") {
         let call_id = ToolCallId("workspace-snapshot-1".to_string());
-        *pending_tool_call = Some(call_id.clone());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
                 tool_id: "workspace.snapshot".to_string(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: None,
+                occurrence_id,
             })
             .into(),
         );
@@ -281,13 +316,17 @@ fn respond_to_user_message(
         // `horizon-agentd`'s e2e suite to prove bash
         // actually runs agentd-side.
         let call_id = ToolCallId("mock-bash-1".to_string());
-        *pending_tool_call = Some(call_id.clone());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
                 tool_id: "bash".to_string(),
                 input: serde_json::json!({ "command": "echo agentd-bash-ok" }).into(),
-                occurrence_id: None,
+                occurrence_id,
             })
             .into(),
         );
@@ -295,13 +334,17 @@ fn respond_to_user_message(
     }
     if lower_text.contains("tool") {
         let call_id = ToolCallId("mock-tool-1".to_string());
-        *pending_tool_call = Some(call_id.clone());
+        let occurrence_id = OccurrenceId::new();
+        *pending_tool_call = Some(ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence_id.clone(),
+        });
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id: call_id.clone(),
                 tool_id: "mock.approval_required".to_string(),
                 input: serde_json::json!({ "message": text }).into(),
-                occurrence_id: None,
+                occurrence_id,
             })
             .into(),
         );

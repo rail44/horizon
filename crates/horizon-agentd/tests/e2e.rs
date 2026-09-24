@@ -794,6 +794,18 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
         })
         .expect("an approval request should have been observed");
 
+    let requested = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested(request) if request.call_id == call_id => {
+                Some(request.identity())
+            }
+            _ => None,
+        })
+        .expect("tool request before approval");
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ApprovalRequested(approval) if approval.occurrence_id == requested.occurrence_id)));
+
     attachment
         .commands
         .send(AgentCommand::ApproveToolCall {
@@ -810,9 +822,14 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     assert!(
         events
             .iter()
-            .any(|event| matches!(event, Event::ToolCallStarted(id) if id == &call_id)),
+            .any(|event| matches!(event, Event::ToolCallStarted(id) if id.call_id == call_id)),
         "approving should have started the tool call before finishing it, got: {events:?}"
     );
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ToolCallStarted(identity) if identity == &requested)));
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ToolCallFinished(result) if result.call_id == requested.call_id
+            && result.occurrence_id == requested.occurrence_id)));
 }
 
 /// `bash` runs agentd-side: approving a real `bash` tool call spawns an
@@ -845,6 +862,18 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
         })
         .expect("bash should request approval before running");
 
+    let requested = events
+        .iter()
+        .find_map(|event| match event {
+            Event::ToolCallRequested(request) if request.call_id == call_id => {
+                Some(request.identity())
+            }
+            _ => None,
+        })
+        .expect("tool request before approval");
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ApprovalRequested(approval) if approval.occurrence_id == requested.occurrence_id)));
+
     attachment
         .commands
         .send(AgentCommand::ApproveToolCall {
@@ -865,6 +894,11 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     };
     assert_eq!(result.output["exit_code"], 0);
     assert_eq!(result.output["output"], "agentd-bash-ok\n");
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ToolCallStarted(identity) if identity == &requested)));
+    assert!(events.iter().any(|event| matches!(event,
+        Event::ToolCallFinished(result) if result.call_id == requested.call_id
+            && result.occurrence_id == requested.occurrence_id)));
 }
 
 /// Regression test for the 2026-07 repeated-approval OOM incident: 10
@@ -917,7 +951,7 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
 
     let started_count = events
         .iter()
-        .filter(|event| matches!(event, Event::ToolCallStarted(id) if id == &call_id))
+        .filter(|event| matches!(event, Event::ToolCallStarted(id) if id.call_id == call_id))
         .count();
     assert_eq!(
         started_count, 1,
@@ -950,7 +984,9 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
     let logged_started_count = report
         .records
         .iter()
-        .filter(|record| matches!(&record.event, Event::ToolCallStarted(id) if id == &call_id))
+        .filter(
+            |record| matches!(&record.event, Event::ToolCallStarted(id) if id.call_id == call_id),
+        )
         .count();
     assert_eq!(
         logged_started_count, 1,
@@ -1184,6 +1220,17 @@ async fn killed_agentd_respawns_and_replays_transcript_with_open_turn_cancelled(
             .any(|event| matches!(event, Event::TurnEnded(TurnEndReason::Cancelled))),
         "the interrupted turn must be committed as cancelled on resume, got: {replayed:?}"
     );
+    for request in replayed.iter().filter_map(|event| match event {
+        Event::ToolCallRequested(request) => Some(request),
+        _ => None,
+    }) {
+        assert!(
+            replayed.iter().any(|event| matches!(event,
+            Event::ToolCallFinished(result) if result.call_id == request.call_id
+                && result.occurrence_id == request.occurrence_id)),
+            "resume must close the exact original execution"
+        );
+    }
     let frame = agent_frame_from_events(&replayed);
     assert!(
         !frame.is_turn_in_flight(),

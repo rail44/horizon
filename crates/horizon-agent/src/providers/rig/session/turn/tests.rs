@@ -74,7 +74,7 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
     let original_config = state.config.clone();
     let result = ToolCallResult::new(
         ToolCallId("last-call".into()),
-        None,
+        crate::contract::OccurrenceId("last-call".into()),
         json!({"content": "read"}),
     );
     let summarized = tokio::time::timeout(

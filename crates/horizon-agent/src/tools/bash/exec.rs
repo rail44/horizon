@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use crate::config::BashToolConfig;
-use crate::contract::{ToolCallId, ToolCallResult};
+use crate::contract::ToolCallIdentity;
 use crate::tools::error_output;
 
 use super::output::{self, Capped};
@@ -289,16 +289,19 @@ fn status_output(
     }
 }
 
-fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> BashCompletion {
+fn domain_denied(
+    identity: &ToolCallIdentity,
+    domains: Vec<String>,
+    output: Value,
+) -> BashCompletion {
     BashCompletion::DomainDenied {
         domains,
-        // The owning BashJob binds every outcome to its dispatch occurrence.
-        result: ToolCallResult::new(call_id.clone(), None, output),
+        result: identity.result(output),
     }
 }
 
-fn finished(call_id: &ToolCallId, output: Value) -> BashCompletion {
-    BashCompletion::Finished(ToolCallResult::new(call_id.clone(), None, output))
+fn finished(identity: &ToolCallIdentity, output: Value) -> BashCompletion {
+    BashCompletion::Finished(identity.result(output))
 }
 
 fn note_undrained(value: &mut Value, drain_grace: Duration) {

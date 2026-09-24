@@ -619,10 +619,14 @@ mod tests {
     #[test]
     fn standard_bash_approval_reason_names_the_one_call_host_scope() {
         let request = ToolCallRequest {
-            call_id: crate::contract::ToolCallId("call-host-reason".to_string()),
+            call_id: (crate::contract::ToolCallId("call-host-reason".to_string())).clone(),
             tool_id: "bash".to_string(),
             input: serde_json::json!({ "command": "cargo check" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (crate::contract::ToolCallId("call-host-reason".to_string()))
+                    .0
+                    .clone(),
+            ),
         };
         let reason = standard_approval_reason(&request);
         assert!(reason.contains("filesystem, network, and process sandbox"));
@@ -750,10 +754,14 @@ mod tests {
 
     fn requested_with_input(tool_id: &str, input: Value) -> Event {
         Event::ToolCallRequested(crate::contract::ToolCallRequest {
-            call_id: crate::contract::ToolCallId("call-1".to_string()),
+            call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
             tool_id: tool_id.to_string(),
             input: input.into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (crate::contract::ToolCallId("call-1".to_string()))
+                    .0
+                    .clone(),
+            ),
         })
     }
 
@@ -782,7 +790,6 @@ mod tests {
             event,
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
-                occurrence_id: None,
                 ..
             }) if domains == &["docs.example.com".to_string()]
         )));
@@ -793,7 +800,6 @@ mod tests {
             event,
             Event::ApprovalRequested(ApprovalRequest {
                 kind: ApprovalKind::DomainGrant { domains },
-                occurrence_id: None,
                 ..
             }) if domains == &["docs.example.com".to_string()]
         )));

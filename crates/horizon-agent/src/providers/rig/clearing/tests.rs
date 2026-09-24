@@ -662,10 +662,10 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
     let fetch = crate::tools::explore::output(
         requester,
         &ToolCallRequest {
-            call_id: call_id("fetch-1"),
+            call_id: (call_id("fetch-1")).clone(),
             tool_id: crate::tools::TASK_OUTPUT_TOOL_ID.to_string(),
             input: serde_json::json!({ "session_id": child.as_uuid().to_string() }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId((call_id("fetch-1")).0.clone()),
         },
     );
     let crate::tools::Execution::Auto(events) = fetch else {

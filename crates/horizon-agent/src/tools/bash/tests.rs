@@ -664,11 +664,20 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
 
     assert!(super::should_fold_completion(&frame, &call_id));
 
+    frame.items.push(AgentFrameItem::ToolCallRequested(
+        crate::contract::ToolCallRequest {
+            call_id: call_id.clone(),
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+            tool_id: "bash".into(),
+            input: json!({"command": "pwd"}).into(),
+        },
+    ));
+
     frame
         .items
         .push(AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             call_id.clone(),
-            None,
+            crate::contract::OccurrenceId(call_id.0.clone()),
             json!({ "cancelled": true }),
         )));
 
@@ -702,30 +711,30 @@ fn should_fold_completion_ignores_the_superseded_close_of_an_abandoned_attempt()
             call_id: call_id.clone(),
             tool_id: "bash".to_string(),
             input: json!({ "command": "echo hi" }).into(),
-            occurrence_id: Some(occurrence.clone()),
+            occurrence_id: occurrence.clone(),
         })
     };
     let superseded_close = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
         call_id.clone(),
-        Some(abandoned.clone()),
+        abandoned.clone(),
         json!({ SUPERSEDED_BY_RETRY: true }),
     ));
     let retry_result = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
         call_id.clone(),
-        Some(retry.clone()),
+        retry.clone(),
         json!({ "exit_code": 0 }),
     ));
 
     let mut frame = AgentFrame::empty();
     frame.items.push(requested(&abandoned));
-    frame
-        .items
-        .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+    frame.items.push(AgentFrameItem::ToolCallStarted(
+        crate::test_support::tool_identity(&call_id),
+    ));
     frame.items.push(requested(&retry));
     frame.items.push(superseded_close.clone());
-    frame
-        .items
-        .push(AgentFrameItem::ToolCallStarted(call_id.clone()));
+    frame.items.push(AgentFrameItem::ToolCallStarted(
+        crate::test_support::tool_identity(&call_id),
+    ));
 
     assert!(
         frame.has_tool_call_finished(&call_id),
@@ -810,15 +819,18 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
     let occurrence = crate::contract::OccurrenceId::new();
 
     let work_call_id = call_id.clone();
+    let work_occurrence = occurrence.clone();
     super::run_job_body(
         SessionId::new(),
-        call_id.clone(),
-        Some(occurrence.clone()),
+        crate::contract::ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence.clone(),
+        },
         &tx,
         move || {
             BashCompletion::Finished(ToolCallResult::new(
                 work_call_id.clone(),
-                None,
+                work_occurrence,
                 json!({ "ok": true }),
             ))
         },
@@ -829,7 +841,7 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
         .expect("completion should be sent");
     let result = expect_finished(completion);
     assert_eq!(result.call_id, call_id);
-    assert_eq!(result.occurrence_id, Some(occurrence));
+    assert_eq!(result.occurrence_id, occurrence);
     assert_eq!(result.output, json!({ "ok": true }));
 }
 
@@ -846,8 +858,10 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
 
     super::run_job_body(
         SessionId::new(),
-        call_id.clone(),
-        Some(occurrence.clone()),
+        crate::contract::ToolCallIdentity {
+            call_id: call_id.clone(),
+            occurrence_id: occurrence.clone(),
+        },
         &tx,
         || panic!("injected panic, not exec::run's own"),
     );
@@ -857,7 +871,7 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
         .expect("a completion must still be delivered when the work function panics");
     let result = expect_finished(completion);
     assert_eq!(result.call_id, call_id);
-    assert_eq!(result.occurrence_id, Some(occurrence));
+    assert_eq!(result.occurrence_id, occurrence);
     assert_eq!(result.output["is_error"], true);
     assert!(result.output["message"]
         .as_str()

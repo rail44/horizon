@@ -33,11 +33,9 @@ impl AgentFrame {
             SessionState::WaitingForUser => match self.turn_end_reason {
                 Some(TurnEndReason::Failed) => SessionStatus::Failed,
                 Some(TurnEndReason::Cancelled) => SessionStatus::Cancelled,
-                Some(
-                    TurnEndReason::Halted
-                    | TurnEndReason::HaltedByIterationCap
-                    | TurnEndReason::HaltedByDoomLoop,
-                ) => SessionStatus::Paused,
+                Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop) => {
+                    SessionStatus::Paused
+                }
                 Some(TurnEndReason::Completed) | None => SessionStatus::WaitingForInput,
             },
             SessionState::Cancelled => SessionStatus::Cancelled,

@@ -260,8 +260,7 @@ fn cancel_unfinished_tool_calls(frame: &AgentFrame) -> Vec<Event> {
         .unfinished_tool_calls()
         .into_iter()
         .map(|request| {
-            let mut result = cancelled_tool_call_result(request.call_id.clone());
-            result.occurrence_id = request.occurrence_id.clone();
+            let result = cancelled_tool_call_result(request.identity());
             Event::ToolCallFinished(result)
         })
         .collect()
@@ -656,7 +655,7 @@ mod tests {
             let request = |id: &str| {
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: ToolCallId("same-call".into()),
-                    occurrence_id: Some(OccurrenceId(id.into())),
+                    occurrence_id: OccurrenceId(id.into()),
                     tool_id: "bash".into(),
                     input: json!({"command": "echo retry"}).into(),
                 })
@@ -665,7 +664,7 @@ mod tests {
             if first_finished {
                 events.push(Event::ToolCallFinished(ToolCallResult::new(
                     ToolCallId("same-call".into()),
-                    Some(OccurrenceId("first".into())),
+                    OccurrenceId("first".into()),
                     json!({"superseded_by_retry": true}),
                 )));
             }
@@ -711,7 +710,7 @@ mod tests {
                 cancelled,
                 expected
                     .into_iter()
-                    .map(|id| Some(OccurrenceId(id.into())))
+                    .map(|id| OccurrenceId(id.into()))
                     .collect::<Vec<_>>()
             );
         }

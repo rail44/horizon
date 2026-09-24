@@ -176,7 +176,7 @@ fn a_call_resolved_with_the_denied_marker_is_denied() {
         approval_requested("a"),
         AgentFrameItem::ToolCallFinished(ToolCallResult::denied(
             ToolCallId("a".to_string()),
-            None,
+            crate::contract::OccurrenceId("a".to_string()),
             json!({"is_error": true, "message": "denied by user"}),
         )),
     ];
@@ -530,7 +530,7 @@ fn a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it() {
             json!({"command": "curl -sS http://evil.example.com/x"}),
             occ_1.clone(),
         ),
-        tool_started("bash:1"),
+        tool_started_with_occurrence("bash:1", occ_1.clone()),
         // `fold_domain_denied`'s reissue: same `call_id`, fresh
         // occurrence, and the retry prompt.
         tool_requested_with_occurrence(
@@ -596,7 +596,7 @@ fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
     let command = json!({"command": "cargo build --workspace"});
     let items = vec![
         tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
-        tool_started("bash:1"),
+        tool_started_with_occurrence("bash:1", occ_1.clone()),
         // `fold_filesystem_denied`'s reissue plus its retry prompt.
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
         approval_requested_with_occurrence("bash:1", occ_2.clone()),
@@ -611,7 +611,7 @@ fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
             }),
             occ_1.clone(),
         ),
-        tool_started("bash:1"),
+        tool_started_with_occurrence("bash:1", occ_2.clone()),
         // ... and finishes on its own.
         tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
     ];

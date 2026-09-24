@@ -380,7 +380,9 @@ mod tests {
                 call_id: ToolCallId(call_id.to_string()),
                 tool_id: tool_id.to_string(),
                 input: input.into(),
-                occurrence_id: None,
+                occurrence_id: horizon_agent::contract::OccurrenceId(
+                    (ToolCallId(call_id.to_string())).0.clone(),
+                ),
             },
         );
         let Execution::Auto(events) = execution else {

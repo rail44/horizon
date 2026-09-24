@@ -8,7 +8,7 @@ use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
 use gpui_component::text::TextView;
 use horizon_agent::{
-    contract::{MessageRole, ToolCallId},
+    contract::{MessageRole, OccurrenceId, ToolCallId},
     frame::AgentFrameItem,
 };
 use std::time::Duration;
@@ -165,12 +165,20 @@ impl AgentTranscript {
             // genuinely unknown future shape must still degrade to the
             // same humane verb/target/summary vocabulary the running
             // card/receipt rows use, not `Display`-dumped JSON).
-            AgentFrameItem::ToolCallRequested(request) => {
-                self.render_orphan_tool_row(all_items, index, &request.call_id, cx)
-            }
-            AgentFrameItem::ToolCallFinished(result) => {
-                self.render_orphan_tool_row(all_items, index, &result.call_id, cx)
-            }
+            AgentFrameItem::ToolCallRequested(request) => self.render_orphan_tool_row(
+                all_items,
+                index,
+                &request.call_id,
+                &request.occurrence_id,
+                cx,
+            ),
+            AgentFrameItem::ToolCallFinished(result) => self.render_orphan_tool_row(
+                all_items,
+                index,
+                &result.call_id,
+                &result.occurrence_id,
+                cx,
+            ),
             AgentFrameItem::ApprovalRequested(request) => {
                 // The actionable (ghost-excluding) reading: this arm only
                 // renders at all for the defensive completed-turn-with-a-
@@ -340,19 +348,21 @@ impl AgentTranscript {
         all_items: &[AgentFrameItem],
         index: usize,
         call_id: &ToolCallId,
+        occurrence_id: &OccurrenceId,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
         let already_rendered = all_items[..index]
             .iter()
-            .filter_map(item_call_id)
-            .any(|seen| seen == call_id);
+            .filter_map(item_execution)
+            .any(|seen| seen == (call_id, occurrence_id));
         if already_rendered {
             return None;
         }
         match turns::build_tool_call_views(all_items)
             .into_iter()
-            .find(|call| &call.call_id == call_id)
-        {
+            .find(|call| {
+                item_execution(&all_items[call.request_index]) == Some((call_id, occurrence_id))
+            }) {
             Some(call) => Some(self.render_tool_call_row(index, all_items, &call, false, cx)),
             None => Some(
                 div()
@@ -371,16 +381,19 @@ impl AgentTranscript {
     }
 }
 
-/// The `ToolCallId` `item` references, if any -- used by
-/// [`AgentTranscript::render_orphan_tool_row`] to correlate a possibly-orphaned
-/// item back to its call's other items anywhere in a wider item slice,
-/// and to de-duplicate against an earlier item for the same call.
-fn item_call_id(item: &AgentFrameItem) -> Option<&ToolCallId> {
+/// Execution identity used to correlate and deduplicate defensive orphan rows.
+fn item_execution(item: &AgentFrameItem) -> Option<(&ToolCallId, &OccurrenceId)> {
     match item {
-        AgentFrameItem::ToolCallRequested(request) => Some(&request.call_id),
-        AgentFrameItem::ToolCallStarted(call_id) => Some(call_id),
-        AgentFrameItem::ToolCallFinished(result) => Some(&result.call_id),
-        AgentFrameItem::ApprovalRequested(request) => Some(&request.call_id),
+        AgentFrameItem::ToolCallRequested(request) => {
+            Some((&request.call_id, &request.occurrence_id))
+        }
+        AgentFrameItem::ToolCallStarted(identity) => {
+            Some((&identity.call_id, &identity.occurrence_id))
+        }
+        AgentFrameItem::ToolCallFinished(result) => Some((&result.call_id, &result.occurrence_id)),
+        AgentFrameItem::ApprovalRequested(request) => {
+            Some((&request.call_id, &request.occurrence_id))
+        }
         _ => None,
     }
 }

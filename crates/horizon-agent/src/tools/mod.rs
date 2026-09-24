@@ -68,7 +68,9 @@ pub(crate) use explore::{notification_event, register_wake, take_notification, u
 // 4a containment proof). Kept to exactly these two items: everything else
 // this module owns stays crate-local per the usual convention.
 pub(crate) use execution::tool_result_message;
-pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, HostTools};
+pub use execution::{
+    cancel_tool_execution, cancelled_tool_call_result, execute_agent_tool, Execution, HostTools,
+};
 // `SessionNetworkProxy` is `pub` (not `pub(crate)`) for the same reason as
 // `execute_agent_tool`/`Execution` above: the leg 4b containment tests in
 // `tests/tier1_network_containment.rs` construct one directly to wire up a

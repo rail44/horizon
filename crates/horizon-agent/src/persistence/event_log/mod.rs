@@ -14,12 +14,32 @@ mod appender;
 mod turn;
 mod writer;
 
+#[cfg(test)]
+mod migration_tests;
+
 pub use appender::Appender;
 use turn::TurnTracker;
 pub use writer::{WriterHandle, WriterInit};
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 1;
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 2;
+
+/// A format cutover requires operator action, not a persistence-disabled run.
+#[derive(Debug)]
+pub struct UnsupportedEventLogFormat {
+    path: PathBuf,
+    found: Option<u64>,
+}
+
+impl std::fmt::Display for UnsupportedEventLogFormat {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter,
+            "agent event log {} has version {:?}; explicit format conversion to version {} is required; use scripts/migrate-agent-history.py before starting Horizon",
+            self.path.display(), self.found, AGENT_EVENT_LOG_VERSION)
+    }
+}
+
+impl std::error::Error for UnsupportedEventLogFormat {}
 
 /// Host-resolved session placement needed to restore the same confinement
 /// after `horizon-agentd` restarts. This is deliberately event-log
@@ -220,6 +240,21 @@ pub fn read(path: impl AsRef<Path>) -> Result<ReadReport> {
     for line in text.lines() {
         if line.trim().is_empty() {
             continue;
+        }
+        // A format cutover must be explicit. Silently skipping an old log
+        // would lose resumable sessions and let the writer append mixed formats.
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value.get("schema").and_then(serde_json::Value::as_str)
+                == Some(AGENT_EVENT_LOG_SCHEMA)
+                && value.get("version").and_then(serde_json::Value::as_u64)
+                    != Some(u64::from(AGENT_EVENT_LOG_VERSION))
+            {
+                return Err(UnsupportedEventLogFormat {
+                    path: path.to_path_buf(),
+                    found: value.get("version").and_then(serde_json::Value::as_u64),
+                }
+                .into());
+            }
         }
         match decode_record_tolerantly(line) {
             DecodedLine::Record(record)
@@ -830,8 +865,12 @@ mod tests {
         assert_eq!(
             tracker.turn_id_for_event(&Event::ToolCallFinished(
                 crate::contract::ToolCallResult::new(
-                    crate::contract::ToolCallId("call-1".to_string()),
-                    None,
+                    (crate::contract::ToolCallId("call-1".to_string())).clone(),
+                    crate::contract::OccurrenceId(
+                        (crate::contract::ToolCallId("call-1".to_string()))
+                            .0
+                            .clone()
+                    ),
                     serde_json::json!({ "approved": true }),
                 )
             )),

@@ -134,20 +134,24 @@ fn bench_mixed_turn_event(index: usize) -> Event {
             text: format!("assistant chunk {index}\n"),
         }),
         6 => Event::ToolCallRequested(ToolCallRequest {
-            call_id: ToolCallId(format!("call-{index}")),
+            call_id: (ToolCallId(format!("call-{index}"))).clone(),
             tool_id: "workspace.snapshot".to_string(),
             input: serde_json::json!({ "index": index }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (ToolCallId(format!("call-{index}"))).0.clone(),
+            ),
         }),
         7 => Event::ApprovalRequested(ApprovalRequest {
-            call_id: ToolCallId(format!("call-{}", index - 1)),
+            call_id: (ToolCallId(format!("call-{}", index - 1))).clone(),
             reason: "benchmark approval".to_string(),
             kind: ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (ToolCallId(format!("call-{}", index - 1))).0.clone(),
+            ),
         }),
         8 => Event::ToolCallFinished(ToolCallResult::new(
-            ToolCallId(format!("call-{}", index - 2)),
-            None,
+            (ToolCallId(format!("call-{}", index - 2))).clone(),
+            crate::contract::OccurrenceId((ToolCallId(format!("call-{}", index - 2))).0.clone()),
             serde_json::json!({ "ok": true, "index": index }),
         )),
         _ => Event::MessageCommitted(Message {

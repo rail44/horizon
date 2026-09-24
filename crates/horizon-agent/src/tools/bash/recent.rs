@@ -256,7 +256,7 @@ mod tests {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: "bash".to_string(),
             input: JsonValue::new(json!({ "command": command })),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.to_string()),
         })
     }
 
@@ -275,7 +275,7 @@ mod tests {
         }
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            None,
+            crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
             output,
         ))
     }
@@ -285,14 +285,14 @@ mod tests {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: tool_id.to_string(),
             input: JsonValue::new(json!({})),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.to_string()),
         })
     }
 
     fn other_result(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            None,
+            crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
             json!({ "output": "ok" }),
         ))
     }

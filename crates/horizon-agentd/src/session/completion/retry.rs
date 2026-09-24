@@ -3,7 +3,7 @@
 use crate::session::approval::begin_reissued_approval;
 use crate::session::state::AgentdState;
 use horizon_agent::contract::{
-    ApprovalKind, ApprovalRequest, SessionId, ToolCallId, ToolCallRequest, ToolCallResult,
+    ApprovalKind, Command, SessionId, ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::should_fold_completion;
@@ -18,18 +18,6 @@ fn pending_request(live: &LiveState, call_id: &ToolCallId) -> Option<ToolCallReq
         return None;
     }
     frame.tool_call_request(call_id).cloned()
-}
-
-/// A denial result is attached to the attempt whose request is being reissued.
-/// Ordinary completion preserves an existing result identity instead; it does
-/// not pass through this retry-specific attribution step.
-fn result_for_attempt(request: &ToolCallRequest, result: ToolCallResult) -> ToolCallResult {
-    ToolCallResult {
-        occurrence_id: result
-            .occurrence_id
-            .or_else(|| request.occurrence_id.clone()),
-        ..result
-    }
 }
 
 /// A sandboxed `bash` call was refused mach-lookup to macOS security
@@ -48,6 +36,7 @@ fn result_for_attempt(request: &ToolCallRequest, result: ToolCallResult) -> Tool
 pub(super) fn fold_mach_service_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
+    commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
     services: Vec<String>,
     result: ToolCallResult,
@@ -72,21 +61,12 @@ pub(super) fn fold_mach_service_denied(
         live_state,
         session_id,
         original_request.clone(),
-        ApprovalRequest {
-            call_id: result.call_id.clone(),
-            // See the matching site in `fold_domain_denied` --
-            // `begin_reissued_approval` mints the fresh `OccurrenceId` for
-            // the reissued request; the `prior_result` is the *first*
-            // attempt's outcome, stamped with the original request's
-            // `occurrence_id` here so the transcript attributes it to the
-            // same occurrence.
-            occurrence_id: None,
-            reason,
-            kind: ApprovalKind::MachServiceGrant {
-                services,
-                prior_result: result_for_attempt(&original_request, result),
-            },
+        ApprovalKind::MachServiceGrant {
+            services,
+            prior_result: result,
         },
+        reason,
+        commands_tx,
     );
 }
 
@@ -103,6 +83,7 @@ pub(super) fn fold_mach_service_denied(
 pub(super) fn fold_domain_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
+    commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
     domains: Vec<String>,
     result: ToolCallResult,
@@ -125,23 +106,19 @@ pub(super) fn fold_domain_denied(
         live_state,
         session_id,
         original_request.clone(),
-        ApprovalRequest {
-            call_id: result.call_id.clone(),
-            // The reissue gets a new ID; prior_result retains the completed
-            // attempt's dispatch identity (or the legacy request fallback).
-            occurrence_id: None,
-            reason,
-            kind: ApprovalKind::DomainDenialRetry {
-                domains,
-                prior_result: result_for_attempt(&original_request, result),
-            },
+        ApprovalKind::DomainDenialRetry {
+            domains,
+            prior_result: result,
         },
+        reason,
+        commands_tx,
     );
 }
 
 pub(super) fn fold_domain_grant_required(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
+    commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
     call_id: ToolCallId,
     domains: Vec<String>,
@@ -161,22 +138,16 @@ pub(super) fn fold_domain_grant_required(
         live_state,
         session_id,
         original_request,
-        ApprovalRequest {
-            call_id,
-            // See the matching site in `fold_domain_denied` --
-            // `begin_reissued_approval` overwrites this with the fresh
-            // `OccurrenceId` it mints for the reissued request, so we
-            // leave it as `None` here.
-            occurrence_id: None,
-            reason,
-            kind: ApprovalKind::DomainGrant { domains },
-        },
+        ApprovalKind::DomainGrant { domains },
+        reason,
+        commands_tx,
     );
 }
 
 pub(super) fn fold_filesystem_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
+    commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
     denials: Vec<horizon_sandbox::FilesystemDenial>,
     result: ToolCallResult,
@@ -224,26 +195,18 @@ pub(super) fn fold_filesystem_denied(
         live_state,
         session_id,
         original_request.clone(),
-        ApprovalRequest {
-            call_id: result.call_id.clone(),
-            // See the matching site in `fold_domain_denied` --
-            // `begin_reissued_approval` mints a fresh `OccurrenceId` for
-            // the reissued request and stamps it on both the new
-            // `ToolCallRequest` and the `ApprovalRequest`, so we leave
-            // this as `None` here.
-            occurrence_id: None,
-            reason,
-            kind: ApprovalKind::FilesystemDenialRetry {
-                denials,
-                grants,
-                // Same prior_result fixup as `fold_domain_denied` --
-                // bash constructed the result without an in-scope
-                // request, so stamp the original request's
-                // `occurrence_id` onto it now so the transcript and
-                // analytics attribute it to the right occurrence.
-                prior_result: result_for_attempt(&original_request, result),
-            },
+        ApprovalKind::FilesystemDenialRetry {
+            denials,
+            grants,
+            // Same prior_result fixup as `fold_domain_denied` --
+            // bash constructed the result without an in-scope
+            // request, so stamp the original request's
+            // `occurrence_id` onto it now so the transcript and
+            // analytics attribute it to the right occurrence.
+            prior_result: result,
         },
+        reason,
+        commands_tx,
     );
 }
 

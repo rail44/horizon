@@ -279,10 +279,14 @@ mod tests {
     fn agent_wire_event_round_trips_each_variant() {
         let events = vec![
             AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
-                call_id: crate::contract::ToolCallId("call-1".to_string()),
+                call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({"path": "a.txt"}).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(
+                    (crate::contract::ToolCallId("call-1".to_string()))
+                        .0
+                        .clone(),
+                ),
             })),
             AgentWireEvent::ToolCallProgress(ToolCallProgress {
                 key: "call-1".to_string(),

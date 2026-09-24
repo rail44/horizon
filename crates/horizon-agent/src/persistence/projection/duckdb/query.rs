@@ -28,16 +28,11 @@ use super::{
 /// snippet, a ~16k-char total cap for `recall.read`) on top of this.
 const RECALL_TEXT_BOUND_CHARS: usize = 4_000;
 
-/// One label per result, using its tagged occurrence or the latest preceding
-/// legacy request. Shared by search and history windows so id reuse neither
-/// multiplies rows nor borrows a label from a future request.
-const RESULT_CALL_JOIN: &str = "LEFT JOIN LATERAL (
-    SELECT arg_max(c.tool_id, c.sequence) AS tool_id
-    FROM agent_tool_calls c
-    WHERE c.session_id = r.session_id AND c.call_id = r.call_id
-      AND c.sequence < r.sequence
-      AND (r.occurrence_id IS NULL OR c.occurrence_id = r.occurrence_id)
-) tc ON TRUE";
+/// One request per execution identity; the schema enforces uniqueness. Keep
+/// event order so a malformed future request cannot lend its label to a result.
+const RESULT_CALL_JOIN: &str = "LEFT JOIN agent_tool_calls tc
+    ON tc.session_id = r.session_id AND tc.call_id = r.call_id
+    AND tc.occurrence_id = r.occurrence_id AND tc.sequence < r.sequence";
 
 impl Store {
     /// Test-only: both current callers (`session_snapshots` below and
@@ -602,10 +597,10 @@ mod recall_tests {
         use crate::contract::OccurrenceId;
         use serde_json::json;
 
-        for tagged in [false, true] {
+        {
             let store = Store::open_in_memory().unwrap();
             let session = SessionId::new();
-            let occurrence = |id: &str| tagged.then(|| OccurrenceId(id.into()));
+            let occurrence = |id: &str| OccurrenceId(id.into());
             let request = |call: &str, id: &str, tool: &str| {
                 Event::ToolCallRequested(ToolCallRequest {
                     call_id: ToolCallId(call.into()),
@@ -630,7 +625,7 @@ mod recall_tests {
                 request("orphan", "future", "fs.write"),
             ];
             let mut expected = vec!["fs.read", "bash", "orphan"];
-            if tagged {
+            {
                 events.push(result("dup", "first"));
                 expected.push("fs.read");
             }
@@ -641,10 +636,7 @@ mod recall_tests {
                 .filter(|row| row.kind == RecallEntryKind::ToolResult)
                 .map(|row| row.role_or_tool.as_str())
                 .collect();
-            assert_eq!(
-                labels, expected,
-                "read must keep one row per result; tagged={tagged}"
-            );
+            assert_eq!(labels, expected, "read must keep one row per result");
             let search = store
                 .search_history(Some(session), Some("needle"), 100, None)
                 .unwrap();
@@ -684,11 +676,11 @@ mod recall_tests {
                         call_id: call_id.clone(),
                         tool_id: "fs.grep".to_string(),
                         input: serde_json::json!({ "pattern": "fox" }).into(),
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
-                        call_id,
-                        None,
+                        call_id.clone(),
+                        crate::contract::OccurrenceId(call_id.0.clone()),
                         serde_json::json!({ "matches": ["a red fox"] }),
                     )),
                 ],
@@ -893,7 +885,7 @@ mod recall_tests {
                 turn_id: Some("turn-halted".to_string()),
                 provider_id: None,
                 role_id: None,
-                event: Event::TurnEnded(TurnEndReason::Halted),
+                event: Event::TurnEnded(TurnEndReason::HaltedByIterationCap),
                 provider_payload: None,
             })
             .expect("append halted turn end");
@@ -926,17 +918,17 @@ mod recall_tests {
                         call_id: call_id.clone(),
                         tool_id: "fs.read".to_string(),
                         input: serde_json::json!({}).into(),
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                     Event::ApprovalRequested(ApprovalRequest {
                         call_id: call_id.clone(),
                         reason: "needs approval".to_string(),
                         kind: ApprovalKind::Standard,
-                        occurrence_id: None,
+                        occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
                     }),
                     Event::ToolCallFinished(ToolCallResult::new(
-                        call_id,
-                        None,
+                        call_id.clone(),
+                        crate::contract::OccurrenceId(call_id.0.clone()),
                         serde_json::json!({ "ok": true }),
                     )),
                 ],

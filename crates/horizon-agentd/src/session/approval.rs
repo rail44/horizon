@@ -110,35 +110,34 @@ pub(super) fn begin_reissued_approval(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
-    request: horizon_agent::contract::ToolCallRequest,
-    approval: ApprovalRequest,
+    mut request: horizon_agent::contract::ToolCallRequest,
+    kind: horizon_agent::contract::ApprovalKind,
+    reason: String,
+    commands_tx: &Sender<Command>,
 ) {
-    // Mint a fresh `OccurrenceId` for the reissue. The provider hands the
-    // same `call_id` back to us on retry -- it has no concept of a retry
-    // -- so by `call_id` alone the two attempts of one conceptual
-    // sandbox-denial-retry collapse onto each other (the cosmetic
-    // "started-but-never-finished" defect the user sees daily, and the
-    // approval-attribution ambiguity that follows). `OccurrenceId` is the
-    // second key the transcript, approval modal, and analytics each
-    // follow; the first attempt (whose `ToolCallRequested` is already in
-    // the frame with its own `OccurrenceId`) keeps its identity, the new
-    // attempt takes this fresh one, and both stay attributable. UUID v4
-    // -- not a per-session counter -- so a resumed session and a replayed
-    // log line up without any shared counter to coordinate (the prior
-    // generation-counter pattern in `crates/horizon-agent/src/tools/web/
-    // mod.rs`'s task registry -- `next_generation` and the
-    // `RegisteredTask`/`finish_registration` pair -- is a process-local
-    // `AtomicU64` and is never persisted, so it would not survive
-    // either of those).
-    let occurrence_id = OccurrenceId::new();
-    let request = horizon_agent::contract::ToolCallRequest {
-        occurrence_id: Some(occurrence_id.clone()),
-        ..request
-    };
+    let prior_identity = request.identity();
+    request.occurrence_id = OccurrenceId::new();
+    if matches!(
+        kind,
+        horizon_agent::contract::ApprovalKind::DomainGrant { .. }
+    ) {
+        // The fetch worker stopped at the next domain boundary. Close that
+        // attempt before opening the retry; no provider answer exists yet.
+        let event = Event::ToolCallFinished(
+            prior_identity
+                .result(serde_json::json!({}))
+                .superseded_by_retry(&request.occurrence_id),
+        );
+        live_state.extend_provider_events([event.clone().into()]);
+        send_session_event(state, session_id, AgentWireEvent::Event(event));
+    }
     let approval = ApprovalRequest {
-        occurrence_id: Some(occurrence_id),
-        ..approval
+        call_id: request.call_id.clone(),
+        occurrence_id: request.occurrence_id.clone(),
+        kind,
+        reason,
     };
+    let _ = commands_tx.send(Command::ToolCallReissued(request.identity()));
     let request_event = Event::ToolCallRequested(request.clone());
     let _ = live_state.extend_provider_events(std::iter::once(request_event.clone().into()));
     send_session_event(state, session_id, AgentWireEvent::Event(request_event));
@@ -166,6 +165,20 @@ pub(super) fn dispatch_inbound_command(
     command: Command,
 ) {
     match command {
+        command @ (Command::Cancel { .. } | Command::Shutdown) => {
+            // Close the accepted executions before forwarding the stop. A
+            // worker/judge racing this command can no longer reissue them.
+            let frame = live_state.frame();
+            for request in frame.unfinished_tool_calls() {
+                horizon_agent::tools::cancel_tool_execution(session_id, &request.call_id);
+                let event = Event::ToolCallFinished(
+                    horizon_agent::tools::cancelled_tool_call_result(request.identity()),
+                );
+                let _ = live_state.extend_provider_events(std::iter::once(event.clone().into()));
+                send_session_event(state, session_id, AgentWireEvent::Event(event));
+            }
+            let _ = commands_tx.send(command);
+        }
         Command::SetSessionModel { provider, model } => {
             match super::model_selection::resolve(state, &provider, &model) {
                 Ok(command) => {
@@ -256,9 +269,10 @@ fn resolve_and_forward(
     // uses to find the matching approval kind) so the audit row pairs
     // with the right `ApprovalRequested` occurrence under a reused
     // `call_id` or a sandbox-denial retry.
-    let occurrence_id = frame
-        .tool_call_request(&logged_call_id)
-        .and_then(|request| request.occurrence_id.clone());
+    let Some(request) = frame.tool_call_request(&logged_call_id) else {
+        return;
+    };
+    let occurrence_id = request.occurrence_id.clone();
     let resolved_event = Event::ApprovalResolved(horizon_agent::contract::ApprovalResolved {
         call_id: logged_call_id.clone(),
         occurrence_id,
@@ -337,6 +351,65 @@ mod tests {
     };
     use horizon_agent::live::LiveState;
 
+    #[test]
+    fn cancellation_closes_every_retry_attempt_before_a_late_completion_arrives() {
+        let state = test_state();
+        let live = LiveState::with_disabled_persistence();
+        let session = SessionId::new();
+        let (commands, received) = crossbeam_channel::unbounded();
+        let first = judge_candidate("cancel-retry").request;
+        let retry = ToolCallRequest {
+            occurrence_id: OccurrenceId::new(),
+            ..first.clone()
+        };
+        live.extend_provider_events([
+            Event::ToolCallRequested(first.clone()).into(),
+            Event::ToolCallStarted(first.identity()).into(),
+            Event::ToolCallRequested(retry.clone()).into(),
+            Event::ApprovalRequested(ApprovalRequest {
+                call_id: retry.call_id.clone(),
+                occurrence_id: retry.occurrence_id.clone(),
+                reason: "retry".into(),
+                kind: ApprovalKind::Standard,
+            })
+            .into(),
+        ]);
+        dispatch_inbound_command(
+            &state,
+            &live,
+            &commands,
+            session,
+            Command::Cancel { request_id: None },
+        );
+        assert!(matches!(received.try_recv(), Ok(Command::Cancel { .. })));
+        assert!(live.frame().unfinished_tool_calls().is_empty());
+        assert!(live.frame().pending_approval_call_id().is_none());
+        let cancelled = live.events();
+        let results = cancelled
+            .iter()
+            .filter_map(|event| match event {
+                Event::ToolCallFinished(result) => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].occurrence_id, first.occurrence_id);
+        assert_eq!(results[1].occurrence_id, retry.occurrence_id);
+        super::super::completion::fold_tool_completion(
+            &state,
+            &live,
+            &commands,
+            session,
+            horizon_agent::tools::ToolCompletion::DomainGrantRequired {
+                call_id: retry.call_id,
+                occurrence_id: retry.occurrence_id,
+                domains: vec!["example.test".into()],
+            },
+        );
+        assert_eq!(live.events(), cancelled);
+        assert!(received.try_recv().is_err());
+    }
+
     /// A session state with a real, canonical workspace root — what the
     /// out-of-root refusal needs in order to name anything.
     fn rooted_tool_state(root: &std::path::Path, unattended: bool) -> ToolSessionState {
@@ -357,13 +430,15 @@ mod tests {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::json!({ "path": path.display().to_string() }).into(),
-            occurrence_id: None,
+            occurrence_id: horizon_agent::contract::OccurrenceId(
+                (ToolCallId(call_id.to_string())).0.clone(),
+            ),
         };
         let events = vec![
             ProviderEvent::from(Event::ToolCallRequested(request.clone())),
             ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
                 call_id: request.call_id.clone(),
-                occurrence_id: None,
+                occurrence_id: horizon_agent::contract::OccurrenceId(request.call_id.0.clone()),
                 reason: "outside the workspace root".to_string(),
                 kind: ApprovalKind::Standard,
             })),
@@ -604,13 +679,13 @@ mod tests {
                 call_id: call_id.clone(),
                 tool_id: "mock.approval_required".to_string(),
                 input: serde_json::json!({}).into(),
-                occurrence_id: Some(occurrence_id.clone()),
+                occurrence_id: occurrence_id.clone(),
             })),
             ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
                 call_id: call_id.clone(),
                 reason: "test".to_string(),
                 kind: ApprovalKind::Standard,
-                occurrence_id: Some(occurrence_id.clone()),
+                occurrence_id: occurrence_id.clone(),
             })),
         ]);
 
@@ -637,7 +712,7 @@ mod tests {
             })
             .expect("an ApprovalResolved event in the live state");
         assert_eq!(resolved.0, call_id);
-        assert_eq!(resolved.1, Some(occurrence_id));
+        assert_eq!(resolved.1, occurrence_id);
         assert!(matches!(resolved.2, ApprovalDecisionPayload::Approve));
 
         // The `Forward` branch sends the original command to the provider,
@@ -664,12 +739,21 @@ mod tests {
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
 
         let call_id = ToolCallId("approval-deny".to_string());
+        live_state.extend_provider_events([Event::ToolCallRequested(
+            horizon_agent::contract::ToolCallRequest {
+                call_id: call_id.clone(),
+                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                tool_id: "mock.approval_required".into(),
+                input: serde_json::json!({}).into(),
+            },
+        )
+        .into()]);
         live_state.extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
             ApprovalRequest {
                 call_id: call_id.clone(),
                 reason: "test".to_string(),
                 kind: ApprovalKind::Standard,
-                occurrence_id: None,
+                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
             },
         ))]);
 
@@ -713,12 +797,21 @@ mod tests {
             crate::session::Connection::new(state.clone()).subscribe_agent(session_id);
 
         let call_id = ToolCallId("approval-fanout".to_string());
+        live_state.extend_provider_events([Event::ToolCallRequested(
+            horizon_agent::contract::ToolCallRequest {
+                call_id: call_id.clone(),
+                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                tool_id: "mock.approval_required".into(),
+                input: serde_json::json!({}).into(),
+            },
+        )
+        .into()]);
         live_state.extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
             ApprovalRequest {
                 call_id: call_id.clone(),
                 reason: "test".to_string(),
                 kind: ApprovalKind::Standard,
-                occurrence_id: None,
+                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
             },
         ))]);
 

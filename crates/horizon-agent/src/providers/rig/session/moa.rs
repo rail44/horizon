@@ -382,12 +382,12 @@ mod tests {
                 call_id: call_id.clone(),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({ "path": "/elsewhere/lib.rs" }).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
             }));
             let _ = tx.send(Event::ToolCallFinished(
                 crate::contract::ToolCallResult::new(
-                    call_id,
-                    None,
+                    call_id.clone(),
+                    crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({
                         "is_error": true,
                         "message": "`fs.read` cannot read `/elsewhere/lib.rs`: it is outside \

@@ -150,6 +150,7 @@ impl SessionLoopState {
                     Command::SessionInput(input) => self
                         .inputs
                         .accept(input, !self.pending_tool_calls.is_empty()),
+                    Command::ToolCallReissued(identity) => self.note_tool_call_reissued(identity),
                     command => preceding.push_back(command),
                 }
             }

@@ -11,12 +11,12 @@ use super::super::{
 };
 use super::capture::Captured;
 use crate::config::BashToolConfig;
-use crate::contract::{ToolCallId, ToolCallResult};
+use crate::contract::ToolCallIdentity;
 use crate::policy::{annotate_denied_domains, annotate_sandboxed};
 use crate::tools::bash::BashCompletion;
 
 pub(super) fn complete(
-    call_id: &ToolCallId,
+    identity: &ToolCallIdentity,
     captured: Captured,
     denied_domains: Vec<String>,
     timeout: Duration,
@@ -40,7 +40,7 @@ pub(super) fn complete(
         if !drained {
             note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
         }
-        return finish_or_domain_denied(call_id, value, denied_domains);
+        return finish_or_domain_denied(identity, value, denied_domains);
     }
     let Some(status) = status else {
         let mut value = failed_output(
@@ -50,7 +50,7 @@ pub(super) fn complete(
         );
         annotate_common(&mut value, &denials);
         // Wait failures historically carry no drain note or filesystem retry.
-        return finish_or_domain_denied(call_id, value, denied_domains);
+        return finish_or_domain_denied(identity, value, denied_domains);
     };
 
     let mut value = status_output(status, raw_stdout, raw_stderr, cwd_handle, config);
@@ -71,9 +71,7 @@ pub(super) fn complete(
         }
         return BashCompletion::FilesystemDenied {
             denials: denials.filesystem,
-            // The daemon's fold stamps the originating request's occurrence
-            // identity, keeping reused call IDs and denial retries distinct.
-            result: ToolCallResult::new(call_id.clone(), None, value),
+            result: identity.result(value),
         };
     }
     #[cfg(target_os = "macos")]
@@ -84,10 +82,10 @@ pub(super) fn complete(
         }
         return BashCompletion::MachServiceDenied {
             services: denials.mach_services,
-            result: ToolCallResult::new(call_id.clone(), None, value),
+            result: identity.result(value),
         };
     }
-    finish_or_domain_denied(call_id, value, denied_domains)
+    finish_or_domain_denied(identity, value, denied_domains)
 }
 
 fn annotate_common(value: &mut Value, denials: &horizon_sandbox::ContainmentDenials) {
@@ -97,15 +95,15 @@ fn annotate_common(value: &mut Value, denials: &horizon_sandbox::ContainmentDeni
 }
 
 fn finish_or_domain_denied(
-    call_id: &ToolCallId,
+    identity: &ToolCallIdentity,
     mut value: Value,
     domains: Vec<String>,
 ) -> BashCompletion {
     if domains.is_empty() {
-        finished(call_id, value)
+        finished(identity, value)
     } else {
         annotate_denied_domains(&mut value, &domains);
-        domain_denied(call_id, domains, value)
+        domain_denied(identity, domains, value)
     }
 }
 
@@ -155,7 +153,9 @@ mod tests {
     fn finish(captured: Captured, domains: Vec<String>) -> (BashCompletion, PathBuf) {
         let cwd = Arc::new(Mutex::new(PathBuf::from("/workspace")));
         let completion = complete(
-            &ToolCallId("result-precedence".into()),
+            &crate::test_support::tool_identity(&crate::contract::ToolCallId(
+                "result-precedence".into(),
+            )),
             captured,
             domains,
             Duration::from_secs(1),
@@ -179,7 +179,7 @@ mod tests {
         };
         assert_eq!(denials, expected_denials);
         assert!(result.is_error);
-        assert!(result.occurrence_id.is_none());
+        assert_eq!(result.occurrence_id.0, "result-precedence");
         assert_eq!(result.output["exit_code"], 0);
         assert_eq!(result.output["sandboxed"], true);
         assert_eq!(result.output["denied_domains"][0], "example.test");

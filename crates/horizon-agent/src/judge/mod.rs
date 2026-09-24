@@ -322,10 +322,10 @@ fn trusted_approval_context(kind: &ApprovalKind, tool_id: &str) -> JudgeApproval
             host_execution_requested: false,
             git_metadata_operation: false,
         },
-        ApprovalKind::Standard | ApprovalKind::SandboxDenialRetry => JudgeApprovalContext {
+        ApprovalKind::Standard => JudgeApprovalContext {
             requested_filesystem_grants: Vec::new(),
             requested_domains: Vec::new(),
-            host_execution_requested: matches!(kind, ApprovalKind::Standard) && tool_id == "bash",
+            host_execution_requested: tool_id == "bash",
             git_metadata_operation: false,
         },
     }
@@ -698,8 +698,12 @@ mod tests {
                 denials: vec![denial.clone()],
                 grants: vec![shaped.clone()],
                 prior_result: crate::contract::ToolCallResult::new(
-                    crate::contract::ToolCallId("call-context".to_string()),
-                    None,
+                    (crate::contract::ToolCallId("call-context".to_string())).clone(),
+                    crate::contract::OccurrenceId(
+                        (crate::contract::ToolCallId("call-context".to_string()))
+                            .0
+                            .clone(),
+                    ),
                     serde_json::json!({}),
                 ),
             },
@@ -719,8 +723,12 @@ mod tests {
             &ApprovalKind::DomainDenialRetry {
                 domains: expected_domains.clone(),
                 prior_result: crate::contract::ToolCallResult::new(
-                    crate::contract::ToolCallId("call-domain".to_string()),
-                    None,
+                    (crate::contract::ToolCallId("call-domain".to_string())).clone(),
+                    crate::contract::OccurrenceId(
+                        (crate::contract::ToolCallId("call-domain".to_string()))
+                            .0
+                            .clone(),
+                    ),
                     serde_json::json!({}),
                 ),
             },
@@ -746,17 +754,21 @@ mod tests {
 
     fn candidate(kind: ApprovalKind) -> ApprovalCandidate {
         let request = ToolCallRequest {
-            call_id: crate::contract::ToolCallId("call-1".to_string()),
+            call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (crate::contract::ToolCallId("call-1".to_string()))
+                    .0
+                    .clone(),
+            ),
         };
         ApprovalCandidate {
             approval: ApprovalRequest {
                 call_id: request.call_id.clone(),
                 reason: "test approval".to_string(),
                 kind,
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(request.call_id.0.clone()),
             },
             request,
         }
@@ -902,8 +914,12 @@ mod tests {
             denials: Vec::new(),
             grants: Vec::new(),
             prior_result: crate::contract::ToolCallResult::new(
-                crate::contract::ToolCallId("call-1".to_string()),
-                None,
+                (crate::contract::ToolCallId("call-1".to_string())).clone(),
+                crate::contract::OccurrenceId(
+                    (crate::contract::ToolCallId("call-1".to_string()))
+                        .0
+                        .clone(),
+                ),
                 serde_json::json!({}),
             ),
         });
@@ -926,10 +942,14 @@ mod tests {
 
     fn git_candidate(command: &str) -> ApprovalCandidate {
         let request = ToolCallRequest {
-            call_id: crate::contract::ToolCallId("call-1".to_string()),
+            call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
             tool_id: "bash".to_string(),
             input: serde_json::json!({ "command": command }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (crate::contract::ToolCallId("call-1".to_string()))
+                    .0
+                    .clone(),
+            ),
         };
         ApprovalCandidate {
             approval: ApprovalRequest {
@@ -938,7 +958,7 @@ mod tests {
                 kind: ApprovalKind::GitOperation {
                     writable_roots: vec![std::env::temp_dir()],
                 },
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(request.call_id.0.clone()),
             },
             request,
         }

@@ -1,12 +1,12 @@
 use super::*;
 use crate::tools::cancelled_tool_call_result;
 
-fn request(tool: &str, occurrence: Option<&str>) -> ToolCallRequest {
+fn request(tool: &str, occurrence: &str) -> ToolCallRequest {
     ToolCallRequest {
         call_id: ToolCallId("reused".into()),
         tool_id: tool.into(),
         input: serde_json::json!({}).into(),
-        occurrence_id: occurrence.map(|id| OccurrenceId(id.into())),
+        occurrence_id: OccurrenceId(occurrence.into()),
     }
 }
 
@@ -20,9 +20,9 @@ fn result(request: &ToolCallRequest, text: &str) -> ToolCallResult {
 
 #[test]
 fn reused_provider_ids_keep_each_executed_tool_name() {
-    for tagged in [false, true] {
-        let first = request("fs.read", tagged.then_some("first"));
-        let second = request("bash", tagged.then_some("second"));
+    {
+        let first = request("fs.read", "first");
+        let second = request("bash", "second");
         let first_result = result(&first, "read");
         let second_result = result(&second, "ran");
         assert_eq!(
@@ -44,20 +44,17 @@ fn reused_provider_ids_keep_each_executed_tool_name() {
 
 #[test]
 fn approved_retries_replay_one_provider_call_and_its_final_answer() {
-    let first = request("bash", Some("first"));
-    let retry = request("bash", Some("retry"));
-    let final_attempt = request("bash", Some("last"));
+    let first = request("bash", "first");
+    let retry = request("bash", "retry");
+    let final_attempt = request("bash", "last");
     let finished = result(&final_attempt, "done");
     let events = vec![
         Event::ToolCallRequested(first.clone()),
         Event::ToolCallRequested(retry.clone()),
-        Event::ToolCallFinished(
-            result(&first, "denied").superseded_by_retry(retry.occurrence_id.as_ref()),
-        ),
+        Event::ToolCallFinished(result(&first, "denied").superseded_by_retry(&retry.occurrence_id)),
         Event::ToolCallRequested(final_attempt.clone()),
         Event::ToolCallFinished(
-            result(&retry, "denied again")
-                .superseded_by_retry(final_attempt.occurrence_id.as_ref()),
+            result(&retry, "denied again").superseded_by_retry(&final_attempt.occurrence_id),
         ),
         Event::ToolCallFinished(finished.clone()),
     ];
@@ -89,8 +86,8 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
 
 #[test]
 fn refusing_a_retry_replays_the_original_attempts_answer_once() {
-    let first = request("bash", Some("first"));
-    let retry = request("bash", Some("retry"));
+    let first = request("bash", "first");
+    let retry = request("bash", "retry");
     let denied = result(&first, "network denied");
     assert_eq!(
         rig_messages_from_horizon_events(&[
@@ -108,8 +105,8 @@ fn refusing_a_retry_replays_the_original_attempts_answer_once() {
 
 #[test]
 fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
-    let first = request("bash", Some("first"));
-    let second = request("bash", Some("second"));
+    let first = request("bash", "first");
+    let second = request("bash", "second");
     let answered = result(&second, "done");
     let messages = rig_messages_from_horizon_events(&[
         Event::ToolCallRequested(first.clone()),
@@ -124,7 +121,7 @@ fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
         messages,
         vec![
             Message::from(rig_tool_call_from_request(&first)),
-            rig_tool_result_message(&cancelled_tool_call_result(first.call_id), "bash"),
+            rig_tool_result_message(&cancelled_tool_call_result(first.identity()), "bash"),
             Message::user("try again"),
             Message::from(rig_tool_call_from_request(&second)),
             rig_tool_result_message(&answered, "bash"),
@@ -135,8 +132,8 @@ fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
 
 #[test]
 fn an_unknown_occurrence_cannot_answer_a_known_provider_id() {
-    let announced = request("fs.read", Some("known"));
-    let unknown = request("fs.read", Some("unknown"));
+    let announced = request("fs.read", "known");
+    let unknown = request("fs.read", "unknown");
     assert_eq!(
         rig_messages_from_horizon_events(&[
             Event::ToolCallRequested(announced.clone()),
@@ -144,7 +141,7 @@ fn an_unknown_occurrence_cannot_answer_a_known_provider_id() {
         ]),
         vec![
             Message::from(rig_tool_call_from_request(&announced)),
-            rig_tool_result_message(&cancelled_tool_call_result(announced.call_id), "fs.read"),
+            rig_tool_result_message(&cancelled_tool_call_result(announced.identity()), "fs.read"),
         ]
     );
 }

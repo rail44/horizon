@@ -48,11 +48,8 @@ pub struct ToolCallId(pub String);
 ///
 /// `OccurrenceId` is the second key. It is stamped on every
 /// `ToolCallRequested`, `ToolCallResult`, and `ApprovalRequest` that flows
-/// out of Horizon. `#[serde(default)]` on the field sites means a peer (older
-/// agentd, replayed pre-feature log) that never minted one decodes cleanly
-/// with `None`, and the consumers fall back to call_id + position scanning
-/// (`frame.rs:189-291`'s existing `.rev()` semantic), so the wire change is
-/// additive and needs no `SESSION_PROTOCOL_VERSION` bump.
+/// out of Horizon, including start and cancellation notifications. Published
+/// events require this identity; old logs must be converted before replay.
 ///
 /// The string itself is a UUID v4 minted at the first emission point in
 /// `providers::rig::mapping::rig_tool_call_request` (and at
@@ -247,6 +244,10 @@ pub enum Command {
     #[serde(skip)]
     #[schemars(skip)]
     ApplySessionModel(Box<crate::config::ResolvedModelSelection>),
+    /// Daemon-owned retry identity for a still-pending provider call.
+    #[serde(skip)]
+    #[schemars(skip)]
+    ToolCallReissued(ToolCallIdentity),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -280,7 +281,7 @@ pub enum Event {
     AssistantTextDelta(MessageDelta),
     MessageCommitted(Message),
     ToolCallRequested(ToolCallRequest),
-    ToolCallStarted(ToolCallId),
+    ToolCallStarted(ToolCallIdentity),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
     /// A turn's completion request left Horizon for the provider (e.g. the
@@ -558,12 +559,6 @@ pub enum TurnEndReason {
     Completed,
     Cancelled,
     Failed,
-    /// Legacy: every guard halt used this bare variant before the above
-    /// resolution. Kept only so a pre-existing persisted event log with
-    /// this reason still deserializes on replay; no current code path
-    /// produces it. Renders the same calm "paused" treatment as the two
-    /// variants below, just without a specific guard-kind sentence.
-    Halted,
     /// The turn-loop guard's consecutive-tool-turn safety net stopped the
     /// turn (`providers::rig::session`'s `TurnLoopGuard::record_tool_turn`)
     /// -- see `docs/agent-tools-design.md`'s "Error Model and Loop Guards".
@@ -715,7 +710,7 @@ pub struct ToolCallProgress {
 impl ProviderEvent {
     /// Feedback and session metadata carry no conversation event. Persistence
     /// and tool dispatch must never interpret their placeholder `event`.
-    pub(crate) fn is_ephemeral(&self) -> bool {
+    pub fn is_ephemeral(&self) -> bool {
         self.tool_call_progress.is_some()
             || self.session_model.is_some()
             || self.session_selection.is_some()
@@ -1037,10 +1032,30 @@ pub struct ToolCallRequest {
     pub call_id: ToolCallId,
     pub tool_id: String,
     pub input: JsonValue,
-    /// Per-occurrence identity -- see [`OccurrenceId`]. `None` when the
-    /// originating request is not in scope (synthetic results); consumers
-    /// fall back to `call_id` + positional `.rev()` scanning in that case.
-    pub occurrence_id: Option<OccurrenceId>,
+    /// Identity of this execution attempt, minted when the request is emitted.
+    pub occurrence_id: OccurrenceId,
+}
+
+/// The request identity carried through start, completion and cancellation.
+#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
+pub struct ToolCallIdentity {
+    pub call_id: ToolCallId,
+    pub occurrence_id: OccurrenceId,
+}
+
+impl ToolCallRequest {
+    pub fn identity(&self) -> ToolCallIdentity {
+        ToolCallIdentity {
+            call_id: self.call_id.clone(),
+            occurrence_id: self.occurrence_id.clone(),
+        }
+    }
+}
+
+impl ToolCallIdentity {
+    pub fn result(&self, output: impl Into<JsonValue>) -> ToolCallResult {
+        ToolCallResult::new(self.call_id.clone(), self.occurrence_id.clone(), output)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1051,7 +1066,7 @@ pub struct ApprovalRequest {
     /// approval attaches to the specific occurrence the user is deciding,
     /// not just to a call_id that may have already been resolved by an
     /// earlier occurrence.
-    pub occurrence_id: Option<OccurrenceId>,
+    pub occurrence_id: OccurrenceId,
     pub reason: String,
     /// Which kind of approval this is -- see [`ApprovalKind`].
     pub kind: ApprovalKind,
@@ -1081,7 +1096,7 @@ pub enum ApprovalDecisionPayload {
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ApprovalResolved {
     pub call_id: ToolCallId,
-    pub occurrence_id: Option<OccurrenceId>,
+    pub occurrence_id: OccurrenceId,
     pub decision: ApprovalDecisionPayload,
 }
 
@@ -1090,7 +1105,7 @@ pub struct ApprovalResolved {
 /// moment the human resumed, recovered via
 /// [`crate::frame::AgentFrame::last_turn_end_reason`] so the analyst knows
 /// which guard's halt the operator overrode (`HaltedByIterationCap` /
-/// `HaltedByDoomLoop` / the legacy bare `Halted`). `None` when no
+/// `HaltedByDoomLoop`). `None` when no
 /// preceding `TurnEnded` exists — the no-op-replay / idle-session case
 /// (see the `Event::ContinueTurnRequested` doc comment for why that
 /// distinction still matters operationally).
@@ -1108,8 +1123,7 @@ pub struct ContinueTurnRequested {
 /// having to sniff `ApprovalRequest::reason`'s free text (today it doesn't,
 /// but this keeps that door open).
 #[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
-// `large_enum_variant` triggered after adding `occurrence_id: Option<
-// OccurrenceId>` to `ToolCallResult` pushed the embedded variants
+// `large_enum_variant` triggered after adding `occurrence_id: OccurrenceId` to `ToolCallResult` pushed the embedded variants
 // (DomainDenied, FilesystemDenied, ...) just past the 200-byte threshold
 // the lint uses. Boxing the embedded `result` fields would propagate
 // `Box` allocations through every match site; the variants are not
@@ -1124,10 +1138,6 @@ pub enum ApprovalKind {
     /// existed before this leg.
     #[default]
     Standard,
-    /// Legacy event-log compatibility for containment denials which did not
-    /// name a narrow grant. New execution never emits this kind, and an old
-    /// pending request fails closed instead of retrying without containment.
-    SandboxDenialRetry,
     /// A tier-1 sandboxed `bash` call's network egress was refused by the
     /// allowlist proxy for one or more domains (`bash::BashCompletion::
     /// DomainDenied`, `docs/agent-approval-design.md` leg 4b). Approving
@@ -1259,6 +1269,19 @@ pub struct Exit {
 mod json_value_tests {
     use super::*;
 
+    #[test]
+    fn clients_cannot_send_internal_retry_identity_updates() {
+        let identity = ToolCallIdentity {
+            call_id: ToolCallId("internal-retry".into()),
+            occurrence_id: OccurrenceId::new(),
+        };
+        assert!(serde_json::from_value::<Command>(serde_json::json!({
+            "ToolCallReissued": identity,
+        }))
+        .is_err());
+        assert!(serde_json::to_value(Command::ToolCallReissued(identity)).is_err());
+    }
+
     /// The load-bearing property of [`JsonValue`]'s human-readable path:
     /// under serde_json the wrapper is *transparent* — byte-identical to a
     /// plain `serde_json::Value` field — so the event log's on-disk JSONL
@@ -1284,12 +1307,12 @@ mod json_value_tests {
     /// persists inside its records — serializes with `input` as the raw
     /// JSON object, exactly as the pre-v10 `serde_json::Value` field did.
     #[test]
-    fn tool_call_request_keeps_the_pre_v10_json_shape() {
+    fn tool_call_request_encodes_input_as_json_with_required_identity() {
         let request = ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.read".to_string(),
             input: serde_json::json!({"path": "a.txt"}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
         };
         let encoded = serde_json::to_value(&request).unwrap();
         assert_eq!(
@@ -1298,7 +1321,7 @@ mod json_value_tests {
                 "call_id": "call-1",
                 "tool_id": "fs.read",
                 "input": {"path": "a.txt"},
-                "occurrence_id": null,
+                "occurrence_id": "call-1",
             })
         );
         let decoded: ToolCallRequest = serde_json::from_value(encoded).unwrap();
@@ -1311,7 +1334,7 @@ mod json_value_tests {
     fn tool_call_result_new_reads_is_error_through_the_wrapper() {
         let result = ToolCallResult::new(
             ToolCallId("call-1".to_string()),
-            None,
+            crate::contract::OccurrenceId("call-1".to_string()),
             serde_json::json!({"is_error": true, "message": "boom"}),
         );
         assert!(result.is_error);
@@ -1321,7 +1344,7 @@ mod json_value_tests {
     fn domain_grant_approval_round_trips_with_its_exact_hosts() {
         let request = ApprovalRequest {
             call_id: ToolCallId("fetch-1".to_string()),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId("fetch-1".to_string()),
             reason: "allow exact host".to_string(),
             kind: ApprovalKind::DomainGrant {
                 domains: vec!["docs.example.com".to_string()],

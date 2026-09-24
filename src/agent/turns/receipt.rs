@@ -79,12 +79,6 @@ pub(crate) fn receipt_status(end: &TurnEnd) -> ReceiptStatus {
             ),
             is_error: false,
         },
-        // The legacy bare variant renders a calm pause with no
-        // guard-specific sentence (it never recorded which guard fired).
-        TurnEndReason::Halted => ReceiptStatus {
-            text: format!("paused · {elapsed}"),
-            is_error: false,
-        },
     }
 }
 
@@ -192,14 +186,6 @@ mod tests {
                 ),
                 is_error: false
             }
-        );
-        assert_eq!(
-            receipt_status(&end(TurnEndReason::Halted)),
-            ReceiptStatus {
-                text: "paused · 38s".to_string(),
-                is_error: false
-            },
-            "the legacy bare Halted reason (pre-resolution persisted logs) reads calmly too"
         );
     }
 

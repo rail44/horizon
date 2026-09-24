@@ -150,7 +150,7 @@ pub(crate) mod test_support {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: tool_id.to_string(),
             input: input.into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.to_string()),
         })
     }
 
@@ -169,14 +169,14 @@ pub(crate) mod test_support {
             call_id: ToolCallId(call_id.to_string()),
             tool_id: tool_id.to_string(),
             input: input.into(),
-            occurrence_id: Some(occurrence_id),
+            occurrence_id,
         })
     }
 
     pub(crate) fn tool_finished(call_id: &str, output: Value) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            None,
+            crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
             output,
         ))
     }
@@ -190,7 +190,7 @@ pub(crate) mod test_support {
     ) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            Some(occurrence_id),
+            occurrence_id,
             output,
         ))
     }
@@ -205,8 +205,20 @@ pub(crate) mod test_support {
         })
     }
 
+    pub(crate) fn tool_started_with_occurrence(
+        call_id: &str,
+        occurrence_id: OccurrenceId,
+    ) -> AgentFrameItem {
+        AgentFrameItem::ToolCallStarted(crate::contract::ToolCallIdentity {
+            call_id: ToolCallId(call_id.into()),
+            occurrence_id,
+        })
+    }
+
     pub(crate) fn tool_started(call_id: &str) -> AgentFrameItem {
-        AgentFrameItem::ToolCallStarted(ToolCallId(call_id.to_string()))
+        AgentFrameItem::ToolCallStarted(crate::test_support::tool_identity(&ToolCallId(
+            call_id.to_string(),
+        )))
     }
 
     pub(crate) fn turn_ended(
@@ -226,7 +238,7 @@ pub(crate) mod test_support {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
             kind: ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.to_string()),
         })
     }
 
@@ -239,7 +251,7 @@ pub(crate) mod test_support {
     ) -> AgentFrameItem {
         AgentFrameItem::ApprovalRequested(ApprovalRequest {
             call_id: ToolCallId(call_id.to_string()),
-            occurrence_id: Some(occurrence_id),
+            occurrence_id,
             reason: "writes a file".to_string(),
             kind: ApprovalKind::Standard,
         })

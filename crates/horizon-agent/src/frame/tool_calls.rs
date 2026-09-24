@@ -1,6 +1,4 @@
-//! Correlate requests and their lifecycle events before consumers derive UI or
-//! recovery decisions. A tagged result belongs to its exact occurrence; legacy
-//! events without a tag bind to the latest preceding request for the call id.
+//! Correlate every lifecycle event with its exact execution request.
 
 use super::{AgentFrame, AgentFrameItem};
 use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult};
@@ -28,21 +26,21 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
             }),
             AgentFrameItem::ApprovalRequested(approval) => {
                 if let Some(index) =
-                    matching_call(&calls, &approval.call_id, approval.occurrence_id.as_ref())
+                    matching_call(&calls, &approval.call_id, &approval.occurrence_id)
                 {
                     calls[index].had_approval_request = true;
                 }
             }
-            AgentFrameItem::ToolCallStarted(call_id) => {
-                // Starts carry no occurrence tag. The daemon reissues the
-                // request before starting a retry, so the latest is current.
-                if let Some(index) = matching_call(&calls, call_id, None) {
+            AgentFrameItem::ToolCallStarted(identity) => {
+                if let Some(index) =
+                    matching_call(&calls, &identity.call_id, &identity.occurrence_id)
+                {
                     calls[index].started = true;
                 }
             }
             AgentFrameItem::ToolCallFinished(result) => {
                 if let Some(call_index) =
-                    matching_call(&calls, &result.call_id, result.occurrence_id.as_ref())
+                    matching_call(&calls, &result.call_id, &result.occurrence_id)
                 {
                     calls[call_index].result = Some(result);
                     calls[call_index].result_index = Some(index);
@@ -57,11 +55,10 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
 fn matching_call(
     calls: &[ToolCallOccurrence<'_>],
     call_id: &ToolCallId,
-    occurrence_id: Option<&OccurrenceId>,
+    occurrence_id: &OccurrenceId,
 ) -> Option<usize> {
-    calls.iter().rposition(|call| match occurrence_id {
-        Some(id) => call.request.occurrence_id.as_ref() == Some(id),
-        None => &call.request.call_id == call_id,
+    calls.iter().rposition(|call| {
+        &call.request.call_id == call_id && &call.request.occurrence_id == occurrence_id
     })
 }
 

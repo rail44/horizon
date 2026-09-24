@@ -14,7 +14,6 @@ use super::{rig_tool_call_from_request, rig_tool_result_message};
 pub(super) struct ReplayedToolCalls<'a> {
     calls: Vec<ProviderCall<'a>>,
     occurrences: HashMap<&'a OccurrenceId, usize>,
-    latest: HashMap<&'a ToolCallId, usize>,
     pending: HashMap<&'a ToolCallId, usize>,
 }
 
@@ -45,10 +44,7 @@ impl<'a> ReplayedToolCalls<'a> {
             self.pending.insert(&request.call_id, index);
             index
         });
-        self.latest.insert(&request.call_id, index);
-        if let Some(occurrence) = &request.occurrence_id {
-            self.occurrences.insert(occurrence, index);
-        }
+        self.occurrences.insert(&request.occurrence_id, index);
         retry
             .is_none()
             .then(|| Message::from(rig_tool_call_from_request(request)))
@@ -58,13 +54,7 @@ impl<'a> ReplayedToolCalls<'a> {
         if is_superseded_output(&result.output) {
             return None;
         }
-        // Tagged results never fall back to an unrelated use of the same id.
-        // Older events without occurrence tags bind to the preceding request.
-        let index = match &result.occurrence_id {
-            Some(occurrence) => self.occurrences.get(occurrence),
-            None => self.latest.get(&result.call_id),
-        }
-        .copied();
+        let index = self.occurrences.get(&result.occurrence_id).copied();
         let Some(index) = index else {
             eprintln!(
                 "horizon-agent: dropped unmatched tool result {} while rebuilding provider history",

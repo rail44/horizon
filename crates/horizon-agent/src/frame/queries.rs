@@ -137,23 +137,14 @@ impl AgentFrame {
     /// one, since there a *second* decision for the same call must be a
     /// no-op no matter which occurrence answered the first.
     ///
-    /// Falls back to the call_id match whenever either side carries no
-    /// occurrence (replayed pre-`OccurrenceId` logs, synthetic results),
-    /// which is exactly [`Self::has_tool_call_finished`]'s behavior.
     pub(crate) fn has_live_occurrence_finished(&self, call_id: &ToolCallId) -> bool {
-        let live = self
-            .tool_call_request(call_id)
-            .and_then(|request| request.occurrence_id.as_ref());
-        self.items_since_latest_request(call_id)
-            .any(|item| match item {
-                AgentFrameItem::ToolCallFinished(result) if &result.call_id == call_id => {
-                    match (live, result.occurrence_id.as_ref()) {
-                        (Some(live), Some(answered)) => live == answered,
-                        _ => true,
-                    }
-                }
-                _ => false,
-            })
+        let Some(request) = self.tool_call_request(call_id) else {
+            return false;
+        };
+        self.items_since_latest_request(call_id).any(|item| {
+            matches!(item, AgentFrameItem::ToolCallFinished(result)
+                if result.call_id == request.call_id && result.occurrence_id == request.occurrence_id)
+        })
     }
 
     /// Whether `call_id`'s *most recent* `ToolCallRequested` occurrence
@@ -173,8 +164,13 @@ impl AgentFrame {
     /// same still-running bash call). Same reused-call_id scoping as
     /// [`Self::has_tool_call_finished`] — see its doc comment.
     pub fn has_tool_call_started(&self, call_id: &ToolCallId) -> bool {
-        self.items_since_latest_request(call_id)
-            .any(|item| matches!(item, AgentFrameItem::ToolCallStarted(id) if id == call_id))
+        let Some(request) = self.tool_call_request(call_id) else {
+            return false;
+        };
+        self.items_since_latest_request(call_id).any(|item| {
+            matches!(item, AgentFrameItem::ToolCallStarted(identity)
+                if identity.call_id == request.call_id && identity.occurrence_id == request.occurrence_id)
+        })
     }
 
     /// The frame's items from (and including) `call_id`'s most recent
@@ -221,23 +217,39 @@ impl AgentFrame {
 /// -- only the tool's eventual *result* (irrelevant to this queue) is still
 /// outstanding for `bash`.
 pub(crate) fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
-    let mut pending = Vec::<ToolCallId>::new();
+    let mut pending = Vec::<&crate::contract::ApprovalRequest>::new();
     for item in items {
         match item {
-            AgentFrameItem::ApprovalRequested(request) if !pending.contains(&request.call_id) => {
-                pending.push(request.call_id.clone());
+            AgentFrameItem::ApprovalRequested(request) => {
+                if !pending
+                    .iter()
+                    .any(|prior| prior.occurrence_id == request.occurrence_id)
+                {
+                    pending.push(request);
+                }
             }
-            AgentFrameItem::ToolCallStarted(call_id) => {
-                pending.retain(|pending_id| pending_id != call_id);
+            AgentFrameItem::ToolCallStarted(identity) => {
+                pending.retain(|request| {
+                    request.call_id != identity.call_id
+                        || request.occurrence_id != identity.occurrence_id
+                });
             }
             AgentFrameItem::ToolCallFinished(result) => {
-                pending.retain(|call_id| call_id != &result.call_id);
+                pending.retain(|request| {
+                    request.call_id != result.call_id
+                        || request.occurrence_id != result.occurrence_id
+                });
             }
             _ => {}
         }
     }
-
-    pending
+    let mut call_ids = Vec::new();
+    for request in pending {
+        if !call_ids.contains(&request.call_id) {
+            call_ids.push(request.call_id.clone());
+        }
+    }
+    call_ids
 }
 
 /// [`pending_approval_call_ids_in`], with one more rule: a `TurnEnded`
@@ -280,17 +292,12 @@ pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<
 /// decision 3). Only the *last* item counts: any later activity (a new user
 /// message, a fresh tool call) means the halt has already been superseded,
 /// even though the old `TurnEnded { reason: Halted*, .. }` item is still
-/// sitting earlier in the frame. `TurnEndReason::Halted` (the legacy,
-/// pre-resolution bare variant -- see its own doc comment) counts too: an
-/// old persisted session that halted before this resolution still reads as
-/// paused and offers Continue, it just can't say which guard fired.
+/// sitting earlier in the frame.
 pub fn halted_awaiting_continue(items: &[AgentFrameItem]) -> bool {
     matches!(
         items.last(),
         Some(AgentFrameItem::TurnEnded {
-            reason: TurnEndReason::Halted
-                | TurnEndReason::HaltedByIterationCap
-                | TurnEndReason::HaltedByDoomLoop,
+            reason: TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop,
             ..
         })
     )
@@ -337,14 +344,14 @@ mod field_scoped_reads_tests {
             call_id: ToolCallId(call_id.to_string()),
             reason: "writes a file".to_string(),
             kind: ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.to_string()),
         })
     }
 
     fn tool_call_finished(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            None,
+            crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
             serde_json::json!({}),
         ))
     }
@@ -352,13 +359,15 @@ mod field_scoped_reads_tests {
     fn tool_call_finished_denied(call_id: &str) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),
-            None,
+            crate::contract::OccurrenceId((ToolCallId(call_id.to_string())).0.clone()),
             serde_json::json!({ "is_error": true, "message": "denied by user" }),
         ))
     }
 
     fn tool_call_started(call_id: &str) -> AgentFrameItem {
-        AgentFrameItem::ToolCallStarted(ToolCallId(call_id.to_string()))
+        AgentFrameItem::ToolCallStarted(crate::test_support::tool_identity(&ToolCallId(
+            call_id.to_string(),
+        )))
     }
 
     fn turn_ended() -> AgentFrameItem {
@@ -568,16 +577,6 @@ mod field_scoped_reads_tests {
         )]));
         assert!(halted_awaiting_continue(&[turn_ended_with_reason(
             TurnEndReason::HaltedByDoomLoop
-        )]));
-    }
-
-    #[test]
-    fn halted_awaiting_continue_is_true_for_the_legacy_bare_halted_reason() {
-        // A pre-resolution persisted session used the bare `Halted` variant
-        // -- it must still read as a resumable pause, just without a
-        // specific guard-kind sentence available.
-        assert!(halted_awaiting_continue(&[turn_ended_with_reason(
-            TurnEndReason::Halted
         )]));
     }
 

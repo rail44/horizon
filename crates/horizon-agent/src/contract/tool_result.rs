@@ -17,7 +17,7 @@ pub struct ToolCallResult {
     pub call_id: ToolCallId,
     /// Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the
     /// `ToolCallRequest` field it answers to.
-    pub occurrence_id: Option<OccurrenceId>,
+    pub occurrence_id: OccurrenceId,
     pub output: JsonValue,
     /// Explicit success/failure outcome, lifted out of `output`'s
     /// `"is_error"` JSON convention (every tool in `tools::` already writes
@@ -49,17 +49,11 @@ impl ToolCallResult {
     /// forgotten) at each tool.
     ///
     /// `occurrence_id` is the per-occurrence identity from the originating
-    /// `ToolCallRequest` (see [`OccurrenceId`]); `None` is acceptable when
-    /// the originating request is not in scope (replayed logs, synthetic
-    /// results). `transcript::tool_call::build_tool_call_views` matches
-    /// `ToolCallFinished` events back to their `Building` entry by
-    /// `occurrence_id` first, falling back to call_id + position -- so a
-    /// `None` here does not break the transcript, it just removes the
-    /// per-occurrence attribution that an older or synthetic event
-    /// doesn't carry.
+    /// `ToolCallRequest` (see [`OccurrenceId`]). Cancellation and failure
+    /// results carry that same identity; construction never invents one.
     pub fn new(
         call_id: ToolCallId,
-        occurrence_id: Option<OccurrenceId>,
+        occurrence_id: OccurrenceId,
         output: impl Into<JsonValue>,
     ) -> Self {
         let output = output.into();
@@ -82,7 +76,7 @@ impl ToolCallResult {
     /// carries. `occurrence_id` is forwarded the same way as [`Self::new`].
     pub(crate) fn denied(
         call_id: ToolCallId,
-        occurrence_id: Option<OccurrenceId>,
+        occurrence_id: OccurrenceId,
         output: impl Into<JsonValue>,
     ) -> Self {
         Self {
@@ -91,17 +85,17 @@ impl ToolCallResult {
             ..Self::new(call_id, occurrence_id, output)
         }
     }
-    /// Close this abandoned attempt when an approved retry replaces it. The
+    /// Close this abandoned attempt when a fresh attempt replaces it. The
     /// marker is persisted for transcript/replay consumers, never sent as the
     /// provider's answer. The replacement attempt supplies that answer later.
-    pub(crate) fn superseded_by_retry(&self, retry_occurrence: Option<&OccurrenceId>) -> Self {
+    pub fn superseded_by_retry(&self, retry_occurrence: &OccurrenceId) -> Self {
         Self::new(
             self.call_id.clone(),
             self.occurrence_id.clone(),
             serde_json::json!({
                 SUPERSEDED_BY_RETRY: true,
-                "retry_occurrence_id": retry_occurrence.map(|occurrence| occurrence.0.as_str()),
-                "message": "this attempt was abandoned; an approved retry of the same call replaced it",
+                "retry_occurrence_id": retry_occurrence.0,
+                "message": "this attempt ended; a new attempt of the same call replaces it",
             }),
         )
     }

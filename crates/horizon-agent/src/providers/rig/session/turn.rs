@@ -226,9 +226,12 @@ impl SessionLoopState {
                 &outcome.requested_tool_calls,
             );
             for call_id in outcome.requested_tool_call_ids {
-                let _ = self
-                    .events_tx
-                    .send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
+                let _ = self.events_tx.send(
+                    Event::ToolCallFinished(cancelled_tool_call_result(
+                        outcome.requested_tool_calls[&call_id].identity.clone(),
+                    ))
+                    .into(),
+                );
             }
             let _ = self
                 .events_tx
@@ -303,7 +306,10 @@ impl SessionLoopState {
                 );
                 for call_id in &outcome.requested_tool_call_ids {
                     let _ = self.events_tx.send(
-                        Event::ToolCallFinished(cancelled_tool_call_result(call_id.clone())).into(),
+                        Event::ToolCallFinished(cancelled_tool_call_result(
+                            outcome.requested_tool_calls[call_id].identity.clone(),
+                        ))
+                        .into(),
                     );
                 }
             }
@@ -441,9 +447,12 @@ impl SessionLoopState {
 
         append_cancelled_tool_results_to_history(&mut self.rig_history, &call_ids, &drained);
         for call_id in call_ids {
-            let _ = self
-                .events_tx
-                .send(Event::ToolCallFinished(cancelled_tool_call_result(call_id)).into());
+            let _ = self.events_tx.send(
+                Event::ToolCallFinished(cancelled_tool_call_result(
+                    drained[&call_id].identity.clone(),
+                ))
+                .into(),
+            );
         }
         true
     }
@@ -644,11 +653,8 @@ pub(crate) fn append_cancelled_tool_results_to_history(
 ) {
     for call_id in cancelled_call_ids {
         rig_history.push(rig_tool_result_message(
-            &cancelled_tool_call_result(call_id.clone()),
-            pending
-                .get(call_id)
-                .map(|descriptor| descriptor.tool_id.as_str())
-                .unwrap_or(""),
+            &cancelled_tool_call_result(pending[call_id].identity.clone()),
+            &pending[call_id].tool_id,
         ));
     }
 }

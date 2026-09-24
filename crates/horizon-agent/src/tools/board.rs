@@ -176,7 +176,7 @@ fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
 fn with_events(request: &ToolCallRequest, output: Value, events: Vec<Event>) -> Execution {
     let mut batch = vec![
         Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.call_id.clone()),
+        Event::ToolCallStarted(request.identity()),
     ];
     batch.extend(events);
     batch.push(Event::ToolCallFinished(ToolCallResult::new(
@@ -233,7 +233,7 @@ mod tests {
         let request = ToolCallRequest {
             call_id: ToolCallId("request".into()),
             tool_id: "board.session".into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId::new(),
             input: json!({"action":"review","id":1}).into(),
         };
         let Execution::Auto(events) = execute_operation(&state, SessionId::new(), &request) else {

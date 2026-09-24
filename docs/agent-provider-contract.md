@@ -156,7 +156,7 @@ enum Event {
     AssistantTextDelta(MessageDelta),
     MessageCommitted(Message),
     ToolCallRequested(ToolCallRequest),
-    ToolCallStarted(ToolCallId),
+    ToolCallStarted(ToolCallIdentity),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
     ProviderRequestSent(ProviderRequestSent),
@@ -466,3 +466,12 @@ framework.
 - How much provider identity should be visible in the pane header?
 - Should provider capability be attached to `PluginManifest` now or introduced
   with the Plugin View MVP?
+
+### Execution identity (agent wire v23)
+
+Every published tool request, start, approval, approval decision, and result
+carries a required `occurrence_id` alongside the provider's `call_id`. A retry
+gets a fresh execution identity; a worker retains that pair through completion,
+cancellation, or failure. Only the matching live execution can accept its async
+completion. Provider history still returns one answer per logical provider call.
+See [history format v2](agent-history-format-v2.md) for the offline cutover.

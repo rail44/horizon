@@ -113,8 +113,8 @@ fn agent_frame_folds_a_compaction_pass_into_its_own_marker_item() {
         recovered_chars: 90_000,
     };
     let finished = agent::ToolCallResult::new(
-        agent::ToolCallId("call-0".to_string()),
-        None,
+        (agent::ToolCallId("call-0".to_string())).clone(),
+        crate::contract::OccurrenceId((agent::ToolCallId("call-0".to_string())).0.clone()),
         serde_json::json!({"total_lines": 42}),
     );
     let frame = agent_frame_from_events(&[
@@ -215,15 +215,19 @@ fn message_committed_promotes_pre_tool_delta_across_tool_call_boundary() {
             text: "Let me check.".to_string(),
         }),
         agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: agent::ToolCallId("call-1".to_string()),
+            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
             tool_id: "fs.read".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (agent::ToolCallId("call-1".to_string())).0.clone(),
+            ),
         }),
-        agent::Event::ToolCallStarted(agent::ToolCallId("call-1".to_string())),
+        agent::Event::ToolCallStarted(crate::test_support::tool_identity(&agent::ToolCallId(
+            "call-1".to_string(),
+        ))),
         agent::Event::ToolCallFinished(agent::ToolCallResult::new(
-            agent::ToolCallId("call-1".to_string()),
-            None,
+            (agent::ToolCallId("call-1".to_string())).clone(),
+            crate::contract::OccurrenceId((agent::ToolCallId("call-1".to_string())).0.clone()),
             serde_json::json!({ "ok": true }),
         )),
         agent::Event::MessageCommitted(agent::Message {
@@ -288,10 +292,12 @@ fn message_committed_promotes_first_delta_and_drops_post_tool_delta() {
             text: "before ".to_string(),
         }),
         agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: agent::ToolCallId("call-1".to_string()),
+            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
             tool_id: "fs.read".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (agent::ToolCallId("call-1".to_string())).0.clone(),
+            ),
         }),
         agent::Event::AssistantTextDelta(agent::MessageDelta {
             role: agent::MessageRole::Assistant,
@@ -311,10 +317,12 @@ fn message_committed_promotes_first_delta_and_drops_post_tool_delta() {
                 text: "before after".to_string(),
             }),
             AgentFrameItem::ToolCallRequested(agent::ToolCallRequest {
-                call_id: agent::ToolCallId("call-1".to_string()),
+                call_id: (agent::ToolCallId("call-1".to_string())).clone(),
                 tool_id: "fs.read".to_string(),
                 input: serde_json::json!({ "path": "/tmp/x" }).into(),
-                occurrence_id: None,
+                occurrence_id: crate::contract::OccurrenceId(
+                    (agent::ToolCallId("call-1".to_string())).0.clone()
+                ),
             }),
         ],
         "one Message before the tool, no orphaned deltas, no duplicate after"
@@ -554,10 +562,12 @@ fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() 
     apply_agent_event_to_frame(
         &mut frame,
         &agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: agent::ToolCallId("call-1".to_string()),
+            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
             tool_id: "fs.write".to_string(),
             input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(
+                (agent::ToolCallId("call-1".to_string())).0.clone(),
+            ),
         }),
         &mut TurnClock::new(),
     );
@@ -701,15 +711,15 @@ fn turn_ended_is_a_turn_boundary_for_coalescing() {
 #[test]
 fn tool_call_result_new_derives_is_error_from_the_output_convention() {
     let ok = agent::ToolCallResult::new(
-        agent::ToolCallId("call-1".to_string()),
-        None,
+        (agent::ToolCallId("call-1".to_string())).clone(),
+        crate::contract::OccurrenceId((agent::ToolCallId("call-1".to_string())).0.clone()),
         serde_json::json!({ "ok": true }),
     );
     assert!(!ok.is_error);
 
     let failed = agent::ToolCallResult::new(
-        agent::ToolCallId("call-2".to_string()),
-        None,
+        (agent::ToolCallId("call-2".to_string())).clone(),
+        crate::contract::OccurrenceId((agent::ToolCallId("call-2".to_string())).0.clone()),
         serde_json::json!({ "is_error": true, "message": "boom" }),
     );
     assert!(failed.is_error);
@@ -728,8 +738,8 @@ fn tool_call_result_new_derives_is_error_from_the_output_convention() {
 #[test]
 fn tool_call_result_denied_marker_round_trips() {
     let denied = agent::ToolCallResult::denied(
-        agent::ToolCallId("call-2".to_string()),
-        None,
+        (agent::ToolCallId("call-2".to_string())).clone(),
+        crate::contract::OccurrenceId((agent::ToolCallId("call-2".to_string())).0.clone()),
         serde_json::json!({ "is_error": true, "message": "denied by user" }),
     );
     let round_tripped: agent::ToolCallResult =
@@ -778,13 +788,17 @@ fn agent_frame_tracks_pending_approval_until_tool_finishes() {
             call_id: call_id.clone(),
             reason: "needs approval".to_string(),
             kind: agent::ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }));
 
     assert_eq!(frame.pending_approval_call_id(), Some(call_id.clone()));
 
     frame.items.push(AgentFrameItem::ToolCallFinished(
-        agent::ToolCallResult::new(call_id, None, serde_json::json!({ "ok": true })),
+        agent::ToolCallResult::new(
+            call_id.clone(),
+            crate::contract::OccurrenceId(call_id.0.clone()),
+            serde_json::json!({ "ok": true }),
+        ),
     ));
 
     assert_eq!(frame.pending_approval_call_id(), None);
@@ -804,7 +818,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
             call_id: first.clone(),
             reason: "first".to_string(),
             kind: agent::ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(first.0.clone()),
         }));
     frame
         .items
@@ -812,7 +826,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
             call_id: second.clone(),
             reason: "second".to_string(),
             kind: agent::ApprovalKind::Standard,
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(second.0.clone()),
         }));
 
     assert_eq!(
@@ -822,7 +836,11 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
     assert_eq!(frame.pending_approval_call_id(), Some(first.clone()));
 
     frame.items.push(AgentFrameItem::ToolCallFinished(
-        agent::ToolCallResult::new(first, None, serde_json::json!({ "ok": true })),
+        agent::ToolCallResult::new(
+            first.clone(),
+            crate::contract::OccurrenceId(first.0.clone()),
+            serde_json::json!({ "ok": true }),
+        ),
     ));
 
     assert_eq!(frame.pending_approval_call_ids(), vec![second.clone()]);
@@ -838,7 +856,7 @@ fn horizon_policy_adds_approval_for_requested_tool() {
             call_id: call_id.clone(),
             tool_id: "mock.approval_required".to_string(),
             input: serde_json::json!({}).into(),
-            occurrence_id: None,
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
         }),
         &tool_state,
         SessionId::new(),
@@ -874,8 +892,8 @@ fn mock_agent_accepts_tool_call_result_command() {
     let rx = handle.events();
 
     let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
-        agent::ToolCallId("call-1".to_string()),
-        None,
+        (agent::ToolCallId("call-1".to_string())).clone(),
+        crate::contract::OccurrenceId((agent::ToolCallId("call-1".to_string())).0.clone()),
         serde_json::json!({ "ok": true }),
     )));
 
@@ -1082,10 +1100,10 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
             ..
         })
     ));
-    let call_id = match recv_event(&rx).event {
+    let identity = match recv_event(&rx).event {
         agent::Event::ToolCallRequested(request) => {
             assert_eq!(request.tool_id, "mock.approval_required");
-            request.call_id
+            request.identity()
         }
         other => panic!("expected a tool call request, got {other:?}"),
     };
@@ -1095,7 +1113,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
 
     match recv_event(&rx).event {
         agent::Event::ToolCallFinished(result) => {
-            assert_eq!(result.call_id, call_id);
+            assert_eq!(result.call_id, identity.call_id);
             assert_eq!(result.output["cancelled"], true);
         }
         other => panic!("expected the pending tool call to finish as cancelled, got {other:?}"),
@@ -1112,8 +1130,8 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
     // A tool result arriving late for the cancelled call is accepted and
     // silently dropped — no further events are produced for it.
     let _ = tx.send(agent::Command::ToolCallResult(agent::ToolCallResult::new(
-        call_id,
-        None,
+        identity.call_id.clone(),
+        identity.occurrence_id.clone(),
         serde_json::json!({ "ignored": true }),
     )));
     assert!(
@@ -1416,7 +1434,7 @@ fn operator_intervention_event_kind_discriminators_are_stable() {
 
     let approval = agent::Event::ApprovalResolved(agent::ApprovalResolved {
         call_id: agent::ToolCallId("call-x".to_string()),
-        occurrence_id: Some(agent::OccurrenceId("occ-x".to_string())),
+        occurrence_id: agent::OccurrenceId("occ-x".to_string()),
         decision: agent::ApprovalDecisionPayload::Deny {
             reason: Some("retry with fs.read".to_string()),
         },
@@ -1446,7 +1464,7 @@ fn operator_intervention_events_round_trip_through_serde_json() {
     // ApprovalResolved: Approve with no deny reason -> no reason field.
     let approve = agent::Event::ApprovalResolved(agent::ApprovalResolved {
         call_id: agent::ToolCallId("call-approve".to_string()),
-        occurrence_id: Some(agent::OccurrenceId("occ-1".to_string())),
+        occurrence_id: agent::OccurrenceId("occ-1".to_string()),
         decision: agent::ApprovalDecisionPayload::Approve,
     });
     let json = serde_json::to_value(&approve).expect("serialize ApprovalResolved");
@@ -1466,18 +1484,17 @@ fn operator_intervention_events_round_trip_through_serde_json() {
     // key itself is required now that this project carries no decode
     // compat -- see `ApprovalDecisionPayload::Deny`).
     let deny_no_reason = agent::Event::ApprovalResolved(agent::ApprovalResolved {
-        call_id: agent::ToolCallId("call-deny".to_string()),
-        occurrence_id: None,
+        call_id: (agent::ToolCallId("call-deny".to_string())).clone(),
+        occurrence_id: crate::contract::OccurrenceId(
+            (agent::ToolCallId("call-deny".to_string())).0.clone(),
+        ),
         decision: agent::ApprovalDecisionPayload::Deny { reason: None },
     });
     let json = serde_json::to_value(&deny_no_reason).expect("serialize");
     let payload = &json["ApprovalResolved"];
+    assert_eq!(payload["occurrence_id"], "call-deny");
     assert!(
-        payload["occurrence_id"].is_null(),
-        "Option::is_none serializes as JSON null under the default behavior"
-    );
-    assert!(
-        payload["decision"]["reason"].is_null(),
+        payload["decision"]["Deny"]["reason"].is_null(),
         "Deny {{ reason: None }} must carry a null reason field"
     );
     let round_tripped: agent::Event = serde_json::from_value(json).expect("deserialize");
@@ -1510,8 +1527,10 @@ fn operator_intervention_events_fold_into_no_frame_item() {
     apply_agent_event_to_frame(
         &mut frame,
         &agent::Event::ApprovalResolved(agent::ApprovalResolved {
-            call_id: agent::ToolCallId("call".to_string()),
-            occurrence_id: None,
+            call_id: (agent::ToolCallId("call".to_string())).clone(),
+            occurrence_id: crate::contract::OccurrenceId(
+                (agent::ToolCallId("call".to_string())).0.clone(),
+            ),
             decision: agent::ApprovalDecisionPayload::Approve,
         }),
         &mut turn,
@@ -1583,8 +1602,11 @@ fn denied_result_is_an_error_independent_of_tool_payload() {
         serde_json::json!({"message": "denied"}),
         serde_json::json!({"is_error": false}),
     ] {
-        let denied =
-            agent::ToolCallResult::denied(agent::ToolCallId("denied".into()), None, output.clone());
+        let denied = agent::ToolCallResult::denied(
+            (agent::ToolCallId("denied".into())).clone(),
+            crate::contract::OccurrenceId((agent::ToolCallId("denied".into())).0.clone()),
+            output.clone(),
+        );
         assert!(denied.denied);
         assert!(denied.is_error);
         assert_eq!(denied.output, output);

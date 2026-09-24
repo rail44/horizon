@@ -264,18 +264,17 @@ mod tests {
 
     #[test]
     fn expanded_bodies_keep_each_reused_call_occurrence_and_pending_result_separate() {
-        for tagged in [false, true] {
+        {
             let mut items = vec![
                 tool_requested("dup", "bash", json!({"command": "echo first"})),
                 tool_finished("dup", json!({"exit_code": 0, "output": "first"})),
                 tool_requested("dup", "bash", json!({"command": "echo second"})),
             ];
-            if tagged {
+            {
                 use horizon_agent::contract::OccurrenceId;
                 for (index, item) in items.iter_mut().enumerate() {
-                    let occurrence = Some(OccurrenceId(
-                        if index < 2 { "first" } else { "second" }.into(),
-                    ));
+                    let occurrence =
+                        OccurrenceId(if index < 2 { "first" } else { "second" }.into());
                     match item {
                         AgentFrameItem::ToolCallRequested(request) => {
                             request.occurrence_id = occurrence
@@ -296,7 +295,7 @@ mod tests {
                     lines: vec!["first".into()],
                     omitted: 0,
                 }),
-                "the completed row must retain its own request and output; tagged={tagged}",
+                "the completed row must retain its own request and output",
             );
             assert_eq!(
                 tool_call_body(&items, &views[1]),
@@ -306,7 +305,7 @@ mod tests {
                     lines: vec![],
                     omitted: 0,
                 }),
-                "a pending row must not borrow the previous output; tagged={tagged}",
+                "a pending row must not borrow the previous output",
             );
         }
     }
@@ -322,7 +321,7 @@ mod tests {
             tool_finished("dup", json!({"superseded_by_retry": true})),
         ];
         for (item, id) in items.iter_mut().zip(["first", "retry", "retry", "first"]) {
-            let occurrence = Some(OccurrenceId(id.into()));
+            let occurrence = OccurrenceId(id.into());
             match item {
                 AgentFrameItem::ToolCallRequested(request) => request.occurrence_id = occurrence,
                 AgentFrameItem::ToolCallFinished(result) => result.occurrence_id = occurrence,
@@ -560,7 +559,7 @@ mod tests {
         // forever, with no Approve/Deny row -- the session the owner had
         // to interrupt because no approval UI ever appeared, though the
         // daemon really was sitting in `WaitingForApproval`.
-        let items = vec![
+        let mut items = vec![
             tool_requested(
                 "dup",
                 "fs.edit",
@@ -580,6 +579,18 @@ mod tests {
             // No `ToolCallStarted`/`ToolCallFinished` yet for this second
             // occurrence: it's the one currently pending approval.
         ];
+        for (index, item) in items.iter_mut().enumerate() {
+            let occurrence = horizon_agent::contract::OccurrenceId(
+                if index < 4 { "first" } else { "second" }.into(),
+            );
+            match item {
+                AgentFrameItem::ToolCallRequested(request) => request.occurrence_id = occurrence,
+                AgentFrameItem::ToolCallStarted(identity) => identity.occurrence_id = occurrence,
+                AgentFrameItem::ToolCallFinished(result) => result.occurrence_id = occurrence,
+                AgentFrameItem::ApprovalRequested(approval) => approval.occurrence_id = occurrence,
+                _ => unreachable!(),
+            }
+        }
         let views = build_tool_call_views(&items);
         assert_eq!(views.len(), 2);
 

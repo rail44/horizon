@@ -64,7 +64,6 @@ pub(crate) struct Store {
 }
 
 impl Store {
-    #[cfg(test)]
     pub(crate) fn open_in_memory() -> Result<Self> {
         Self::from_connection(
             Connection::open_in_memory().context("open in-memory DuckDB agent store")?,
