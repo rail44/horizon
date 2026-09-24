@@ -58,10 +58,9 @@ pub(super) fn kill_process_tree(root_pid: u32) {
     }
 }
 
+// Process-tree termination is implemented only for Unix hosts.
 #[cfg(not(unix))]
-pub(super) fn kill_process_tree(root_pid: u32) {
-    let _ = root_pid;
-}
+pub(super) fn kill_process_tree(_root_pid: u32) {}
 
 /// Signals the whole process group whose pgid is `pid`. Reaches the root
 /// and every descendant still in the group, but not descendants that left
@@ -76,14 +75,6 @@ fn kill_process_group(pid: u32) {
     unsafe {
         libc::kill(-(pid as libc::pid_t), libc::SIGKILL);
     }
-}
-
-#[cfg(not(unix))]
-fn kill_process_group(pid: u32) {
-    // No portable process-group signal outside unix. Best effort only: this
-    // reaches the direct `bash` child but not further descendants it may
-    // have spawned.
-    let _ = pid;
 }
 
 /// Snapshots every descendant of `root_pid` by walking `/proc`: reads each

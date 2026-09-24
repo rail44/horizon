@@ -2,6 +2,7 @@
 //! in plain/sandboxed execution, with each path retaining its own kill/drain rules.
 mod plain;
 mod sandboxed;
+mod stream;
 use plain::run_async;
 pub(super) use sandboxed::run_sandboxed;
 

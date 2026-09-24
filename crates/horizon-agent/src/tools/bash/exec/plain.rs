@@ -1,4 +1,5 @@
 //! Ordinary host execution uses async pipes and abortable output pumps.
+use super::stream::pump;
 #[cfg(unix)]
 use super::BASH_NICE_LEVEL;
 use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
@@ -9,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::io::AsyncReadExt;
 use tokio::process::Command as TokioCommand;
 
 pub(super) async fn run_async(
@@ -188,21 +188,4 @@ async fn capture(
         raw_stderr,
         drained,
     })
-}
-
-/// Reads a child's stream to EOF, appending every chunk to `buf` as it
-/// arrives. Running two of these concurrently (stdout + stderr) means a
-/// timeout can still report whatever had already been produced, since `buf`
-/// lives outside the timed-out future.
-async fn pump(mut reader: impl tokio::io::AsyncRead + Unpin, buf: Arc<StdMutex<Vec<u8>>>) {
-    let mut chunk = [0u8; 8192];
-    loop {
-        match reader.read(&mut chunk).await {
-            Ok(0) | Err(_) => break,
-            Ok(n) => buf
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .extend_from_slice(&chunk[..n]),
-        }
-    }
 }

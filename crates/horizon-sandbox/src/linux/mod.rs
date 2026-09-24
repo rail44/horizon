@@ -193,31 +193,7 @@ pub(crate) fn spawn_with_grants(
 
     let mut wrapped = Command::new(&program);
     wrapped.args(&args);
-    if let Some(cwd) = command.get_current_dir() {
-        wrapped.current_dir(cwd);
-    }
-    for (key, value) in command.get_envs() {
-        match value {
-            Some(v) => {
-                wrapped.env(key, v);
-            }
-            None => {
-                wrapped.env_remove(key);
-            }
-        }
-    }
-
-    // TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): bwrap gave a
-    // private tmpfs `/tmp` for free via its mount namespace; nono has no
-    // mount namespace at all, so there is nothing to substitute a fresh
-    // `/tmp` with. Hoisted to `crate::tmpdir` since macOS needs the exact
-    // same substitution -- see that module's doc.
-    crate::tmpdir::provision(policy, &command, &mut wrapped)?;
-
-    wrapped
-        .stdin(stdio.stdin)
-        .stdout(stdio.stdout)
-        .stderr(stdio.stderr);
+    crate::command::configure_child(&command, &mut wrapped, policy, stdio)?;
 
     // `CapabilitySet`, `DetectedAbi`, and `Command` are all `Send +
     // 'static`, so this thread can own everything it needs.
@@ -268,24 +244,7 @@ pub(crate) fn spawn_with_grants(
         .arg(&program)
         .args(&args)
         .process_group(0);
-    if let Some(cwd) = command.get_current_dir() {
-        wrapped.current_dir(cwd);
-    }
-    for (key, value) in command.get_envs() {
-        match value {
-            Some(value) => {
-                wrapped.env(key, value);
-            }
-            None => {
-                wrapped.env_remove(key);
-            }
-        }
-    }
-    crate::tmpdir::provision(policy, &command, &mut wrapped)?;
-    wrapped
-        .stdin(stdio.stdin)
-        .stdout(stdio.stdout)
-        .stderr(stdio.stderr);
+    crate::command::configure_child(&command, &mut wrapped, policy, stdio)?;
 
     let expected_parent = std::process::id() as libc::pid_t;
     // SAFETY: only async-signal-safe scalar syscalls run between fork and

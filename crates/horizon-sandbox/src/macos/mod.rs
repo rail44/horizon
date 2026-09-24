@@ -102,41 +102,10 @@ pub(crate) fn spawn_with_grants(
     wrapped.arg(&program);
     wrapped.args(&args);
 
-    if let Some(cwd) = command.get_current_dir() {
-        wrapped.current_dir(cwd);
-    }
-    for (key, value) in command.get_envs() {
-        match value {
-            Some(v) => {
-                wrapped.env(key, v);
-            }
-            None => {
-                wrapped.env_remove(key);
-            }
-        }
-    }
-
-    // TMPDIR parity (`docs/roadmap.md`'s backlog-60 entry): set on the
-    // helper invocation itself, so it's already part of the ambient
-    // environment the helper inherits across its own `exec()` into the
-    // real command -- see `crate::tmpdir`'s module doc.
-    crate::tmpdir::provision(policy, &command, &mut wrapped)?;
-
-    // Make the sandboxed child a process-group leader. Two consequences,
-    // both deliberate (2026-09-10, `docs/macos-containment-denial-
-    // reporting-design.md`):
-    // 1. The registry's timeout kill (`kill(-pid)`, a group kill) actually
-    //    reaches the tree -- without this the sandboxed child stays in the
-    //    daemon's own group and the group kill misses it.
-    // 2. Every descendant inherits the group at spawn and keeps it after
-    //    reparenting, which is how the unified-log denial collector
-    //    (`macos::denials`) attributes kernel records to this run.
+    // Group membership supports both timeout termination and denial attribution
+    // after descendants are reparented. Keep this before the helper execs.
     wrapped.process_group(0);
-
-    wrapped
-        .stdin(stdio.stdin)
-        .stdout(stdio.stdout)
-        .stderr(stdio.stderr);
+    crate::command::configure_child(&command, &mut wrapped, policy, stdio)?;
 
     let child = wrapped.spawn()?;
     Ok(SandboxedChild { child })

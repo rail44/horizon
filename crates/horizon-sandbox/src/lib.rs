@@ -43,6 +43,8 @@
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 mod caps;
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod command;
 mod error;
 mod grant;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

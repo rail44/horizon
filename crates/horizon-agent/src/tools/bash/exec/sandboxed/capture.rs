@@ -1,12 +1,12 @@
 //! Own the child through exit and output drain, then collect denial evidence.
-use super::super::{failed_output, take};
+use super::super::{failed_output, stream::spawn_blocking_pump, take};
 use crate::config::BashToolConfig;
 #[cfg(target_os = "linux")]
 use crate::policy::annotate_sandboxed;
+use crate::tools::bash::process::kill_process_tree;
 use crate::tools::bash::registry::Registration;
 use serde_json::Value;
 use std::process::ExitStatus;
-use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
 pub(super) struct Captured {
@@ -42,7 +42,7 @@ pub(super) fn collect(
     let denial_collector = horizon_sandbox::DenialCollector::start(child.id(), started_at);
 
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
-        kill_pid(child.id());
+        kill_process_tree(child.id());
         let _ = child.wait();
         return Err(failed_output(
             "failed to start bash: stdout/stderr pipe was not available",
@@ -147,36 +147,6 @@ pub(super) fn collect(
     })
 }
 
-/// Spawns a background OS thread that blocking-reads `reader` to EOF,
-/// appending every chunk into a shared buffer -- the synchronous analogue
-/// of `plain::pump` (which is async, for the unsandboxed tokio path). A
-/// `std::process::Child`'s piped stdio has no async wrapper available in
-/// this crate (`horizon_sandbox::spawn` returns a plain `std::process::
-/// Child`, not a tokio one -- see that crate's doc), so this reads
-/// synchronously on its own thread instead. Returns the shared buffer and
-/// the join handle, so the caller can bound how long it waits for a
-/// straggler (see `join_within`) without blocking this thread past that
-/// bound.
-fn spawn_blocking_pump(
-    mut reader: impl std::io::Read + Send + 'static,
-) -> (Arc<StdMutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
-    let buf = Arc::new(StdMutex::new(Vec::new()));
-    let buf_for_thread = buf.clone();
-    let handle = std::thread::spawn(move || {
-        let mut chunk = [0u8; 8192];
-        loop {
-            match reader.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => buf_for_thread
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner())
-                    .extend_from_slice(&chunk[..n]),
-            }
-        }
-    });
-    (buf, handle)
-}
-
 /// Waits up to `timeout` for every handle in `handles` to finish, without
 /// blocking past it -- the synchronous-thread analogue of `run_async`'s
 /// `tokio::time::timeout` drain bound (a background process a command left
@@ -229,23 +199,9 @@ fn wait_child_with_timeout(
     match rx.recv_timeout(timeout) {
         Ok(status) => (status, false),
         Err(_) => {
-            kill_pid(pid);
+            kill_process_tree(pid);
             let status = rx.recv().unwrap_or(None);
             (status, true)
         }
     }
 }
-
-#[cfg(unix)]
-fn kill_pid(pid: u32) {
-    // Kill the entire process tree, not just the process group: the
-    // sandbox child (the dedicated helper on Linux) is the process-group
-    // leader, and every descendant that stays in the group is reached by
-    // the group signal. But a descendant that called `setsid`/`setpgid`
-    // escaped the group and survives it — `kill_process_tree` walks
-    // `/proc` to find and kill those individually (issue 017).
-    crate::tools::bash::process::kill_process_tree(pid);
-}
-
-#[cfg(not(unix))]
-fn kill_pid(_pid: u32) {}
