@@ -37,10 +37,11 @@ pub use session_loop::{
     core_channels, run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions,
 };
 pub use types::{
-    KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
-    TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
-    TerminalMouseReport, TerminalScroll, TerminalScrollWindow, TerminalSelection,
-    TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan, TerminalUnderline,
+    fixed_palette_rgb, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,
+    TerminalCursorShape, TerminalFrame, TerminalLine, TerminalMouseButton, TerminalMouseKind,
+    TerminalMouseModifiers, TerminalMouseReport, TerminalScroll, TerminalScrollWindow,
+    TerminalSelection, TerminalSelectionKind, TerminalSelectionPoint, TerminalSize, TerminalSpan,
+    TerminalUnderline,
 };
 
 #[cfg(test)]

@@ -144,23 +144,8 @@ fn default_rgb(index: usize, scheme: TerminalColorScheme) -> Rgb {
         return named_rgb(base_ansi_color(index), scheme);
     }
 
-    if index < 232 {
-        let cube = (index - 16) as u8;
-        let component = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
-        return Rgb {
-            r: component(cube / 36),
-            g: component((cube / 6) % 6),
-            b: component(cube % 6),
-        };
-    }
-
-    if index < 256 {
-        let gray = 8 + (index - 232) as u8 * 10;
-        return Rgb {
-            r: gray,
-            g: gray,
-            b: gray,
-        };
+    if let Some([r, g, b]) = u8::try_from(index).ok().and_then(crate::fixed_palette_rgb) {
+        return Rgb { r, g, b };
     }
 
     named_rgb(

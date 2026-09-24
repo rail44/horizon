@@ -5,7 +5,7 @@
 
 use alacritty_terminal::vte::ansi::Rgb;
 use gpui::{rgb, Hsla};
-use horizon_terminal_core::{NamedColor, TerminalColor};
+use horizon_terminal_core::{fixed_palette_rgb, NamedColor, TerminalColor};
 
 use super::scheme::scheme;
 
@@ -101,20 +101,7 @@ fn named_rgb(color: NamedColor) -> [u8; 3] {
 }
 
 fn indexed_rgb(index: u8) -> [u8; 3] {
-    if index < 16 {
-        return split(scheme().ansi[index as usize]);
-    }
-    if index < 232 {
-        let index = index - 16;
-        let component = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
-        return [
-            component(index / 36),
-            component((index / 6) % 6),
-            component(index % 6),
-        ];
-    }
-    let gray = 8 + (index - 232) * 10;
-    [gray, gray, gray]
+    fixed_palette_rgb(index).unwrap_or_else(|| split(scheme().ansi[index as usize]))
 }
 
 #[cfg(test)]

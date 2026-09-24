@@ -1,6 +1,28 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+/// The theme-independent part of the xterm palette (indices 16..=255).
+/// Base ANSI slots return `None`: the caller supplies its current theme.
+/// Runtime OSC overrides take precedence and must be checked before this.
+pub fn fixed_palette_rgb(index: u8) -> Option<[u8; 3]> {
+    match index {
+        0..=15 => None,
+        16..=231 => {
+            let cube = index - 16;
+            let component = |value: u8| if value == 0 { 0 } else { 55 + value * 40 };
+            Some([
+                component(cube / 36),
+                component((cube / 6) % 6),
+                component(cube % 6),
+            ])
+        }
+        _ => {
+            let gray = 8 + (index - 232) * 10;
+            Some([gray, gray, gray])
+        }
+    }
+}
+
 /// A cell's logical color: one of the 16 base ANSI slots (+ their bold/dim
 /// promotions), a default-role slot (foreground/background/cursor, also
 /// bold/dim-promotable), an xterm 256-color palette index, or a literal
