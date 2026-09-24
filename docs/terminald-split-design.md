@@ -146,3 +146,13 @@ auto-drains its PTYs. `cargo tree -p horizon-terminald -e normal` now has
 neither `horizon-agent` nor libduckdb; the only agent edge left is
 `tests/e2e.rs`'s dev-dependency, which exists precisely to drive a real
 agentd through the acceptance property above.
+
+## Geometry at runtime entry points (2026-09-24)
+
+Wire geometry remains a plain `TerminalSize`. Spawn and resize normalize its
+cell dimensions with the emulation engine's minima (two columns, one row)
+before updating both the PTY and core. The core also normalizes direct
+session-loop input. Zero dimensions previously panicked during construction
+or resize; a one-column screen cannot hold a wide cell safely. Valid sizes
+and supplied pixel dimensions remain unchanged, including zero pixels for
+unknown geometry. This adds no protocol fields or user configuration.

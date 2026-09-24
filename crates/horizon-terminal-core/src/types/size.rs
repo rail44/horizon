@@ -1,5 +1,6 @@
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
+use alacritty_terminal::term::{MIN_COLUMNS, MIN_SCREEN_LINES};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +34,16 @@ impl Default for TerminalSize {
 }
 
 impl TerminalSize {
+    /// Apply the emulation engine's cell minima before configuring either
+    /// the core or its PTY. Pixel dimensions are independent and may be unknown.
+    pub fn normalized(self) -> Self {
+        Self {
+            cols: self.cols.max(MIN_COLUMNS as u16),
+            rows: self.rows.max(MIN_SCREEN_LINES as u16),
+            ..self
+        }
+    }
+
     /// Character-cell geometry only, pixel dimensions left at `0`. Used by
     /// tests (both in this crate and in the `horizon` host crate, which
     /// cannot see this crate's own `#[cfg(test)]` items) that only care

@@ -1581,3 +1581,17 @@ fn last_turn_end_reason_finds_the_latest_turn_ended() {
         Some(agent::TurnEndReason::Completed),
     );
 }
+
+#[test]
+fn denied_result_is_an_error_independent_of_tool_payload() {
+    for output in [
+        serde_json::json!({"message": "denied"}),
+        serde_json::json!({"is_error": false}),
+    ] {
+        let denied =
+            agent::ToolCallResult::denied(agent::ToolCallId("denied".into()), None, output.clone());
+        assert!(denied.denied);
+        assert!(denied.is_error);
+        assert_eq!(denied.output, output);
+    }
+}

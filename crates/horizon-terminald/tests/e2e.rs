@@ -562,3 +562,57 @@ async fn an_agentd_drain_and_respawn_leaves_a_live_terminald_session_attachable(
 
     send_terminal_command(&reattached.commands, TerminalCommand::Shutdown).await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn undersized_geometry_reaches_the_pty_as_the_same_effective_size() {
+    let terminald = spawn_terminald();
+    let client = connect_hub(&terminald.socket_path).await;
+    let mut spec = terminal_spec(std::env::temp_dir(), None);
+    spec.initial_size = TerminalSize::new(0, 0);
+    let mut attachment = client
+        .hub
+        .create_terminal(uuid::Uuid::new_v4(), spec)
+        .await
+        .unwrap();
+
+    for (step, (resize, expected)) in [
+        (None, "1 2"),
+        (Some(TerminalSize::new(1, 0)), "1 2"),
+        (Some(TerminalSize::new(30, 5)), "5 30"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if let Some(size) = resize {
+            send_terminal_command(&attachment.commands, TerminalCommand::Resize(size)).await;
+        }
+        // OSC title delivery remains observable even on a two-cell viewport.
+        // stty reads the real PTY's geometry, independently of the core frame.
+        let command = format!("printf '\\033]0;size-{step}:%s\\007' \"$(stty size)\"\n");
+        send_terminal_command(
+            &attachment.commands,
+            TerminalCommand::Input(command.into_bytes()),
+        )
+        .await;
+        let expected = format!("size-{step}:{expected}");
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                let event = attachment
+                    .events
+                    .recv()
+                    .await
+                    .unwrap()
+                    .expect("live terminal");
+                if let TerminalUpdate::Title(Some(title)) = event {
+                    if title == expected {
+                        break;
+                    }
+                }
+            }
+        })
+        .await
+        .expect("PTY geometry title should arrive through the core");
+    }
+    send_terminal_command(&attachment.commands, TerminalCommand::Shutdown).await;
+    wait_for_session_end(&mut attachment.events).await;
+}

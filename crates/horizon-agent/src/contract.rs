@@ -1115,6 +1115,7 @@ impl ToolCallResult {
     ) -> Self {
         Self {
             denied: true,
+            is_error: true,
             ..Self::new(call_id, occurrence_id, output)
         }
     }

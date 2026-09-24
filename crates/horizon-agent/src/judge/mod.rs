@@ -8,7 +8,7 @@
 //! ## Shape
 //!
 //! - [`JudgeHandle`] is the per-session-installed bundle (model id, pooled
-//!   client, rate limiter, event-log writer) `ToolSessionState::with_judge`
+//!   client, rate limiter, event-log writer) `ToolSessionBuilder::with_judge`
 //!   carries -- see `handle`'s module doc.
 //! - [`run_judge`] is the pure two-stage orchestration: stage 1 (single-
 //!   token, err-toward-block, cheap) auto-approves or flags; a flagged call

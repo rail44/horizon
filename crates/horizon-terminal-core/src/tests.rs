@@ -2915,3 +2915,45 @@ fn scrollback_window_spans_carry_osc8_uris() {
         .unwrap();
     assert_eq!(span.url.as_deref(), Some("https://example.com/h"));
 }
+
+#[test]
+fn undersized_initial_geometry_keeps_vt_and_frame_usable() {
+    let mut core = TerminalCore::new(TerminalSize::new(0, 0));
+    core.write_vt("界".as_bytes());
+    assert_eq!(core.snapshot_frame().lines.len(), 1);
+    assert!(core.snapshot_text().contains("界"));
+    assert_eq!(
+        core.write_vt(b"\x1b[18t").pty_writes,
+        [b"\x1b[8;1;2t".to_vec()]
+    );
+}
+
+#[test]
+fn undersized_resize_keeps_wide_cells_and_reports_effective_geometry() {
+    let mut core = TerminalCore::new(TerminalSize::new(20, 4));
+    for cols in [0, 1, 2] {
+        core.resize(TerminalSize {
+            cols,
+            rows: 0,
+            pixel_width: 18,
+            pixel_height: 22,
+        });
+        core.write_vt("\x1b[2J\x1b[H界".as_bytes());
+        assert_eq!(core.snapshot_frame().lines.len(), 1);
+        assert!(core.snapshot_text().contains("界"));
+        assert_eq!(
+            core.write_vt(b"\x1b[18t").pty_writes,
+            [b"\x1b[8;1;2t".to_vec()]
+        );
+        assert_eq!(
+            core.write_vt(b"\x1b[14t").pty_writes,
+            [b"\x1b[4;22;18t".to_vec()]
+        );
+    }
+    core.resize(TerminalSize::new(20, 4));
+    assert_eq!(core.snapshot_frame().lines.len(), 4);
+    assert_eq!(
+        core.write_vt(b"\x1b[18t").pty_writes,
+        [b"\x1b[8;4;20t".to_vec()]
+    );
+}

@@ -100,6 +100,7 @@ impl TerminalCore {
     /// `[terminal].scrollback_lines` (`terminal::config::TerminalConfig`)
     /// in rather than this crate's own built-in default.
     pub fn with_scrollback(size: TerminalSize, scrollback_lines: usize) -> Self {
+        let size = size.normalized();
         let events = EventSink::default();
         let config = TermConfig {
             kitty_keyboard: true,
@@ -260,6 +261,7 @@ impl TerminalCore {
     }
 
     pub fn resize(&mut self, size: TerminalSize) {
+        let size = size.normalized();
         self.size = size;
         self.term.resize(size);
     }

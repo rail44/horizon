@@ -447,12 +447,13 @@ fn spawn_terminal(
     Receiver<TerminalFrame>,
     Receiver<TerminalUpdate>,
 )> {
+    let size = spec.initial_size.normalized();
     let pty_system = native_pty_system();
     let pair = pty_system.openpty(PtySize {
-        rows: spec.initial_size.rows,
-        cols: spec.initial_size.cols,
-        pixel_width: spec.initial_size.pixel_width,
-        pixel_height: spec.initial_size.pixel_height,
+        rows: size.rows,
+        cols: size.cols,
+        pixel_width: size.pixel_width,
+        pixel_height: size.pixel_height,
     })?;
 
     let mut command = CommandBuilder::new(&spec.shell);
@@ -499,7 +500,6 @@ fn spawn_terminal(
     let response_tx = command_tx.clone();
     let read_update_tx = update_tx.clone();
     thread::spawn(move || read_pty(&mut *reader, pty_tx, read_update_tx));
-    let size = spec.initial_size;
     let options = TerminalCoreOptions {
         scrollback_lines: spec.scrollback_lines,
         color_scheme: spec.color_scheme,
@@ -650,6 +650,7 @@ fn run_writer(
                 let _ = paste_tx.send(text);
             }
             TerminalCommand::Resize(size) => {
+                let size = size.normalized();
                 if last_size != Some(size) {
                     last_size = Some(size);
                     let _ = master.resize(PtySize {

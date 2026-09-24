@@ -51,7 +51,7 @@
 //! [`ExplorationHost`] is a daemon-provided capability handle, installed on
 //! `ToolSessionState` at session construction exactly like the recall
 //! store, the network proxy, and the judge already are
-//! (`ToolSessionState::with_exploration_host`). `None` -- every test
+//! (`ToolSessionBuilder::with_exploration_host`). `None` -- every test
 //! construction, and any future host that can't spawn peers -- degrades to
 //! an actionable error result, never a silent no-op. Its daemon-side
 //! implementation is written against a named "subscribe to another
