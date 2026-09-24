@@ -132,8 +132,7 @@ struct Inner {
     /// `.horizon/worktrees/`") -- the daemon already knows the real
     /// outcome of its own worktree creation (see `horizon-agentd`'s
     /// `resolve_and_create_isolated_worktree`), so this is threaded in
-    /// after construction the same way [`ToolSessionBuilder::with_skills`]/[`Self::
-    /// with_config_path`] are, rather than re-derived. `false` everywhere
+    /// after construction through [`ToolSessionBuilder`], rather than re-derived. `false` everywhere
     /// except the one production call site.
     isolated_worktree: bool,
     /// Whether this session has no client that could answer an approval
@@ -159,8 +158,7 @@ struct Inner {
     /// across this `Rc`-based struct's threading boundary onto the bash
     /// background thread (`tools::bash::exec::run_sandboxed` needs it to
     /// drain denied hosts) the same way `bash_cwd` already crosses that
-    /// boundary. Injected post-construction the same way [`Self::
-    /// with_skills`]/[`ToolSessionBuilder::with_config_path`] are: the one production
+    /// boundary. Installed through [`ToolSessionBuilder`]: the one production
     /// call site (`horizon-agentd`'s `session::run_session`) is the only
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
@@ -368,7 +366,7 @@ impl ToolSessionState {
 
     /// Installs this session's board host after construction -- see
     /// [`Inner::board`]'s doc comment. Same construction-time-only safety
-    /// contract as [`ToolSessionBuilder::with_exploration_host`].
+    /// contract as [`Self::with_exploration_host`].
     pub fn with_board_host(
         mut self,
         board: Option<Arc<dyn crate::tools::board::BoardHost>>,

@@ -61,17 +61,10 @@ impl State {
         }
     }
 
-    /// Folds one batch of provider events into the frame. A
-    /// [`ProviderEvent`] carrying `tool_call_progress` is ephemeral
-    /// tool-call-argument-streaming feedback: it folds straight into
-    /// `frame.items` via `apply_tool_call_progress_to_frame` and — unlike
-    /// every other event — is never pushed to `self.events`, since it isn't
-    /// part of the conversation history replayed from that log (e.g.
-    /// `rig::mapping::rig_messages_from_horizon_events`). One carrying
-    /// `session_model` is handled the same way, but sets `self.session_model`
-    /// instead of touching the frame at all -- see that field's doc comment.
-    /// Every other event goes through the normal `apply_agent_event_to_frame`
-    /// reducer, unchanged.
+    /// Fold conversation events through the reducer and retain their history.
+    /// Ephemeral tool progress updates the frame; model and selection update
+    /// sidecars. Task progress belongs to the view's live child rows. None of
+    /// these notifications enters conversation history.
     pub(crate) fn extend_provider_events(
         &mut self,
         events: impl IntoIterator<Item = ProviderEvent>,
