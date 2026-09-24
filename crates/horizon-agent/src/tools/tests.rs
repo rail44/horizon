@@ -1846,6 +1846,97 @@ fn resolve_approval_executes_fs_write_on_approve() {
 }
 
 #[test]
+fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
+    for automatic in [false, true] {
+        let root = temp_workspace("approval-dispatch");
+        let target = root.join("new.txt");
+        let session_id = SessionId::new();
+        let live = LiveState::new();
+        register_session_runtime(
+            session_id,
+            ToolSessionState::new(root),
+            live.clone(),
+            dummy_bash_results(),
+        );
+        let request = ToolCallRequest {
+            call_id: ToolCallId("dispatch".into()),
+            tool_id: "fs.write".into(),
+            input: json!({"path":target, "content":"approved content"}).into(),
+            occurrence_id: Some(crate::contract::OccurrenceId::new()),
+        };
+        let approval = ApprovalRequest {
+            call_id: request.call_id.clone(),
+            reason: "write file".into(),
+            kind: ApprovalKind::Standard,
+            occurrence_id: request.occurrence_id.clone(),
+        };
+        let frame = live.extend_events([
+            Event::ToolCallRequested(request.clone()),
+            Event::ApprovalRequested(approval.clone()),
+        ]);
+        let candidate = ApprovalCandidate {
+            request: request.clone(),
+            approval,
+        };
+        if automatic {
+            let mut stale = candidate.clone();
+            stale.request.input = json!({"path":target,"content":"different"}).into();
+            assert!(matches!(
+                resolve_auto_approval(&frame, session_id, &stale),
+                ApprovalOutcome::AlreadyResolved
+            ));
+            assert!(!target.exists());
+        }
+        let outcome = if automatic {
+            resolve_auto_approval(&frame, session_id, &candidate)
+        } else {
+            resolve_approval(
+                &frame,
+                session_id,
+                request.call_id.clone(),
+                ApprovalDecision::Approve,
+            )
+        };
+        let ApprovalOutcome::Executed {
+            events,
+            frame,
+            command,
+        } = outcome
+        else {
+            panic!("synchronous execution")
+        };
+        assert!(matches!(
+            events.as_slice(),
+            [
+                Event::StateChanged(crate::contract::SessionState::ToolRunning),
+                Event::ToolCallStarted(_),
+                Event::ToolCallFinished(_)
+            ]
+        ));
+        let Command::ToolCallResult(result) = command else {
+            panic!("result delivery")
+        };
+        assert_eq!(result.occurrence_id, request.occurrence_id);
+        assert!(!result.is_error);
+        assert_eq!(fs::read_to_string(&target).unwrap(), "approved content");
+        fs::write(&target, "later edit").unwrap();
+        let repeated = if automatic {
+            resolve_auto_approval(&frame, session_id, &candidate)
+        } else {
+            resolve_approval(
+                &frame,
+                session_id,
+                request.call_id,
+                ApprovalDecision::Approve,
+            )
+        };
+        assert!(matches!(repeated, ApprovalOutcome::AlreadyResolved));
+        assert_eq!(fs::read_to_string(target).unwrap(), "later edit");
+        unregister_session_runtime(session_id);
+    }
+}
+
+#[test]
 fn resolve_approval_denies_fs_edit_without_running_it() {
     let root = temp_workspace("approval-deny-edit");
     let target = root.join("file.txt");

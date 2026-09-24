@@ -151,26 +151,14 @@ pub fn resolve_auto_approval(
         });
     };
 
-    if request.tool_id == "bash" {
-        resolve_bash(
-            session_id,
-            &runtime,
-            request,
-            &ApprovalDecision::Approve,
-            candidate.approval.kind.clone(),
-            ApprovalSource::Judge,
-        )
-    } else if request.tool_id == "web_fetch" {
-        resolve_web_fetch(
-            session_id,
-            &runtime,
-            request,
-            &ApprovalDecision::Approve,
-            candidate.approval.kind.clone(),
-        )
-    } else {
-        resolve_synchronous_tool(&runtime, request, &ApprovalDecision::Approve)
-    }
+    dispatch_approval(
+        session_id,
+        &runtime,
+        request,
+        &ApprovalDecision::Approve,
+        candidate.approval.kind.clone(),
+        ApprovalSource::Judge,
+    )
 }
 
 /// The result a tool call resolves to when it would otherwise wait for a
@@ -261,29 +249,31 @@ fn try_execute(
     }
     let runtime = session_runtime(session_id)?;
 
-    Some(if request.tool_id == "bash" {
-        // The pending request's own kind (`docs/agent-approval-design.md`
-        // leg 4b): a domain-denial retry resolves an Approve very
-        // differently from an ordinary approval or a sandbox-denial retry
-        // (see `resolve_bash`'s doc comment) -- looked up from `frame`
-        // itself, not carried by the caller, so every entry point into this
-        // function (approve, deny, a future replay) reads the same source
-        // of truth.
-        let kind = frame.approval_kind(call_id).unwrap_or_default();
-        resolve_bash(
-            session_id,
-            &runtime,
-            request,
-            decision,
-            kind,
-            approval_source,
-        )
-    } else if request.tool_id == "web_fetch" {
-        let kind = frame.approval_kind(call_id).unwrap_or_default();
-        resolve_web_fetch(session_id, &runtime, request, decision, kind)
-    } else {
-        resolve_synchronous_tool(&runtime, request, decision)
-    })
+    // Human approvals read the displayed kind; automatic approvals carry
+    // the judge's candidate after checking the exact current request.
+    Some(dispatch_approval(
+        session_id,
+        &runtime,
+        request,
+        decision,
+        frame.approval_kind(call_id).unwrap_or_default(),
+        approval_source,
+    ))
+}
+
+fn dispatch_approval(
+    session_id: SessionId,
+    runtime: &SessionRuntime,
+    request: &ToolCallRequest,
+    decision: &ApprovalDecision,
+    kind: ApprovalKind,
+    source: ApprovalSource,
+) -> ApprovalOutcome {
+    match request.tool_id.as_str() {
+        "bash" => resolve_bash(session_id, runtime, request, decision, kind, source),
+        "web_fetch" => resolve_web_fetch(session_id, runtime, request, decision, kind),
+        _ => resolve_synchronous_tool(runtime, request, decision),
+    }
 }
 
 fn resolve_web_fetch(

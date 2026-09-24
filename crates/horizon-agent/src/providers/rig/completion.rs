@@ -220,7 +220,7 @@ pub(super) async fn complete_rig_turn(
             Err(error) => {
                 let _ = events_tx.send(
                     Event::Error(Error {
-                        message: format!("Rig OpenAI completion failed: {error}"),
+                        message: format!("Rig completion failed: {error}"),
                     })
                     .into(),
                 );
@@ -846,3 +846,6 @@ fn tool_call_requests_from_events(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests;
