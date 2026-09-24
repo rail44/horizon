@@ -63,7 +63,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
         vec![AssistantContent::ToolCall(raw)],
     );
     assert!(durable);
-    assert_eq!(outcome.final_text.as_deref(), Some("reading"));
+    assert_eq!(outcome.final_text(), Some("reading"));
     assert_eq!(
         outcome.requested_tool_call_ids,
         vec![ToolCallId("call-1".into())]
@@ -136,10 +136,12 @@ fn cancelled_response_retains_observed_history_and_suppresses_truncation() {
         },
     )));
     let (message, outcome) = response.finish(true, Some("partial-id".into()), Vec::new());
-    assert!(outcome.cancelled);
-    assert!(!outcome.truncated);
-    assert!(!outcome.cap_truncated);
-    assert!(outcome.final_text.is_none());
+    assert_eq!(outcome.stop, CompletionStop::Cancelled);
+    assert_eq!(outcome.requested_tool_call_ids.len(), 1);
+    assert_eq!(outcome.requested_tool_calls.len(), 1);
+    assert_eq!(outcome.input_tokens, Some(10));
+    assert_eq!(outcome.output_tokens, Some(20));
+    assert!(outcome.final_text().is_none());
     let Message::Assistant { id, content } = message else {
         panic!("partial history")
     };
@@ -169,10 +171,14 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
         },
     )));
     let (_, outcome) = response.finish(false, None, Vec::new());
-    assert!(outcome.truncated);
-    assert_eq!(outcome.truncated_tool_call_count, 1);
-    assert!(outcome.cap_truncated);
+    assert_eq!(
+        outcome.stop,
+        CompletionStop::Truncated(super::super::Truncation::Tools {
+            unfinished: std::num::NonZeroUsize::new(1).unwrap(),
+            output_cap: true,
+        })
+    );
     assert_eq!(outcome.input_tokens, Some(10));
     assert_eq!(outcome.output_tokens, Some(20));
-    assert!(outcome.final_text.is_none());
+    assert!(outcome.final_text().is_none());
 }

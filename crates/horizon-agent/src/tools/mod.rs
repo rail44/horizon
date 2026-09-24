@@ -14,6 +14,7 @@ mod network;
 mod processing;
 mod recall;
 mod state;
+mod synchronous;
 mod work_boundary;
 pub use work_boundary::session_tool_work_settled;
 pub(crate) mod web;
@@ -110,19 +111,13 @@ pub fn start_approval_gate(
 /// approved it -- `tools::approval`'s single entry point for the tools this
 /// crate itself executes (as opposed to `bash`, which runs on its own
 /// background thread, and `Provider::Forward`-ed tools like
-/// `mock.approval_required`). Dispatches by tool id prefix to whichever
-/// module owns that tool's execution; `fs`/`config` each cover their own
-/// small id set.
+/// `mock.approval_required`). The synchronous registry selects the owning implementation.
 pub(crate) fn execute_approved(
     tool_state: &ToolSessionState,
     tool_id: &str,
     input: &serde_json::Value,
 ) -> serde_json::Value {
-    if tool_id == "config.write" {
-        config::execute_approved(tool_state, tool_id, input)
-    } else {
-        fs::execute_approved(tool_state, tool_id, input)
-    }
+    synchronous::execute_approved(tool_state, tool_id, input)
 }
 
 /// Constructs the wire-visible tool error-output shape

@@ -17,9 +17,8 @@ const COALESCE_WINDOW: Duration = Duration::from_millis(16);
 pub(super) struct FramePublisher {
     frame_tx: Sender<TerminalFrame>,
     last_sent: Instant,
-    dirty: bool,
-    flush_armed: bool,
-    flush_rx: Receiver<Instant>,
+    pending_flush: Option<Receiver<Instant>>,
+    idle: Receiver<Instant>,
 }
 
 impl FramePublisher {
@@ -29,14 +28,13 @@ impl FramePublisher {
             // The startup frame does not consume the first mutation's
             // immediate slot.
             last_sent: Instant::now() - COALESCE_WINDOW,
-            dirty: false,
-            flush_armed: false,
-            flush_rx: crossbeam_channel::never(),
+            pending_flush: None,
+            idle: crossbeam_channel::never(),
         }
     }
 
     pub(super) fn flush_timer(&self) -> &Receiver<Instant> {
-        &self.flush_rx
+        self.pending_flush.as_ref().unwrap_or(&self.idle)
     }
 
     /// Send immediately after an idle window, or schedule the latest
@@ -50,30 +48,22 @@ impl FramePublisher {
         if elapsed >= COALESCE_WINDOW {
             let _ = self.frame_tx.send(core.snapshot_frame());
             self.last_sent = now;
-            self.dirty = false;
             // An old timer no longer corresponds to this send window.
             // Drop it so it cannot cause an extra send or prevent rearming.
-            self.flush_armed = false;
-            self.flush_rx = crossbeam_channel::never();
+            self.pending_flush = None;
             return;
         }
 
-        self.dirty = true;
-        if !self.flush_armed {
-            self.flush_rx = crossbeam_channel::after(COALESCE_WINDOW - elapsed);
-            self.flush_armed = true;
-        }
+        self.pending_flush
+            .get_or_insert_with(|| crossbeam_channel::after(COALESCE_WINDOW - elapsed));
     }
 
     /// Called when the one-shot timer fires. Snapshot at flush time so a
     /// burst sends its latest state, then park the timer until another edit.
     pub(super) fn flush(&mut self, core: &TerminalCore) {
-        self.flush_armed = false;
-        self.flush_rx = crossbeam_channel::never();
-        if self.dirty {
+        if self.pending_flush.take().is_some() {
             let _ = self.frame_tx.send(core.snapshot_frame());
             self.last_sent = Instant::now();
-            self.dirty = false;
         }
     }
 }

@@ -305,24 +305,20 @@ pub(crate) fn parse_update(input: &Value) -> Result<MemoryDigest, String> {
 }
 
 /// Executes the `memory.update` auto-allowed tool: validates the input and
-/// returns a confirmation. Returns `None` for any other tool id, so the caller
-/// can try elsewhere — same contract as `tools::knowledge::execute_auto`.
+/// returns a confirmation. The registry selects this handler before input validation.
 ///
 /// **No side effect here.** The session loop owns the state mutation and event
 /// emission (see the module doc): this handler only validates and confirms, so
 /// the model sees whether its edit was well-formed before the loop applies it.
-pub(crate) fn execute_auto(tool_id: &str, input: &Value) -> Option<Value> {
-    if tool_id != TOOL_ID {
-        return None;
-    }
+pub(super) fn execute(input: &Value) -> Value {
     match parse_update(input) {
         Ok(digest) => {
             if let Some(reason) = &digest.no_update_reason {
-                Some(json!({
+                json!({
                     "ok": true,
                     "no_update": true,
                     "reason": reason,
-                }))
+                })
             } else {
                 let fields: Vec<&str> = digest
                     .updates
@@ -339,10 +335,10 @@ pub(crate) fn execute_auto(tool_id: &str, input: &Value) -> Option<Value> {
                         "to_seq": range.to_seq,
                     });
                 }
-                Some(result)
+                result
             }
         }
-        Err(message) => Some(error_output(message)),
+        Err(message) => error_output(message),
     }
 }
 
@@ -512,38 +508,25 @@ mod tests {
         assert!(!rendered.contains("completed"));
     }
 
-    // -- execute_auto ------------------------------------------------------
+    // -- execute ------------------------------------------------------
 
     #[test]
-    fn execute_auto_returns_none_for_other_tools() {
-        assert!(execute_auto("fs.read", &json!({})).is_none());
-    }
-
-    #[test]
-    fn execute_auto_confirms_updated_fields() {
-        let result = execute_auto(
-            TOOL_ID,
-            &json!({ "goal": op("set", "x"), "decisions": op("append", "y") }),
-        )
-        .expect("handled");
+    fn execute_confirms_updated_fields() {
+        let result = execute(&json!({ "goal": op("set", "x"), "decisions": op("append", "y") }));
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["fields_updated"], json!(["goal", "decisions"]));
     }
 
     #[test]
-    fn execute_auto_confirms_no_update() {
-        let result = execute_auto(
-            TOOL_ID,
-            &json!({ "no_update": { "reason": "nothing changed" } }),
-        )
-        .expect("handled");
+    fn execute_confirms_no_update() {
+        let result = execute(&json!({ "no_update": { "reason": "nothing changed" } }));
         assert_eq!(result["ok"], json!(true));
         assert_eq!(result["no_update"], json!(true));
     }
 
     #[test]
-    fn execute_auto_returns_error_for_invalid_input() {
-        let result = execute_auto(TOOL_ID, &json!({})).expect("handled");
+    fn execute_returns_error_for_invalid_input() {
+        let result = execute(&json!({}));
         assert_eq!(result["is_error"], json!(true));
     }
 }

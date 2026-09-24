@@ -18,7 +18,7 @@ const MAX_LINE_LIMIT: usize = 2000;
 /// context budget before the line limit is reached.
 const MAX_CONTENT_CHARS: usize = 50_000;
 
-pub(super) fn execute(
+pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &Value,
     allow_out_of_root: bool,

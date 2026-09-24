@@ -15,23 +15,22 @@ use serde_json::Value;
 
 use crate::tools::state::ToolSessionState;
 
-/// Executes an auto-allowed tool from this module's catalog entries.
-/// Returns `None` for any other tool id, so the caller can try
-/// elsewhere — same contract as `tools::config::execute_auto`.
-pub(crate) fn execute_auto(
-    tool_state: &ToolSessionState,
-    tool_id: &str,
+pub(super) fn read(state: &ToolSessionState, input: &Value) -> Value {
+    with_main_root(state, input, crate::knowledge::execute_read)
+}
+
+pub(super) fn write(state: &ToolSessionState, input: &Value) -> Value {
+    with_main_root(state, input, crate::knowledge::execute_write)
+}
+
+fn with_main_root(
+    state: &ToolSessionState,
     input: &Value,
-) -> Option<Value> {
-    let root = tool_state.workspace_root()?;
-    // Resolve the project's main root (the --git-common-dir parent) so
-    // every worktree of one project shares the same store. `None` when
-    // `root` is not in a git repo — the tools surface an actionable
-    // error rather than guessing a path.
+    execute: impl FnOnce(&std::path::Path, &Value) -> Value,
+) -> Value {
+    let Some(root) = state.workspace_root() else {
+        return crate::tools::error_output("knowledge tools require a workspace root");
+    };
     let main_root = crate::knowledge::main_root(root).unwrap_or(root.to_path_buf());
-    match tool_id {
-        "knowledge.read" => Some(crate::knowledge::execute_read(&main_root, input)),
-        "knowledge.write" => Some(crate::knowledge::execute_write(&main_root, input)),
-        _ => None,
-    }
+    execute(&main_root, input)
 }

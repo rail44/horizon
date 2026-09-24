@@ -1,9 +1,5 @@
-//! `config.read`/`config.write`/`skill.read`. The first two are the config
-//! role's only allowed tools (`roles::CONFIG_ROLE`); `skill.read` is
-//! available to every session, role-bearing or not (see `skills`' module
-//! doc). Grouped in one module because `config.read`/`config.write` share a
-//! trust story, and `skill.read` shares this module's dispatch shape --
-//! not because any of the three share code with `tools::fs`:
+//! `config.read` and `config.write`, the config role's tools. Their resolved
+//! user-config path and prior-read guard differ from workspace filesystem tools.
 //!
 //! **Why `config.write` bypasses `workspace_root` confinement.**
 //! `tools::fs::safety::resolve_path` confines every filesystem tool to the
@@ -39,40 +35,16 @@ use serde_json::{json, Value};
 
 use crate::tools::state::ToolSessionState;
 
-/// Executes an auto-allowed (`AutoAllowRead`) tool from this module's
-/// catalog entries. Returns `None` for any other tool id, so the caller can
-/// try elsewhere -- same contract as `tools::fs::execute_auto`.
-pub(crate) fn execute_auto(
-    tool_state: &ToolSessionState,
-    tool_id: &str,
-    input: &Value,
-) -> Option<Value> {
-    match tool_id {
-        "config.read" => Some(read_at(tool_state, tool_state.config_path())),
-        "skill.read" => Some(crate::skills::execute_read(
-            tool_state.skill_registry(),
-            input,
-        )),
-        _ => None,
-    }
+pub(super) fn read(tool_state: &ToolSessionState, _input: &Value) -> Value {
+    read_at(tool_state, tool_state.config_path())
 }
 
-/// Executes a Horizon-approved (`RequireApproval`) tool from this module --
-/// only `config.write`. Mirrors `tools::fs::execute_approved`'s shape and
-/// fallback-error convention.
-pub(crate) fn execute_approved(
-    tool_state: &ToolSessionState,
-    tool_id: &str,
-    input: &Value,
-) -> Value {
-    match tool_id {
-        "config.write" => write::execute(
-            tool_state,
-            tool_state.config_path().map(Path::to_path_buf),
-            input,
-        ),
-        _ => error_output(format!("tool `{tool_id}` has no Horizon-side execution")),
-    }
+pub(super) fn write(tool_state: &ToolSessionState, input: &Value) -> Value {
+    write::execute(
+        tool_state,
+        tool_state.config_path().map(Path::to_path_buf),
+        input,
+    )
 }
 
 /// The pure body of `config.read`, taking the resolved path as a parameter

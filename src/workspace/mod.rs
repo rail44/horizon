@@ -40,8 +40,10 @@ mod commands;
 mod modals;
 mod navigation;
 mod preview;
+mod recovery;
 mod render;
 mod restore;
+use recovery::WorkspacePhase;
 mod runtime_reload;
 mod session_creation;
 mod session_events;
@@ -128,10 +130,10 @@ pub(crate) struct CloseTab {
 
 const MODE_CONTEXT: &str = "WorkspaceMode";
 
-fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bool) {
+fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, WorkspacePhase) {
     match store.load(u64::from(WORKSPACE_STATE_VERSION)) {
         Ok(LoadResult::Valid(json)) => match Workspace::from_persisted_json(&json) {
-            Ok(workspace) => (workspace, true, false),
+            Ok(workspace) => (workspace, WorkspacePhase::Restoring),
             Err(horizon_workspace::WorkspaceStateError::UnsupportedVersion {
                 found,
                 supported,
@@ -139,27 +141,27 @@ fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bo
                 eprintln!(
                     "workspace state version {found} is unsupported (expected {supported}); preserving the file"
                 );
-                (Workspace::mvp(), false, false)
+                (Workspace::mvp(), WorkspacePhase::PreservingFile)
             }
             Err(error) => {
                 eprintln!("ignoring invalid workspace state: {error}");
-                (Workspace::mvp(), false, true)
+                (Workspace::mvp(), WorkspacePhase::Ready)
             }
         },
-        Ok(LoadResult::Missing) => (Workspace::mvp(), false, true),
+        Ok(LoadResult::Missing) => (Workspace::mvp(), WorkspacePhase::Ready),
         Ok(LoadResult::Invalid(InvalidState::UnsupportedVersion { found, supported })) => {
             eprintln!(
                 "workspace state version {found} is unsupported (expected {supported}); preserving the file"
             );
-            (Workspace::mvp(), false, false)
+            (Workspace::mvp(), WorkspacePhase::PreservingFile)
         }
         Ok(LoadResult::Invalid(InvalidState::Corrupt(error))) => {
             eprintln!("ignoring corrupt workspace state: {error}");
-            (Workspace::mvp(), false, true)
+            (Workspace::mvp(), WorkspacePhase::Ready)
         }
         Err(error) => {
             eprintln!("failed to load workspace state: {error}");
-            (Workspace::mvp(), false, false)
+            (Workspace::mvp(), WorkspacePhase::PreservingFile)
         }
     }
 }
@@ -293,9 +295,7 @@ impl PaneView {
 pub(crate) struct WorkspaceShell {
     workspace: Workspace,
     workspace_state: WorkspaceStateStore,
-    persistence_ready: bool,
-    restoring_workspace: bool,
-    workspace_restore_failed: bool,
+    workspace_phase: WorkspacePhase,
     // This instance's control socket — every spawned pane gets it as
     // HORIZON_SOCKET so CLIs invoked inside reach back here.
     socket_path: std::path::PathBuf,
@@ -403,8 +403,7 @@ impl WorkspaceShell {
         cx: &mut Context<Self>,
     ) -> Self {
         let mut workspace_state = WorkspaceStateStore::from_environment();
-        let (workspace, restoring_workspace, persistence_ready) =
-            load_workspace_state(&mut workspace_state);
+        let (workspace, workspace_phase) = load_workspace_state(&mut workspace_state);
         let (agentd, host_tool_rx, workspace_root_rx) = AgentdHandle::start(
             &horizon_wire::socket::default_agentd_socket_path(),
             &socket_path,
@@ -419,9 +418,7 @@ impl WorkspaceShell {
         let mut shell = Self {
             workspace,
             workspace_state,
-            persistence_ready,
-            restoring_workspace,
-            workspace_restore_failed: false,
+            workspace_phase,
             socket_path,
             sessions: HashMap::new(),
             agent_sessions: HashMap::new(),
@@ -466,7 +463,7 @@ impl WorkspaceShell {
         shell.wire_session_title_updates(session_title_rx, cx);
         shell.wire_terminal_notifications(terminal_notify_rx, cx);
         shell.wire_notification_responses(cx);
-        if shell.restoring_workspace {
+        if shell.workspace_phase.blocks_mutation() {
             shell.spawn_workspace_restore(agentd, terminald, cx);
         } else {
             shell.reconcile(window, cx);
@@ -478,7 +475,7 @@ impl WorkspaceShell {
     }
 
     fn persist_workspace(&mut self) {
-        if !self.persistence_ready || self.restoring_workspace {
+        if !self.workspace_phase.can_save() {
             return;
         }
         let json = match self.workspace.to_persisted_json() {
@@ -497,12 +494,20 @@ impl WorkspaceShell {
     }
 
     fn fail_workspace_restore(&mut self, error: impl std::fmt::Display, cx: &mut Context<Self>) {
-        if !self.restoring_workspace {
+        if !self.workspace_phase.fail_restore() {
             return;
         }
         eprintln!("workspace restore failed: {error}");
-        self.workspace_restore_failed = true;
         cx.notify();
+    }
+
+    fn discard_failed_workspace_restore(&mut self) -> bool {
+        if !self.workspace_phase.discard_failed_restore() {
+            return false;
+        }
+        self.workspace = Workspace::mvp();
+        self.persist_workspace();
+        true
     }
 
     /// Focuses the cursor pane's view, or -- when there is none, e.g. an
@@ -546,7 +551,7 @@ impl WorkspaceShell {
     /// pane ([`Self::focus_active`], `render::activate_pane`) and from
     /// the window-activation observer registered in [`Self::new`].
     fn sync_terminal_focus(&mut self, window: &Window, cx: &mut Context<Self>) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         let (unfocus, focus) = focus_transition(
@@ -575,7 +580,7 @@ impl WorkspaceShell {
     /// typing in does not). Workspace restore is excluded like every other
     /// session-driven reaction (`sync_terminal_focus`'s guard).
     fn should_surface_notification(&self, session_id: SessionId, window: &Window) -> bool {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return false;
         }
         !window.is_window_active()
@@ -591,7 +596,7 @@ impl WorkspaceShell {
 
 #[cfg(test)]
 mod tests {
-    use super::load_workspace_state;
+    use super::{load_workspace_state, WorkspacePhase};
     use horizon_workspace::Workspace;
 
     use crate::workspace_state::WorkspaceStateStore;
@@ -607,11 +612,10 @@ mod tests {
     fn missing_workspace_state_starts_fresh_and_enables_persistence() {
         let path = state_path("missing");
         let mut store = WorkspaceStateStore::new(path);
-        let (workspace, restoring, persistence_ready) = load_workspace_state(&mut store);
+        let (workspace, phase) = load_workspace_state(&mut store);
 
         assert_eq!(workspace.tab_count(), 1);
-        assert!(!restoring);
-        assert!(persistence_ready);
+        assert_eq!(phase, WorkspacePhase::Ready);
     }
 
     #[test]
@@ -622,11 +626,10 @@ mod tests {
         let mut store = WorkspaceStateStore::new(path.clone());
         store.save(&json).unwrap();
 
-        let (workspace, restoring, persistence_ready) = load_workspace_state(&mut store);
+        let (workspace, phase) = load_workspace_state(&mut store);
 
         assert_eq!(workspace.to_persisted_json().unwrap(), json);
-        assert!(restoring);
-        assert!(!persistence_ready);
+        assert_eq!(phase, WorkspacePhase::Restoring);
         std::fs::remove_file(path).unwrap();
     }
 
@@ -637,10 +640,9 @@ mod tests {
         std::fs::write(&path, contents).unwrap();
         let mut store = WorkspaceStateStore::new(path.clone());
 
-        let (_, restoring, persistence_ready) = load_workspace_state(&mut store);
+        let (_, phase) = load_workspace_state(&mut store);
 
-        assert!(!restoring);
-        assert!(!persistence_ready);
+        assert_eq!(phase, WorkspacePhase::PreservingFile);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), contents);
         std::fs::remove_file(path).unwrap();
     }

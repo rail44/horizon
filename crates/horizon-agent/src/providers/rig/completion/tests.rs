@@ -167,7 +167,13 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     .count(),
                 1
             );
-            assert_eq!(outcome.failed, rejected);
+            assert_eq!(
+                matches!(
+                    outcome.stop,
+                    crate::providers::rig::completion::CompletionStop::Failed
+                ),
+                rejected
+            );
             if rejected {
                 assert!(history.is_empty());
                 assert!(outcome.requested_tool_call_ids.is_empty());
@@ -179,7 +185,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                         | Event::MessageCommitted(_)
                 )));
             } else {
-                assert_eq!(outcome.final_text.as_deref(), Some("reading"));
+                assert_eq!(outcome.final_text(), Some("reading"));
                 assert_eq!(
                     outcome.requested_tool_call_ids,
                     vec![ToolCallId("call-1".into())]

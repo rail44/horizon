@@ -314,9 +314,7 @@ impl WorkspaceShell {
             .terminals
             .broadcast_terminal_color_scheme(theme::terminal_color_scheme());
 
-        self.restoring_workspace = false;
-        self.workspace_restore_failed = false;
-        self.persistence_ready = true;
+        self.workspace_phase.finish_restore();
         self.reconcile(window, cx);
         self.focus_active(window, cx);
     }

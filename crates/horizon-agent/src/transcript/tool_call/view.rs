@@ -116,7 +116,8 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     tool_call_occurrences(items)
         .into_iter()
         .map(|entry| {
-            let output = entry.result.map(|result| &result.output.0);
+            let result = entry.result.map(|result| result.value);
+            let output = result.map(|result| &result.output.0);
             let ToolCallClassification {
                 verb,
                 target,
@@ -129,7 +130,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
             ToolCallView {
                 call_id: entry.request.call_id.clone(),
                 request_index: entry.request_index,
-                result_index: entry.result_index,
+                result_index: entry.result.map(|result| result.index),
                 tool_id: entry.request.tool_id.clone(),
                 verb,
                 target,
@@ -141,13 +142,9 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 kind,
                 affected_files,
                 finished: entry.result.is_some(),
-                is_error: entry.result.map(|result| result.is_error).unwrap_or(false),
+                is_error: result.is_some_and(|result| result.is_error),
                 superseded: output.is_some_and(is_superseded_output),
-                approval: derive_approval_state(
-                    entry.had_approval_request,
-                    entry.started,
-                    entry.result,
-                ),
+                approval: derive_approval_state(entry.had_approval_request, entry.started, result),
             }
         })
         .collect()

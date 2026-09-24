@@ -48,7 +48,7 @@ use crate::preview::{registry, sample};
 // A text system that makes rendered text visible to assertions
 // ---------------------------------------------------------------------------
 
-struct ProbeTextSystem;
+pub(super) struct ProbeTextSystem;
 
 const UNITS_PER_EM: u32 = 1000;
 const ADVANCE_UNITS: f32 = 500.0;

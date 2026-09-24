@@ -5,6 +5,7 @@ use crate::contract::{
 };
 use crate::persistence::projection::duckdb::{AppendEvent, DuckdbStoreHandle, Store};
 use crate::tools::state::RecallContext;
+use crate::tools::synchronous::execute_auto;
 
 /// Builds a fresh file-backed DuckDB projection at a throwaway path, seeded
 /// with `sessions` (each a `SessionId` and its committed messages), and a

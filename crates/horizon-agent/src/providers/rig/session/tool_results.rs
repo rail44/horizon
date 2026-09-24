@@ -35,11 +35,11 @@ impl SessionLoopState {
         if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID {
             if let Some(memory) = self.memory.as_mut() {
                 if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
-                    memory.apply(&digest);
+                    memory.document.apply(&digest);
                     let _ = self
                         .events_tx
                         .send(crate::contract::Event::MemoryDigest(digest).into());
-                    self.memory_satisfied = true;
+                    memory.checkpoint = super::memory::MemoryCheckpoint::Satisfied;
                 }
             }
         }

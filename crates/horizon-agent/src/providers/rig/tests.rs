@@ -1814,7 +1814,7 @@ fn output_cap_truncated_does_not_false_positive_when_usage_is_absent() {
 }
 
 /// A cancelled turn's usage is not a cap-truncation, mirroring the `!cancelled`
-/// guard on tool-call truncation (`outcome.truncated`).
+/// guard on tool-call truncation (`Truncation::Tools`).
 #[test]
 fn output_cap_truncated_ignores_a_cancelled_turn() {
     assert!(!output_cap_truncated(Some(32_768), 32_768, true));
@@ -1847,7 +1847,9 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
 
     let outcome = TurnCompletion {
         output_tokens: Some(cap),
-        cap_truncated: true,
+        stop: crate::providers::rig::completion::CompletionStop::Truncated(
+            crate::providers::rig::completion::Truncation::OutputCap,
+        ),
         ..TurnCompletion::default()
     };
 
@@ -1855,9 +1857,11 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
 
     let recovered =
         result.expect("recovered round must still pass through final checkpoint processing");
-    assert!(!recovered.cap_truncated);
-    assert!(!recovered.failed);
-    assert!(recovered.final_text.is_some());
+    assert!(matches!(
+        recovered.stop,
+        crate::providers::rig::completion::CompletionStop::Finished { .. }
+    ));
+    assert!(recovered.final_text().is_some());
 
     let events: Vec<_> = rx.try_iter().collect();
 
@@ -2034,7 +2038,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
 /// real needs the rig OpenAI completion call to fail (`complete_rig_turn`'s
 /// `Err` branch), not something worth wiring a real/fake network call for
 /// here. `apply_turn_outcome` is where every rig turn's `TurnCompletion`
-/// funnels through regardless of *why* it produced `failed: true`, so
+/// funnels through regardless of *why* it produced `CompletionStop::Failed`, so
 /// driving it directly with that flag set proves the wiring
 /// (`TurnEnded(Failed)` then `WaitingForUser`, nothing else) without needing
 /// to reach the network-dependent code that sets the flag in production.
@@ -2048,7 +2052,7 @@ fn apply_turn_outcome_emits_turn_ended_failed_for_a_failed_provider_request() {
     };
 
     state.apply_turn_outcome(TurnCompletion {
-        failed: true,
+        stop: crate::providers::rig::completion::CompletionStop::Failed,
         ..TurnCompletion::default()
     });
 

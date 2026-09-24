@@ -1,6 +1,8 @@
+mod outcome;
 mod response;
+pub(super) use outcome::{CompletionStop, Truncation, TurnCompletion};
 
-use std::{collections::HashMap, future::Future, time::Duration};
+use std::{future::Future, time::Duration};
 
 use crossbeam_channel::Sender;
 use futures_util::StreamExt;
@@ -121,57 +123,6 @@ pub(super) struct ToolCallDescriptor {
     pub(super) args: serde_json::Value,
 }
 
-/// Outcome of a single turn: which tool calls (if any) it requested (with
-/// a descriptor per call id, for the doom-loop fingerprint in
-/// `session.rs`), and whether it ended via cancellation rather than running
-/// to completion. Cancellation is a stop reason, not an error — the caller
-/// still gets a well-formed outcome, just with `cancelled: true`.
-#[derive(Debug, Default)]
-pub(super) struct TurnCompletion {
-    pub(super) final_text: Option<String>,
-    pub(super) requested_tool_call_ids: Vec<ToolCallId>,
-    pub(super) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
-    pub(super) cancelled: bool,
-    /// The provider request itself failed (e.g. the OpenAI completion call
-    /// returned an error) rather than the turn completing or being
-    /// cancelled — a third, distinct stop reason `apply_turn_outcome` (in
-    /// `session.rs`) maps to `Event::TurnEnded(TurnEndReason::Failed)`. An
-    /// `Error` event has already been sent by the time this is set (see the
-    /// `Err` branch below); this field only exists so the caller can tell
-    /// "failed" apart from "completed with nothing to do", which otherwise
-    /// look identical (empty tool calls, not cancelled).
-    pub(super) failed: bool,
-    /// Input tokens the provider reported for this turn's request, when it
-    /// reported usage at all. Fed to `ClearingState::record_input_tokens` so
-    /// Tier 1's trigger runs off the provider's own measurement rather than
-    /// a byte heuristic (`docs/agent-compaction-design.md`; crush and
-    /// opencode both drive the same decision off actual usage tokens).
-    pub(super) input_tokens: Option<u64>,
-    /// The provider started streaming one or more tool calls but never
-    /// finalized them — the response was truncated mid-stream (rig's
-    /// `take_finalized_tool_calls` dropped the incomplete calls with only
-    /// a `tracing::debug`). Distinct from `failed` (the request itself
-    /// errored) and from an empty `requested_tool_call_ids` (which could
-    /// be a normal text-only reply): a truncated turn must not be misread
-    /// as `Completed`.
-    pub(super) truncated: bool,
-    /// How many tool calls the provider started but never finalized, when
-    /// `truncated` is true. Zero otherwise.
-    pub(super) truncated_tool_call_count: usize,
-    /// Output tokens the provider reported for this turn's request, when it
-    /// reported usage at all. `None` when no `Final` chunk arrived (the
-    /// stream ended without usage — see [`output_cap_truncated`]'s doc
-    /// comment for why that matters).
-    pub(super) output_tokens: Option<u64>,
-    /// The provider generated exactly `max_output_tokens` of output — the
-    /// response was almost certainly truncated at the output ceiling (see
-    /// [`output_cap_truncated`]). Distinct from `truncated` (tool calls cut
-    /// mid-stream): a cap-truncated turn may have no started tool calls at
-    /// all (e.g. reasoning consumed the entire budget). Like `truncated`,
-    /// this is suppressed for a cancelled turn.
-    pub(super) cap_truncated: bool,
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
@@ -226,7 +177,7 @@ pub(super) async fn complete_rig_turn(
                     .into(),
                 );
                 return TurnCompletion {
-                    failed: true,
+                    stop: CompletionStop::Failed,
                     ..TurnCompletion::default()
                 };
             }
@@ -253,16 +204,13 @@ pub(super) async fn complete_rig_turn(
         let _ = events_tx.send(event);
     }
     TurnCompletion {
-        final_text,
+        stop: CompletionStop::Finished {
+            text: final_text.unwrap_or_default(),
+        },
         requested_tool_call_ids,
         requested_tool_calls,
-        cancelled: false,
-        failed: false,
         input_tokens: None,
         output_tokens: None,
-        truncated: false,
-        truncated_tool_call_count: 0,
-        cap_truncated: false,
     }
 }
 
@@ -332,7 +280,7 @@ async fn rig_provider_turn_with_retry(
         Retried::Cancelled => Ok((
             partial_assistant_message(None, "", Vec::new()),
             TurnCompletion {
-                cancelled: true,
+                stop: CompletionStop::Cancelled,
                 ..TurnCompletion::default()
             },
         )),
@@ -451,7 +399,7 @@ where
             return Ok((
                 partial_assistant_message(None, "", Vec::new()),
                 TurnCompletion {
-                    cancelled: true,
+                    stop: CompletionStop::Cancelled,
                     ..TurnCompletion::default()
                 },
             ));

@@ -361,9 +361,11 @@ mod outcome_tests {
             );
             state.inputs.start_next();
             state.apply_turn_outcome(TurnCompletion {
-                final_text: Some("partial draft".into()),
-                cancelled,
-                failed: !cancelled,
+                stop: if cancelled {
+                    crate::providers::rig::completion::CompletionStop::Cancelled
+                } else {
+                    crate::providers::rig::completion::CompletionStop::Failed
+                },
                 ..Default::default()
             });
             let outcomes: Vec<_> = receiver

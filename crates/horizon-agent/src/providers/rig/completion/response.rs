@@ -23,7 +23,7 @@ use super::super::{
 use super::{
     make_tool_call_arguments_replay_safe, output_cap_truncated, partial_assistant_message,
     provider_request_usage_event_from_stream_final, repair_double_encoded_tool_arguments,
-    ToolCallDescriptor, TurnCompletion,
+    CompletionStop, ToolCallDescriptor, TurnCompletion,
 };
 
 pub(super) struct ResponseCollector<'a> {
@@ -189,22 +189,21 @@ impl<'a> ResponseCollector<'a> {
             }
         };
         let truncated_ids = self.tool_call_progress.truncated_ids();
-        let truncated = !cancelled && !truncated_ids.is_empty();
         let cap_truncated =
             output_cap_truncated(self.output_tokens, self.max_output_tokens, cancelled);
         (
             assistant_message,
             TurnCompletion {
-                final_text: (!cancelled && !truncated && !cap_truncated).then_some(self.text),
+                stop: CompletionStop::from_response(
+                    cancelled,
+                    truncated_ids.len(),
+                    cap_truncated,
+                    self.text,
+                ),
                 requested_tool_call_ids: self.requested_tool_call_ids,
                 requested_tool_calls: self.requested_tool_calls,
-                cancelled,
-                failed: false,
                 input_tokens: self.input_tokens,
                 output_tokens: self.output_tokens,
-                truncated,
-                truncated_tool_call_count: truncated_ids.len(),
-                cap_truncated,
             },
         )
     }

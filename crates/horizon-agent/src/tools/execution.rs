@@ -10,26 +10,14 @@ use crate::policy::{
     Classification,
 };
 use crate::tools::board;
-use crate::tools::config;
 use crate::tools::error_output;
 use crate::tools::fs;
-use crate::tools::knowledge;
-use crate::tools::memory;
-use crate::tools::recall;
 use crate::tools::state::{session_runtime, ToolSessionState};
 use crate::tools::{definitions, permission_for_tool};
 
-/// Seam for tools this crate doesn't implement itself because they need
-/// Horizon-side state this crate can't depend on — currently just
-/// `workspace.snapshot`, which reads Horizon's `Workspace`. Horizon
-/// implements this trait (see `agent::host_tools::WorkspaceHostTools`) and
-/// passes it in at every call into [`execute_agent_tool`]/
-/// `processing::process_agent_provider_event`, keeping the tool catalog's
-/// shape otherwise unchanged: an unrecognized `tool_id` here just falls
-/// through to this crate's own auto-allow tools (`tools::fs`). See
-/// `docs/agent-runtime-split-design.md`'s "Tools execute in the child"
-/// guardrail — this is the seam that will grow into the host-tool channel
-/// once tool execution moves into `horizon-agentd`.
+/// Boundary for tools needing shell-owned state, such as `workspace.snapshot`.
+/// The daemon supplies its host-channel adapter; implementations return `None`
+/// only for unrecognized ids. Local synchronous tools use the closed registry.
 pub trait HostTools {
     /// Executes a host-owned auto-allow tool, returning `None` if `tool_id`
     /// isn't one this implementation handles.
@@ -317,23 +305,14 @@ fn execute_auto_tool(
 ) -> Vec<Event> {
     let output = host
         .execute_auto(&request.tool_id, &request.input)
-        .or_else(|| fs::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| config::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| knowledge::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| recall::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| memory::execute_auto(&request.tool_id, &request.input));
-    let output = match output {
-        Some(output) => output,
-        None => {
-            return vec![Event::Error(Error {
-                message: format!(
-                    "Tool `{}` cannot be executed automatically.",
-                    request.tool_id
-                ),
-            })]
-        }
-    };
+        .or_else(|| super::synchronous::execute_auto(tool_state, &request.tool_id, &request.input))
+        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input));
+    let output = output.unwrap_or_else(|| {
+        error_output(format!(
+            "Tool `{}` cannot be executed automatically.",
+            request.tool_id
+        ))
+    });
 
     vec![
         Event::StateChanged(SessionState::ToolRunning),

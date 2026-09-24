@@ -40,15 +40,6 @@ fn prepare_workspace_for_terminal_runtime_reload(workspace: &mut Workspace) {
     }
 }
 
-fn command_blocked_by_restore(restoring: bool, failed: bool, id: CommandId) -> bool {
-    restoring
-        && !(failed
-            && matches!(
-                id,
-                CommandId::ReloadAgentRuntime | CommandId::ReloadTerminalRuntime
-            ))
-}
-
 /// Binding writes precede asynchronous daemon installation. Retry only this
 /// board's missing bindings; never start a session or adopt unrelated sessions.
 fn load_board_summaries(
@@ -152,7 +143,7 @@ impl WorkspaceShell {
                 .await;
             let _ = this.update(cx, |shell, cx| {
                 view.update(cx, |view, _| view.finish_inventory_refresh(&sessions));
-                if shell.restoring_workspace
+                if shell.workspace_phase.blocks_mutation()
                     || shell
                         .agentd
                         .as_ref()
@@ -221,7 +212,7 @@ impl WorkspaceShell {
                 .await;
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.restoring_workspace
+                    if shell.workspace_phase.blocks_mutation()
                         || shell
                             .agentd
                             .as_ref()
@@ -284,7 +275,7 @@ impl WorkspaceShell {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
                     if view.read(cx).navigation_epoch() != navigation_epoch
-                        || shell.restoring_workspace
+                        || shell.workspace_phase.blocks_mutation()
                         || shell
                             .agentd
                             .as_ref()
@@ -354,7 +345,7 @@ impl WorkspaceShell {
     /// later the control plane) funnels through here — the GPUI
     /// counterpart of the Floem shell's `execute_command`.
     pub(super) fn execute(&mut self, id: CommandId, window: &mut Window, cx: &mut Context<Self>) {
-        if command_blocked_by_restore(self.restoring_workspace, self.workspace_restore_failed, id) {
+        if self.workspace_phase.blocks_command(id) {
             return;
         }
         match id {
@@ -514,13 +505,7 @@ impl WorkspaceShell {
                 }
                 self.reload_in_progress = true;
                 let old = self.agentd.take();
-                if self.workspace_restore_failed {
-                    self.workspace = Workspace::mvp();
-                    self.restoring_workspace = false;
-                    self.workspace_restore_failed = false;
-                    self.persistence_ready = true;
-                    self.persist_workspace();
-                }
+                self.discard_failed_workspace_restore();
                 self.pending_agent_spawns.clear();
                 self.agent_sessions.clear();
                 // The model picker's target session and its provider list
@@ -547,13 +532,7 @@ impl WorkspaceShell {
                 self.reload_in_progress = true;
                 let old = self.terminald.take();
                 self.terminald_slot.set(None);
-                if self.workspace_restore_failed {
-                    self.workspace = Workspace::mvp();
-                    self.restoring_workspace = false;
-                    self.workspace_restore_failed = false;
-                    self.persistence_ready = true;
-                    self.persist_workspace();
-                } else {
+                if !self.discard_failed_workspace_restore() {
                     prepare_workspace_for_terminal_runtime_reload(&mut self.workspace);
                     self.persist_workspace();
                 }
@@ -587,7 +566,7 @@ impl WorkspaceShell {
     }
 
     fn close_pane(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         // Close before exiting workspace mode, mirroring the
@@ -631,7 +610,7 @@ impl WorkspaceShell {
     /// background-tab close is rare enough that "mode turned off" reads as
     /// the same simplification `CloseActiveTab` already makes.
     pub(super) fn close_tab(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         // The index is render-time state and the dispatch is synchronous,
@@ -679,7 +658,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return Err("workspace restore is still in progress".to_string());
         }
         if self.workspace.session_pane_kind(session_id).is_none() {
@@ -700,7 +679,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return Err("workspace restore is still in progress".to_string());
         }
         self.workspace
@@ -747,7 +726,7 @@ impl WorkspaceShell {
                 .await;
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if shell.restoring_workspace
+                    if shell.workspace_phase.blocks_mutation()
                         || shell
                             .agentd
                             .as_ref()
@@ -782,7 +761,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return Err("workspace restore is still in progress".to_string());
         }
         if !self.workspace.terminate_session(session_id) {
@@ -893,7 +872,7 @@ impl WorkspaceShell {
         reply: Sender<EnvelopeBody>,
         cx: &mut Context<Self>,
     ) -> Option<EnvelopeBody> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             let _ = reply.send(error_body("workspace restore is still in progress"));
             return None;
         }
@@ -927,7 +906,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         for summary in self.workspace.detached_session_summaries() {
@@ -967,10 +946,9 @@ impl WorkspaceShell {
 
 #[cfg(test)]
 mod tests {
-    use horizon_workspace::commands::CommandId;
     use horizon_workspace::{PaneKind, SessionKind, Workspace};
 
-    use super::{command_blocked_by_restore, prepare_workspace_for_terminal_runtime_reload};
+    use super::prepare_workspace_for_terminal_runtime_reload;
     #[test]
     fn stale_board_lookup_cannot_restore_a_just_terminated_session() {
         assert!(!super::board_session_still_requested(true, false));
@@ -1014,8 +992,7 @@ mod tests {
     // half of every daemon-agent adoption now lives.
 
     // `ensure_workspace_has_pane` lives in `super::super` (`workspace::
-    // mod`), not here -- unlike `command_blocked_by_restore`/
-    // `prepare_workspace_for_terminal_runtime_reload`, both defined in this
+    // mod`), not here -- unlike `prepare_workspace_for_terminal_runtime_reload`, both defined in this
     // file, it's no longer called by any production code in `commands.rs`
     // (the 2026-07-18 "empty workspace is valid" change removed its
     // `TerminateActiveSession`/`control_plane_terminate` call sites); its one
@@ -1051,33 +1028,5 @@ mod tests {
             workspace.session_pane_kind(session_id),
             Some(PaneKind::Terminal)
         );
-    }
-
-    #[test]
-    fn failed_restore_allows_only_the_explicit_runtime_reload_commands() {
-        // Both reloads are escape hatches out of a failed restore, and both
-        // stay blocked while a restore is merely *in progress*.
-        assert!(command_blocked_by_restore(
-            true,
-            false,
-            CommandId::ReloadAgentRuntime
-        ));
-        assert!(command_blocked_by_restore(
-            true,
-            false,
-            CommandId::ReloadTerminalRuntime
-        ));
-        assert!(command_blocked_by_restore(true, true, CommandId::NewTab));
-        assert!(!command_blocked_by_restore(
-            true,
-            true,
-            CommandId::ReloadAgentRuntime
-        ));
-        assert!(!command_blocked_by_restore(
-            true,
-            true,
-            CommandId::ReloadTerminalRuntime
-        ));
-        assert!(!command_blocked_by_restore(false, false, CommandId::NewTab));
     }
 }

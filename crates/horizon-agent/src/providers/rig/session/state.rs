@@ -17,6 +17,7 @@ use crate::{
     tools::MemoryDocument,
 };
 
+use super::memory::StandingMemory;
 use super::{ClearingState, ToolCallDescriptor, TurnLoopGuard};
 
 /// What the session loop woke up for: an inbound command, or a background
@@ -73,14 +74,7 @@ pub(crate) struct SessionLoopState {
     /// `memory.update` results arrive. Seeded from the event log at spawn;
     /// the provider-view projection prepends it (replacing old history) for
     /// standing roles. `None` for non-standing roles (no memory mechanism).
-    pub(crate) memory: Option<MemoryDocument>,
-    /// Whether the current user-turn's memory checkpoint is satisfied — i.e.
-    /// a `memory.update` call (Updated or Skipped) has landed this turn.
-    /// Reset to `false` when a new user message opens a turn.
-    pub(crate) memory_satisfied: bool,
-    /// Whether a checkpoint reminder has already been injected this turn —
-    /// bounds the checkpoint to at most one reminder, then a missed event.
-    pub(crate) memory_reminded: bool,
+    pub(in crate::providers::rig) memory: Option<StandingMemory>,
 
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
@@ -117,8 +111,6 @@ impl Default for SessionLoopState {
             guard: TurnLoopGuard::new(0, 0),
             pending_halt_result: None,
             memory: None,
-            memory_satisfied: false,
-            memory_reminded: false,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
             moa_conversation: super::moa::MoaConversation::default(),
@@ -161,7 +153,10 @@ impl SessionLoopState {
         // non-standing role has no memory mechanism, so `memory` stays `None`
         // and the projection skips the memory prepend entirely.
         let memory = if role.is_some_and(|r| r.standing) {
-            Some(memory_document.unwrap_or_default())
+            Some(StandingMemory {
+                document: memory_document.unwrap_or_default(),
+                ..Default::default()
+            })
         } else {
             None
         };
@@ -179,8 +174,6 @@ impl SessionLoopState {
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             pending_halt_result: None,
             memory,
-            memory_satisfied: false,
-            memory_reminded: false,
             config,
             moa_conversation,
             moa_turn: None,

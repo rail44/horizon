@@ -30,52 +30,33 @@ pub enum Direction {
     Down,
 }
 
+/// A cursor belongs only to explicit workspace mode. Entry with no panes
+/// is valid and has no cursor; implicit empty-workspace mode is derived.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum WorkspaceMode {
+    #[default]
+    PaneInput,
+    Commands {
+        cursor: Option<PaneId>,
+    },
+}
+
+impl WorkspaceMode {
+    pub(crate) fn cursor(self) -> Option<PaneId> {
+        match self {
+            Self::PaneInput => None,
+            Self::Commands { cursor } => cursor,
+        }
+    }
+}
+
 impl Workspace {
-    /// Whether workspace mode is currently active. `true` either because
-    /// it was explicitly toggled on ([`Self::workspace_mode_active`], the
-    /// raw "entered via the reserved chord" bookkeeping [`enter_workspace_
-    /// mode`]/[`cancel_workspace_mode`]/[`commit_workspace_mode`]/
-    /// [`exit_workspace_mode`] read and write) *or*, unconditionally,
-    /// because the workspace has zero tabs.
-    ///
-    /// The zero-tab bypass is the owner's 2026-07-19 clarification of the
-    /// mode's own purpose: workspace mode exists to separate "keys go to
-    /// the focused pane" from "keys command the workspace"
-    /// (`docs/workspace-mode-design.md`), and with no panes at all there
-    /// is no pane input left to protect -- so an empty workspace is
-    /// implicitly *always* a command surface, and requiring the entry
-    /// chord first is meaningless. This getter is the single place that
-    /// encodes that: every mode-resident key binding (`:` opening the
-    /// palette foremost -- the only reachable path back to `New Tab…`
-    /// once every pane is gone) becomes reachable the instant the
-    /// workspace empties, no entry chord needed, and reverts the instant
-    /// a tab exists again, purely because the bypass stops applying --
-    /// airtight in both directions by construction, since nothing needs
-    /// to remember to flip a flag on the way in or out. The entry chord
-    /// itself becomes a harmless no-op while empty as a direct
-    /// consequence: `toggle_mode` (`src/workspace/render.rs`) always sees
-    /// this method return `true` while empty and takes its "cancel"
-    /// branch, which is already idempotent when [`Self::
-    /// workspace_mode_cursor`] is `None` (see [`cancel_workspace_mode`]).
-    ///
-    /// The raw field alone remains the exact answer once a tab exists --
-    /// the bypass only ever adds, never removes, activeness, so a
-    /// non-empty workspace's behavior is untouched.
-    ///
-    /// The GPUI shell additionally suppresses this (for its key-context
-    /// decision only, not this method's own answer) while a
-    /// control-surface modal is open -- see `render::
-    /// mode_key_context_active`'s doc comment for why: the mode's own
-    /// hjkl/Enter/Escape bindings must not compete with a modal's typed
-    /// search keys, the same hazard `effective_scrim_pattern` already
-    /// guards against on the scrim/border side.
-    ///
-    /// [`enter_workspace_mode`]: Self::enter_workspace_mode
-    /// [`cancel_workspace_mode`]: Self::cancel_workspace_mode
-    /// [`commit_workspace_mode`]: Self::commit_workspace_mode
-    /// [`exit_workspace_mode`]: Self::exit_workspace_mode
+    /// Active after explicit entry, or whenever no tabs exist. An empty
+    /// workspace has no pane input to protect, so `:` can always open the
+    /// command palette. The shell suppresses mode bindings while a modal
+    /// owns keyboard input.
     pub fn is_workspace_mode_active(&self) -> bool {
-        self.workspace_mode_active || self.tab_count() == 0
+        matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) || self.tab_count() == 0
     }
 
     /// Enters workspace mode, seeding the cursor at the currently focused
@@ -86,11 +67,12 @@ impl Workspace {
     /// `docs/workspace-mode-design.md`'s "re-pressing the entry key while
     /// already in the mode does nothing".
     pub fn enter_workspace_mode(&mut self) {
-        if self.workspace_mode_active {
+        if matches!(self.workspace_mode, WorkspaceMode::Commands { .. }) {
             return;
         }
-        self.workspace_mode_active = true;
-        self.workspace_mode_cursor = self.active_tab().map(|tab| tab.active);
+        self.workspace_mode = WorkspaceMode::Commands {
+            cursor: self.active_tab().map(|tab| tab.active),
+        };
     }
 
     /// Moves the cursor one step in `direction`, resolved geometrically
@@ -107,7 +89,7 @@ impl Workspace {
     /// `focus_next`'s wrap-around cycling, which is a different, older
     /// command this deliberately doesn't reuse.
     pub fn move_cursor(&mut self, direction: Direction) {
-        let Some(current) = self.workspace_mode_cursor else {
+        let Some(current) = self.workspace_mode.cursor() else {
             return;
         };
         let Some(tab) = self.active_tab() else {
@@ -115,7 +97,7 @@ impl Workspace {
         };
         let rects = pane_rects(&tab.root);
         if let Some(next) = nearest_in_direction(&rects, current, direction) {
-            self.workspace_mode_cursor = Some(next);
+            self.workspace_mode = WorkspaceMode::Commands { cursor: Some(next) };
         }
     }
 
@@ -124,8 +106,8 @@ impl Workspace {
     /// cursor to commit to -- a zero-tab workspace, which entered the mode
     /// with nothing to focus -- there is simply nothing else to do.
     pub fn commit_workspace_mode(&mut self) {
-        self.workspace_mode_active = false;
-        if let Some(pane_id) = self.workspace_mode_cursor.take() {
+        let mode = std::mem::take(&mut self.workspace_mode);
+        if let Some(pane_id) = mode.cursor() {
             self.activate_pane(pane_id);
         }
     }
@@ -134,8 +116,7 @@ impl Workspace {
     /// active, so simply discarding the cursor is enough to "snap it back"
     /// -- there is nothing else to restore.
     pub fn cancel_workspace_mode(&mut self) {
-        self.workspace_mode_active = false;
-        self.workspace_mode_cursor = None;
+        self.workspace_mode = WorkspaceMode::PaneInput;
     }
 
     /// A pane click while workspace mode is active: the design's click
@@ -150,10 +131,12 @@ impl Workspace {
     ///
     /// [`commit_workspace_mode`]: Self::commit_workspace_mode
     pub fn commit_workspace_mode_to(&mut self, pane_id: PaneId) {
-        if !self.workspace_mode_active {
+        if self.workspace_mode == WorkspaceMode::PaneInput {
             return;
         }
-        self.workspace_mode_cursor = Some(pane_id);
+        self.workspace_mode = WorkspaceMode::Commands {
+            cursor: Some(pane_id),
+        };
         self.commit_workspace_mode();
     }
 
@@ -172,8 +155,7 @@ impl Workspace {
     /// reusable across both call shapes without an extra active-check at
     /// each call site.
     pub fn exit_workspace_mode(&mut self) {
-        self.workspace_mode_active = false;
-        self.workspace_mode_cursor = None;
+        self.workspace_mode = WorkspaceMode::PaneInput;
     }
 }
 
@@ -404,7 +386,7 @@ mod tests {
         assert_eq!(workspace.cursor_pane_id(), None);
         // The raw "explicitly entered" bookkeeping never had to flip --
         // the getter's zero-tab bypass is doing all the work.
-        assert!(!workspace.workspace_mode_active);
+        assert_eq!(workspace.workspace_mode, WorkspaceMode::PaneInput);
     }
 
     #[test]
@@ -477,7 +459,7 @@ mod tests {
 
         workspace.commit_workspace_mode();
 
-        assert!(!workspace.workspace_mode_active);
+        assert_eq!(workspace.workspace_mode, WorkspaceMode::PaneInput);
         assert!(workspace.is_workspace_mode_active());
     }
 }

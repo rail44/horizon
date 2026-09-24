@@ -225,7 +225,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         let Some((tab_index, pane_index)) = self.workspace.pane_location_for_session(session_id)
@@ -253,7 +253,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         if !self.workspace.terminate_session(session_id) {

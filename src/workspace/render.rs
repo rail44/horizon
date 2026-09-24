@@ -24,7 +24,6 @@ use horizon_workspace::commands::CommandId;
 use horizon_workspace::types::{LayoutNode, TabId};
 use horizon_workspace::{Direction, PaneId, PaneKind, SplitAxis};
 
-use super::navigation::workspace_mode_blocked_by_restore;
 use super::{
     ClosePane, CloseTab, ModeCancel, ModeCommit, ModeMoveDown, ModeMoveLeft, ModeMoveRight,
     ModeMoveUp, NewAgentTab, NewTab, NextTab, OpenPalette, OpenSessionDirectory, PrevTab,
@@ -565,8 +564,8 @@ impl WorkspaceShell {
                     PaneBorderRole::Inactive => rgb(theme::background()).into(),
                 };
                 let view = self.panes.get(&pane_id).cloned();
-                let restoring = self.restoring_workspace && view.is_none();
-                let restore_label = if self.workspace_restore_failed {
+                let restoring = self.workspace_phase.blocks_mutation() && view.is_none();
+                let restore_label = if self.workspace_phase.failed() {
                     "Workspace restore failed"
                 } else {
                     "Restoring session..."
@@ -878,7 +877,7 @@ impl WorkspaceShell {
     /// visible via the handle's own dragging-highlight check in
     /// `render_node`.
     fn begin_split_drag(&mut self, drag: SplitDrag, cx: &mut Context<Self>) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         self.active_split_drag = Some(drag);
@@ -1004,10 +1003,7 @@ impl Render for WorkspaceShell {
         // zero-tab bypass firing immediately on load, before the restore
         // sweep (which still runs a background round trip to agentd
         // even when there's nothing to resume) has actually finished.
-        let restore_blocked = workspace_mode_blocked_by_restore(
-            self.restoring_workspace,
-            self.workspace_restore_failed,
-        );
+        let restore_blocked = self.workspace_phase.blocks_workspace_mode();
         let mode_active = !restore_blocked
             && mode_key_context_active(
                 self.workspace.is_workspace_mode_active(),

@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
+use std::{cell::RefCell, rc::Rc};
 
 use embedded_gpui::surface::{KeyEvent, ViewApiCaller as _};
 use embedded_gpui::{PluginHost, PluginHostHandle as _, PluginOptions, Surface};
@@ -104,23 +105,53 @@ pub(crate) fn status_line(status: &Status, path: Option<&Path>, preview_name: &s
     }
 }
 
+enum LoadState {
+    Empty,
+    Loading { _task: Task<()> },
+    Loaded(LoadedPlugin),
+    Failed(String),
+}
+
+struct LoadedPlugin {
+    names: PreviewNames,
+    // Dropping a load cancels metadata before releasing the guest and its root.
+    _host: Entity<PluginHost>,
+    _root: Entity<PreviewHostRoot>,
+}
+
+/// The reply updates only the metadata belonging to its own load. Even a late
+/// reply cannot replace another load's values or change the pane's lifecycle.
+struct PreviewNames {
+    _request: Task<()>,
+    values: Rc<RefCell<Vec<String>>>,
+}
+
+impl PreviewNames {
+    fn new(names: embedded_gpui::Receipt<Vec<String>>, cx: &mut Context<PreviewPane>) -> Self {
+        let values = Rc::new(RefCell::new(Vec::new()));
+        let received = values.clone();
+        let request = cx.spawn(async move |pane, cx| {
+            if let Ok(names) = names.await {
+                *received.borrow_mut() = names;
+                let _ = pane.update(cx, |_, cx| cx.notify());
+            }
+        });
+        Self {
+            _request: request,
+            values,
+        }
+    }
+}
+
 pub(crate) struct PreviewPane {
     path: Option<PathBuf>,
     preview_name: String,
-    status: Status,
+    load: LoadState,
     surface: Entity<Surface>,
     theme_source: Entity<PreviewThemeSource>,
-    /// Dropped on reload; dropping it frees the wasmtime store, the guest's
-    /// linear memory, and the instance's epoch ticker thread.
-    host: Option<Entity<PluginHost>>,
-    /// The root the guest reaches the host through, kept alive alongside it.
-    _root: Option<Entity<PreviewHostRoot>>,
     focus_handle: FocusHandle,
+    // The artifact watch survives load failures and belongs to the target path.
     _watch: Option<ArtifactWatch>,
-    _load: Option<Task<()>>,
-    /// Belongs to this load; a reply from an old guest must not replace
-    /// the next load's status after reload or retarget.
-    _names: Option<Task<()>>,
 }
 
 impl PreviewPane {
@@ -130,15 +161,11 @@ impl PreviewPane {
         let mut pane = Self {
             path: None,
             preview_name,
-            status: Status::Empty,
+            load: LoadState::Empty,
             surface,
             theme_source,
-            host: None,
-            _root: None,
             focus_handle: cx.focus_handle(),
             _watch: None,
-            _load: None,
-            _names: None,
         };
         if let Some(path) = path {
             pane.set_target(path, cx);
@@ -170,38 +197,35 @@ impl PreviewPane {
 
     /// Drop the loaded plugin and load the artifact again.
     pub(crate) fn reload(&mut self, cx: &mut Context<Self>) {
-        self._load = None;
-        self._names = None;
-        self.host = None;
-        self._root = None;
+        self.load = LoadState::Empty;
         let Some(path) = self.path.clone() else {
-            self.status = Status::Empty;
             cx.notify();
             return;
         };
-        self.status = Status::Loading;
         cx.notify();
         let Some(text_system) = cx
             .try_global::<PreviewTextSystem>()
             .map(|global| global.0.clone())
         else {
-            self.status = Status::Failed("no text system to shape guest text with".to_string());
+            self.load = LoadState::Failed("no text system to shape guest text with".to_string());
             return;
         };
         let options = PluginOptions::new(text_system)
             .with_turn_budget(TURN_BUDGET)
             .with_memory_limit(MEMORY_LIMIT);
         let load = PluginHost::load(path, options, cx);
-        self._load = Some(cx.spawn(async move |this, cx| {
-            let loaded = load.await;
-            let _ = this.update(cx, |pane, cx| match loaded {
-                Ok(host) => pane.attach(host, cx),
-                Err(error) => {
-                    pane.status = Status::Failed(format!("{error:#}"));
-                    cx.notify();
-                }
-            });
-        }));
+        self.load = LoadState::Loading {
+            _task: cx.spawn(async move |this, cx| {
+                let loaded = load.await;
+                let _ = this.update(cx, |pane, cx| match loaded {
+                    Ok(host) => pane.attach(host, cx),
+                    Err(error) => {
+                        pane.load = LoadState::Failed(format!("{error:#}"));
+                        cx.notify();
+                    }
+                });
+            }),
+        };
     }
 
     /// Bootstrap a freshly loaded plugin: install the host root, take the
@@ -220,29 +244,23 @@ impl PreviewPane {
         let surface_ref = host.share(&self.surface, cx);
         plugin.mount(surface_ref, cx);
         let names = plugin.preview_names(cx);
-        self.host = Some(host);
-        self._root = Some(root);
-        self.status = Status::Loaded {
-            previews: Vec::new(),
-        };
+        self.load = LoadState::Loaded(LoadedPlugin {
+            names: PreviewNames::new(names, cx),
+            _host: host,
+            _root: root,
+        });
         cx.notify();
-        self.receive_preview_names(names, cx);
     }
 
-    fn receive_preview_names(
-        &mut self,
-        names: embedded_gpui::Receipt<Vec<String>>,
-        cx: &mut Context<Self>,
-    ) {
-        self._names = Some(cx.spawn(async move |this, cx| {
-            let Ok(previews) = names.await else {
-                return;
-            };
-            let _ = this.update(cx, |pane, cx| {
-                pane.status = Status::Loaded { previews };
-                cx.notify();
-            });
-        }));
+    fn status(&self) -> Status {
+        match &self.load {
+            LoadState::Empty => Status::Empty,
+            LoadState::Loading { .. } => Status::Loading,
+            LoadState::Loaded(plugin) => Status::Loaded {
+                previews: plugin.names.values.borrow().clone(),
+            },
+            LoadState::Failed(error) => Status::Failed(error.clone()),
+        }
     }
 
     /// Keys reach the guest through whichever of the two focus handles is
@@ -265,12 +283,12 @@ impl PreviewPane {
     }
 
     fn status_line(&self) -> String {
-        status_line(&self.status, self.path.as_deref(), &self.preview_name)
+        status_line(&self.status(), self.path.as_deref(), &self.preview_name)
     }
 
     fn status_color(&self) -> gpui::Hsla {
-        match self.status {
-            Status::Failed(_) => theme::danger(),
+        match self.load {
+            LoadState::Failed(_) => theme::danger(),
             _ => theme::text_muted(),
         }
     }

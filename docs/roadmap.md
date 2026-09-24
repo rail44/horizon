@@ -28,6 +28,8 @@ checks, followed by responsibility/contract review. History and dependency
 graphs are optional supporting evidence, not automatic refactoring decisions.
 See [the tool](../scripts/refactor-audit/README.md) and
 [review guide](refactoring-review.md).
+The state-contract sweep consolidates eight execution/lifecycle responsibilities
+with enums and ownership types; see [its results](research/refactoring-state-contracts-2026-09-25.md).
 The first reviewed changes and deliberate exclusions are recorded in
 [the initial audit](research/refactoring-first-pass-2026-09-22.md).
 The first full sweep completed its seven selected refactors on main

@@ -6,10 +6,16 @@ use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult}
 pub(crate) struct ToolCallOccurrence<'a> {
     pub request: &'a ToolCallRequest,
     pub request_index: usize,
-    pub result: Option<&'a ToolCallResult>,
-    pub result_index: Option<usize>,
+    pub result: Option<IndexedResult<'a>>,
     pub had_approval_request: bool,
     pub started: bool,
+}
+
+/// A finished result and its position refer to the same source item.
+#[derive(Clone, Copy)]
+pub(crate) struct IndexedResult<'a> {
+    pub value: &'a ToolCallResult,
+    pub index: usize,
 }
 
 pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOccurrence<'_>> {
@@ -20,7 +26,6 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
                 request,
                 request_index: index,
                 result: None,
-                result_index: None,
                 had_approval_request: false,
                 started: false,
             }),
@@ -42,8 +47,10 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
                 if let Some(call_index) =
                     matching_call(&calls, &result.call_id, &result.occurrence_id)
                 {
-                    calls[call_index].result = Some(result);
-                    calls[call_index].result_index = Some(index);
+                    calls[call_index].result = Some(IndexedResult {
+                        value: result,
+                        index,
+                    });
                 }
             }
             _ => {}

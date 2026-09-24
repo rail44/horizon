@@ -96,7 +96,7 @@ impl Workspace {
     /// cursor's pane.
     pub fn cursor_pane_id(&self) -> Option<PaneId> {
         let focus = self.active_tab().map(|tab| tab.active);
-        match self.workspace_mode_cursor {
+        match self.workspace_mode.cursor() {
             Some(pane_id) if self.visible_pane_ids().contains(&pane_id) => Some(pane_id),
             _ => focus,
         }

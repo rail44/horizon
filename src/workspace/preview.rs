@@ -26,7 +26,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return Err("workspace restore is still in progress".to_string());
         }
         let preview_name = preview_name.unwrap_or_else(|| DEFAULT_PREVIEW_NAME.to_string());

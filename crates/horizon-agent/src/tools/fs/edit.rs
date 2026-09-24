@@ -46,7 +46,7 @@ struct Edit<'a> {
     replace_all: bool,
 }
 
-pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let edits = match parse_edits(input) {
         Ok(edits) => edits,
         Err(error) => return error,

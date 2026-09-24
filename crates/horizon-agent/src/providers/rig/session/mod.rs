@@ -45,6 +45,7 @@ use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
 mod environment;
 mod input;
 mod interaction;
+mod memory;
 pub(crate) mod moa;
 mod state;
 mod tool_results;

@@ -39,8 +39,7 @@ impl Workspace {
             sessions: vec![WorkspaceSession::new(session_id, SessionKind::Terminal, 1)],
             next_terminal_display_number: 2,
             next_agent_display_number: 1,
-            workspace_mode_cursor: None,
-            workspace_mode_active: false,
+            workspace_mode: Default::default(),
         }
     }
 

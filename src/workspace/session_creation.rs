@@ -139,7 +139,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         self.workspace.exit_workspace_mode();
@@ -231,7 +231,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         self.workspace.exit_workspace_mode();
@@ -292,7 +292,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Result<String, String> {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return Err("workspace restore is still in progress".to_string());
         }
         let source = control_plane_spawn_source(split.map(|(target, _)| target), issuer);

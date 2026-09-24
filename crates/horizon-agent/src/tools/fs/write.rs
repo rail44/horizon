@@ -8,7 +8,7 @@ use super::safety::resolve_path;
 use super::staleness::check_staleness;
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
     let Some(path_arg) = input.get("path").and_then(Value::as_str) else {
         return error_output("fs.write requires a `path` string argument");
     };

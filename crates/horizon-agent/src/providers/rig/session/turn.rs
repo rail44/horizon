@@ -8,6 +8,8 @@
 //! `BatchStep`) stay as free `pub(super)` functions so the tests can keep
 //! calling them without a `SessionLoopState`.
 
+use super::memory::MemoryCheckpoint;
+
 use std::collections::HashMap;
 
 use rig_core::completion::Message;
@@ -22,6 +24,7 @@ use crate::{
     tools::cancelled_tool_call_result,
 };
 
+use super::super::completion::{CompletionStop, Truncation};
 use super::state::SessionLoopState;
 use super::{
     complete_rig_turn, deterministic_rig_response, rig_tool_result_message, GuardHalt,
@@ -41,7 +44,7 @@ impl SessionLoopState {
             self.pause_inputs(true);
             self.rig_history.push(prompt);
             self.apply_turn_outcome(TurnCompletion {
-                cancelled: true,
+                stop: CompletionStop::Cancelled,
                 ..Default::default()
             });
             return;
@@ -61,15 +64,15 @@ impl SessionLoopState {
                 return;
             };
             outcome = checked;
-            if outcome.truncated || outcome.cap_truncated {
+            if outcome.stop.truncation().is_some() {
                 continue;
             }
             self.collect_inputs();
-            if self.has_pending_stop() && !outcome.cancelled {
-                outcome.cancelled = true;
+            if self.has_pending_stop() && !matches!(outcome.stop, CompletionStop::Cancelled) {
+                outcome.stop = CompletionStop::Cancelled;
                 self.pause_inputs(true);
             }
-            if !outcome.cancelled && !outcome.failed && outcome.requested_tool_call_ids.is_empty() {
+            if outcome.is_completing() {
                 if let Some(text) = self.inputs.take_additions() {
                     let _ = self
                         .events_tx
@@ -167,10 +170,7 @@ impl SessionLoopState {
         // appends anything, so every round of one turn injects the block at
         // the same index.
         let moa = self.moa_injection();
-        let memory = self
-            .memory
-            .as_ref()
-            .map(|doc| doc as &crate::tools::MemoryDocument);
+        let memory = self.memory.as_ref().map(|memory| &memory.document);
         let turn = complete_rig_turn(
             config,
             &self.environment,
@@ -207,76 +207,72 @@ impl SessionLoopState {
     /// guard-halted stop reasons come from the turn-loop guard's own
     /// [`Self::halt_turn_loop`], which never calls this — a halt stops the
     /// loop *instead of* running another turn, so there's no `TurnCompletion`
-    /// for it to inspect). `outcome.failed` is checked before the
-    /// empty-tool-calls branch since a failed provider request also requests
-    /// no tool calls — without the explicit flag the two would be
-    /// indistinguishable.
+    /// for it to inspect). Failure is checked before the
+    /// empty-tool-calls branch: both a failed request and a text answer can
+    /// have no tool calls, but only the latter completes the input.
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnCompletion) {
-        // Every branch below except the outstanding-tool-calls one ends the
-        // turn, and the injected Mixture-of-Agents block belongs to the turn
-        // that opened it.
-        if outcome.cancelled || outcome.failed || outcome.requested_tool_call_ids.is_empty() {
+        if !matches!(outcome.stop, CompletionStop::Finished { .. })
+            || outcome.requested_tool_call_ids.is_empty()
+        {
             self.moa_turn = None;
         }
-        if outcome.cancelled {
-            self.finish_input(crate::contract::InputResult::Interrupted);
-            append_cancelled_tool_results_to_history(
-                &mut self.rig_history,
-                &outcome.requested_tool_call_ids,
-                &outcome.requested_tool_calls,
-            );
-            for call_id in outcome.requested_tool_call_ids {
-                let _ = self.events_tx.send(
-                    Event::ToolCallFinished(cancelled_tool_call_result(
-                        outcome.requested_tool_calls[&call_id].identity.clone(),
-                    ))
-                    .into(),
+        match outcome.stop {
+            CompletionStop::Cancelled => {
+                self.finish_input(crate::contract::InputResult::Interrupted);
+                append_cancelled_tool_results_to_history(
+                    &mut self.rig_history,
+                    &outcome.requested_tool_call_ids,
+                    &outcome.requested_tool_calls,
                 );
+                for call_id in outcome.requested_tool_call_ids {
+                    let _ = self.events_tx.send(
+                        Event::ToolCallFinished(cancelled_tool_call_result(
+                            outcome.requested_tool_calls[&call_id].identity.clone(),
+                        ))
+                        .into(),
+                    );
+                }
+                let _ = self
+                    .events_tx
+                    .send(Event::TurnEnded(TurnEndReason::Cancelled).into());
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::Cancelled).into());
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
             }
-            let _ = self
-                .events_tx
-                .send(Event::TurnEnded(TurnEndReason::Cancelled).into());
-            let _ = self
-                .events_tx
-                .send(Event::StateChanged(SessionState::Cancelled).into());
-            let _ = self
-                .events_tx
-                .send(Event::StateChanged(SessionState::WaitingForUser).into());
-            return;
-        }
-
-        if outcome.failed {
-            self.finish_input(crate::contract::InputResult::Failure {
-                message: "Provider request failed.".into(),
-            });
-            let _ = self
-                .events_tx
-                .send(Event::TurnEnded(TurnEndReason::Failed).into());
-            let _ = self
-                .events_tx
-                .send(Event::StateChanged(SessionState::WaitingForUser).into());
-            return;
-        }
-
-        if outcome.requested_tool_call_ids.is_empty() {
-            let final_text = outcome.final_text.unwrap_or_default();
-            self.moa_conversation.record_answer(final_text.clone());
-            self.finish_input(crate::contract::InputResult::Success { text: final_text });
-            let _ = self
-                .events_tx
-                .send(Event::TurnEnded(TurnEndReason::Completed).into());
-            let _ = self
-                .events_tx
-                .send(Event::StateChanged(SessionState::WaitingForUser).into());
-        } else {
-            self.pending_tool_calls.extend(outcome.requested_tool_calls);
+            CompletionStop::Failed | CompletionStop::Truncated(_) => {
+                self.finish_input(crate::contract::InputResult::Failure {
+                    message: "Provider request failed.".into(),
+                });
+                let _ = self
+                    .events_tx
+                    .send(Event::TurnEnded(TurnEndReason::Failed).into());
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+            }
+            CompletionStop::Finished { text } if outcome.requested_tool_call_ids.is_empty() => {
+                self.moa_conversation.record_answer(text.clone());
+                self.finish_input(crate::contract::InputResult::Success { text });
+                let _ = self
+                    .events_tx
+                    .send(Event::TurnEnded(TurnEndReason::Completed).into());
+                let _ = self
+                    .events_tx
+                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+            }
+            CompletionStop::Finished { .. } => {
+                self.pending_tool_calls.extend(outcome.requested_tool_calls);
+            }
         }
     }
 
     /// Handles a turn outcome that may be truncated: if the provider started
-    /// streaming tool calls but never finalized them (`outcome.truncated`), or
+    /// streaming tool calls but never finalized them (unfinished tool calls), or
     /// if the turn's output hit the configured token ceiling
-    /// (`outcome.cap_truncated`), the turn is closed as `Failed` and the
+    /// (output cap), the turn is closed as `Failed` and the
     /// harness automatically continues with a synthetic prompt, up to
     /// [`MAX_CONSECUTIVE_TRUNCATION_CONTINUES`] times before falling back to
     /// `WaitingForUser`. Both truncation modes share the same
@@ -290,12 +286,7 @@ impl SessionLoopState {
         &mut self,
         mut outcome: TurnCompletion,
     ) -> Option<TurnCompletion> {
-        if !outcome.truncated && !outcome.cap_truncated {
-            self.guard.reset_truncation_counter();
-            return Some(outcome);
-        }
-
-        loop {
+        while let Some(reason) = outcome.stop.truncation() {
             // Cancel any finalized tool calls from the truncated turn — the
             // turn is ending as Failed, so they must not hang as pending.
             if !outcome.requested_tool_call_ids.is_empty() {
@@ -320,7 +311,11 @@ impl SessionLoopState {
             // vs. output budget exhausted).
             let _ = self.events_tx.send(
                 Event::Error(Error {
-                    message: truncation_error_message(&outcome, self.config.max_output_tokens),
+                    message: truncation_error_message(
+                        reason,
+                        outcome.output_tokens,
+                        self.config.max_output_tokens,
+                    ),
                 })
                 .into(),
             );
@@ -342,7 +337,7 @@ impl SessionLoopState {
 
             // Auto-continue: inject the synthetic continuation prompt and run
             // the next turn, mirroring the TaskWake auto-start seam.
-            let text = truncation_continuation_prompt_for(&outcome, self.config.max_output_tokens);
+            let text = truncation_continuation_prompt_for(reason, self.config.max_output_tokens);
             let _ = self
                 .events_tx
                 .send(Event::StateChanged(SessionState::Running).into());
@@ -358,12 +353,9 @@ impl SessionLoopState {
                     deterministic_rig_response("truncation recovery")
                 })
                 .await;
-
-            if !outcome.truncated && !outcome.cap_truncated {
-                self.guard.reset_truncation_counter();
-                return Some(outcome);
-            }
         }
+        self.guard.reset_truncation_counter();
+        Some(outcome)
     }
 
     /// The turn-end memory checkpoint for standing-role sessions
@@ -376,8 +368,8 @@ impl SessionLoopState {
     /// tool calls).
     ///
     /// **Bounded**: at most one reminder is injected (setting
-    /// `memory_reminded`), then one re-run; if the re-run still ends without
-    /// a memory update, a `MemoryCheckpointMissed` event is emitted and the
+    /// the checkpoint to `Reminded`), then one re-run; if it still ends
+    /// without a memory update, a `MemoryCheckpointMissed` event is emitted and the
     /// turn ends. No infinite loop — the second visit to this method can only
     /// satisfy (return) or miss (return), never remind again.
     async fn handle_memory_checkpoint(
@@ -388,44 +380,38 @@ impl SessionLoopState {
             // Only standing roles have a memory checkpoint (`self.memory` is
             // `Some` exclusively for standing roles — see `SessionLoopState::new`),
             // and only a completing turn reaches it.
-            let is_completing = !outcome.cancelled
-                && !outcome.failed
-                && !outcome.truncated
-                && !outcome.cap_truncated
-                && outcome.requested_tool_call_ids.is_empty();
-            if self.memory.is_none() || !is_completing {
+            if !outcome.is_completing() {
                 return Some(outcome);
             }
-            if self.memory_satisfied {
+            let Some(memory) = &mut self.memory else {
                 return Some(outcome);
+            };
+            match memory.checkpoint {
+                MemoryCheckpoint::Satisfied => return Some(outcome),
+                MemoryCheckpoint::Reminded => {
+                    let _ = self.events_tx.send(Event::MemoryCheckpointMissed.into());
+                    return Some(outcome);
+                }
+                MemoryCheckpoint::Pending => {}
             }
-            if !self.memory_reminded {
-                // First miss: inject a reminder and re-run the turn once.
-                self.memory_reminded = true;
-                let _ = self
-                    .events_tx
-                    .send(Event::StateChanged(SessionState::Running).into());
-                let _ = self.events_tx.send(
-                    Event::MessageCommitted(AgentMessage {
-                        role: MessageRole::AutoContinue,
-                        text: MEMORY_CHECKPOINT_REMINDER.to_string(),
-                    })
-                    .into(),
-                );
-                outcome = self
-                    .run_cancellable_turn(Message::user(MEMORY_CHECKPOINT_REMINDER), || {
-                        deterministic_rig_response("memory checkpoint reminder")
-                    })
-                    .await;
-                // Loop back to re-evaluate (bounded: `memory_reminded` is
-                // now true, so the next iteration can only satisfy or miss).
-                continue;
-            }
-            // Already reminded, still not satisfied: record the miss and let
-            // the turn end. The event is visible in the transcript so an
-            // operator can see how often the model skips its own continuity.
-            let _ = self.events_tx.send(Event::MemoryCheckpointMissed.into());
-            return Some(outcome);
+            // First miss: inject a reminder and re-run the turn once.
+            memory.checkpoint = MemoryCheckpoint::Reminded;
+            let _ = self
+                .events_tx
+                .send(Event::StateChanged(SessionState::Running).into());
+            let _ = self.events_tx.send(
+                Event::MessageCommitted(AgentMessage {
+                    role: MessageRole::AutoContinue,
+                    text: MEMORY_CHECKPOINT_REMINDER.to_string(),
+                })
+                .into(),
+            );
+            outcome = self
+                .run_cancellable_turn(Message::user(MEMORY_CHECKPOINT_REMINDER), || {
+                    deterministic_rig_response("memory checkpoint reminder")
+                })
+                .await;
+            // The next completing round can only satisfy or miss.
         }
     }
 
@@ -585,7 +571,10 @@ impl SessionLoopState {
             )
             .await;
 
-        if outcome.failed || outcome.cancelled {
+        if matches!(
+            outcome.stop,
+            CompletionStop::Failed | CompletionStop::Cancelled
+        ) {
             self.rig_history.truncate(baseline_len);
             return false;
         }
@@ -678,19 +667,19 @@ fn truncation_continuation_prompt(truncated_count: usize) -> String {
 /// modes the harness recovers from. Tool-call truncation names how many calls
 /// were cut mid-stream; output-cap truncation names the ceiling and the token
 /// count that hit it.
-fn truncation_error_message(outcome: &TurnCompletion, cap: u64) -> String {
-    if outcome.truncated {
+fn truncation_error_message(reason: Truncation, output_tokens: Option<u64>, cap: u64) -> String {
+    if let Truncation::Tools { unfinished, .. } = reason {
         format!(
             "Provider truncated {count} tool call(s) mid-stream — \
              the call(s) started streaming but were never finalized.",
-            count = outcome.truncated_tool_call_count,
+            count = unfinished.get(),
         )
     } else {
         format!(
             "Provider truncated the response at the {cap}-token output limit — \
              {output_tokens} tokens were generated and the turn did not complete \
              (the output budget was exhausted before a tool call or text reply).",
-            output_tokens = outcome.output_tokens.unwrap_or(0),
+            output_tokens = output_tokens.unwrap_or(0),
         )
     }
 }
@@ -699,9 +688,9 @@ fn truncation_error_message(outcome: &TurnCompletion, cap: u64) -> String {
 /// truncation mode. Tool-call truncation asks the model to re-issue the cut
 /// calls; output-cap truncation asks it to be more concise so the next turn
 /// does not exhaust the budget the same way.
-fn truncation_continuation_prompt_for(outcome: &TurnCompletion, cap: u64) -> String {
-    if outcome.truncated {
-        truncation_continuation_prompt(outcome.truncated_tool_call_count)
+fn truncation_continuation_prompt_for(reason: Truncation, cap: u64) -> String {
+    if let Truncation::Tools { unfinished, .. } = reason {
+        truncation_continuation_prompt(unfinished.get())
     } else {
         format!(
             "The provider cut your previous response short at the output-token \

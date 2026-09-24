@@ -283,8 +283,7 @@ impl Workspace {
                 self.active_tab = tab.id;
             }
         }
-        self.workspace_mode_cursor = None;
-        self.workspace_mode_active = false;
+        self.exit_workspace_mode();
     }
 }
 
@@ -398,8 +397,7 @@ impl WorkspaceState {
             active_tab: self.active_tab,
             next_terminal_display_number: self.next_terminal_display_number,
             next_agent_display_number: self.next_agent_display_number,
-            workspace_mode_cursor: None,
-            workspace_mode_active: false,
+            workspace_mode: Default::default(),
         }
     }
 }
@@ -620,7 +618,10 @@ mod tests {
             restored.next_agent_display_number,
             workspace.next_agent_display_number
         );
-        assert_eq!(restored.workspace_mode_cursor, None);
+        assert_eq!(
+            restored.workspace_mode,
+            crate::mode::WorkspaceMode::PaneInput
+        );
         assert_eq!(restored.to_persisted_json().expect("serialize again"), json);
     }
 

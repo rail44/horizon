@@ -4,10 +4,6 @@ use super::WorkspaceShell;
 use gpui::*;
 use horizon_workspace::{Direction, PaneId};
 
-pub(super) fn workspace_mode_blocked_by_restore(restoring: bool, failed: bool) -> bool {
-    restoring && !failed
-}
-
 /// Index arithmetic behind `next_tab`/`prev_tab`: `delta` steps around the
 /// tab strip, wrapping at both ends (`rem_euclid` keeps negative sums in
 /// range, so Shift+Tab from the first tab lands on the last one). Callers
@@ -19,10 +15,7 @@ fn cycle_tab_index(active: usize, count: usize, delta: isize) -> usize {
 
 impl WorkspaceShell {
     pub(super) fn toggle_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if workspace_mode_blocked_by_restore(
-            self.restoring_workspace,
-            self.workspace_restore_failed,
-        ) {
+        if self.workspace_phase.blocks_workspace_mode() {
             return;
         }
         if self.workspace.is_workspace_mode_active() {
@@ -36,10 +29,7 @@ impl WorkspaceShell {
     }
 
     pub(super) fn mode_move(&mut self, direction: Direction, cx: &mut Context<Self>) {
-        if workspace_mode_blocked_by_restore(
-            self.restoring_workspace,
-            self.workspace_restore_failed,
-        ) {
+        if self.workspace_phase.blocks_workspace_mode() {
             return;
         }
         self.workspace.move_cursor(direction);
@@ -47,10 +37,7 @@ impl WorkspaceShell {
     }
 
     pub(super) fn mode_commit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if workspace_mode_blocked_by_restore(
-            self.restoring_workspace,
-            self.workspace_restore_failed,
-        ) {
+        if self.workspace_phase.blocks_workspace_mode() {
             return;
         }
         self.workspace.commit_workspace_mode();
@@ -59,10 +46,7 @@ impl WorkspaceShell {
     }
 
     pub(super) fn mode_cancel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if workspace_mode_blocked_by_restore(
-            self.restoring_workspace,
-            self.workspace_restore_failed,
-        ) {
+        if self.workspace_phase.blocks_workspace_mode() {
             return;
         }
         self.workspace.cancel_workspace_mode();
@@ -85,7 +69,7 @@ impl WorkspaceShell {
     /// neither action is bound outside [`MODE_CONTEXT`], so neither can
     /// normally fire while the mode is off.
     fn cycle_tab(&mut self, delta: isize, window: &mut Window, cx: &mut Context<Self>) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         let count = self.workspace.tab_count();
@@ -119,7 +103,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         self.workspace.exit_workspace_mode();
@@ -134,7 +118,7 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.restoring_workspace {
+        if self.workspace_phase.blocks_mutation() {
             return;
         }
         self.workspace.activate_pane(pane_id);
@@ -146,13 +130,7 @@ impl WorkspaceShell {
 
 #[cfg(test)]
 mod tests {
-    use super::{cycle_tab_index, workspace_mode_blocked_by_restore};
-    #[test]
-    fn failed_restore_allows_workspace_mode_to_reach_the_reload_command() {
-        assert!(workspace_mode_blocked_by_restore(true, false));
-        assert!(!workspace_mode_blocked_by_restore(true, true));
-        assert!(!workspace_mode_blocked_by_restore(false, false));
-    }
+    use super::cycle_tab_index;
 
     #[test]
     fn cycle_tab_index_steps_forward_wrapping_at_the_end() {

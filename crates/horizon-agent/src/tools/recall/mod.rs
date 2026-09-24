@@ -48,29 +48,13 @@ const SNIPPET_RADIUS_CHARS: usize = 100;
 /// not re-inlining everything).
 const READ_TOTAL_CHAR_CAP: usize = 16_000;
 
-/// Executes `recall.search`/`recall.read` if `tool_id` names one of them,
-/// mirroring `tools::fs`/`tools::config`'s `execute_auto` contract: `None`
-/// for any other tool id, so `execution::execute_auto_tool`'s chain can try
-/// elsewhere.
-pub(crate) fn execute_auto(
-    tool_state: &ToolSessionState,
-    tool_id: &str,
-    input: &Value,
-) -> Option<Value> {
-    match tool_id {
-        "recall.search" => Some(search(tool_state, input)),
-        "recall.read" => Some(read(tool_state, input)),
-        _ => None,
-    }
-}
-
 /// Valid `turn_outcome` filter values -- mirrors `agent_turns.end_reason`'s
 /// four `TurnEndReason` variants (`contract::TurnEndReason`; see
 /// `docs/agent-feedback-design.md`'s implementation-shape addendum for why
 /// there are four, not three).
 const VALID_TURN_OUTCOMES: &[&str] = &["completed", "cancelled", "failed", "halted"];
 
-fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     let query = input.get("query").and_then(Value::as_str);
     let scope_arg = input.get("scope").and_then(Value::as_str);
     // An explicit `session_id` names *which* session to search, the way
@@ -185,7 +169,7 @@ fn hit_json(entry: RecallEntry, query: Option<&str>, own_session_id: Option<Sess
     })
 }
 
-fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
         return error_output(

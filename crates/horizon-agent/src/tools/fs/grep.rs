@@ -67,7 +67,7 @@ fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults
     }
 }
 
-pub(super) fn execute(
+pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &Value,
     allow_out_of_root: bool,

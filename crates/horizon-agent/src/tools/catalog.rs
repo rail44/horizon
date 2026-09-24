@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use super::synchronous::SynchronousTool;
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -25,10 +26,9 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        Definition {
-            id: "fs.read".to_string(),
-            title: "Read File".to_string(),
-            description: "Read a known text file or a relevant line window, with line numbers. \
+        SynchronousTool::ReadFile.definition(
+            "Read File".to_string(),
+            "Read a known text file or a relevant line window, with line numbers. \
                 Requires an absolute path. Use fs.grep to locate specific content before \
                 reading a large file, and fs.glob when the file path is unknown. Pass \
                 offset/limit to continue through a file; the result stops at 50,000 content \
@@ -36,7 +36,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 characters. Read independent known files in parallel, and prefer one useful \
                 window over many tiny adjacent slices."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["path"],
@@ -58,16 +58,14 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "fs.glob".to_string(),
-            title: "Find Files".to_string(),
-            description: "Find files under a directory matching a glob pattern (e.g. \
+        ),
+        SynchronousTool::Glob.definition(
+            "Find Files".to_string(),
+            "Find files under a directory matching a glob pattern (e.g. \
                 `**/*.rs`). Requires an absolute base path; results are capped, with the \
                 total match count reported."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["base_path", "pattern"],
@@ -87,12 +85,10 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "fs.grep".to_string(),
-            title: "Search File Contents".to_string(),
-            description: "Find where text occurs. Search one file or all files under a \
+        ),
+        SynchronousTool::Grep.definition(
+            "Search File Contents".to_string(),
+            "Find where text occurs. Search one file or all files under a \
                 directory with a regular expression, optionally restricted by glob. Returns \
                 one `path` + `line_number` per match — locations, not content — plus the \
                 total match count. Read what a location says with fs.read, passing offset \
@@ -101,7 +97,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 keep only its report. Requires an absolute base \
                 path. Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["base_path", "pattern"],
@@ -125,16 +121,14 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "fs.write".to_string(),
-            title: "Write File".to_string(),
-            description: "Create or overwrite a file with the given content, creating parent \
+        ),
+        SynchronousTool::WriteFile.definition(
+            "Write File".to_string(),
+            "Create or overwrite a file with the given content, creating parent \
                 directories as needed. Overwriting an existing file requires it to have been \
                 read in this session with no changes on disk since."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["path", "content"],
@@ -149,12 +143,10 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::RequireApproval,
-        },
-        Definition {
-            id: "fs.edit".to_string(),
-            title: "Edit File".to_string(),
-            description: "Apply one or more string replacements in a single call. Batch related \
+        ),
+        SynchronousTool::EditFile.definition(
+            "Edit File".to_string(),
+            "Apply one or more string replacements in a single call. Batch related \
                 edits — several files, or several hunks of one file — into one list instead of \
                 one call each. Each `old_string` must match exactly once unless \
                 `replace_all: true` is set for that edit, and every file must have been read in \
@@ -164,7 +156,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 edit's outcome (applied / failed / not_attempted) in order plus the failing \
                 index, so you can fix that edit and resend from it."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["edits"],
@@ -199,8 +191,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::RequireApproval,
-        },
+        ),
         Definition {
             id: "bash".to_string(),
             title: "Run Shell Command".to_string(),
@@ -336,33 +327,29 @@ pub(crate) fn definitions() -> Vec<Definition> {
         // (`docs/agent-tools-design.md`) -- the restriction they exist for
         // happens at the role's `allowed_tool_ids`, not here. See
         // `tools::config`'s own doc comment for the full trust reasoning.
-        // `skill.read` (grouped with them below since `tools::config` also
-        // executes it) is different: every session can call it, role-less
+        // `skill.read` is different: every session can call it, role-less
         // or not -- see `skills`' module doc.
-        Definition {
-            id: "config.read".to_string(),
-            title: "Read Horizon Config".to_string(),
-            description: "Read Horizon's config file: the resolved path and its current \
+        SynchronousTool::ReadConfig.definition(
+            "Read Horizon Config".to_string(),
+            "Read Horizon's config file: the resolved path and its current \
                 contents, or an explicit \"does not exist yet\" result (with the path still \
                 reported) if nothing has been written there yet. Takes no arguments."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {}
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "config.write".to_string(),
-            title: "Write Horizon Config".to_string(),
-            description: "Replace Horizon's config file with the given complete content \
+        ),
+        SynchronousTool::WriteConfig.definition(
+            "Write Horizon Config".to_string(),
+            "Replace Horizon's config file with the given complete content \
                 (validated as well-formed TOML before writing). Preserve every entry the user \
                 didn't ask to change -- this replaces the whole file, not just one section. \
                 Overwriting an existing file requires it to have been read in this session \
                 (via config.read) with no changes on disk since."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["content"],
@@ -373,12 +360,10 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::RequireApproval,
-        },
-        Definition {
-            id: "recall.search".to_string(),
-            title: "Search Persisted History".to_string(),
-            description: "Search committed conversation text and tool calls/results across \
+        ),
+        SynchronousTool::SearchRecall.definition(
+            "Search Persisted History".to_string(),
+            "Search committed conversation text and tool calls/results across \
                 persisted history (including turns no longer in your context window). \
                 Case-insensitive substring match. Streaming deltas/reasoning are not included, \
                 only what was actually committed. Default scope is this session; pass \
@@ -395,7 +380,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 digging into any one of them with recall.read. At least one of `query`/ \
                 `turn_outcome` is required."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -432,18 +417,16 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "recall.read".to_string(),
-            title: "Read Persisted History Window".to_string(),
-            description: "Read an ordered window of committed messages, tool calls, and tool \
+        ),
+        SynchronousTool::ReadRecall.definition(
+            "Read Persisted History Window".to_string(),
+            "Read an ordered window of committed messages, tool calls, and tool \
                 results for a session starting at a given sequence number -- use after \
                 recall.search to pull full context around a hit. Defaults to this session if \
                 session_id is omitted. Output is capped in total size; call again with a later \
                 from_sequence to continue."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["from_sequence"],
@@ -464,8 +447,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
+        ),
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
         // auto-allowed like every other read tool -- the session it spawns
         // can only read, and only inside the requester's own workspace root.
@@ -552,13 +534,12 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        Definition {
-            id: "skill.read".to_string(),
-            title: "Read Skill".to_string(),
-            description: "Read one of this session's available skills by id (see the skills \
+        SynchronousTool::ReadSkill.definition(
+            "Read Skill".to_string(),
+            "Read one of this session's available skills by id (see the skills \
                 listed in the system prompt) and return its full instructions."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["id"],
@@ -569,15 +550,13 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "knowledge.read".to_string(),
-            title: "Read Knowledge".to_string(),
-            description: "Read one of this project's knowledge entries by id (see the system \
+        ),
+        SynchronousTool::ReadKnowledge.definition(
+            "Read Knowledge".to_string(),
+            "Read one of this project's knowledge entries by id (see the system \
                 prompt's project-knowledge section) and return its full frontmatter and body."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["id"],
@@ -588,16 +567,14 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
-        Definition {
-            id: "knowledge.write".to_string(),
-            title: "Write Knowledge".to_string(),
-            description: "Create or update a knowledge entry for this project. Upserts by id: \
+        ),
+        SynchronousTool::WriteKnowledge.definition(
+            "Write Knowledge".to_string(),
+            "Create or update a knowledge entry for this project. Upserts by id: \
                 an existing entry's `created` date is preserved while `updated` is refreshed. \
                 No approval — the tool-event recording is the audit."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "required": ["id", "description", "body", "sources"],
@@ -631,8 +608,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     },
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
+        ),
         Definition {
             id: "board.read".to_string(),
             title: "Read Board".to_string(),
@@ -697,10 +673,9 @@ pub(crate) fn definitions() -> Vec<Definition> {
             }),
             permission: ToolPermission::AutoAllowRead,
         },
-        Definition {
-            id: "memory.update".to_string(),
-            title: "Update Memory Document".to_string(),
-            description: "Update your memory document — the structured summary of project \
+        SynchronousTool::UpdateMemory.definition(
+            "Update Memory Document".to_string(),
+            "Update your memory document — the structured summary of project \
                 state that carries your context across turns. Each call edits individual \
                 fields incrementally (set/append/clear); never regenerate the whole document. \
                 Every turn must end with either a memory.update call or a `no_update` \
@@ -709,7 +684,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 `folded_log_range` optionally records the raw event-log sequence range \
                 this update condenses, so recall.read can fetch the originals."
                 .to_string(),
-            input_schema: json!({
+            json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
@@ -804,8 +779,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                     }
                 }
             }),
-            permission: ToolPermission::AutoAllowRead,
-        },
+        ),
     ]
 }
 

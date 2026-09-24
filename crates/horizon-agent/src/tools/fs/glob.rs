@@ -6,7 +6,7 @@ use super::safety::resolve_read_path;
 use super::traverse;
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn execute(
+pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &Value,
     allow_out_of_root: bool,
