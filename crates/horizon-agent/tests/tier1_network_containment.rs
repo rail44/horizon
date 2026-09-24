@@ -279,7 +279,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
             request.call_id.clone(),
             ApprovalDecision::Approve,
         ),
-        ApprovalOutcome::Started { .. }
+        ApprovalOutcome::Applied(horizon_agent::tools::ToolUpdate::Started { .. })
     ));
     let reached = match rx_a
         .recv_timeout(Duration::from_secs(30))

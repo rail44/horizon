@@ -470,7 +470,7 @@ mod field_scoped_reads_tests {
         // The daemon's approve ack for `bash` folds `ToolCallStarted`
         // synchronously, one IPC hop after the click, with the eventual
         // `ToolCallFinished` arriving later and asynchronously -- see
-        // `resolve_bash`/`ApprovalOutcome::Started`
+        // `resolve_bash`/`ToolUpdate::Started`
         // (`crates/horizon-agent/src/tools/approval.rs`). The pending queue
         // must resolve right there, not wait for the result.
         let items = vec![

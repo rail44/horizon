@@ -3,6 +3,8 @@ mod bash;
 mod board;
 mod catalog;
 mod completion;
+mod transition;
+pub use transition::ToolUpdate;
 mod config;
 mod execution;
 pub(crate) mod explore;

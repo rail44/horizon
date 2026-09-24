@@ -8,9 +8,42 @@ use crate::contract::{Command, Event, InputResult, SessionInput, SessionInputOut
 #[derive(Default)]
 pub(crate) struct Inputs {
     seen: HashSet<String>,
-    active: Vec<SessionInput>,
+    active: Option<ActiveInputs>,
+    paused: bool,
     queued: VecDeque<SessionInput>,
     additions: Vec<String>,
+}
+
+/// The first request owns the reply destination and receipt identity. Extra
+/// passive inputs may join the answer but cannot change either of them.
+struct ActiveInputs {
+    first: SessionInput,
+    rest: Vec<SessionInput>,
+}
+
+impl ActiveInputs {
+    fn new(first: SessionInput) -> Self {
+        Self {
+            first,
+            rest: Vec::new(),
+        }
+    }
+
+    fn ids(&self) -> Vec<String> {
+        std::iter::once(&self.first)
+            .chain(&self.rest)
+            .map(|input| input.id.clone())
+            .collect()
+    }
+
+    fn finish(self, outcome: InputResult) -> SessionInputOutcome {
+        SessionInputOutcome {
+            delivery_id: format!("input-result:{}", self.first.id),
+            reply_to: self.first.reply_to.clone(),
+            input_ids: self.ids(),
+            outcome,
+        }
+    }
 }
 
 fn present_input(input: &SessionInput) -> String {
@@ -40,10 +73,20 @@ impl Inputs {
             .collect();
         let mut inputs = Self::default();
         for event in events {
-            if let Event::InputAccepted(input) = event {
-                if inputs.seen.insert(input.id.clone()) && !completed.contains(input.id.as_str()) {
-                    inputs.queued.push_back(input.clone());
+            match event {
+                Event::InputAccepted(input) => {
+                    if input.resume_work {
+                        inputs.paused = false;
+                    }
+                    if inputs.seen.insert(input.id.clone())
+                        && !completed.contains(input.id.as_str())
+                    {
+                        inputs.queued.push_back(input.clone());
+                    }
                 }
+                Event::InputQueuePaused(paused) => inputs.paused = *paused,
+                Event::InputStarted(_) => inputs.paused = false,
+                _ => {}
             }
         }
         inputs
@@ -55,41 +98,59 @@ impl Inputs {
         }
         if busy {
             self.additions.push(present_input(&input));
-            if input.reply_to.is_none()
-                || (!self.active.is_empty() && input.reply_to == self.active[0].reply_to)
-            {
-                self.active.push(input);
-                return;
+            match &mut self.active {
+                Some(active)
+                    if input.reply_to.is_none() || input.reply_to == active.first.reply_to =>
+                {
+                    active.rest.push(input);
+                    return;
+                }
+                None if input.reply_to.is_none() => {
+                    self.active = Some(ActiveInputs::new(input));
+                    return;
+                }
+                _ => {}
             }
         }
         self.queued.push_back(input);
     }
 
-    pub(super) fn has_requests(&self) -> bool {
-        !self.active.is_empty() || !self.queued.is_empty()
+    pub(super) fn active_ids(&self) -> Vec<String> {
+        self.active
+            .as_ref()
+            .map_or_else(Vec::new, ActiveInputs::ids)
     }
 
-    pub(super) fn active_ids(&self) -> Vec<String> {
-        self.active.iter().map(|input| input.id.clone()).collect()
+    pub(super) fn is_paused(&self) -> bool {
+        self.paused
+    }
+
+    /// Admission state and its durable marker change together, including when
+    /// a provider future borrows the rest of SessionLoopState.
+    pub(super) fn set_paused(&mut self, paused: bool) -> Option<Event> {
+        let changed = self.paused != paused;
+        self.paused = paused;
+        changed.then_some(Event::InputQueuePaused(paused))
     }
 
     pub(super) fn start_next(&mut self) -> Option<String> {
-        if !self.active.is_empty() {
+        if self.paused || self.active.is_some() {
             return None;
         }
         let first = self.queued.pop_front()?;
         let mut text = present_input(&first);
-        self.active.push(first);
+        let mut active = ActiveInputs::new(first);
         while self
             .queued
             .front()
-            .is_some_and(|input| input.reply_to == self.active[0].reply_to)
+            .is_some_and(|input| input.reply_to == active.first.reply_to)
         {
             let input = self.queued.pop_front().unwrap();
             text.push_str("\n\n");
             text.push_str(&present_input(&input));
-            self.active.push(input);
+            active.rest.push(input);
         }
+        self.active = Some(active);
         Some(text)
     }
 
@@ -104,16 +165,7 @@ impl Inputs {
     }
 
     pub(super) fn finish(&mut self, outcome: InputResult) -> Option<SessionInputOutcome> {
-        if self.active.is_empty() {
-            return None;
-        }
-        let active = std::mem::take(&mut self.active);
-        Some(SessionInputOutcome {
-            delivery_id: format!("input-result:{}", active[0].id),
-            reply_to: active[0].reply_to.clone(),
-            input_ids: active.into_iter().map(|input| input.id).collect(),
-            outcome,
-        })
+        self.active.take().map(|active| active.finish(outcome))
     }
 }
 
@@ -125,9 +177,9 @@ impl SessionLoopState {
             self.inbox.push_back(command);
         }
         self.prioritize_lifecycle_control();
-        if self.inbox.is_empty() && self.pending_tool_calls.is_empty() {
+        if self.inbox.is_empty() && !self.execution.has_pending_tools() {
             self.activate_environment().await;
-            if !self.inputs_paused && !self.has_pending_stop() {
+            if !self.inputs.is_paused() && !self.has_pending_stop() {
                 if let Some(text) = self.inputs.start_next() {
                     self.record_active_input();
                     self.inbox.push_front(Command::UserMessage { text });
@@ -149,7 +201,7 @@ impl SessionLoopState {
                 match self.inbox.pop_front().unwrap() {
                     Command::SessionInput(input) => self
                         .inputs
-                        .accept(input, !self.pending_tool_calls.is_empty()),
+                        .accept(input, self.execution.has_pending_tools()),
                     Command::ToolCallReissued(identity) => self.note_tool_call_reissued(identity),
                     command => preceding.push_back(command),
                 }
@@ -163,9 +215,8 @@ impl SessionLoopState {
     }
 
     pub(super) fn pause_inputs(&mut self, paused: bool) {
-        self.inputs_paused = paused;
-        if self.inputs.has_requests() {
-            let _ = self.events_tx.send(Event::InputQueuePaused(paused).into());
+        if let Some(event) = self.inputs.set_paused(paused) {
+            let _ = self.events_tx.send(event.into());
         }
     }
 
@@ -380,5 +431,100 @@ mod outcome_tests {
             assert_eq!(outcomes.len(), 1);
             assert!(!matches!(outcomes[0].outcome, InputResult::Success { .. }));
         }
+    }
+}
+
+#[cfg(test)]
+mod recovery_tests {
+    use super::*;
+
+    fn request(id: &str) -> SessionInput {
+        SessionInput {
+            id: id.into(),
+            origin: "test".into(),
+            text: id.into(),
+            reply_to: Some(id.into()),
+            resume_work: false,
+        }
+    }
+
+    #[test]
+    fn an_empty_queue_stop_survives_later_passive_input_and_replay() {
+        let mut inputs = Inputs::default();
+        let pause = inputs
+            .set_paused(true)
+            .expect("empty queues also persist their stop");
+        let pending = request("later");
+        inputs.accept(pending.clone(), false);
+        assert!(inputs.start_next().is_none());
+        let mut restored = Inputs::restore(&[pause, Event::InputAccepted(pending)]);
+        assert!(
+            restored.start_next().is_none(),
+            "replay must preserve admission"
+        );
+        restored.set_paused(false);
+        assert!(restored.start_next().unwrap().ends_with("later"));
+    }
+
+    #[test]
+    fn replay_preserves_control_order_and_never_requeues_completed_inputs() {
+        let done = request("done");
+        let pending = request("pending");
+        let history = vec![
+            Event::InputAccepted(done.clone()),
+            Event::InputStarted(vec![done.id.clone()]),
+            Event::InputAccepted(pending.clone()),
+            Event::InputQueuePaused(true),
+            Event::InputOutcome(ActiveInputs::new(done.clone()).finish(InputResult::Interrupted)),
+        ];
+        for resume in [
+            None,
+            Some(Event::InputQueuePaused(false)),
+            Some(Event::InputAccepted(SessionInput {
+                resume_work: true,
+                ..pending.clone()
+            })),
+        ] {
+            let mut events = history.clone();
+            if let Some(event) = resume.clone() {
+                events.push(event);
+            }
+            let mut inputs = Inputs::restore(&events);
+            inputs.accept(done.clone(), false);
+            assert_eq!(inputs.start_next().is_some(), resume.is_some());
+            inputs.set_paused(false);
+            if resume.is_none() {
+                inputs.start_next().unwrap();
+            }
+            assert_eq!(
+                inputs.finish(InputResult::Interrupted).unwrap().input_ids,
+                ["pending"]
+            );
+            assert!(inputs.start_next().is_none());
+        }
+    }
+
+    #[tokio::test]
+    async fn a_stale_continue_cannot_restart_a_restored_paused_queue() {
+        let (events_tx, events) = crossbeam_channel::unbounded();
+        let mut state = SessionLoopState {
+            inputs: Inputs::restore(&[
+                Event::InputQueuePaused(true),
+                Event::InputAccepted(request("pending")),
+            ]),
+            events_tx,
+            ..Default::default()
+        };
+        state.continue_halted_turn().await;
+        state.prepare_next_input().await;
+        assert!(state.inbox.is_empty());
+        assert!(state.inputs.is_paused());
+        assert!(events.try_recv().is_err());
+        state.pause_inputs(false);
+        state.prepare_next_input().await;
+        assert!(
+            matches!(state.inbox.pop_front(), Some(Command::UserMessage { text }) if text.ends_with("pending"))
+        );
+        assert_eq!(state.inputs.active_ids(), ["pending"]);
     }
 }

@@ -4,6 +4,7 @@ use crate::session::Connection;
 use crossbeam_channel::unbounded;
 use horizon_agent::contract::SessionId;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, ToolCallId};
+use horizon_agent::contract::{Event, SessionState, ToolCallResult};
 use horizon_agent::tools::ApprovalCandidate;
 
 #[test]
@@ -569,7 +570,7 @@ fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
     ));
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
-    fold_approval_judgment(
+    deliver_judgment(
         &state,
         &live_state,
         &commands_tx,
@@ -617,7 +618,7 @@ fn late_or_started_verdict_is_ignored() {
         );
         let (commands_tx, commands_rx) = unbounded::<Command>();
 
-        fold_approval_judgment(
+        deliver_judgment(
             &state,
             &live_state,
             &commands_tx,
@@ -670,7 +671,7 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
     ));
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
-    fold_approval_judgment(
+    deliver_judgment(
         &state,
         &live_state,
         &commands_tx,
@@ -751,7 +752,7 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
     ));
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
-    fold_approval_judgment(
+    deliver_judgment(
         &state,
         &live_state,
         &commands_tx,
@@ -814,7 +815,7 @@ fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
     };
     let (commands_tx, _commands_rx) = unbounded::<Command>();
 
-    fold_approval_judgment(
+    deliver_judgment(
         &state,
         &live_state,
         &commands_tx,
@@ -823,7 +824,7 @@ fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
     );
     assert_eq!(drain_events(&mut outgoing_rx).len(), 2);
 
-    fold_approval_judgment(&state, &live_state, &commands_tx, session_id, judgment);
+    deliver_judgment(&state, &live_state, &commands_tx, session_id, judgment);
     assert!(drain_events(&mut outgoing_rx).is_empty());
 }
 
@@ -937,8 +938,131 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
     );
     assert!(matches!(
         outcome,
-        horizon_agent::tools::ApprovalOutcome::Executed { .. }
+        horizon_agent::tools::ApprovalOutcome::Applied(
+            horizon_agent::tools::ToolUpdate::Finished { .. }
+        )
     ));
     assert!(live_state.frame().unfinished_tool_calls().is_empty());
     horizon_agent::tools::unregister_session_runtime(session_id);
+}
+
+// Exercise the real acceptance boundary before the decision-specific handler.
+fn deliver_judgment(
+    state: &Arc<AgentdState>,
+    live: &LiveState,
+    commands: &Sender<Command>,
+    session: SessionId,
+    judgment: horizon_agent::tools::ApprovalJudgment,
+) {
+    fold_tool_completion(
+        state,
+        live,
+        commands,
+        session,
+        ToolCompletion::ApprovalJudged(judgment),
+    );
+}
+
+#[test]
+fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_delivery() {
+    use horizon_agent::tools::{
+        register_session_runtime, unregister_session_runtime, ApprovalDecision, ToolSessionBuilder,
+    };
+    for synchronous in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let state = test_state();
+        let live = LiveState::with_disabled_persistence();
+        let session = SessionId::new();
+        let mut outgoing = Connection::new(state.clone()).subscribe_agent(session);
+        let (commands, responses) = unbounded();
+        let (worker, _completed) = unbounded();
+        register_session_runtime(
+            session,
+            ToolSessionBuilder::for_root(
+                dir.path().to_path_buf(),
+                Default::default(),
+                Default::default(),
+            )
+            .build(),
+            live.clone(),
+            worker,
+        );
+        let mut primary = judge_candidate("primary");
+        primary.request.tool_id = "fs.write".into();
+        primary.request.input = serde_json::json!({"path": dir.path().join("written").display().to_string(), "content": "once"}).into();
+        let sibling = judge_candidate("sibling");
+        live.extend_provider_events(
+            [
+                Event::ToolCallRequested(primary.request.clone()),
+                Event::ToolCallRequested(sibling.request),
+                Event::ApprovalRequested(primary.approval),
+                Event::ApprovalRequested(sibling.approval),
+                Event::StateChanged(SessionState::WaitingForApproval),
+            ]
+            .into_iter()
+            .map(Into::into),
+        );
+        let prior_events = live.events().len();
+        if synchronous {
+            let outcome = horizon_agent::tools::resolve_approval(
+                &live.frame(),
+                session,
+                primary.request.call_id.clone(),
+                ApprovalDecision::Approve,
+            );
+            forward_approval_outcome(
+                &state,
+                &commands,
+                session,
+                primary.request.call_id.clone(),
+                outcome,
+            );
+            assert_eq!(
+                std::fs::read_to_string(dir.path().join("written")).unwrap(),
+                "once"
+            );
+        } else {
+            fold_tool_completion(
+                &state,
+                &live,
+                &commands,
+                session,
+                ToolCompletion::Finished(ToolCallResult::new(
+                    primary.request.call_id.clone(),
+                    primary.request.occurrence_id.clone(),
+                    serde_json::json!({"ok": true}),
+                )),
+            );
+        }
+        assert!(
+            matches!(responses.try_recv().unwrap(), Command::ToolCallResult(result) if result.call_id == primary.request.call_id)
+        );
+        let events = drain_events(&mut outgoing);
+        assert_eq!(live.events()[prior_events..], events);
+        assert_eq!(
+            events.last(),
+            Some(&Event::StateChanged(SessionState::WaitingForApproval))
+        );
+        assert!(matches!(
+            &events[events.len() - 2],
+            Event::ToolCallFinished(_)
+        ));
+        // A repeated decision sees the committed state and cannot write again.
+        let duplicate = horizon_agent::tools::resolve_approval(
+            &live.frame(),
+            session,
+            primary.request.call_id.clone(),
+            ApprovalDecision::Approve,
+        );
+        forward_approval_outcome(
+            &state,
+            &commands,
+            session,
+            primary.request.call_id,
+            duplicate,
+        );
+        assert!(responses.try_recv().is_err());
+        assert!(drain_events(&mut outgoing).is_empty());
+        unregister_session_runtime(session);
+    }
 }

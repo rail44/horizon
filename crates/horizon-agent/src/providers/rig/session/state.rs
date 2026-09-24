@@ -1,9 +1,8 @@
-//! [`SessionLoopState`] — the mutable state `run_session_loop` threads
-//! through every turn, bundled into a struct so the turn-execution
-//! pipeline methods (in [`super::turn`]) take `&mut self` instead of the
-//! 10+ individual arguments the free-function form accumulated.
+//! Session command coordinator. Inputs owns admission and receipts; Execution
+//! owns tool batches and retained halt results. Provider futures remain local
+//! to the turn pipeline so commands can cancel them without sharing mutation.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crossbeam_channel::Sender;
 use rig_core::completion::Message;
@@ -11,14 +10,14 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     config::RigAgentConfig,
-    contract::{Command, ProviderEvent, SessionId, ToolCallId, ToolCallResult},
+    contract::{Command, ProviderEvent, SessionId, ToolCallId},
     prompt::SessionEnvironment,
     roles::RoleDefinition,
     tools::MemoryDocument,
 };
 
 use super::memory::StandingMemory;
-use super::{ClearingState, ToolCallDescriptor, TurnLoopGuard};
+use super::{ClearingState, TurnLoopGuard};
 
 /// What the session loop woke up for: an inbound command, or a background
 /// `task` child finishing while no provider round was pending
@@ -32,17 +31,9 @@ enum Next {
     Closed,
 }
 
-/// The mutable state `run_session_loop` carries across every iteration of
-/// the loop, plus the read-only inputs shared for the session's lifetime.
-///
-/// The nine fields below `rig_history` … `pending_halt_result` are the
-/// mutable state that was previously nine `let mut` locals in
-/// `run_session_loop`; the remaining fields are the read-only parameters
-/// the turn pipeline helpers borrowed via `&` / `&mut` on every call.
-/// Bundling them lets the pipeline methods in [`super::turn`] take
-/// `&mut self` instead of threading each one as a separate argument.
+/// The session owns command ordering and provider futures. Input admission and
+/// retained execution work have separate owners; configuration is independent.
 pub(crate) struct SessionLoopState {
-    pub(crate) inputs_paused: bool,
     pub(crate) activation: VecDeque<String>,
     pub(crate) inputs: super::input::Inputs,
     // --- Mutable loop state ---------------------------------------------
@@ -58,16 +49,9 @@ pub(crate) struct SessionLoopState {
     pub(crate) task_wake: UnboundedReceiver<()>,
     /// Commands observed mid-turn and queued for replay after the turn.
     pub(crate) inbox: VecDeque<Command>,
-    /// Every tool call whose result is still outstanding.
-    pub(crate) pending_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
+    pub(crate) execution: super::progress::Execution,
     /// Iteration-cap + doom-loop guard.
     pub(crate) guard: TurnLoopGuard,
-    /// The real, already-executed tool result a guard halt stashed instead
-    /// of folding into `rig_history` right away — see `halt_turn_loop`.
-    // Paired with the executed tool's id: rig 0.42 requires the tool name
-    // on every tool-result message, and the descriptor is gone from
-    // `pending_tool_calls` by the time this is flushed.
-    pub(crate) pending_halt_result: Option<(ToolCallResult, String)>,
 
     // --- Standing-agent memory (`docs/standing-agent-memory-design.md`) ----
     /// The current memory document, maintained incrementally as
@@ -101,15 +85,13 @@ impl Default for SessionLoopState {
         Self {
             inputs: super::input::Inputs::default(),
             activation: VecDeque::new(),
-            inputs_paused: false,
             rig_history: Vec::new(),
             clearing: ClearingState::disabled(),
             commands,
             task_wake,
             inbox: VecDeque::new(),
-            pending_tool_calls: HashMap::new(),
+            execution: Default::default(),
             guard: TurnLoopGuard::new(0, 0),
-            pending_halt_result: None,
             memory: None,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
@@ -125,9 +107,7 @@ impl Default for SessionLoopState {
 
 impl SessionLoopState {
     pub(super) fn note_tool_call_reissued(&mut self, identity: crate::contract::ToolCallIdentity) {
-        if let Some(descriptor) = self.pending_tool_calls.get_mut(&identity.call_id) {
-            descriptor.identity = identity;
-        }
+        self.execution.reissue(identity);
     }
 
     /// Constructs the state `run_session_loop` needs, doing the async init
@@ -163,16 +143,14 @@ impl SessionLoopState {
         Self {
             inputs: super::input::Inputs::default(),
             activation: VecDeque::new(),
-            inputs_paused: false,
             session_id,
             commands: super::bridge_commands(commands_rx),
             task_wake: crate::tools::register_wake(session_id),
             inbox: VecDeque::new(),
             rig_history,
             clearing,
-            pending_tool_calls: HashMap::new(),
+            execution: Default::default(),
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
-            pending_halt_result: None,
             memory,
             config,
             moa_conversation,
@@ -230,7 +208,7 @@ impl SessionLoopState {
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
                     self.inputs
-                        .accept(input, !self.pending_tool_calls.is_empty());
+                        .accept(input, self.execution.has_pending_tools());
                     if resume_work {
                         self.pause_inputs(false);
                     }
@@ -239,7 +217,7 @@ impl SessionLoopState {
                 Command::AcknowledgeDelivery { .. } | Command::SendSessionInput { .. } => {}
                 Command::ActivateWorktree { base } => {
                     self.activation.push_back(base);
-                    if self.pending_tool_calls.is_empty() {
+                    if !self.execution.has_pending_tools() {
                         self.activate_environment().await;
                     }
                 }
@@ -269,9 +247,8 @@ impl SessionLoopState {
                 crate::contract::Command::Cancel { .. } => {
                     self.pause_inputs(true);
                     if !self.cancel_outstanding_tool_calls() {
-                        // Nothing in flight (no running turn, no pending tool
-                        // call) — cancel is a no-op in v1's "cancel whatever
-                        // is in flight" semantics.
+                        // Admission remains paused even without a tool batch;
+                        // there is no active turn to finish.
                         continue;
                     }
                     self.emit_cancelled_turn();

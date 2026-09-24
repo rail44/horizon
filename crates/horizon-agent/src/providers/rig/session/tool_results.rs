@@ -10,22 +10,7 @@ use super::{
 
 impl SessionLoopState {
     pub(super) async fn handle_tool_result(&mut self, result: ToolCallResult) {
-        // A replacement is bookkeeping for an execution attempt, not the
-        // provider's final answer. Keep waiting for the replacement result.
-        if result.is_superseded() {
-            return;
-        }
-        // The daemon validates execution identity before delivery. A declined
-        // retry deliberately answers the provider call with the prior attempt's
-        // real result, so the provider's pending key remains its call ID.
-        let Some(descriptor) = self.pending_tool_calls.remove(&result.call_id) else {
-            // Unsolicited (duplicate or stale) result: no pending
-            // tool call under this id. Running a turn from it would
-            // append an orphan tool-result message to rig_history —
-            // the next OpenAI request rejects a tool result with no
-            // matching assistant tool call — and stray results
-            // must not advance the loop guards. Accepted and
-            // silently dropped.
+        let Some(descriptor) = self.execution.accept(&result) else {
             return;
         };
 
@@ -70,7 +55,7 @@ impl SessionLoopState {
 
         if fold_batched_tool_result(
             &mut self.rig_history,
-            &self.pending_tool_calls,
+            self.execution.has_pending_tools(),
             &result,
             &descriptor.tool_id,
         ) == BatchStep::Continue
@@ -83,18 +68,18 @@ impl SessionLoopState {
     }
 
     pub(super) async fn continue_halted_turn(&mut self) {
-        self.pause_inputs(false);
-        let Some((result, tool_id)) = self.pending_halt_result.take() else {
+        let Some((result, tool_id)) = self.execution.take_halted() else {
             // Nothing halted to resume: a safe no-op. Covers a
             // stale Continue arriving after a fresh user message
             // already flushed the pending result, a Continue sent
             // to an idle/never-halted session, and — critically —
             // a resumed session right after bootstrap: replay
-            // never populates `pending_halt_result` on its own, so
+            // never reconstructs an in-memory halted continuation, so
             // a persisted session that ended halted stays halted
             // (waiting-for-user) rather than auto-resuming.
             return;
         };
+        self.pause_inputs(false);
         self.guard.reset();
         self.advance_from_tool_result(result, &tool_id).await;
     }
@@ -139,7 +124,7 @@ mod tests {
             args: serde_json::json!({"path": "file"}),
         };
         let mut state = SessionLoopState {
-            pending_tool_calls: HashMap::from([(reused.clone(), descriptor(&reused))]),
+            execution: HashMap::from([(reused.clone(), descriptor(&reused))]).into(),
             guard: super::super::TurnLoopGuard::new(20, 10),
             ..SessionLoopState::default()
         };
@@ -165,8 +150,8 @@ mod tests {
             before + 1,
             "new result must reach provider history"
         );
-        assert!(!state.pending_tool_calls.contains_key(&reused));
-        assert!(state.pending_tool_calls.contains_key(&sibling));
+        assert!(!state.execution.contains(&reused));
+        assert!(state.execution.contains(&sibling));
     }
     #[tokio::test]
     async fn only_a_successful_memory_result_commits_the_checkpoint() {
@@ -190,10 +175,11 @@ mod tests {
             let mut state = SessionLoopState {
                 events_tx,
                 memory: Some(StandingMemory::default()),
-                pending_tool_calls: HashMap::from([
+                execution: HashMap::from([
                     (call.clone(), descriptor.clone()),
                     (ToolCallId("sibling".into()), descriptor),
-                ]),
+                ])
+                .into(),
                 guard: super::super::TurnLoopGuard::new(20, 10),
                 ..SessionLoopState::default()
             };
@@ -217,7 +203,7 @@ mod tests {
                 success
             );
             assert_eq!(
-                state.pending_tool_calls.contains_key(&call),
+                state.execution.contains(&call),
                 matches!(outcome, ToolOutcome::Superseded { .. })
             );
         }

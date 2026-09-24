@@ -1892,13 +1892,13 @@ fn resolve_approval_executes_fs_write_on_approve() {
         ApprovalDecision::Approve,
     );
 
-    let ApprovalOutcome::Executed { frame, command, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("expected fs.write to be executed by Horizon");
     };
-    assert!(matches!(
-        &command,
-        Command::ToolCallResult(result) if result.call_id == call_id && result.output["is_error"].is_null()
-    ));
+    let frame = live.frame();
+
+    assert_eq!(result.call_id, call_id);
+    assert!(result.output["is_error"].is_null());
     assert_eq!(fs::read_to_string(&target).unwrap(), "approved content");
     assert!(frame.items.iter().any(|item| matches!(
         item,
@@ -1958,25 +1958,20 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
                 ApprovalDecision::Approve,
             )
         };
-        let ApprovalOutcome::Executed {
-            events,
-            frame,
-            command,
-        } = outcome
-        else {
+        let ApprovalOutcome::Applied(ToolUpdate::Finished { events, result }) = outcome else {
             panic!("synchronous execution")
         };
+        let frame = live.frame();
+
         assert!(matches!(
             events.as_slice(),
             [
                 Event::StateChanged(crate::contract::SessionState::ToolRunning),
                 Event::ToolCallStarted(_),
-                Event::ToolCallFinished(_)
+                Event::ToolCallFinished(_),
+                Event::StateChanged(crate::contract::SessionState::Running)
             ]
         ));
-        let Command::ToolCallResult(result) = command else {
-            panic!("result delivery")
-        };
         assert_eq!(result.occurrence_id, request.occurrence_id);
         assert!(!result.is_error());
         assert_eq!(fs::read_to_string(&target).unwrap(), "approved content");
@@ -2022,11 +2017,8 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
         ApprovalDecision::Deny { reason: None },
     );
 
-    let ApprovalOutcome::Executed { command, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("expected fs.edit denial to be resolved by Horizon");
-    };
-    let Command::ToolCallResult(result) = command else {
-        panic!("expected a ToolCallResult command");
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
@@ -2068,11 +2060,8 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
         ApprovalDecision::Approve,
     );
 
-    let ApprovalOutcome::Executed { command, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("expected fs.edit approve to resolve synchronously");
-    };
-    let Command::ToolCallResult(result) = command else {
-        panic!("expected a ToolCallResult command");
     };
     assert_eq!(result.output["is_error"], true);
     assert!(
@@ -2114,13 +2103,10 @@ fn resolve_approval_second_approve_is_noop() {
         call_id.clone(),
         ApprovalDecision::Approve,
     );
-    let ApprovalOutcome::Executed {
-        frame: updated_frame,
-        ..
-    } = first
-    else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = first else {
         panic!("first approve should execute fs.write");
     };
+    let updated_frame = live_state.frame();
     assert_eq!(fs::read_to_string(&target).unwrap(), "first");
 
     // Prove the duplicate doesn't re-run the tool: change the file on disk;
@@ -2166,13 +2152,10 @@ fn resolve_approval_deny_then_approve_is_noop() {
         call_id.clone(),
         ApprovalDecision::Deny { reason: None },
     );
-    let ApprovalOutcome::Executed {
-        frame: updated_frame,
-        ..
-    } = denied
-    else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = denied else {
         panic!("deny of fs.write should be resolved by Horizon");
     };
+    let updated_frame = live_state.frame();
     assert!(!target.exists());
 
     let approved_late = resolve_approval(
@@ -2229,7 +2212,7 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         ApprovalDecision::Approve,
     );
     assert!(
-        matches!(first, ApprovalOutcome::Executed { .. }),
+        matches!(first, ApprovalOutcome::Applied(ToolUpdate::Finished { .. })),
         "first occurrence's approve should execute fs.write"
     );
     assert_eq!(fs::read_to_string(&target_a).unwrap(), "first");
@@ -2251,7 +2234,10 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         ApprovalDecision::Approve,
     );
     assert!(
-        matches!(second, ApprovalOutcome::Executed { .. }),
+        matches!(
+            second,
+            ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
+        ),
         "second occurrence's approve must execute, not be swallowed as \
          AlreadyResolved just because an earlier occurrence of the same \
          call_id already finished: {second:?}"
@@ -2724,7 +2710,10 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    ));
     let result = expect_finished(
         bash_results_rx
             .recv_timeout(Duration::from_secs(10))
@@ -2836,7 +2825,10 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     let frame = live_state.extend_events([Event::ToolCallRequested(request.clone())]);
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    ));
 
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -2968,7 +2960,10 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
     };
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
-    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    ));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
         .expect("sandboxed retry completion");
@@ -3151,11 +3146,8 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
     ]);
 
     let outcome = resolve_approval(&frame, session_id, call_id, ApprovalDecision::Approve);
-    let ApprovalOutcome::Executed { command, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("an approval with no grant must fail closed: {outcome:?}");
-    };
-    let Command::ToolCallResult(result) = command else {
-        panic!("expected a ToolCallResult");
     };
     assert_eq!(result.output["is_error"], true);
     assert!(result.output["message"]
@@ -3214,16 +3206,13 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
-        ApprovalOutcome::Executed {
-            command,
-            frame,
-            events,
-        } => {
-            assert_eq!(command, Command::ToolCallResult(prior_result));
+        ApprovalOutcome::Applied(ToolUpdate::Finished { result, events }) => {
+            let frame = live_state.frame();
+            assert_eq!(result, prior_result);
             assert!(frame.unfinished_tool_calls().is_empty());
             assert!(frame.pending_approval_call_ids().is_empty());
             assert!(
-                matches!(events.last(), Some(Event::ToolCallFinished(result))
+                matches!(events.as_slice(), [Event::ToolCallFinished(_), Event::ToolCallFinished(result), Event::StateChanged(crate::contract::SessionState::Running)]
                 if result.occurrence_id == request.occurrence_id
                     && result.output["cancelled"] == true)
             );
@@ -3323,9 +3312,10 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
         call_id.clone(),
         ApprovalDecision::Approve,
     );
-    let ApprovalOutcome::Started { events, frame, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Started { events, .. }) = outcome else {
         panic!("approving the retry must start it: {outcome:?}");
     };
+    let frame = live_state.frame();
     let Some(Event::ToolCallFinished(superseded)) = events.first() else {
         panic!("the abandoned attempt must be closed before the retry starts: {events:?}");
     };
@@ -3492,7 +3482,10 @@ fn resolve_approval_web_fetch_deny_does_not_mutate_the_domain_policy() {
         ApprovalDecision::Deny { reason: None },
     );
 
-    assert!(matches!(outcome, ApprovalOutcome::Executed { .. }));
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Finished { .. })
+    ));
     assert!(!tool_state.is_domain_allowed("example.com"));
     unregister_session_runtime(session_id);
 }
@@ -3528,7 +3521,10 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
 
-    assert!(matches!(outcome, ApprovalOutcome::Started { .. }));
+    assert!(matches!(
+        outcome,
+        ApprovalOutcome::Applied(ToolUpdate::Started { .. })
+    ));
     assert!(approved_state.is_domain_allowed("example.com"));
     assert!(!approved_state.is_domain_allowed("www.example.com"));
     assert!(!other_state.is_domain_allowed("example.com"));
@@ -3564,13 +3560,11 @@ fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
-        ApprovalOutcome::Executed {
-            command, events, ..
-        } => {
+        ApprovalOutcome::Applied(ToolUpdate::Finished { result, events, .. }) => {
             assert!(events.iter().any(|event| matches!(event, Event::ToolCallFinished(result) if result.outcome == crate::contract::ToolOutcome::Cancelled)));
-            assert_eq!(command, Command::ToolCallResult(prior_result));
+            assert_eq!(result, prior_result);
         }
-        other => panic!("expected Executed forwarding the prior result, got {other:?}"),
+        other => panic!("expected Finished forwarding the prior result, got {other:?}"),
     }
 }
 
@@ -3612,8 +3606,8 @@ fn resolve_approval_domain_denial_retry_approve_without_a_network_proxy_falls_ba
     let outcome =
         resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
     match outcome {
-        ApprovalOutcome::Executed { command, .. } => {
-            assert_eq!(command, Command::ToolCallResult(prior_result));
+        ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) => {
+            assert_eq!(result, prior_result);
         }
         other => panic!("expected a defensive fallback forwarding the prior result, got {other:?}"),
     }
@@ -3652,9 +3646,10 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         ApprovalDecision::Approve,
     );
 
-    let ApprovalOutcome::Started { frame, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Started { .. }) = outcome else {
         panic!("approving bash should start it, not finish it synchronously");
     };
+    let frame = live_state.frame();
     assert!(frame
         .items
         .iter()
@@ -3699,11 +3694,8 @@ fn resolve_approval_denies_bash_without_running_it() {
         ApprovalDecision::Deny { reason: None },
     );
 
-    let ApprovalOutcome::Executed { command, .. } = outcome else {
+    let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("denying bash should resolve synchronously, like fs.write/fs.edit");
-    };
-    let Command::ToolCallResult(result) = command else {
-        panic!("expected a ToolCallResult command");
     };
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
@@ -3751,13 +3743,10 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         call_id.clone(),
         ApprovalDecision::Approve,
     );
-    let ApprovalOutcome::Started {
-        frame: running_frame,
-        ..
-    } = first
-    else {
+    let ApprovalOutcome::Applied(ToolUpdate::Started { .. }) = first else {
         panic!("first approve should start bash");
     };
+    let running_frame = live_state.frame();
     // The frame the second approve would actually see (production folds
     // this exact frame, e.g. `horizon-agentd`'s `resolve_and_forward` reads
     // `live_state.frame()` fresh for every inbound command) already shows

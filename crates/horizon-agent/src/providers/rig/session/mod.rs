@@ -1,8 +1,8 @@
 //! The rig session: spawns the OS thread, loads history, and drives the
 //! [`SessionLoopState`] turn loop. Split into:
 //!
-//! - [`mod@state`] — [`SessionLoopState`] (the mutable loop state bundled into
-//!   a struct) and the loop body (`run`).
+//! - [`mod@state`] — [`SessionLoopState`] and command coordination.
+//! - [`mod@progress`] — retained tool batches and halted results.
 //! - [`mod@input`] — input routing and lifecycle-control priority.
 //! - [`mod@tool_results`] — result acceptance, batch completion, and halt continuation.
 //! - [`mod@interaction`] — fresh user/background interaction preparation.
@@ -47,6 +47,7 @@ mod input;
 mod interaction;
 mod memory;
 pub(crate) mod moa;
+mod progress;
 mod state;
 mod tool_results;
 mod turn;
@@ -82,16 +83,6 @@ pub(super) fn spawn_rig_session(
     let session_id = request.session_id;
     let fallback_events = request.history;
     let restored_inputs = input::Inputs::restore(&fallback_events);
-    let inputs_paused = fallback_events
-        .iter()
-        .rev()
-        .find_map(|event| match event {
-            Event::InputQueuePaused(paused) => Some(*paused),
-            Event::InputAccepted(input) if input.resume_work => Some(false),
-            Event::InputStarted(_) => Some(false),
-            _ => None,
-        })
-        .unwrap_or(false);
     let trusted_project = request.trusted_project;
     // Thread `trusted_project` into the per-session config so
     // `rig_tool_definitions` can filter the knowledge tools out of the
@@ -193,7 +184,6 @@ pub(super) fn spawn_rig_session(
                 )
                 .await;
                 state.inputs = restored_inputs;
-                state.inputs_paused = inputs_paused;
                 state.run().await;
             });
         });

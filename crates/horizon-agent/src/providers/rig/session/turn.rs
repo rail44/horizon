@@ -191,8 +191,15 @@ impl SessionLoopState {
                 outcome = &mut turn => return outcome,
                 maybe_command = self.commands.recv() => {
                     match maybe_command {
-                        Some(Command::Cancel { .. }) => { self.inputs_paused = true; if self.inputs.has_requests() { let _ = self.events_tx.send(Event::InputQueuePaused(true).into()); } token.cancel(); },
-                        Some(Command::Shutdown) => { self.inputs_paused = true; if self.inputs.has_requests() { let _ = self.events_tx.send(Event::InputQueuePaused(true).into()); } self.inbox.push_front(Command::Shutdown); token.cancel(); },
+                        Some(command @ (Command::Cancel { .. } | Command::Shutdown)) => {
+                            if let Some(event) = self.inputs.set_paused(true) {
+                                let _ = self.events_tx.send(event.into());
+                            }
+                            if matches!(command, Command::Shutdown) {
+                                self.inbox.push_front(command);
+                            }
+                            token.cancel();
+                        }
                         Some(other) => self.inbox.push_back(other),
                         None => return turn.await,
                     }
@@ -211,14 +218,8 @@ impl SessionLoopState {
     /// empty-tool-calls branch: both a failed request and a text answer can
     /// have no tool calls, but only the latter completes the input.
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnCompletion) {
-        if !matches!(outcome.stop, CompletionStop::Finished { .. })
-            || outcome.requested_tool_call_ids.is_empty()
-        {
-            self.moa_turn = None;
-        }
         match outcome.stop {
             CompletionStop::Cancelled => {
-                self.finish_input(crate::contract::InputResult::Interrupted);
                 append_cancelled_tool_results_to_history(
                     &mut self.rig_history,
                     &outcome.requested_tool_call_ids,
@@ -232,39 +233,26 @@ impl SessionLoopState {
                         .into(),
                     );
                 }
-                let _ = self
-                    .events_tx
-                    .send(Event::TurnEnded(TurnEndReason::Cancelled).into());
-                let _ = self
-                    .events_tx
-                    .send(Event::StateChanged(SessionState::Cancelled).into());
-                let _ = self
-                    .events_tx
-                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+                self.emit_cancelled_turn();
             }
             CompletionStop::Failed | CompletionStop::Truncated(_) => {
-                self.finish_input(crate::contract::InputResult::Failure {
-                    message: "Provider request failed.".into(),
-                });
-                let _ = self
-                    .events_tx
-                    .send(Event::TurnEnded(TurnEndReason::Failed).into());
-                let _ = self
-                    .events_tx
-                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+                self.end_interaction(
+                    TurnEndReason::Failed,
+                    crate::contract::InputResult::Failure {
+                        message: "Provider request failed.".into(),
+                    },
+                );
             }
             CompletionStop::Finished { text } if outcome.requested_tool_call_ids.is_empty() => {
                 self.moa_conversation.record_answer(text.clone());
-                self.finish_input(crate::contract::InputResult::Success { text });
-                let _ = self
-                    .events_tx
-                    .send(Event::TurnEnded(TurnEndReason::Completed).into());
-                let _ = self
-                    .events_tx
-                    .send(Event::StateChanged(SessionState::WaitingForUser).into());
+                self.end_interaction(
+                    TurnEndReason::Completed,
+                    crate::contract::InputResult::Success { text },
+                );
             }
+
             CompletionStop::Finished { .. } => {
-                self.pending_tool_calls.extend(outcome.requested_tool_calls);
+                self.execution.wait_for(outcome.requested_tool_calls);
             }
         }
     }
@@ -424,8 +412,7 @@ impl SessionLoopState {
     /// also checks async dispatch identity before forwarding a result when a
     /// later provider batch reuses the same call ID.
     pub(crate) fn cancel_outstanding_tool_calls(&mut self) -> bool {
-        let drained: HashMap<ToolCallId, ToolCallDescriptor> =
-            std::mem::take(&mut self.pending_tool_calls);
+        let drained: HashMap<ToolCallId, ToolCallDescriptor> = self.execution.cancel_tools();
         if drained.is_empty() {
             return false;
         }
@@ -444,13 +431,24 @@ impl SessionLoopState {
     }
 
     pub(crate) fn emit_cancelled_turn(&mut self) {
-        self.finish_input(crate::contract::InputResult::Interrupted);
-        let _ = self
-            .events_tx
-            .send(Event::TurnEnded(TurnEndReason::Cancelled).into());
-        let _ = self
-            .events_tx
-            .send(Event::StateChanged(SessionState::Cancelled).into());
+        self.end_interaction(
+            TurnEndReason::Cancelled,
+            crate::contract::InputResult::Interrupted,
+        );
+    }
+
+    /// Every terminal path settles its input receipt before publishing the
+    /// turn boundary. Per-turn proposals must not leak into the next input.
+    fn end_interaction(&mut self, reason: TurnEndReason, result: crate::contract::InputResult) {
+        self.moa_turn = None;
+        self.finish_input(result);
+        let cancelled = reason == TurnEndReason::Cancelled;
+        let _ = self.events_tx.send(Event::TurnEnded(reason).into());
+        if cancelled {
+            let _ = self
+                .events_tx
+                .send(Event::StateChanged(SessionState::Cancelled).into());
+        }
         let _ = self
             .events_tx
             .send(Event::StateChanged(SessionState::WaitingForUser).into());
@@ -485,7 +483,7 @@ impl SessionLoopState {
     /// case (doom loop, a role that doesn't opt in, or the wrap-up completion
     /// itself failing) falls back to the original behavior: `arrived_result`
     /// is deliberately *not* folded into `rig_history` here —
-    /// `pending_halt_result` stashes it instead, the same way an ordinary
+    /// `Execution::halt` retains it instead, the same way an ordinary
     /// tool-driven turn treats a batch's last-landed result: as the *next*
     /// turn's prompt (see [`fold_batched_tool_result`]'s doc comment), not a
     /// pre-pushed history entry. `Command::ContinueTurn` consumes it to
@@ -497,7 +495,7 @@ impl SessionLoopState {
     /// `Command::UserMessage` would).
     ///
     /// The caller must have already removed `arrived_result`'s call id from
-    /// `pending_tool_calls` (the session loop does this when it looks up the
+    /// the pending batch (the session loop does this when it looks up the
     /// call's descriptor).
     pub(crate) async fn halt_turn_loop(
         &mut self,
@@ -512,18 +510,15 @@ impl SessionLoopState {
             && self.run_cap_summary_turn(arrived_result, tool_id).await;
 
         if !summarized {
-            self.pending_halt_result = Some((arrived_result.clone(), tool_id.to_string()));
+            self.execution
+                .halt(arrived_result.clone(), tool_id.to_string());
         }
 
-        self.finish_input(crate::contract::InputResult::Interrupted);
         self.guard.reset();
-        self.moa_turn = None;
-        let _ = self
-            .events_tx
-            .send(Event::TurnEnded(halt.turn_end_reason()).into());
-        let _ = self
-            .events_tx
-            .send(Event::StateChanged(SessionState::WaitingForUser).into());
+        self.end_interaction(
+            halt.turn_end_reason(),
+            crate::contract::InputResult::Interrupted,
+        );
     }
 
     /// Runs one forced, tools-disabled completion for an iteration-cap halt on
@@ -612,16 +607,15 @@ pub(crate) enum BatchStep {
 /// instead of once per batch.
 ///
 /// The caller must have already removed `result`'s call id from
-/// `pending_tool_calls` (to look up its descriptor for the doom-loop
-/// fingerprint) before calling this — so an empty `pending_tool_calls` here
-/// means `result` was the batch's last outstanding call.
+/// the pending batch before calling this. `has_pending_tools` is false when
+/// this result was the last outstanding call.
 pub(crate) fn fold_batched_tool_result(
     rig_history: &mut Vec<Message>,
-    pending_tool_calls: &HashMap<ToolCallId, ToolCallDescriptor>,
+    has_pending_tools: bool,
     result: &ToolCallResult,
     tool_id: &str,
 ) -> BatchStep {
-    if pending_tool_calls.is_empty() {
+    if !has_pending_tools {
         BatchStep::RunTurn
     } else {
         rig_history.push(rig_tool_result_message(result, tool_id));

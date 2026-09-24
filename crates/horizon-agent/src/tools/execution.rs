@@ -30,7 +30,7 @@ pub enum Execution {
     /// A call that moved to background execution (`bash` via
     /// `horizon_sandbox`, or a host-side web request) instead of finishing synchronously
     /// like [`Execution::Auto`] -- mirrors `tools::approval::
-    /// ApprovalOutcome::Started`'s split for the same reason (a command can
+    /// ToolUpdate::Started`'s split for the same reason (a command can
     /// run for up to its timeout). `events` are the `ToolRunning`/
     /// `ToolCallStarted` pair already folded by the caller; the eventual
     /// result arrives later on the session's `async_results` channel exactly

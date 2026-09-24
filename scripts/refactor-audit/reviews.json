@@ -56,6 +56,38 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/providers/rig/session/input.rs",
+        "owner": "Inputs",
+        "name": "restore",
+        "partition": "production"
+      },
+      "sha256": "6b55208f75fa567bacc27a448596e46021a6930f39d73a3af8962782dd272535",
+      "related": {
+        "crates/horizon-agent/src/providers/rig/session/state.rs": "96138e1b5374a64c446790a8f2e2ede0b704bf22f1d58a89e3ea140278ae5cb0",
+        "crates/horizon-agentd/src/session/resume.rs": "e4558f07e0b5dfb1de69c7501962dd8f01d14005e317da513f66e99a7cf1552d"
+      },
+      "decision": "preserve",
+      "reason": "Input admission and receipt routing share one owner in live execution and replay. Empty-queue pauses persist; completed inputs never requeue. Keep daemon interruption settlement before provider restoration.",
+      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agent/src/providers/rig/session/turn.rs",
+        "owner": "SessionLoopState",
+        "name": "apply_turn_outcome",
+        "partition": "production"
+      },
+      "sha256": "f24a4e49187d45d4f634d4bb434e6202a9669875eefad8fd995fc1fd86dec5db",
+      "related": {
+        "crates/horizon-agent/src/providers/rig/session/progress.rs": "bc14aa4c48a634d83e64bd5619373178b0619de8d1af5e7c3d992a438d6ec7df",
+        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "efc5543a216966ec0661a92c524e4eff3a394e6ce8bcd91bda883f336129c730"
+      },
+      "decision": "preserve",
+      "reason": "Turn endings share receipt and proposal cleanup. Execution owns mutually exclusive pending tools or a halted result; provider futures and independent configuration remain coordinator-owned.",
+      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/tools/bash/shell.rs",
         "owner": "<free>",
         "name": "tokenize",
@@ -74,6 +106,22 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/tools/completion.rs",
+        "owner": "ToolCompletion",
+        "name": "live_request",
+        "partition": "production"
+      },
+      "sha256": "ccdd9b3e5da77c2d6efa5cc40faf5cba9167928a79141826919adb24633fe629",
+      "related": {
+        "crates/horizon-agent/src/tools/approval.rs": "46faed83ea7690bbdb7a9740960e68664f421fbc120a252932f052d07a60829c",
+        "crates/horizon-agentd/src/session/completion/retry.rs": "fcd0b3d87afe06d15f9df888bcae1d53d8525ad4c93565c776bf9afe42435001"
+      },
+      "decision": "preserve",
+      "reason": "Accept exact execution identity and unresolved approval at the coordinator boundary. Carry the validated request into retries; keep provider call ID batching because declining retries returns the prior attempt.",
+      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
         "owner": "<free>",
         "name": "build_tool_call_views",
@@ -89,6 +137,22 @@
       "decision": "preserve",
       "reason": "Keep exact execution correlation separate from presentation. One optional ToolOutcome replaces the finished/error/superseded flag combination; cancellation and denial are explicit, and only success contributes to completed-action counts. Approval state agrees with the DuckDB projection.",
       "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agentd/src/session/completion.rs",
+        "owner": "<free>",
+        "name": "publish_tool_update",
+        "partition": "production"
+      },
+      "sha256": "233ded66057d46da2b6164885ad8f68c177858cfdb1db4965824ca604e4ff330",
+      "related": {
+        "crates/horizon-agent/src/tools/approval.rs": "46faed83ea7690bbdb7a9740960e68664f421fbc120a252932f052d07a60829c",
+        "crates/horizon-agent/src/tools/transition.rs": "a330a348df5a1593c95f1d3edd5018f764cc1a4ebb960c349e81568840e8bfd4"
+      },
+      "decision": "preserve",
+      "reason": "Synchronous approvals and asynchronous results publish the same applied update before provider delivery. Start before worker enqueue and retain sibling approval state. Persistence acknowledgment remains a separate existing contract.",
+      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
     },
     {
       "target": {

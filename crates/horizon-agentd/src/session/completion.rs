@@ -6,10 +6,10 @@ use std::sync::Arc;
 
 use crossbeam_channel::Sender;
 
-use horizon_agent::contract::{Command, Event, SessionId, SessionState, ToolCallResult};
+use horizon_agent::contract::{Command, SessionId};
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
-    refuse_unattended, resolve_auto_approval, should_fold_completion, JudgeDecision, ToolCompletion,
+    refuse_unattended, resolve_auto_approval, JudgeDecision, ToolCompletion, ToolUpdate,
 };
 use horizon_agent::wire::AgentWireEvent;
 
@@ -23,19 +23,9 @@ use retry::{
     fold_mach_service_denied,
 };
 
-/// The async-execution analogue of `run::handle_provider_event`'s fold, for a
-/// bash or host-side web call whose result has now arrived on its own
-/// channel -- the same shape the deleted
-/// in-process agent runtime's `fold_bash_completion` used to have,
-/// forwarding the same events over the wire instead of updating a local
-/// `Frames` signal, except the trailing `StateChanged` is no longer
-/// unconditional (see below).
-///
-/// Bash and web tools complete asynchronously here; fs/config tools resolve synchronously
-/// inside `agent::tools::approval::resolve_synchronous_tool` (folded
-/// straight into `dispatch_inbound_command`'s `resolve_and_forward`) -- so
-/// this is the one place a completion can land after *other* tool-call
-/// approvals from the same turn are still outstanding.
+/// Accept the exact live attempt before dispatch. Workers do not mutate the
+/// frame; retry handlers receive the accepted request and cannot reselect an
+/// occurrence by its provider call ID.
 pub(super) fn fold_tool_completion(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
@@ -43,30 +33,50 @@ pub(super) fn fold_tool_completion(
     session_id: SessionId,
     completion: ToolCompletion,
 ) {
-    if !completion.matches_live_request(&live_state.frame()) {
+    let frame = live_state.frame();
+    let Some(request) = completion.live_request(&frame).cloned() else {
         return;
-    }
+    };
     match completion {
         ToolCompletion::ApprovalJudged(judgment) => {
             fold_approval_judgment(state, live_state, commands_tx, session_id, judgment)
         }
-        ToolCompletion::Finished(result) => {
-            fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
+        ToolCompletion::Finished(result) => publish_tool_update(
+            state,
+            commands_tx,
+            session_id,
+            ToolUpdate::finish(live_state, result),
+        ),
+        ToolCompletion::DomainDenied { domains, result } => fold_domain_denied(
+            state,
+            live_state,
+            commands_tx,
+            session_id,
+            request,
+            domains,
+            result,
+        ),
+        ToolCompletion::DomainGrantRequired { domains, .. } => {
+            fold_domain_grant_required(state, live_state, commands_tx, session_id, request, domains)
         }
-        ToolCompletion::DomainDenied { domains, result } => {
-            fold_domain_denied(state, live_state, commands_tx, session_id, domains, result)
-        }
-        ToolCompletion::DomainGrantRequired {
-            call_id, domains, ..
-        } => {
-            fold_domain_grant_required(state, live_state, commands_tx, session_id, call_id, domains)
-        }
-        ToolCompletion::FilesystemDenied { denials, result } => {
-            fold_filesystem_denied(state, live_state, commands_tx, session_id, denials, result)
-        }
-        ToolCompletion::MachServiceDenied { services, result } => {
-            fold_mach_service_denied(state, live_state, commands_tx, session_id, services, result)
-        }
+        ToolCompletion::FilesystemDenied { denials, result } => fold_filesystem_denied(
+            state,
+            live_state,
+            commands_tx,
+            session_id,
+            request,
+            denials,
+            result,
+        ),
+        ToolCompletion::MachServiceDenied { services, result } => fold_mach_service_denied(
+            state,
+            live_state,
+            commands_tx,
+            session_id,
+            request,
+            services,
+            result,
+        ),
     }
 }
 
@@ -78,19 +88,6 @@ fn fold_approval_judgment(
     judgment: horizon_agent::tools::ApprovalJudgment,
 ) {
     let frame = live_state.frame();
-    if !should_fold_completion(&frame, &judgment.candidate.request.call_id)
-        || frame.has_tool_call_started(&judgment.candidate.request.call_id)
-    {
-        return;
-    }
-    if frame
-        .actionable_pending_approval_call_ids()
-        .contains(&judgment.candidate.request.call_id)
-    {
-        // A duplicate/stale verdict must not duplicate a prompt or overturn
-        // a verdict that has already escalated to the human.
-        return;
-    }
     match judgment.decision {
         JudgeDecision::AutoApprove => {
             let logged_call_id = judgment.candidate.request.call_id.clone();
@@ -121,64 +118,25 @@ fn fold_bash_completion(
     fold_tool_completion(state, live_state, commands_tx, session_id, completion);
 }
 
-/// The ordinary case: a bash call actually finished (successfully or not).
-/// Unchanged behavior from before [`BashCompletion`] grew a second variant.
-fn fold_finished_bash_result(
+/// Both synchronous approvals and asynchronous completions use the same
+/// publication order. The update was applied to LiveState before a worker was started or
+/// before this provider result became deliverable.
+pub(super) fn publish_tool_update(
     state: &Arc<AgentdState>,
-    live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
-    result: ToolCallResult,
+    update: ToolUpdate,
 ) {
-    let frame = live_state.frame();
-    if !should_fold_completion(&frame, &result.call_id) {
-        return;
-    }
-
-    // Honest trailing state: a second approval-gated call from the same
-    // turn (another `bash` approved earlier, or a sibling fs/config
-    // request still awaiting a decision) can still be outstanding when
-    // this one finishes -- reporting `WaitingForUser` then is exactly the
-    // backlog #34 bug (status line blanks, stop button vanishes, while a
-    // decision is still actionable). `actionable_pending_approval_call_ids`
-    // (not the plain `pending_approval_call_ids`) is the right reader here
-    // for the same reason it's the required one on every dispatch path
-    // (see its doc comment): it excludes a *ghost* request whose own turn
-    // already ended, which no live daemon-side gate can ever answer, so a
-    // ghost alone must never hold the reported state at `WaitingForApproval`
-    // forever. `result.call_id` itself is still in that list at this point
-    // -- only a *folded* `ToolCallFinished` clears an id, and this call's
-    // hasn't been folded yet -- so it's excluded explicitly rather than
-    // re-reading the frame after folding.
-    //
-    // If nothing else is actionable, the turn is still running: the result
-    // is about to be handed back to the provider via `commands_tx.send`,
-    // which will run another completion. Reporting `WaitingForUser` here
-    // would tell observers the turn finished and would make the persistence
-    // turn tracker close the turn prematurely. `Running` keeps the stop
-    // button enabled and the composer in the "running" placeholder until
-    // the provider itself emits `TurnEnded` and the real `WaitingForUser`
-    // at the turn boundary.
-    let approval_still_pending = frame
-        .actionable_pending_approval_call_ids()
-        .into_iter()
-        .any(|id| id != result.call_id);
-    let trailing_state = if approval_still_pending {
-        SessionState::WaitingForApproval
-    } else {
-        SessionState::Running
+    let (events, result) = match update {
+        ToolUpdate::Started { events } => (events, None),
+        ToolUpdate::Finished { events, result } => (events, Some(result)),
     };
-
-    let events = vec![
-        Event::ToolCallFinished(result.clone()),
-        Event::StateChanged(trailing_state),
-    ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
     for event in events {
         send_session_event(state, session_id, AgentWireEvent::Event(event));
     }
-
-    let _ = commands_tx.send(Command::ToolCallResult(result));
+    if let Some(result) = result {
+        let _ = commands_tx.send(Command::ToolCallResult(result));
+    }
 }
 
 #[cfg(test)]

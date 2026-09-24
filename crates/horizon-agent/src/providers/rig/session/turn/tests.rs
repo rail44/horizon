@@ -177,7 +177,7 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
                 checkpoint: MemoryCheckpoint::Reminded,
                 ..Default::default()
             }),
-            pending_tool_calls: HashMap::from([
+            execution: HashMap::from([
                 (call_id, descriptor),
                 (
                     sibling.clone(),
@@ -187,7 +187,8 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
                         args: json!({"path": "/pending"}),
                     },
                 ),
-            ]),
+            ])
+            .into(),
             guard: super::super::TurnLoopGuard::new(20, 10),
             events_tx,
             ..Default::default()

@@ -13,7 +13,7 @@ impl SessionLoopState {
         // arrive while any kind of tool is still running or
         // awaiting approval, so retire the whole old batch before
         // asking the provider to handle the new message. Otherwise
-        // those old call ids remain in `pending_tool_calls` and a
+        // those old call ids remain in the pending batch and a
         // result from the new turn is mistaken for a non-final
         // member of the old batch, leaving the session waiting
         // forever.
@@ -45,7 +45,7 @@ impl SessionLoopState {
     }
 
     pub(super) async fn handle_task_wake(&mut self) {
-        if self.inputs_paused {
+        if self.inputs.is_paused() {
             return;
         }
         // A background `task` child finished. If a tool batch is
@@ -57,7 +57,7 @@ impl SessionLoopState {
         // synthetic input. That turn is an ordinary one:
         // `Event::TurnEnded` remains the only turn boundary
         // external monitors need to trust.
-        if !self.pending_tool_calls.is_empty() {
+        if self.execution.has_pending_tools() {
             return;
         }
         let Some(notification) = crate::tools::take_notification(self.session_id) else {
@@ -80,7 +80,7 @@ impl SessionLoopState {
     /// call in provider history has a result. Fresh interactions also reset
     /// the tool-loop guards and standing-memory checkpoint.
     fn begin_interaction(&mut self) {
-        if let Some((result, tool_id)) = self.pending_halt_result.take() {
+        if let Some((result, tool_id)) = self.execution.take_halted() {
             self.rig_history
                 .push(rig_tool_result_message(&result, &tool_id));
         }

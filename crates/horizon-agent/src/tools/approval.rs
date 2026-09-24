@@ -1,9 +1,9 @@
+use super::completion::approval_is_unresolved;
+use super::transition::ToolUpdate;
 use serde_json::Value;
 
 use crate::contract::SessionId;
-use crate::contract::{
-    ApprovalKind, Command, Event, SessionState, ToolCallId, ToolCallRequest, ToolCallResult,
-};
+use crate::contract::{ApprovalKind, Command, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
@@ -18,44 +18,11 @@ pub enum ApprovalDecision {
     Deny { reason: Option<String> },
 }
 
-/// What the caller (the approve/deny UI) should do next after
-/// `resolve_approval` runs.
+/// The coordinator publishes applied updates or forwards provider-owned
+/// approvals. Duplicate decisions never execute or return a second result.
 #[derive(Debug)]
 pub enum ApprovalOutcome {
-    /// Horizon executed (or, for a deny, short-circuited) the tool
-    /// app-side, synchronously. `events` are exactly the events that were
-    /// just folded into the session's `LiveState` (in order) — this is
-    /// what the one production caller uses: `horizon-agentd` (the only
-    /// place agent sessions run today — see `crate::client`'s module doc,
-    /// there is no in-process fallback) forwards `events` over the wire to
-    /// Horizon, since a whole-frame snapshot isn't the wire's
-    /// event-envelope shape (`resolve_and_forward` in
-    /// `crates/horizon-agentd/src/session.rs`, which discards `frame`
-    /// via `..`). `frame` — the session's updated live frame, already
-    /// folded through the session's `LiveState` — is kept for a caller
-    /// that wants the whole updated frame directly instead of replaying
-    /// events (this crate's own tests use it to assert fold correctness).
-    /// `command` is the `Command::ToolCallResult` to forward to the
-    /// provider.
-    Executed {
-        events: Vec<Event>,
-        frame: AgentFrame,
-        command: Command,
-    },
-    /// Horizon started executing the tool app-side, but off the UI thread —
-    /// `bash` and `web_fetch` on approve, since their I/O must not block the
-    /// session loop. `events`/
-    /// `frame` are the running-state events (`ToolRunning`/`ToolCallStarted`)
-    /// already folded in — see `Executed`'s doc comment for why both are
-    /// exposed — but there is no `command` yet. The eventual result arrives
-    /// later on the per-session `async_results` channel registered by
-    /// `register_session_runtime` and is folded (and forwarded to the
-    /// provider) by `fold_tool_completion` in `horizon-agentd`'s session
-    /// loop (`crates/horizon-agentd/src/session.rs`), not by this call.
-    Started {
-        events: Vec<Event>,
-        frame: AgentFrame,
-    },
+    Applied(ToolUpdate),
     /// Not a tool Horizon executes on approval (or no runtime is registered
     /// for the session) — forward the original `ApproveToolCall`/
     /// `DenyToolCall` command to the provider, exactly as before this
@@ -134,10 +101,7 @@ pub fn resolve_auto_approval(
     let Some(request) = frame.tool_call_request(call_id) else {
         return ApprovalOutcome::AlreadyResolved;
     };
-    if request != &candidate.request
-        || frame.has_tool_call_finished(call_id)
-        || frame.has_tool_call_started(call_id)
-    {
+    if !approval_is_unresolved(frame, &candidate.request) {
         return ApprovalOutcome::AlreadyResolved;
     }
     if !is_horizon_executed_tool(&request.tool_id) {
@@ -193,17 +157,10 @@ pub fn refuse_unattended(
 ) -> Option<ApprovalOutcome> {
     let runtime = session_runtime(session_id)?;
     let result = unattended_refusal_result(&runtime.tool_state, request)?;
-    // No `ToolRunning`/`ToolCallStarted`: nothing ran, exactly as for a
-    // denied call.
-    let events = vec![Event::ToolCallFinished(result.clone())];
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
-    Some(ApprovalOutcome::Executed {
-        events,
-        frame,
-        command: Command::ToolCallResult(result),
-    })
+    Some(ApprovalOutcome::Applied(ToolUpdate::finish(
+        &runtime.live_state,
+        result,
+    )))
 }
 
 fn unattended_refusal_message(
@@ -244,7 +201,7 @@ fn try_execute(
     // "decided" per call_id -- see `AgentFrame::has_tool_call_started`'s
     // doc comment for why `has_tool_call_finished` alone isn't enough for
     // `bash`.
-    if frame.has_tool_call_finished(call_id) || frame.has_tool_call_started(call_id) {
+    if !approval_is_unresolved(frame, request) {
         return Some(ApprovalOutcome::AlreadyResolved);
     }
     let runtime = session_runtime(session_id)?;
@@ -362,8 +319,7 @@ fn resolve_synchronous_tool(
 }
 
 /// `bash`: a deny short-circuits synchronously exactly like the fs tools,
-/// but an approve only *starts* the command — see `ApprovalOutcome::
-/// Started`. Domain-denial retries, filesystem-denial retries, and
+/// but an approve only *starts* the command — see `ToolUpdate::Started`. Domain-denial retries, filesystem-denial retries, and
 /// pre-execution [`ApprovalKind::GitOperation`] grants all keep the rerun
 /// sandboxed — an approval buys scoped, contained access, never an
 /// unconfined execution. Only [`ApprovalKind::Standard`] still runs on the
@@ -607,18 +563,11 @@ fn begin_execution(
     request: &ToolCallRequest,
     prior_result: Option<&ToolCallResult>,
 ) -> ApprovalOutcome {
-    let mut events = Vec::new();
-    if let Some(prior) = prior_result {
-        events.push(Event::ToolCallFinished(
-            prior.superseded_by_retry(&request.occurrence_id),
-        ));
-    }
-    events.push(Event::StateChanged(SessionState::ToolRunning));
-    events.push(Event::ToolCallStarted(request.identity()));
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
-    ApprovalOutcome::Started { events, frame }
+    ApprovalOutcome::Applied(ToolUpdate::start(
+        &runtime.live_state,
+        request,
+        prior_result,
+    ))
 }
 
 /// The deny half of the denial-retry pair (see
@@ -628,26 +577,7 @@ fn begin_execution(
 /// settled on. Unchanged by backlog 55 -- it was already the path that
 /// closed the first row.
 fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) -> ApprovalOutcome {
-    let mut events = vec![Event::ToolCallFinished(prior_result.clone())];
-    if let Some(request) = runtime
-        .live_state
-        .frame()
-        .tool_call_request(&prior_result.call_id)
-    {
-        if request.occurrence_id != prior_result.occurrence_id {
-            events.push(Event::ToolCallFinished(ToolCallResult::cancelled(
-                request.identity(),
-            )));
-        }
-    }
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
-    ApprovalOutcome::Executed {
-        events,
-        frame,
-        command: Command::ToolCallResult(prior_result),
-    }
+    ApprovalOutcome::Applied(ToolUpdate::decline_retry(&runtime.live_state, prior_result))
 }
 
 /// A tier-1 sandboxed `bash` call's network egress was refused for
@@ -827,27 +757,9 @@ fn synchronous_result(
         ToolCallResult::denied(call_id.clone(), identity.occurrence_id.clone(), output)
     };
 
-    let mut events = Vec::new();
-    if ran {
-        events.push(Event::StateChanged(SessionState::ToolRunning));
-        events.push(Event::ToolCallStarted(identity));
-    }
-    events.push(Event::ToolCallFinished(result.clone()));
-    // No `StateChanged(WaitingForUser)` here: like `execution::
-    // execute_auto_tool`'s equivalent removal, this call may be only one
-    // member of a batch the originating completion requested, and this
-    // approve/deny path has no visibility into whether sibling calls are
-    // still outstanding or a turn is in flight. The session loop owns
-    // turn-level state and emits its own accurate `WaitingForUser` once the
-    // batch is fully resolved.
-
-    let frame = runtime
-        .live_state
-        .extend_provider_events(events.clone().into_iter().map(Into::into));
-
-    ApprovalOutcome::Executed {
-        events,
-        frame,
-        command: Command::ToolCallResult(result),
-    }
+    ApprovalOutcome::Applied(if ran {
+        ToolUpdate::executed(&runtime.live_state, result, identity)
+    } else {
+        ToolUpdate::finish(&runtime.live_state, result)
+    })
 }

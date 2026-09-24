@@ -1953,7 +1953,6 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
             args: serde_json::json!({ "path": "/x" }),
         },
     )]);
-    let pending_halt_result: Option<(ToolCallResult, String)> = None;
     let arrived = ToolCallResult::new(
         id_a.clone(),
         crate::contract::OccurrenceId(id_a.0.clone()),
@@ -1979,8 +1978,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         events_tx: tx,
         guard,
         rig_history: history,
-        pending_tool_calls: pending,
-        pending_halt_result,
+        execution: pending.into(),
         ..SessionLoopState::default()
     };
 
@@ -1998,7 +1996,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     // `halt_turn_loop`'s doc comment). Only B's synthesized cancellation is
     // appended immediately, since it never gets a second chance to land.
     assert_eq!(
-        state.pending_halt_result,
+        state.execution.take_halted(),
         Some((arrived.clone(), "workspace.snapshot".to_string())),
         "the real, already-executed result must be stashed for Continue/a new user message"
     );
@@ -2009,7 +2007,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
                 && matches!(result.content.first(), Some(ToolResultContent::Text(text))
                     if text.text.contains("cancelled")))));
 
-    assert!(state.pending_tool_calls.is_empty());
+    assert!(!state.execution.has_pending_tools());
     match recv(&rx) {
         Event::ToolCallFinished(result) => {
             assert_eq!(
@@ -2115,6 +2113,18 @@ fn start_fallback_rig_session_as(
     crossbeam_channel::Sender<Command>,
     crossbeam_channel::Receiver<ProviderEvent>,
 ) {
+    start_fallback_rig_session_with_history(config, role_id, session_id, Vec::new())
+}
+
+fn start_fallback_rig_session_with_history(
+    config: RigAgentConfig,
+    role_id: Option<RoleId>,
+    session_id: SessionId,
+    history: Vec<Event>,
+) -> (
+    crossbeam_channel::Sender<Command>,
+    crossbeam_channel::Receiver<ProviderEvent>,
+) {
     let provider = Provider::for_entry(
         ProviderId("builtin.agent.rig".to_string()),
         config,
@@ -2127,7 +2137,7 @@ fn start_fallback_rig_session_as(
             provider_id: AgentProvider::provider_id(&provider),
             role_id,
             workspace_root: None,
-            history: Vec::new(),
+            history,
             trusted_project: true,
         },
     );
@@ -2345,10 +2355,9 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
 
 /// `docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,
 /// replay-safety requirement: a session that ended halted must not
-/// auto-resume once restarted/replayed. `pending_halt_result` (the state
-/// `Command::ContinueTurn` consumes) is purely in-memory session-loop
-/// state, never persisted and never reconstructed from `rig_history` --
-/// every freshly spawned session loop starts with it `None`, regardless of
+/// auto-resume once restarted/replayed. The halted continuation consumed by
+/// `Command::ContinueTurn` is purely in-memory, never reconstructed from
+/// `rig_history`; each new execution owner starts idle, regardless of
 /// what the loaded history looks like, exactly as if bootstrap had replayed
 /// a persisted halted turn. So a stray `Command::ContinueTurn` reaching a
 /// just-started session (e.g. a UI that still shows a stale Continue
@@ -2534,7 +2543,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         serde_json::json!({ "contents": "a" }),
     );
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_a, "fs.read"),
+        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_a, "fs.read"),
         BatchStep::Continue
     );
     assert_eq!(history.len(), 3);
@@ -2547,7 +2556,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         serde_json::json!({ "contents": "b" }),
     );
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_b, "fs.read"),
+        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_b, "fs.read"),
         BatchStep::Continue
     );
     assert_eq!(history.len(), 4);
@@ -2564,7 +2573,7 @@ fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_c
         serde_json::json!({ "contents": "c" }),
     );
     assert_eq!(
-        fold_batched_tool_result(&mut history, &pending, &result_c, "fs.read"),
+        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_c, "fs.read"),
         BatchStep::RunTurn
     );
     assert_eq!(
@@ -2780,6 +2789,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     );
 
     let _ = tx.send(Command::Cancel { request_id: None });
+    assert_eq!(recv(&rx), Event::InputQueuePaused(true));
     let remaining = &call_ids[1..];
     let mut cancelled_ids: HashSet<ToolCallId> = HashSet::new();
     for _ in remaining {
@@ -2816,6 +2826,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     let _ = tx.send(Command::UserMessage {
         text: "hello again".to_string(),
     });
+    assert_eq!(recv(&rx), Event::InputQueuePaused(false));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
         recv(&rx),
@@ -4152,6 +4163,80 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
         ));
         if matches!(event, Event::StateChanged(SessionState::Terminated)) {
             break;
+        }
+    }
+}
+
+#[test]
+fn restored_input_admission_and_receipts_match_the_live_session() {
+    use crate::contract::{InputResult, SessionInput, SessionInputOutcome};
+    for paused in [false, true] {
+        let input = |id: &str| SessionInput {
+            id: id.into(),
+            origin: "owner".into(),
+            text: format!("question {id}"),
+            reply_to: Some(id.into()),
+            resume_work: false,
+        };
+        let history = vec![
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::User,
+                text: "previous question".into(),
+            }),
+            Event::MessageCommitted(AgentMessage {
+                role: MessageRole::Assistant,
+                text: "previous answer".into(),
+            }),
+            Event::InputAccepted(input("done")),
+            Event::InputStarted(vec!["done".into()]),
+            Event::InputOutcome(SessionInputOutcome {
+                input_ids: vec!["done".into()],
+                delivery_id: "input-result:done".into(),
+                reply_to: Some("done".into()),
+                outcome: InputResult::Interrupted,
+            }),
+            Event::InputQueuePaused(paused),
+            Event::InputAccepted(input("pending")),
+        ];
+        let (tx, rx) = start_fallback_rig_session_with_history(
+            RigAgentConfig {
+                api_key_present: false,
+                ..Default::default()
+            },
+            None,
+            SessionId::new(),
+            history,
+        );
+        if paused {
+            tx.send(Command::ContinueTurn).unwrap();
+            assert!(
+                rx.recv_timeout(Duration::from_millis(100)).is_err(),
+                "stale Continue must preserve a restored pause"
+            );
+            tx.send(Command::UserMessage {
+                text: "resume".into(),
+            })
+            .unwrap();
+        }
+        loop {
+            let event = recv(&rx);
+            if let Event::InputOutcome(outcome) = event {
+                assert_eq!(outcome.input_ids, ["pending"]);
+                assert_eq!(outcome.reply_to.as_deref(), Some("pending"));
+                assert!(matches!(outcome.outcome, InputResult::Success { .. }));
+                break;
+            }
+        }
+        // Re-delivery of either completed request cannot produce a receipt.
+        tx.send(Command::SessionInput(input("done"))).unwrap();
+        tx.send(Command::SessionInput(input("pending"))).unwrap();
+        tx.send(Command::Shutdown).unwrap();
+        loop {
+            match recv(&rx) {
+                Event::InputOutcome(outcome) => panic!("duplicate receipt: {outcome:?}"),
+                Event::StateChanged(SessionState::Terminated) => break,
+                _ => {}
+            }
         }
     }
 }

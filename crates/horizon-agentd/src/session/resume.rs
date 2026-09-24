@@ -720,6 +720,61 @@ mod tests {
     }
 
     #[test]
+    fn recovery_commits_active_receipts_once_and_preserves_queue_pause() {
+        use horizon_agent::contract::{InputResult, SessionInput};
+        let (_dir, path, writer) = open_test_event_log("input-recovery");
+        let session_id = SessionId::new();
+        let mut appender = Appender::new(writer.clone(), session_id, None, None);
+        let input = |id: &str| {
+            Event::InputAccepted(SessionInput {
+                id: id.into(),
+                text: id.into(),
+                origin: "owner".into(),
+                reply_to: Some(id.into()),
+                resume_work: false,
+            })
+        };
+        let mut events = vec![
+            input("active"),
+            Event::InputStarted(vec!["active".into()]),
+            input("queued"),
+            Event::InputQueuePaused(true),
+        ];
+        appender
+            .append_provider_events(events.iter().cloned().map(Into::into).collect())
+            .unwrap();
+        settle_interrupted_turn(
+            &mut appender,
+            &agent_frame_from_events(&events),
+            &mut events,
+        )
+        .unwrap();
+        let settled = events.clone();
+        // A second recovery of the committed log must not send a second reply.
+        settle_interrupted_turn(
+            &mut appender,
+            &agent_frame_from_events(&events),
+            &mut events,
+        )
+        .unwrap();
+        writer.flush().unwrap();
+        assert_eq!(events, settled);
+        assert_eq!(persisted_events(&path, session_id), settled);
+        let receipts = horizon_agent::contract::pending_input_outcomes(&events);
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].input_ids, ["active"]);
+        assert_eq!(receipts[0].outcome, InputResult::Interrupted);
+        assert_eq!(receipts[0].reply_to.as_deref(), Some("active"));
+        assert_eq!(
+            events.iter().rev().find_map(|event| match event {
+                Event::InputQueuePaused(paused) => Some(*paused),
+                _ => None,
+            }),
+            Some(true)
+        );
+    }
+
+    #[test]
     fn failed_recovery_commit_keeps_the_restored_history_unchanged() {
         let dir = tempfile::tempdir().unwrap();
         let (writer, init) =

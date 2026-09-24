@@ -2,23 +2,10 @@
 
 use crate::session::approval::begin_reissued_approval;
 use crate::session::state::AgentdState;
-use horizon_agent::contract::{
-    ApprovalKind, Command, SessionId, ToolCallId, ToolCallRequest, ToolCallResult,
-};
+use horizon_agent::contract::{ApprovalKind, Command, SessionId, ToolCallRequest, ToolCallResult};
 use horizon_agent::live::LiveState;
-use horizon_agent::tools::should_fold_completion;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-/// Finished/cancelled occurrences and requests absent from the frame cannot
-/// create another approval. The live request owns the completed attempt's ID.
-fn pending_request(live: &LiveState, call_id: &ToolCallId) -> Option<ToolCallRequest> {
-    let frame = live.frame();
-    if !should_fold_completion(&frame, call_id) {
-        return None;
-    }
-    frame.tool_call_request(call_id).cloned()
-}
 
 /// A sandboxed `bash` call was refused mach-lookup to macOS security
 /// services (`docs/macos-containment-denial-reporting-design.md`) -- the
@@ -38,15 +25,10 @@ pub(super) fn fold_mach_service_denied(
     live_state: &LiveState,
     commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
+    original_request: ToolCallRequest,
     services: Vec<String>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &result.call_id) else {
-        // Should be unreachable (this call_id was necessarily requested to
-        // have gotten this far) -- nothing sane to reissue against.
-        return;
-    };
-
     let service_list = services.join(", ");
     let reason = format!(
         "`{}` tried to reach macOS security services ({service_list}) -- typically the \
@@ -60,7 +42,7 @@ pub(super) fn fold_mach_service_denied(
         state,
         live_state,
         session_id,
-        original_request.clone(),
+        original_request,
         ApprovalKind::MachServiceGrant {
             services,
             prior_result: result,
@@ -85,15 +67,10 @@ pub(super) fn fold_domain_denied(
     live_state: &LiveState,
     commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
+    original_request: ToolCallRequest,
     domains: Vec<String>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &result.call_id) else {
-        // Should be unreachable (this call_id was necessarily requested to
-        // have gotten this far) -- nothing sane to reissue against.
-        return;
-    };
-
     let domain_list = domains.join(", ");
     let reason = format!(
         "`{}` tried to reach {domain_list}, but it isn't allowed \
@@ -105,7 +82,7 @@ pub(super) fn fold_domain_denied(
         state,
         live_state,
         session_id,
-        original_request.clone(),
+        original_request,
         ApprovalKind::DomainDenialRetry {
             domains,
             prior_result: result,
@@ -120,12 +97,9 @@ pub(super) fn fold_domain_grant_required(
     live_state: &LiveState,
     commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
-    call_id: ToolCallId,
+    original_request: ToolCallRequest,
     domains: Vec<String>,
 ) {
-    let Some(original_request) = pending_request(live_state, &call_id) else {
-        return;
-    };
     let domain_list = domains.join(", ");
     let reason = format!(
         "`{}` needs to contact {domain_list}, but no request was sent to that domain. Allow {} \
@@ -149,12 +123,10 @@ pub(super) fn fold_filesystem_denied(
     live_state: &LiveState,
     commands_tx: &crossbeam_channel::Sender<Command>,
     session_id: SessionId,
+    original_request: ToolCallRequest,
     denials: Vec<horizon_sandbox::FilesystemDenial>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &result.call_id) else {
-        return;
-    };
     let attempted = denials
         .iter()
         .map(|denial| denial.attempted_path.display().to_string())
@@ -194,15 +166,10 @@ pub(super) fn fold_filesystem_denied(
         state,
         live_state,
         session_id,
-        original_request.clone(),
+        original_request,
         ApprovalKind::FilesystemDenialRetry {
             denials,
             grants,
-            // Same prior_result fixup as `fold_domain_denied` --
-            // bash constructed the result without an in-scope
-            // request, so stamp the original request's
-            // `occurrence_id` onto it now so the transcript and
-            // analytics attribute it to the right occurrence.
             prior_result: result,
         },
         reason,

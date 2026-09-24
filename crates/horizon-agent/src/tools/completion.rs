@@ -1,6 +1,6 @@
 //! Dispatch identity and acceptance of asynchronous tool and approval outcomes.
 
-use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult};
 use crate::frame::AgentFrame;
 
 /// A tool or approval outcome, delivered from its worker
@@ -71,6 +71,22 @@ pub type BashCompletion = ToolCompletion;
 impl ToolCompletion {
     /// A completion must name the current execution, including its occurrence.
     pub fn matches_live_request(&self, frame: &AgentFrame) -> bool {
+        self.live_request(frame).is_some()
+    }
+
+    /// Accept once at the coordinator boundary, then carry the validated
+    /// request into retry handling instead of looking it up by a bare ID.
+    pub fn live_request<'a>(&self, frame: &'a AgentFrame) -> Option<&'a ToolCallRequest> {
+        if let Self::ApprovalJudged(judgment) = self {
+            let request = &judgment.candidate.request;
+            if !approval_is_unresolved(frame, request)
+                || frame
+                    .actionable_pending_approval_call_ids()
+                    .contains(&request.call_id)
+            {
+                return None;
+            }
+        }
         let (call_id, occurrence_id) = match self {
             Self::ApprovalJudged(judgment) => (
                 &judgment.candidate.request.call_id,
@@ -86,10 +102,9 @@ impl ToolCompletion {
             | Self::FilesystemDenied { result, .. }
             | Self::MachServiceDenied { result, .. } => (&result.call_id, &result.occurrence_id),
         };
-        should_fold_completion(frame, call_id)
-            && frame
-                .tool_call_request(call_id)
-                .is_some_and(|request| &request.occurrence_id == occurrence_id)
+        let request = frame.tool_call_request(call_id)?;
+        (should_fold_completion(frame, call_id) && &request.occurrence_id == occurrence_id)
+            .then_some(request)
     }
 
     pub(crate) fn result_mut(&mut self) -> Option<&mut ToolCallResult> {
@@ -121,4 +136,13 @@ impl ToolCompletion {
 /// the call_id-keyed reading would swallow the retry's real result.
 pub fn should_fold_completion(frame: &AgentFrame, call_id: &ToolCallId) -> bool {
     !frame.has_live_occurrence_finished(call_id)
+}
+
+/// Decisions must still refer to the exact unresolved request. Starting an
+/// asynchronous worker consumes approval just as finishing a synchronous call
+/// does; a retry's terminal prior attempt also consumes that retry decision.
+pub(super) fn approval_is_unresolved(frame: &AgentFrame, request: &ToolCallRequest) -> bool {
+    frame.tool_call_request(&request.call_id) == Some(request)
+        && !frame.has_tool_call_finished(&request.call_id)
+        && !frame.has_tool_call_started(&request.call_id)
 }

@@ -315,18 +315,8 @@ pub(super) fn forward_approval_outcome(
     outcome: ApprovalOutcome,
 ) {
     match outcome {
-        ApprovalOutcome::Executed {
-            events, command, ..
-        } => {
-            for event in events {
-                send_session_event(state, session_id, AgentWireEvent::Event(event));
-            }
-            let _ = commands_tx.send(command);
-        }
-        ApprovalOutcome::Started { events, .. } => {
-            for event in events {
-                send_session_event(state, session_id, AgentWireEvent::Event(event));
-            }
+        ApprovalOutcome::Applied(update) => {
+            super::completion::publish_tool_update(state, commands_tx, session_id, update);
         }
         ApprovalOutcome::Forward(command) => {
             let _ = commands_tx.send(command);
