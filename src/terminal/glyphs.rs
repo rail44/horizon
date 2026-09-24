@@ -1,6 +1,6 @@
 //! Geometric synthesis for box-drawing (U+2500-257F), block-element
 //! (U+2580-259F), Legacy-Computing sextant (U+1FB00-1FB3B), and Braille
-//! (U+2800-28FF) characters: `paint_terminal`'s span loop (`super::mod`)
+//! (U+2800-28FF) characters: `paint_terminal`'s span loop (`super::paint`)
 //! calls into this module for any character in these ranges instead of
 //! shaping it as a font glyph. A font's em box cannot fill a terminal cell
 //! whose height exceeds it (line_height 18px vs. a 13px font), which is
@@ -1215,7 +1215,7 @@ fn paint_diagonal(
 }
 
 /// Whether `ch` is covered by this module's geometric synthesis --
-/// `super::paint_terminal`'s span loop uses this to decide whether a
+/// `super::paint::paint_terminal`'s span loop uses this to decide whether a
 /// character should be painted via [`paint_glyph`] instead of shaped as a
 /// font glyph.
 pub(crate) fn is_geometric(ch: char) -> bool {

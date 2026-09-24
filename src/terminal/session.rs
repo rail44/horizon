@@ -331,7 +331,7 @@ impl TerminalSession {
                 self.frame = Some(frame);
                 if let Some(path) = dump_path {
                     let frame = self.frame.as_ref().unwrap();
-                    let _ = std::fs::write(path, super::dump_frame(frame));
+                    let _ = std::fs::write(path, super::diagnostics::dump_frame(frame));
                 }
                 self.scrollback.borrow_mut().on_live_frame(available)
             }

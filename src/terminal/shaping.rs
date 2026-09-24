@@ -6,7 +6,7 @@ use gpui::{
     WindowTextSystem,
 };
 
-use super::{char_columns, glyphs, shape_cache::RowItem};
+use super::{glyphs, paint::char_columns, shape_cache::RowItem};
 use crate::theme;
 
 /// Builds one row's text layer as cache-ready [`RowItem`]s: walks the
