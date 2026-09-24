@@ -820,12 +820,8 @@ noticeably before `session_list`/`session_new` answered.
   that connects *after* the failure still learns about it via the existing
   `Control::SkippedLines` channel.
 - **A cheap freshness check skips the rebuild on an unchanged log.**
-  `main::rebuild_duckdb_projection` opens the store, and — unless opening it
-  just migrated a legacy pre-`event_at` schema (`Store::
-  migrated_legacy_schema`, added for exactly this: a migration drops and
-  recreates `agent_events` without touching `agent_sessions`, so that
-  table's `last_sequence` values would otherwise look deceptively "current"
-  against a now-empty projection) — compares `Store::max_last_sequence`
+  The writer's `rebuild_and_open_duckdb_projection` opens the store and
+  compares `Store::max_last_sequence`
   (a single `MAX(last_sequence)` aggregate over `agent_sessions`) against
   the log's own final record's sequence. `Record::sequence` is a single
   counter global to the whole log, not per-session (`event_log::writer`'s
@@ -833,8 +829,10 @@ noticeably before `session_list`/`session_new` answered.
   ascending, so the last element is the log's overall maximum — no
   additional scan needed. Equal means the projection already reflects
   everything on disk, so the (expensive) full rebuild is skipped entirely,
-  logged as a one-liner; any mismatch, migration, or error in the check
-  falls through to the same full rebuild as before. On a long-lived
+  logged as a one-liner. A behind mark first tries incremental catch-up;
+  an ahead/absent mark or failed check/catch-up triggers full rebuild.
+  Incompatible database files must be rotated; the retired migration's
+  no-op state was removed on 2026-09-25. On a long-lived
   daily-driver log this makes a clean restart's DuckDB work nearly free
   instead of a full re-import every time.
 - **`Reload Agent Runtime` gained staged, short status messages** instead of

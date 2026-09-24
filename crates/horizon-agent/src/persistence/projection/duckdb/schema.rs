@@ -23,9 +23,8 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
 -- than kept alongside `event_at`: it was never read through this crate's
 -- own API (only raw SQL saw it), and keeping a proven-misleading column
 -- next to the correct one just reintroduces the mistake for the next
--- reader. See `Store::migrate_legacy_agent_events_schema` (`mod.rs`) for
--- how a pre-`event_at` file gets migrated -- `CREATE TABLE IF NOT EXISTS`
--- below is additive-only and does not by itself alter an existing table.
+-- reader. Incompatible projection files must be rotated and rebuilt from
+-- JSONL; `CREATE TABLE IF NOT EXISTS` does not alter an existing table.
 CREATE TABLE IF NOT EXISTS agent_events (
     event_id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,

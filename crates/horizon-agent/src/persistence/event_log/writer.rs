@@ -343,10 +343,7 @@ fn discard_partial_tail(file: &mut std::fs::File) -> std::io::Result<()> {
 /// project live instead of only at the next restart (see
 /// `docs/agent-duckdb-state-design.md`'s "Runtime Boundary" addendum).
 ///
-/// Three outcomes, decided by [`duckdb_projection_currency`] (unless
-/// [`Store::migrated_legacy_schema`] just ran, which invalidates the
-/// projection's own high-water mark and forces a full rebuild
-/// unconditionally -- see that method's doc comment):
+/// Three outcomes, decided by [`duckdb_projection_currency`]:
 ///
 /// - **Current**: the mark already matches the log's tail. No work; prints
 ///   "already current, skipping rebuild".
@@ -416,38 +413,36 @@ fn rebuild_and_open_duckdb_projection(
         }
     };
 
-    if !store.migrated_legacy_schema() {
-        match duckdb_projection_currency(&store, records) {
-            Ok(ProjectionCurrency::Current) => {
-                eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
-                return Some(DuckdbStoreHandle::new(store));
-            }
-            Ok(ProjectionCurrency::Behind(mark)) => {
-                let tail = records
-                    .iter()
-                    .filter(|record| record.sequence as i64 > mark)
-                    .cloned();
-                match store.catch_up_from_event_log_records(tail) {
-                    Ok(report) => {
-                        log_skipped_record_summary(&report);
-                        eprintln!(
-                            "horizon-agentd: DuckDB projection caught up incrementally \
-                             ({} record(s))",
-                            report.applied
-                        );
-                        return Some(DuckdbStoreHandle::new(store));
-                    }
-                    Err(error) => eprintln!(
-                        "horizon-agentd: DuckDB incremental catch-up failed ({error}), \
-                         falling back to a full rebuild"
-                    ),
-                }
-            }
-            Ok(ProjectionCurrency::RebuildNeeded) => {}
-            Err(error) => eprintln!(
-                "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
-            ),
+    match duckdb_projection_currency(&store, records) {
+        Ok(ProjectionCurrency::Current) => {
+            eprintln!("horizon-agentd: DuckDB projection already current, skipping rebuild");
+            return Some(DuckdbStoreHandle::new(store));
         }
+        Ok(ProjectionCurrency::Behind(mark)) => {
+            let tail = records
+                .iter()
+                .filter(|record| record.sequence as i64 > mark)
+                .cloned();
+            match store.catch_up_from_event_log_records(tail) {
+                Ok(report) => {
+                    log_skipped_record_summary(&report);
+                    eprintln!(
+                        "horizon-agentd: DuckDB projection caught up incrementally \
+                             ({} record(s))",
+                        report.applied
+                    );
+                    return Some(DuckdbStoreHandle::new(store));
+                }
+                Err(error) => eprintln!(
+                    "horizon-agentd: DuckDB incremental catch-up failed ({error}), \
+                         falling back to a full rebuild"
+                ),
+            }
+        }
+        Ok(ProjectionCurrency::RebuildNeeded) => {}
+        Err(error) => eprintln!(
+            "horizon-agentd: DuckDB projection freshness check failed ({error}), rebuilding"
+        ),
     }
 
     match store.replace_from_event_log_records(records.iter().cloned()) {

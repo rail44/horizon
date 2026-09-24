@@ -94,9 +94,7 @@ pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
             provider: nonempty_string_arg(args, "provider")?,
             model: nonempty_string_arg(args, "model")?,
         },
-        "reload-agent-runtime" | "reload-session-runtime" => {
-            Command::Execute(CommandId::ReloadAgentRuntime)
-        }
+        "reload-agent-runtime" => Command::Execute(CommandId::ReloadAgentRuntime),
         "reload-terminal-runtime" => Command::Execute(CommandId::ReloadTerminalRuntime),
         other => return Err(format!("unknown external command `{other}`")),
     })
@@ -326,17 +324,15 @@ mod tests {
     }
 
     #[test]
-    fn legacy_reload_name_and_model_switch_keep_their_dispatch() {
-        for command in ["reload-session-runtime", "reload-agent-runtime"] {
-            assert!(matches!(
-                parse(&Invoke {
-                    command: command.into(),
-                    args: serde_json::json!({})
-                })
-                .unwrap(),
-                Command::Execute(horizon_workspace::commands::CommandId::ReloadAgentRuntime)
-            ));
-        }
+    fn runtime_reload_and_model_switch_dispatch() {
+        assert!(matches!(
+            parse(&Invoke {
+                command: "reload-agent-runtime".into(),
+                args: serde_json::json!({})
+            })
+            .unwrap(),
+            Command::Execute(horizon_workspace::commands::CommandId::ReloadAgentRuntime)
+        ));
         assert!(
             matches!(parse(&Invoke { command: "set-model".into(), args: serde_json::json!({
             "session_id": uuid::Uuid::nil().to_string(), "provider": "p", "model": "m",

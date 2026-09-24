@@ -26,12 +26,12 @@ impl CommandOptions {
     pub(super) fn validate_unused(&self) -> Result<(), UsageError> {
         if self.prompt.is_some() {
             return Err(UsageError(
-                "--prompt is only valid with new-agent/new-config-agent".to_string(),
+                "--prompt is only valid with new-agent".to_string(),
             ));
         }
         if self.role.is_some() {
             return Err(UsageError(
-                "--role is only valid with new-agent/new-config-agent".to_string(),
+                "--role is only valid with new-agent".to_string(),
             ));
         }
         if self.preview_name.is_some() {
@@ -39,15 +39,13 @@ impl CommandOptions {
         }
         if self.split.is_some() {
             return Err(UsageError(
-                "--split is only valid with new-terminal/new-agent/new-config-agent/preview"
-                    .to_string(),
+                "--split is only valid with new-terminal/new-agent/preview".to_string(),
             ));
         }
         if self.active {
             return Err(UsageError(
-            "--active is only valid with new-terminal/new-agent/new-config-agent/preview/attach"
-                .to_string(),
-        ));
+                "--active is only valid with new-terminal/new-agent/preview/attach".to_string(),
+            ));
         }
 
         Ok(())

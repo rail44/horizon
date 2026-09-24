@@ -106,11 +106,10 @@ Item 1 landed. Concrete schema (all in
   down) says three ("Completed / Cancelled / Halted"); the enum in
   `contract.rs` is authoritative, and the schema/projection follow it.
 
-Schema evolution followed the existing `agent_events`/`event_at`
-precedent (`Store::migrate_legacy_agent_events_schema`): a `.duckdb`
-file missing any of the columns/table above is detected on open, the
-affected table is dropped, and the startup rebuild from JSONL
-repopulates it -- no in-place `ALTER TABLE` migration.
+Incompatible `.duckdb` projections are rotated and rebuilt from JSONL.
+The old automatic schema migration was retired; the unused migration flag
+and no-op extension point were removed on 2026-09-25. Opening a store
+initializes absent tables but does not alter incompatible existing tables.
 
 Recall (decision 3): `recall.search` hits carry `is_error` (tool-result
 hits only) and `turn_outcome` (the end reason of the enclosing turn,

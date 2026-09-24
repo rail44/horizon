@@ -305,7 +305,7 @@ pub(crate) struct WorkspaceShell {
     sessions: HashMap<SessionId, Entity<TerminalSession>>,
     agent_sessions: HashMap<SessionId, Entity<AgentSession>>,
     // Staged by `control_plane_new_session` (a role-tagged create, e.g.
-    // `new-config-agent`) and consumed by `reconcile` when it actually
+    // `new-agent --role config`) and consumed by `reconcile` when it actually
     // starts the session — the model's `open_tab_with_new_session_*`
     // call only yields a `SessionId`, so the role has nowhere else to
     // ride until reconcile turns that id into a live agent session.

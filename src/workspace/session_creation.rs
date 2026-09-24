@@ -252,7 +252,7 @@ impl WorkspaceShell {
     /// steals focus. `prompt` (agent sessions only) sends
     /// the first user message right after the session starts — the
     /// create-with-prompt composite from the CLI design. `role_id` is
-    /// fixed by the caller (e.g. `new-config-agent`), never client-supplied
+    /// fixed by the caller (e.g. `new-agent --role config`), never client-supplied
     /// — see `pending_roles`. `isolate` is agent sessions' own per-spawn
     /// override of `docs/session-relationship-design.md` decision 3's
     /// origin default (CLI/control-plane origin defaults to isolated,

@@ -43,10 +43,10 @@ human-readable summary.
   terminal pane.
 - `horizon new-agent [--prompt <text>] [--split [<session-id>]] [--active]` —
   a new generic agent session, optionally seeded with an initial prompt.
-- `horizon new-config-agent [--prompt <text>] [--split [<session-id>]] [--active]` —
+- `horizon new-agent --role config [--prompt <text>] [--split [<session-id>]] [--active]` —
   a new configuration-agent session (the `config` role: edits Horizon's
-  theme/keybindings via its own `horizon-config` skill). Use this instead of
-  `new-agent` when the task is specifically about Horizon's own config file.
+  theme/keybindings via its own `horizon-config` skill). Select `--role config`
+  when the task is specifically about Horizon's own config file.
 
 `--split` placement:
 

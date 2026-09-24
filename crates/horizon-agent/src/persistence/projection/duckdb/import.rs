@@ -55,8 +55,8 @@ impl Store {
     /// Full rebuild: clears every durable/derived agent table and reinserts
     /// `records` from scratch. Used when there is no existing high-water
     /// mark to catch up from (an empty store), the mark is ahead of the
-    /// log's own tail (a signal something is wrong, not just behind), or a
-    /// schema migration just invalidated the existing projection's rows --
+    /// log's own tail (a signal something is wrong, not just behind), or
+    /// checking/catching up the projection failed --
     /// see `event_log::writer::rebuild_and_open_duckdb_projection`.
     pub(crate) fn replace_from_event_log_records(
         &self,

@@ -97,12 +97,10 @@ role deliberately has no filesystem access.
 
 The `config` role is the first role and the first skill consumer. It is
 launched as a named command — `New Configuration Agent` in the palette,
-`new-config-agent` over the control plane / CLI (mirroring `new-agent`'s
-`--prompt`/`--split`/`--active`). The external vocabulary names each
-role-tagged flavor rather than exposing a free-form `--role` argument:
-the set of roles stays the binary's to define, never a client-supplied
-string, and an unknown role id can therefore only arise from version
-skew, where it fails the session start loudly.
+`new-agent --role config` over the control plane / CLI (mirroring `new-agent`'s
+`--prompt`/`--split`/`--active`). The CLI accepts `--role <id>` and the shell
+validates that id against its registry of user-launchable roles before
+creating a session. Unknown or internal role ids are rejected.
 
 - prompt section: Horizon configuration assistant framing — read the
   skill and the current config before proposing changes; write the
@@ -356,7 +354,7 @@ role-less session can discover on its own initiative (v1's
 `horizon-config` was role-gated). It teaches an agent to operate the
 Horizon workspace it's running inside via the `horizon` CLI: orientation
 (`sessions`/`state`), pane creation (`new-terminal`/`new-agent`/
-`new-config-agent`, `--split`'s "here" vs. explicit vs. omitted placement,
+`new-agent --role config`, `--split`'s "here" vs. explicit vs. omitted placement,
 `--active`'s focus-stealing caution), attach/terminate/approve/deny/
 cancel-turn, and the `--yes`/destructive-command convention for running
 non-interactively from `bash`. Its description frontmatter names the

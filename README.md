@@ -88,7 +88,7 @@ Unix-socket control plane, useful for scripting or driving Horizon from an
 agent. Panes get `HORIZON_SOCKET`/`HORIZON_SESSION_ID` in their environment,
 so a subcommand run from inside a pane targets the enclosing instance and
 `--split` (bare) resolves to "here" by default. Subcommands: `new-terminal`,
-`new-agent [--prompt <text>]`, `new-config-agent [--prompt <text>]`,
+`new-agent [--prompt <text>]`, `new-agent --role config [--prompt <text>]`,
 `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
 `approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,

@@ -193,8 +193,7 @@ font_size = 13.0
 # chooser to open a new tab), focus-next-pane, close-active-pane,
 # close-active-tab, terminate-active-session, terminate-all-detached-sessions,
 # approve-tool-call, deny-tool-call, cancel-agent-turn, continue-agent-turn,
-# switch-model, reload-agent-runtime (`reload-session-runtime` is accepted as a
-# legacy alias for it), reload-terminal-runtime (restarts horizon-terminald --
+# switch-model, reload-agent-runtime, reload-terminal-runtime (restarts horizon-terminald --
 # destructive: every terminal session ends), reload-config, manage-sessions
 # (opens the session manager modal), open-terminal-in-session-directory,
 # open-board, toggle-board-expansion, toggle-board-closed-visibility,

@@ -61,17 +61,6 @@ impl DuckdbStoreHandle {
 
 pub(crate) struct Store {
     conn: Connection,
-    /// Whether opening this store had to migrate a pre-`event_at`
-    /// `agent_events` table (see [`Self::migrate_legacy_agent_events_schema`]).
-    /// Not test-only: `horizon-agentd`'s startup rebuild-skip check
-    /// (task 2 of the readiness fix) reads this via [`Self::
-    /// migrated_legacy_schema`] to know it must not trust the projection's
-    /// existing `agent_sessions.last_sequence` high-water mark -- a
-    /// migration just dropped and recreated `agent_events` (losing its
-    /// rows) without touching `agent_sessions`, so that table's numbers
-    /// would otherwise look deceptively "current" against an now-empty
-    /// projection.
-    migrated_legacy_schema: bool,
 }
 
 impl Store {
@@ -87,48 +76,8 @@ impl Store {
     }
 
     fn from_connection(conn: Connection) -> Result<Self> {
-        let migrated_legacy_schema = Self::migrate_legacy_agent_events_schema(&conn)?;
         conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
-        Ok(Self {
-            conn,
-            migrated_legacy_schema,
-        })
-    }
-
-    /// See the field's doc comment on [`Self::migrated_legacy_schema`].
-    pub(crate) fn migrated_legacy_schema(&self) -> bool {
-        self.migrated_legacy_schema
-    }
-
-    /// Extension point for a future schema change that `CREATE TABLE IF
-    /// NOT EXISTS` in [`INITIALIZE_SCHEMA_SQL`] cannot express on its own:
-    /// that statement is additive-only and never alters an existing table,
-    /// and DuckDB (confirmed against the bundled 1.10504.0) rejects `ALTER
-    /// TABLE ... ADD COLUMN` with an inline `NOT NULL` constraint ("Adding
-    /// columns with constraints not yet supported"), so a plain `ADD
-    /// COLUMN IF NOT EXISTS` cannot get us to e.g. a new `NOT NULL` column
-    /// either. Dropping a stale table and letting `CREATE TABLE IF NOT
-    /// EXISTS` recreate it is cheap and correct specifically *because* the
-    /// whole projection is rebuildable-by-construction from the JSONL log:
-    /// every caller of this method immediately runs `INITIALIZE_SCHEMA_SQL`
-    /// and then, if this returns `true`, a full
-    /// `replace_from_event_log_records` (see [`Self::migrated_legacy_schema`]'s
-    /// callers) that repopulates every dropped table's rows from the source
-    /// of truth. Extend this function -- a shape check (e.g. querying
-    /// `information_schema.columns`/`.tables`) plus one `DROP TABLE IF
-    /// EXISTS` per outdated shape -- whenever a future column/table needs
-    /// the same treatment, rather than writing an in-place `ALTER TABLE`
-    /// migration.
-    ///
-    /// This project carries no on-disk schema compatibility by default:
-    /// the shape checks this function used to
-    /// run for the pre-`event_at`/pre-label/pre-`occurrence_id` DuckDB
-    /// projections were retired with the rest of the compat sweep, since a
-    /// stale `.duckdb` file is expected to be rotated rather than migrated
-    /// forward. The function stays as the seam the *next* genuine schema
-    /// change reaches for.
-    fn migrate_legacy_agent_events_schema(_conn: &Connection) -> Result<bool> {
-        Ok(false)
+        Ok(Self { conn })
     }
 }
 

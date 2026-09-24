@@ -50,8 +50,7 @@ pub enum SplitFlag {
 /// `--isolate` counterpart -- it would be a no-op given the default), and
 /// `role` (`--role <id>`): the role id to spawn the agent session with
 /// (validated server-side by the shell's control-plane dispatch, which knows
-/// the set of user-launchable roles). `new-config-agent` is kept as an alias
-/// for `new-agent --role config`.
+/// the set of user-launchable roles).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Subcommand {
     NewTerminal {
@@ -163,7 +162,6 @@ Running `horizon` with no subcommand launches the GUI application.\n\
 Subcommands:\n  \
   new-terminal [--split [<session-id>]] [--active]\n  \
   new-agent [--prompt <text>] [--role <id>] [--split [<session-id>]] [--active] [--share]\n  \
-  new-config-agent (alias for new-agent --role config)\n  \
   preview <path-to-wasm> [--name <preview>] [--split [<session-id>]] [--active]\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
@@ -219,20 +217,6 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
             Subcommand::NewAgent {
                 prompt: options.prompt.take(),
                 role: options.role.take(),
-                split: options.split.take(),
-                activate: std::mem::take(&mut options.active),
-                share: std::mem::take(&mut options.share),
-            }
-        }
-        // `new-config-agent` is kept as an alias for `new-agent --role config`
-        // -- the role-tagged flavor that started as a separate subcommand now
-        // rides the generic `--role` flag, and the old name is preserved for
-        // muscle memory and existing scripts.
-        "new-config-agent" => {
-            reject_extra(&mut positionals, "new-config-agent")?;
-            Subcommand::NewAgent {
-                prompt: options.prompt.take(),
-                role: Some("config".to_string()),
                 split: options.split.take(),
                 activate: std::mem::take(&mut options.active),
                 share: std::mem::take(&mut options.share),
@@ -311,7 +295,7 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
                 model,
             }
         }
-        "reload-agent-runtime" | "reload-session-runtime" => {
+        "reload-agent-runtime" => {
             reject_extra(&mut positionals, "reload-agent-runtime")?;
             Subcommand::ReloadAgentRuntime
         }
@@ -504,13 +488,11 @@ mod tests {
             parse(&args(&["state", "--prompt=x", "--active"]))
                 .unwrap_err()
                 .0,
-            "--prompt is only valid with new-agent/new-config-agent"
+            "--prompt is only valid with new-agent"
         );
         assert_eq!(
-            parse(&args(&["new-config-agent", "--role=custom"]))
-                .unwrap_err()
-                .0,
-            "--role is only valid with new-agent/new-config-agent"
+            parse(&args(&["state", "--role=custom"])).unwrap_err().0,
+            "--role is only valid with new-agent"
         );
     }
 
@@ -668,9 +650,11 @@ mod tests {
     }
 
     #[test]
-    fn new_config_agent_is_an_alias_for_role_config() {
+    fn parses_config_role_with_prompt_and_placement() {
         let parsed = parse(&args(&[
-            "new-config-agent",
+            "new-agent",
+            "--role",
+            "config",
             "--prompt",
             "make it dark",
             "--split",
@@ -883,13 +867,6 @@ mod tests {
         );
         assert_eq!(
             parse(&args(&["reload-agent-runtime"])).unwrap().subcommand,
-            Subcommand::ReloadAgentRuntime
-        );
-        // The pre-rename alias `reload-session-runtime` must still parse.
-        assert_eq!(
-            parse(&args(&["reload-session-runtime"]))
-                .unwrap()
-                .subcommand,
             Subcommand::ReloadAgentRuntime
         );
         assert_eq!(
