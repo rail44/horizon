@@ -63,13 +63,14 @@
       },
       "sha256": "002f6a416110f571730eefdce6cfa8b5a1f834bcca7af17799c0a2646bd914ee",
       "related": {
-        "crates/horizon-agent/src/tools/approval.rs": "d364c502b44552b08e601856c4b323930b2817f3407a7025a795142025d367e6",
+        "crates/horizon-agent/src/tools/approval.rs": "a6427bd3c07040bf0f3971db57f31638586d08dfd72fce44fa0d980d4c0b25df",
         "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
-        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb"
+        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb",
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f"
       },
       "decision": "preserve",
-      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Filesystem authority, metadata revalidation and approval stay outside it. Passing dispatch occurrence through the web adapter changes neither permission policy nor lexer behavior.",
-      "commit": "0d6186ec783dfcf08d0003f066d74fecfb316ddd"
+      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Filesystem authority, metadata revalidation and approval stay outside it. Passing dispatch occurrence through the web adapter changes neither permission policy nor lexer behavior. Retry bookkeeping now comes from contract rather than transcript; shell tokenization and approval capability decisions remain unchanged.",
+      "commit": "aa2636049393e68bf668f03c35c9b70701efbb2d"
     },
     {
       "target": {
@@ -78,18 +79,19 @@
         "name": "build_tool_call_views",
         "partition": "production"
       },
-      "sha256": "c8bf490e42046cc2754e51a720e41de12eab6bd9ab3a39241096334a6520530b",
+      "sha256": "c8dd0ea855ab2648d307a5ab03cbbcaf7e466840bc728187e49016bd20ab81b2",
       "related": {
         "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
-        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "55463d2d218784c162476e909a554b150d8ff86913a272594d7c020c3de8ca3f",
-        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "b31bb8b1d3bcb6ef3a89bb8ac23767b6ea199537a0ae045b3296b2188b524275",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "880be1dabdfd28048c04fc26269dcf4f7c3fdbb2544984a9180bc67265f9a0a3",
+        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "4f450f383acbe07262f4aecee992d53c36799cdd2c78bc2954789d5bd3e49b9b",
         "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912",
-        "src/agent/turns/tool_call.rs": "5d7b276b01010b8b4dcaa3c75b0a854542d0417509d3b4bcede1a53f1e4838a5",
-        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e"
+        "src/agent/turns/tool_call.rs": "3308101382d5dacbde5ed895b2ecf340c139c544c22c51d4c841017f3fad3bbd",
+        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e",
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f"
       },
       "decision": "preserve",
-      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate.",
-      "commit": "a967cc6af6b12aa3984a4f911640c4b760e5420c"
+      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate. Retry metadata now belongs to contract. Display classification returns explicit recognition and named data; the UI no longer infers recognition from wording. Per-occurrence transcript rows and historical denial display remain distinct from provider replay.",
+      "commit": "aa2636049393e68bf668f03c35c9b70701efbb2d"
     },
     {
       "target": {

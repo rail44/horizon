@@ -1,0 +1,143 @@
+[
+  {
+    "label": "Recognition is explicit rather than derived from wording",
+    "before": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "name": "is_known_tool_id_recognizes_every_classify_arm",
+        "owner": "<free>",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "name": "classification_recognizes_every_displayed_tool",
+        "owner": "<free>",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Ordinary output-derived errors plus explicit denial live/rebuild regression",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/tests.rs",
+        "name": "tool_result_is_error_reflects_the_output_jsons_own_flag",
+        "owner": "<free>",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/tests.rs",
+        "name": "tool_result_is_error_reflects_the_output_jsons_own_flag",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/tests.rs",
+        "name": "live_and_rebuilt_tool_results_preserve_explicit_denial_errors",
+        "owner": "<free>",
+        "partition": "tests"
+      }
+    ]
+  },
+  {
+    "label": "Provider replay regressions and both persistence sources, including fixtures",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "resumed_history_from_duckdb_is_pairing_valid",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "rebuilt_history_pairing_repair_is_idempotent",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "an_orphaned_tool_result_is_dropped_when_history_is_rebuilt",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "an_unanswered_tool_call_is_closed_with_a_cancelled_result_on_rebuild",
+        "owner": "<free>",
+        "partition": "tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "resumed_history_from_duckdb_is_pairing_valid",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "rebuilt_history_pairing_repair_is_idempotent",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "an_orphaned_tool_result_is_dropped_when_history_is_rebuilt",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "name": "an_unanswered_tool_call_is_closed_with_a_cancelled_result_on_rebuild",
+        "owner": "<free>",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "request",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "result",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "reused_provider_ids_keep_each_executed_tool_name",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "approved_retries_replay_one_provider_call_and_its_final_answer",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "refusing_a_retry_replays_the_original_attempts_answer_once",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id",
+        "partition": "tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tests.rs",
+        "owner": "<free>",
+        "name": "an_unknown_occurrence_cannot_answer_a_known_provider_id",
+        "partition": "tests"
+      }
+    ]
+  }
+]

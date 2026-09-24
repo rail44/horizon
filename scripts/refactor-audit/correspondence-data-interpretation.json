@@ -1,0 +1,342 @@
+[
+  {
+    "label": "Tool result construction, retry metadata and authoritative stored outcome",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "name": "new",
+        "owner": "ToolCallResult",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract.rs",
+        "name": "denied",
+        "owner": "ToolCallResult",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "name": "begin_execution",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "name": "superseded_by_retry_result",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/approval.rs",
+        "name": "is_superseded_output",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs",
+        "name": "insert_tool_result",
+        "owner": "Store",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/contract/tool_result.rs",
+        "owner": "<free>",
+        "name": "is_superseded_output",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract/tool_result.rs",
+        "owner": "ToolCallResult",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract/tool_result.rs",
+        "owner": "ToolCallResult",
+        "name": "denied",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/contract/tool_result.rs",
+        "owner": "ToolCallResult",
+        "name": "superseded_by_retry",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "name": "begin_execution",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs",
+        "name": "insert_tool_result",
+        "owner": "Store",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Explicit tool display classification through the UI",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify_tool",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_views",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "is_known_tool_id",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "terse_summary",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_body",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/classify.rs",
+        "owner": "<free>",
+        "name": "classify_tool",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_views",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "terse_summary",
+        "partition": "production"
+      },
+      {
+        "file": "src/agent/turns/tool_call.rs",
+        "owner": "<free>",
+        "name": "build_tool_call_body",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Provider history identity, retry attempts and pairing repair including helpers",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping.rs",
+        "name": "rig_messages_from_horizon_events",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "repair_replayed_message_pairing",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "ReplayIndex",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "push",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "push_assistant",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "close_unanswered_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "finish",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "announced_tool_call_ids",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "announced_tool_call_ids_in",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "answered_tool_call_id",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping.rs",
+        "name": "rig_messages_from_horizon_events",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "repair_replayed_message_pairing",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "ReplayIndex",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "new",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "push",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "push_assistant",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "close_unanswered_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "PairingRepair",
+        "name": "finish",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "announced_tool_calls",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/replay.rs",
+        "owner": "<free>",
+        "name": "answered_tool_call_id",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs",
+        "owner": "ReplayedToolCalls<'a>",
+        "name": "request",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs",
+        "owner": "ReplayedToolCalls<'a>",
+        "name": "result",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs",
+        "owner": "ReplayedToolCalls<'a>",
+        "name": "start_turn",
+        "partition": "production"
+      }
+    ]
+  },
+  {
+    "label": "Shared fixed terminal palette with separate theme and override resolution",
+    "before": [
+      {
+        "file": "src/theme/ansi.rs",
+        "name": "indexed_rgb",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/core/color.rs",
+        "name": "default_rgb",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/theme/ansi.rs",
+        "name": "indexed_rgb",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/core/color.rs",
+        "name": "default_rgb",
+        "owner": "<free>",
+        "partition": "production"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/types/color.rs",
+        "name": "fixed_palette_rgb",
+        "owner": "<free>",
+        "partition": "production"
+      }
+    ]
+  }
+]

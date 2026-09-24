@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "515e610c3685f15efd927888fe018422ed959749",
+  "reviewed_commit": "aa2636049393e68bf668f03c35c9b70701efbb2d",
+  "profile": "profiles/non-board.json",
+  "scope": "Nine cross-layer interpretation reviews across tool execution, provider history, live/persisted state, CLI/UI/runtime, config, terminal and preview. Evidence identifies reviewed boundaries and tests, not a fresh line-by-line audit. Board-specific directories, functions and mixed-file board behavior are excluded.",
+  "groups": [
+    {
+      "id": "tool_result_contract",
+      "scenario": "Complete, deny or supersede a tool attempt and consume its result in execution, storage and transcript.",
+      "decision": "refactor",
+      "reason": "Move the result envelope and persisted retry marker to contract. Execution no longer imports transcript metadata. DuckDB copies the explicit is_error field instead of interpreting the output again; the payload and wire shape are retained.",
+      "validation": [
+        "The denial projection regression failed before the fix and now passes for live append and full rebuild, including absent/false JSON error flags. Existing approval and retry tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/contract.rs": "42a0fc9854f1b50a0f4dc0415cf9d765d7bb0d550594e72e50fea9b17398d9b4",
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
+        "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs": "657e45c10129eb068ec572d895629cd50e4b11e4784427b5360f238b229fdb56",
+        "crates/horizon-agent/src/persistence/projection/duckdb/records.rs": "e97b300b5a4f733f27455f126090c590b4e5aa0f5f70e794112c2c3bd12df9a0",
+        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "5e3f6827cbce3ebc4757cd6346838086ae1adce7a56d61bf157c0ad9e7aadbbf",
+        "crates/horizon-agent/src/persistence/projection/duckdb/tests.rs": "370c44d2cc3ac31c3a68ab0b07068c761de28ff2c29014a013768599a5ce418a",
+        "crates/horizon-agent/src/tools/approval.rs": "a6427bd3c07040bf0f3971db57f31638586d08dfd72fce44fa0d980d4c0b25df",
+        "crates/horizon-agent/src/tools/bash/tests.rs": "c43c28da26bb8a518e035d582095c0c11e40ba85df03b77bbc5a2eb4980679e5",
+        "crates/horizon-agent/src/tools/execution.rs": "dc813d40cb42fb49985a315eb0d5dbbfb2cf35860d6ddf13ff994efe8c82479f",
+        "crates/horizon-agent/src/tools/processing.rs": "0e125a865e71fb968decbb7c6ed22af24dc8376b06aaafe4b026a43386dbc1ef",
+        "crates/horizon-agent/src/tools/tests.rs": "4096c047a43209a5bfa8dad0fab9a926874b4307f9d7bd581f94097038b5e25d"
+      }
+    },
+    {
+      "id": "tool_display_classification",
+      "scenario": "Render known generic tools, future unknown tools and superseded attempts in transcript rows and expanded bodies.",
+      "decision": "refactor",
+      "reason": "Return explicit recognition with named display data from the classifier. Remove recognition based on human-facing wording and repeated classification. Keep the separate terse body wording and historical denial display fallback.",
+      "validation": [
+        "Existing known/unknown body, occurrence correlation, denial and superseded display tests pass; the recognition test now checks the explicit result."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
+        "crates/horizon-agent/src/transcript/mod.rs": "11b6bb441fcca0607a86793434c711ecc2f894b20dee99162ca595d123c846ed",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "880be1dabdfd28048c04fc26269dcf4f7c3fdbb2544984a9180bc67265f9a0a3",
+        "crates/horizon-agent/src/transcript/tool_call/classify.rs": "4f450f383acbe07262f4aecee992d53c36799cdd2c78bc2954789d5bd3e49b9b",
+        "crates/horizon-agent/src/transcript/tool_call/mod.rs": "65e6b61870730c562cb23233536a3e79b10c6f717b0e5176860f1bfe0d06eae9",
+        "crates/horizon-agent/src/transcript/tool_call/view.rs": "44e3fca2d904b92324ac554c50e14be40b230b4444652058dda3c32278a0ea50",
+        "src/agent/turns/tool_call.rs": "3308101382d5dacbde5ed895b2ecf340c139c544c22c51d4c841017f3fad3bbd",
+        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b",
+        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e"
+      }
+    },
+    {
+      "id": "provider_history",
+      "scenario": "Rebuild tool history across provider-ID reuse, missing answers, approved retries and refused retries.",
+      "decision": "refactor",
+      "reason": "Track execution occurrences and pending provider calls in the provider adapter. Identical requests reissued while that provider ID is pending remain attempts of one call; user turns, provider requests and turn endings reset this relation. Tagged results never fall back to unrelated IDs. Skip superseded bookkeeping and duplicate answers. Pairing repair tracks individual announcements rather than whole-history ID sets. Keep UI attempt history and canonical events unchanged.",
+      "validation": [
+        "Five regressions fail before the change and pass after it. The approved multi-retry case also round-trips through DuckDB and event-history resume; existing streaming, parallel-batch, cancellation and idempotence cases pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/history.rs": "9a1c140309969542a0c75bb96f35dc315880b5e5e8be44c0ca65e98bc684433e",
+        "crates/horizon-agent/src/providers/rig/mapping.rs": "551e434af7e5f8cea4d29d6eb9ab598a1737aa248d42e46401cf8de09e61f945",
+        "crates/horizon-agent/src/providers/rig/mapping/replay.rs": "4fe943890c6650c793e7aec9f84aca4fe9526485d95cdb34f2f6aff662ab19d5",
+        "crates/horizon-agent/src/providers/rig/mapping/tests.rs": "1d4dedf6ba88f7331a175491ef54c4951ca3760d5329a665f8166ff94d8b3409",
+        "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs": "9a2e6ee8b773b2e33188eec5f0cc9ea6e0b021b46c28b9790039ba42a30e18fc",
+        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "b6b15b29b41da67a7834d40a91443626dc1e7302fd068f5f71398ef1262b684f",
+        "crates/horizon-agent/src/providers/rig/session/turn.rs": "5374a8d52e7a39c6ff5550cf5184c070309330f9bbd607a2f8d5b466eb4456fb",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "ace4b544bbbce4ec417b2dd81a6d8a90e3a44a1acc00fb2b1a761cc46e638448",
+        "crates/horizon-agentd/src/session/approval.rs": "ce574125bee5c0d35883f3f8a75f18a05e450083d72a69de3c4e5c2ed78597ad",
+        "crates/horizon-agentd/src/session/completion/retry.rs": "95f8dcbba7c90c1d8fca2596be0312f6bcf4b28a254dba417ef24b88d2eabddc"
+      }
+    },
+    {
+      "id": "event_state_and_persistence",
+      "scenario": "Fold live events, retain a failed turn while idle, replay events and rebuild analytical rows.",
+      "decision": "preserve",
+      "reason": "Live and replay already share frame folding and status derivation. Keep ephemeral provider feedback out of durable history; preserve acknowledged append ordering, turn tracking and the analytical halted grouping. The result flag defect is handled by tool_result_contract. No event-log rewrite or migration is needed.",
+      "validation": [
+        "Existing stepwise live/replay status, writer, recovery and DuckDB projection tests pass. Stored historical rows are not proactively rewritten by this work."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
+        "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "c01204c63279520c1356efccd3c2bdfc2b7d7048bca5be7e5bcb3c1dca3c2319",
+        "crates/horizon-agent/src/persistence/event_log/turn.rs": "86a3dd0a2d49199b9e33c0f842c8100ab28eeae22c9e85307b108c7de6192e1b",
+        "crates/horizon-agent/src/persistence/event_log/writer.rs": "ab350d92f035d248f93cc97e612ed908e4d2947370805ece2b593224c8509593",
+        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "0c2ffa49c147d5f72d9f33af181ffb7852d8062608d50ed9848f4ab79a5f6588",
+        "crates/horizon-agent/src/wire.rs": "e8fec936267c0b7d1c164f5e5677b2da05bea8c2a4951ffb535b4b3fe2f497bb",
+        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d"
+      }
+    },
+    {
+      "id": "command_boundary",
+      "scenario": "Submit CLI JSON or UI commands, validate arguments and serialize session summaries.",
+      "decision": "refactor",
+      "reason": "Use SessionKind.label for stable external kind names instead of Debug formatting. Keep explicit CLI targets, optional/null argument distinctions and new-session defaults; user operations still use the command model. Preserve asynchronous model-switch response ownership, snapshot ID format and excluded board/view handling.",
+      "validation": [
+        "CLI mapping/parser tests and command/restore checks pass. Kind output remains exactly terminal/agent; no command or wire vocabulary changes."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-cli/src/client.rs": "c73f44cac89f75cd176446d8a60aad89077af28437f3ae999a0845901bbe1719",
+        "crates/horizon-cli/src/commands.rs": "0a2b75afb0545b83ea3bc261444387d1225a06a9a21715d791d8baa5dd5e3065",
+        "crates/horizon-control/src/contract.rs": "032abcdd7110802878e12f462985b9b64a1a6fc4fa38434b1e3a794fd728557b",
+        "crates/horizon-control/src/host/executor.rs": "4f8b4e6302f11059d725da4465d1da830daaef7c8e53103ae507bb9088769639",
+        "crates/horizon-workspace/src/snapshot.rs": "512a5901ec87a1cc71ed19cbed3ac44859310a6b9c9ef8674b68879089006f31",
+        "crates/horizon-workspace/src/types/kind.rs": "3dc3a8b1c8329959a5cf58cea6bc37ac3c75b0c65bffa361f2fe0537dfe2f583",
+        "src/control_plane.rs": "87b374fa62a6ab273b62eaf15ac34463a2fa55baef2ab58f86143d56e5753dc8",
+        "src/control_plane/invoke.rs": "16f0d317c1ea8a56c340cfdd04b6a165bdc424c729f85042bb672b4c3287552d",
+        "src/workspace/commands.rs": "ff71d09fb720a3cb24627cc2be07676f968c720ca72d38367d3d249b72de7024"
+      }
+    },
+    {
+      "id": "runtime_responses",
+      "scenario": "Queue a request, fail before send, time out, receive a daemon rejection or attach an existing session.",
+      "decision": "preserve",
+      "reason": "Keep typed operation/reply boundaries and distinguish transport failure from a daemon reply. A timeout stops waiting without undoing a queued operation. Creation acceptance, asynchronous completion and terminal attach fallback have distinct meanings; a generic success/error adapter would erase them.",
+      "validation": [
+        "Existing request lifetime, daemon handshake, attach, reload and real-process tests pass. Runtime ownership and cancellation are unchanged."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agentd/src/hub.rs": "5cd5de7fe768b36a7624c102917322df9821cbae494ebd086356f058026a2568",
+        "crates/horizon-agentd/src/session/connection.rs": "ba0190bd3c864be01913a7cf434d1277379e132ed96a41d2e65c4e6d377b4044",
+        "crates/horizon-terminald/src/hub.rs": "896d67ec4bf46b1536433d24ff9e0156b4d5d388cb03489ccc84ac69314b271f",
+        "src/runtime/agent.rs": "9a80c0d1406f18b5c2da28267e5251f4c8eb9a86e7b0d840ef2af9d38579b7a4",
+        "src/runtime/connection.rs": "162b216fde2daa1253d8e4275d79ccdfa0fca44778e4e3d4b606a5f50c4864ef",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/request.rs": "d1c2432249bb3cda528df2bb10ce683ae4dbc24f3794e2dfc34c89d471458b5e",
+        "src/runtime/routing.rs": "c2f6bdcd7d3cd78845b72e2ec2ce2e82333f3fd1fc7e94e89064bbfda3d5a7d5",
+        "src/runtime/terminal.rs": "b5b83a8168688a5535aa691326f4b1e4c844c509372f599cee656fadfb63c769"
+      }
+    },
+    {
+      "id": "configuration_resolution",
+      "scenario": "Resolve provider/MoA settings, reload theme/provider settings and preserve a running session generation.",
+      "decision": "preserve",
+      "reason": "horizon-config owns file shape, precedence and pure resolution; daemon providers.rs owns translation into agent provider types. Keep startup session settings distinct from newly reloaded registry settings, and keep grant validation at execution. No configuration abstraction or new setting is required.",
+      "validation": [
+        "Existing configuration resolution, malformed reload, provider translation and generation tests pass."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/config.rs": "3302dbf02113744aa2dbeb62adee863a1059e00b568a207bc18887f7e34baa0c",
+        "crates/horizon-agentd/src/providers.rs": "e038e0acf103b4277dec083723979b8e848a86275bd2d2c7e7377b9abf6449a3",
+        "crates/horizon-config/src/lib.rs": "d9ede225d65d90fc07364ed0c066eea2c22c5f1ccb2a7de3f6b2e6c2cb3e8d43",
+        "crates/horizon-config/src/tests.rs": "80f227ef80a19571965dffce89ea038e3cf2648f4fa4e272f855e939adb3b149",
+        "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
+        "src/theme/scheme.rs": "fae4f4c9560ffac627997a53cb4c40e9a7fadfe4f91c47af748a02e646b1acfe"
+      }
+    },
+    {
+      "id": "terminal_conversion",
+      "scenario": "Translate VT cells, color queries and UI input while painting live or scrollback frames.",
+      "decision": "refactor",
+      "reason": "Share only fixed xterm palette indices 16..255 in terminal-core. Keep theme base colors, OSC override precedence and dim display policy separate. Retain logical-color frames, presentation pixel/row translation, core escape encoding and distinct live/scrollback coordinates and caches.",
+      "validation": [
+        "Existing color-query/reload, frame/wire, geometry, keyboard protocol and scrollback tests pass, together with WASM and isolated terminal/workspace-restore GUI checks. GUI taps verify model inputs, not rendered pixels or physical IME input."
+      ],
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-terminal-core/src/core/color.rs": "17c9d61455d23ceee9955fe6250d5ca54e5575259c01ae773d1922e1f01dd44a",
+        "crates/horizon-terminal-core/src/core/input.rs": "b1a523db537ecd4550116d0c83981bc0729a673c6938cc7fd9ef3fdb11911ced",
+        "crates/horizon-terminal-core/src/core/render.rs": "d80c8b7612caa8e9c0bd59dad81b5fd8a4bcc8226753cb6f61ad5d1fe3d67bb3",
+        "crates/horizon-terminal-core/src/lib.rs": "6425d61c31be0aab71dabfc38b4a44a5d6f089f52792df2009abdc20a9de2bc8",
+        "crates/horizon-terminal-core/src/tests.rs": "95d48a1ca21a8d2b92cc743a9940ddcdaf9d05850f896607fe6e4b7f540a59fa",
+        "crates/horizon-terminal-core/src/types.rs": "d9dc385c9c8061bdbc8b513d6e5f528184a470e86e2918f0e83c41c9c2078d22",
+        "crates/horizon-terminal-core/src/types/color.rs": "c9085f3a98a2b12f90ad6ecf8b5ecf6cf33a8d431e38995306a871be545bfc30",
+        "crates/horizon-terminal-core/src/types/frame.rs": "44b261da191758d6036a0e8ef551ad8bbabb60b5b00e5a2bd5715ea1a73cf3de",
+        "crates/horizon-terminal-core/src/types/size.rs": "c363dc0c2b38c02288d98eebd446b59eac943d039719a52e01d2275b559c72d7",
+        "crates/horizon-terminald/src/terminal.rs": "7d7f48c9e388e3d293d17c8a126731dff0431055e1f585d3a1187202a84d96c6",
+        "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
+        "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
+        "src/theme/ansi.rs": "a79d347d7e928bfc87f414c31c6d7e82d839b73351c04c1d3741a2ca70733627"
+      }
+    },
+    {
+      "id": "preview_conversion",
+      "scenario": "Publish live theme input from the native host and apply it in a WASM guest.",
+      "decision": "preserve",
+      "reason": "Host and guest share RawThemeConfig and the theme resolver. The wire carries theme input, not duplicated derived colors. Keep failed guest parsing from replacing the current theme, host publication after successful apply, and task/subscription lifetime ownership.",
+      "validation": [
+        "Existing theme round-trip, preview lifecycle/debounce tests and the preview WASM build pass. No preview protocol or watcher behavior changes."
+      ],
+      "status": "reviewed",
+      "files": {
+        "src/preview/guest.rs": "51935d66f8aebd4592fd1a03d09fa4e330159adad91154d64528019afea77eba",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/pane.rs": "ee2b5f0d5d0035cd7ff1908e63a60079118668f1a80c24f57ea12b326ed735e5",
+        "src/preview/pane/tests.rs": "7840d6120b9bbe4201be854f5d37fd488e6be046190f3bb93dec30140a16e682",
+        "src/preview/schema.rs": "3ecc880178f1bd5f4a0077ab05ea4bae5cfe3b8c91506154765e413602753740",
+        "src/preview/tests.rs": "3d0df04eb1075da448c421cecdda0cf531008a14d7fc734e9ee25e7031158003",
+        "src/preview/watch.rs": "558d44f3242bc8df57060f59031885dbc1ad09329da6501706e0d8de13b4a9ec"
+      }
+    }
+  ]
+}
