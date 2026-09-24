@@ -63,6 +63,13 @@ consolidated model validation while preserving config-generation semantics; see
 [its decisions and verification](research/refactoring-change-paths-2026-09-24.md).
 Further work in this refactoring effort excludes board UI, board CLI,
 horizon-board, and horizon-logd, which are being handled separately (2026-09-22).
+The owner prioritizes the newer design over backward compatibility for this
+personal project (2026-09-25). A review of previously preserved behavior found
+removable compatibility remnants and proposals to unify provider configuration,
+model-switch configuration, and tool execution identity. See the
+[specification simplification review](research/refactoring-spec-simplification-2026-09-25.md)
+for migration needs and remaining feature decisions. This is an investigation
+result; the proposed behavior and feature changes have not shipped.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree
