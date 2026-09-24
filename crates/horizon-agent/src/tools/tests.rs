@@ -1614,7 +1614,8 @@ fn fs_grep_respects_gitignore_in_a_git_repository() {
 /// non-git workspace roots.
 #[test]
 fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
-    let root = crate::instructions::non_repository_test_dir();
+    let directory = crate::test_support::non_repository_test_dir();
+    let root = directory.path().to_path_buf();
     fs::write(root.join(".gitignore"), "secret.log\n").unwrap();
     fs::write(root.join("secret.log"), "content").unwrap();
     let tool_state = ToolSessionState::new(root.clone());
@@ -1628,7 +1629,6 @@ fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
-    fs::remove_dir_all(root).unwrap();
 }
 
 /// Locks in the decision to keep walking plain dotfiles/dotdirs (anything

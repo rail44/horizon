@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    run_terminal_core, CoreReceivers, CoreSenders, ScrollWindowRequest, SelectionCommand,
+    core_channels, run_terminal_core, CoreSenders, ScrollWindowRequest, SelectionCommand,
     TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
     TerminalUpdate,
 };
@@ -486,16 +486,7 @@ fn spawn_terminal(
     let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
     let (update_tx, update_rx) = crossbeam_channel::unbounded();
     let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
-    let (resize_tx, resize_rx) = crossbeam_channel::unbounded();
-    let (scroll_tx, scroll_rx) = crossbeam_channel::unbounded();
-    let (mouse_tx, mouse_rx) = crossbeam_channel::unbounded();
-    let (paste_tx, paste_rx) = crossbeam_channel::unbounded();
-    let (key_tx, key_rx) = crossbeam_channel::unbounded();
-    let (text_tx, text_rx) = crossbeam_channel::unbounded();
-    let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
-    let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
-    let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
-    let (window_tx, window_rx) = crossbeam_channel::unbounded();
+    let (senders, receivers) = core_channels();
 
     let response_tx = command_tx.clone();
     let read_update_tx = update_tx.clone();
@@ -509,18 +500,7 @@ fn spawn_terminal(
             size,
             options,
             pty_rx,
-            CoreReceivers {
-                resize_rx,
-                scroll_rx,
-                mouse_rx,
-                paste_rx,
-                key_rx,
-                text_rx,
-                selection_rx,
-                focus_rx,
-                color_scheme_rx,
-                window_rx,
-            },
+            receivers,
             response_tx,
             frame_tx,
             update_tx,
@@ -528,24 +508,7 @@ fn spawn_terminal(
     });
     let writer_killer = killer.clone();
     thread::spawn(move || {
-        run_writer(
-            master,
-            &mut *writer,
-            writer_killer,
-            command_rx,
-            CoreSenders {
-                resize_tx,
-                scroll_tx,
-                mouse_tx,
-                paste_tx,
-                key_tx,
-                text_tx,
-                selection_tx,
-                focus_tx,
-                color_scheme_tx,
-                window_tx,
-            },
-        );
+        run_writer(master, &mut *writer, writer_killer, command_rx, senders);
     });
 
     Ok((

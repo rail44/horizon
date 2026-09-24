@@ -9,7 +9,7 @@ use horizon_workspace::PaneId;
 use crate::preview::host::theme_input_json;
 use crate::preview::pane::{preview_pane_for_path, status_line, PreviewTarget, Status};
 use crate::preview::registry;
-use crate::preview::watch::{event_changes_content, event_touches, watch_root, RELOAD_DEBOUNCE};
+use crate::preview::watch::{event_changes_content, event_touches, watch_root};
 
 // --- the watcher's pure decisions ---------------------------------------
 
@@ -67,13 +67,6 @@ fn reading_the_artifact_does_not_count_as_a_change() {
     ] {
         assert!(event_changes_content(&kind), "{kind:?}");
     }
-}
-
-#[test]
-fn the_debounce_outlasts_a_cargo_unlink_relink_pair() {
-    // cargo removes the old artifact and links the new one back-to-back;
-    // reloading on the unlink would load a file that is about to be gone.
-    assert!(RELOAD_DEBOUNCE >= std::time::Duration::from_millis(100));
 }
 
 // --- "the same path reloads instead of duplicating" ---------------------

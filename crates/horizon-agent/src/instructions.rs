@@ -162,20 +162,6 @@ pub(crate) fn cap_to_chars(body: String, cap_chars: usize) -> (String, bool) {
     }
 }
 
-/// A host-boundary fixture for repository-aware instruction, skill, and file discovery.
-/// A temporary directory can itself be inside a checkout on the test host.
-#[cfg(test)]
-pub(crate) fn non_repository_test_dir() -> PathBuf {
-    let base = [std::env::temp_dir(), PathBuf::from("/var/tmp")]
-        .into_iter()
-        .find(|path| path.is_dir() && git_root(path).is_none())
-        .expect("repository-boundary tests need a temporary directory outside any checkout");
-    let root = base.join(format!("horizon-non-repository-{}", uuid::Uuid::new_v4()));
-    std::fs::create_dir(&root).expect("create a directory outside the repository");
-    root.canonicalize()
-        .expect("canonicalize non-repository fixture")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -184,20 +170,19 @@ mod tests {
         std::fs::write(dir.join(name), content).unwrap();
     }
 
-    fn temp_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-agent-instructions-{label}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
+    fn temp_dir(label: &str) -> tempfile::TempDir {
+        tempfile::Builder::new()
+            .prefix(&format!("horizon-agent-instructions-{label}-"))
+            .tempdir()
+            .unwrap()
     }
 
     /// No `AGENTS.md`/`CLAUDE.md` anywhere in the walk must produce zero
     /// extra sections — the "no consumer" backward-compatible case.
     #[test]
     fn extra_sections_is_empty_when_no_instruction_files_exist() {
-        let root = temp_dir("empty");
+        let directory = temp_dir("empty");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
 
         assert_eq!(extra_sections(&root, 24_000), Vec::<String>::new());
@@ -207,7 +192,8 @@ mod tests {
     /// the root) surfaces as one labelled section containing its content.
     #[test]
     fn extra_sections_surfaces_a_single_agents_md_at_the_repo_root() {
-        let root = temp_dir("single");
+        let directory = temp_dir("single");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         write(&root, "AGENTS.md", "Run `cargo test` before committing.");
 
@@ -223,7 +209,8 @@ mod tests {
     /// around.
     #[test]
     fn extra_sections_composes_ancestors_root_first() {
-        let root = temp_dir("nested-root");
+        let directory = temp_dir("nested-root");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         let nested = root.join("crates").join("inner");
         std::fs::create_dir_all(&nested).unwrap();
@@ -249,7 +236,8 @@ mod tests {
     /// instead; at a level with both, `AGENTS.md` wins.
     #[test]
     fn extra_sections_prefers_agents_md_and_falls_back_to_claude_md() {
-        let root = temp_dir("fallback");
+        let directory = temp_dir("fallback");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         // Root has only CLAUDE.md.
         write(&root, "CLAUDE.md", "CLAUDE_ONLY_MARKER");
@@ -271,7 +259,8 @@ mod tests {
     /// ancestors.
     #[test]
     fn extra_sections_checks_only_cwd_outside_a_git_repository() {
-        let root = non_repository_test_dir();
+        let directory = crate::test_support::non_repository_test_dir();
+        let root = directory.path().to_path_buf();
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write(&root, "AGENTS.md", "PARENT_MARKER_SHOULD_NOT_APPEAR");
@@ -282,14 +271,14 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert!(sections[0].contains("CWD_MARKER"));
         assert!(!sections[0].contains("PARENT_MARKER_SHOULD_NOT_APPEAR"));
-        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A cap smaller than the composed body truncates and appends a note,
     /// rather than silently dropping content or exceeding the cap.
     #[test]
     fn extra_sections_truncates_and_notes_when_over_the_cap() {
-        let root = temp_dir("truncate");
+        let directory = temp_dir("truncate");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         write(&root, "AGENTS.md", &"x".repeat(1000));
 
@@ -305,7 +294,8 @@ mod tests {
     /// `AGENTS.md`, here) is skipped rather than propagated as an error.
     #[test]
     fn extra_sections_skips_an_unreadable_instruction_file() {
-        let root = temp_dir("unreadable");
+        let directory = temp_dir("unreadable");
+        let root = directory.path().to_path_buf();
         std::fs::create_dir_all(root.join(".git")).unwrap();
         // A directory named AGENTS.md can't be read as a file -- read_to_string
         // fails with something other than NotFound.

@@ -20,20 +20,24 @@
 use std::time::Duration;
 use std::time::Instant;
 
+mod channels;
 mod frames;
+
+pub use channels::{core_channels, CoreReceivers, CoreSenders};
 
 use frames::FramePublisher;
 
 use crossbeam_channel::{Receiver, Sender};
+#[cfg(test)]
 use termwiz::input::{KeyCode, Modifiers};
 
 use crate::contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalUpdate,
 };
 use crate::core::{TerminalColorScheme, TerminalCore, TerminalEvents};
-use crate::types::{
-    KeyEventKind, TerminalFrame, TerminalMouseReport, TerminalScroll, TerminalSize,
-};
+#[cfg(test)]
+use crate::types::KeyEventKind;
+use crate::types::{TerminalFrame, TerminalSize};
 
 /// Construction-time options a real session feeds into `TerminalCore`,
 /// mirroring host-config-derived values the crate itself has no way to read
@@ -52,45 +56,6 @@ impl Default for TerminalCoreOptions {
             color_scheme: TerminalColorScheme::default(),
         }
     }
-}
-
-pub struct CoreReceivers {
-    pub resize_rx: Receiver<TerminalSize>,
-    pub scroll_rx: Receiver<TerminalScroll>,
-    pub mouse_rx: Receiver<TerminalMouseReport>,
-    pub paste_rx: Receiver<String>,
-    pub key_rx: Receiver<(KeyCode, Modifiers, KeyEventKind, Option<String>)>,
-    /// Committed text for which no key identity is available, most notably
-    /// an IME commit (`TerminalCommand::TextInput`). Encoded by the core
-    /// according to the live Kitty keyboard mode.
-    pub text_rx: Receiver<String>,
-    pub selection_rx: Receiver<SelectionCommand>,
-    pub focus_rx: Receiver<bool>,
-    /// Demuxed `TerminalCommand::SetColorScheme` -- a live theme apply's
-    /// re-push of the host's color scheme into this already-running
-    /// session (see that variant's doc comment).
-    pub color_scheme_rx: Receiver<TerminalColorScheme>,
-    /// Demuxed `TerminalCommand::RequestScrollWindow` -- a client's request
-    /// for a scrollback window (`docs/terminal-scrollback-design.md` §7.1).
-    /// The loop answers by calling `TerminalCore::snapshot_window` and
-    /// putting the window on the events mpsc as
-    /// `TerminalUpdate::ScrollWindow`, never moving the live `display_offset`.
-    pub window_rx: Receiver<ScrollWindowRequest>,
-}
-
-pub struct CoreSenders {
-    pub resize_tx: Sender<TerminalSize>,
-    pub scroll_tx: Sender<TerminalScroll>,
-    pub mouse_tx: Sender<TerminalMouseReport>,
-    pub paste_tx: Sender<String>,
-    pub key_tx: Sender<(KeyCode, Modifiers, KeyEventKind, Option<String>)>,
-    /// Committed text for which no key identity is available, most notably
-    /// an IME commit (`TerminalCommand::TextInput`).
-    pub text_tx: Sender<String>,
-    pub selection_tx: Sender<SelectionCommand>,
-    pub focus_tx: Sender<bool>,
-    pub color_scheme_tx: Sender<TerminalColorScheme>,
-    pub window_tx: Sender<ScrollWindowRequest>,
 }
 
 /// Re-arm (or disarm) the synchronized-update failsafe timer against the
@@ -615,6 +580,42 @@ mod tests {
         assert_eq!(drain_to_latest(only, &rx), 42);
     }
 
+    #[test]
+    fn disconnecting_pty_or_command_inputs_stops_the_core_with_the_other_input_alive() {
+        for close_commands in [false, true] {
+            let (senders, receivers) = core_channels();
+            let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+            let (command_tx, _command_rx) = crossbeam_channel::unbounded();
+            let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
+            let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+            let mut senders = Some(senders);
+            let mut pty_tx = Some(pty_tx);
+            let worker = std::thread::spawn(move || {
+                run_terminal_core(
+                    TerminalSize::new(20, 5),
+                    TerminalCoreOptions::default(),
+                    pty_rx,
+                    receivers,
+                    command_tx,
+                    frame_tx,
+                    update_tx,
+                );
+            });
+            frame_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            if close_commands {
+                drop(senders.take());
+            } else {
+                drop(pty_tx.take());
+            }
+            assert_eq!(
+                frame_rx.recv_timeout(Duration::from_secs(2)),
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected),
+                "the core must exit without waiting for the other input owner"
+            );
+            worker.join().unwrap();
+        }
+    }
+
     /// End-to-end regression test for the synchronized-update failsafe
     /// (`rearm_sync_flush`/`TerminalCore::flush_sync_update`): a PTY chunk
     /// that opens a BSU window and never sends the closing ESU must still
@@ -630,18 +631,7 @@ mod tests {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (_senders, receivers) = core_channels();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -721,20 +711,8 @@ mod tests {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (key_tx, key_rx) = crossbeam_channel::unbounded();
-        let (_text_tx, text_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx,
-            text_rx,
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (senders, receivers) = core_channels();
+        let key_tx = senders.key_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -798,18 +776,7 @@ mod tests {
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (_senders, receivers) = core_channels();
 
         let event_rx = spawn_core_with_capture(
             TerminalSize::new(40, 40),
@@ -935,18 +902,7 @@ mod tests {
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (_senders, receivers) = core_channels();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -998,18 +954,7 @@ mod tests {
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (_senders, receivers) = core_channels();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1064,19 +1009,8 @@ mod tests {
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (window_tx, window_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx,
-        };
+        let (senders, receivers) = core_channels();
+        let window_tx = senders.window_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1164,19 +1098,8 @@ mod tests {
         let (command_tx, _command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, update_rx) = crossbeam_channel::unbounded();
-        let (selection_tx, selection_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx,
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (senders, receivers) = core_channels();
+        let selection_tx = senders.selection_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1237,19 +1160,8 @@ mod tests {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (focus_tx, focus_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx,
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (senders, receivers) = core_channels();
+        let focus_tx = senders.focus_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1317,19 +1229,8 @@ mod tests {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (color_scheme_tx, color_scheme_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx: crossbeam_channel::never(),
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx,
-            window_rx: crossbeam_channel::never(),
-        };
+        let (senders, receivers) = core_channels();
+        let color_scheme_tx = senders.color_scheme_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1492,19 +1393,8 @@ mod tests {
         let (command_tx, command_rx) = crossbeam_channel::unbounded();
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
-        let (key_tx, key_rx) = crossbeam_channel::unbounded();
-        let receivers = CoreReceivers {
-            resize_rx: crossbeam_channel::never(),
-            scroll_rx: crossbeam_channel::never(),
-            mouse_rx: crossbeam_channel::never(),
-            paste_rx: crossbeam_channel::never(),
-            key_rx,
-            text_rx: crossbeam_channel::never(),
-            selection_rx: crossbeam_channel::never(),
-            focus_rx: crossbeam_channel::never(),
-            color_scheme_rx: crossbeam_channel::never(),
-            window_rx: crossbeam_channel::never(),
-        };
+        let (senders, receivers) = core_channels();
+        let key_tx = senders.key_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(

@@ -398,13 +398,13 @@ use crate::tools::error_output;
 mod tests {
     use super::*;
 
-    fn temp_repo(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "horizon-agent-skills-{label}-{}",
-            uuid::Uuid::new_v4()
-        ));
-        std::fs::create_dir_all(dir.join(".git")).unwrap();
-        dir
+    fn temp_repo(label: &str) -> tempfile::TempDir {
+        let directory = tempfile::Builder::new()
+            .prefix(&format!("horizon-agent-skills-{label}-"))
+            .tempdir()
+            .unwrap();
+        std::fs::create_dir(directory.path().join(".git")).unwrap();
+        directory
     }
 
     fn write_skill(dir: &Path, rel: &str, id: &str, description: &str, body: &str) {
@@ -440,7 +440,7 @@ mod tests {
 
     #[test]
     fn embedded_skills_parse_and_are_registered() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let config_skill = registry
             .get("horizon-config")
             .expect("horizon-config must be registered");
@@ -480,13 +480,13 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_is_none_for_an_empty_id_list() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         assert_eq!(registry.prompt_section_for_ids(&[]), None);
     }
 
     #[test]
     fn prompt_section_for_all_lists_every_skill_and_mentions_skill_read() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let section = registry
             .prompt_section_for_all()
             .expect("must build a section");
@@ -498,7 +498,7 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_lists_only_the_given_ids() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let section = registry
             .prompt_section_for_ids(&["horizon-config"])
             .expect("must build a section");
@@ -508,7 +508,7 @@ mod tests {
 
     #[test]
     fn prompt_section_for_ids_silently_skips_an_unknown_skill_id() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let section = registry
             .prompt_section_for_ids(&["horizon-config", "does-not-exist"])
             .expect("must still build a section for the known entry");
@@ -518,7 +518,8 @@ mod tests {
 
     #[test]
     fn discover_finds_a_repository_skill_at_the_repo_root() {
-        let root = temp_repo("root-level");
+        let directory = temp_repo("root-level");
+        let root = directory.path().to_path_buf();
         write_skill(&root, "my-skill", "my-skill", "A repo skill.", "Body text.");
 
         let registry = SkillRegistry::discover(&root);
@@ -527,26 +528,24 @@ mod tests {
             .expect("repo skill must be discovered");
         assert_eq!(skill.description, "A repo skill.");
         assert_eq!(skill.body(), "Body text.");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn discover_finds_a_repository_skill_in_a_nested_ancestor() {
-        let root = temp_repo("nested");
+        let directory = temp_repo("nested");
+        let root = directory.path().to_path_buf();
         let nested = root.join("crates").join("inner");
         std::fs::create_dir_all(&nested).unwrap();
         write_skill(&root, "my-skill", "my-skill", "A repo skill.", "Body text.");
 
         let registry = SkillRegistry::discover(&nested);
         assert!(registry.get("my-skill").is_some());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn discover_skips_a_skill_dir_with_unparsable_frontmatter() {
-        let root = temp_repo("bad-frontmatter");
+        let directory = temp_repo("bad-frontmatter");
+        let root = directory.path().to_path_buf();
         let skill_dir = root.join(".horizon").join("skills").join("broken");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(skill_dir.join("SKILL.md"), "not a valid SKILL.md at all").unwrap();
@@ -556,13 +555,12 @@ mod tests {
         // The build's embedded skills must still be present -- one bad
         // repository skill must not take down the whole registry.
         assert!(registry.get("horizon-config").is_some());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn discover_does_not_search_ancestors_outside_a_git_repository() {
-        let root = crate::instructions::non_repository_test_dir();
+        let directory = crate::test_support::non_repository_test_dir();
+        let root = directory.path().to_path_buf();
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write_skill(
@@ -575,13 +573,12 @@ mod tests {
 
         let registry = SkillRegistry::discover(&nested);
         assert!(registry.get("parent-only").is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn discover_lets_a_repository_skill_override_an_embedded_one() {
-        let root = temp_repo("override");
+        let directory = temp_repo("override");
+        let root = directory.path().to_path_buf();
         write_skill(
             &root,
             "horizon-config",
@@ -594,13 +591,12 @@ mod tests {
         let skill = registry.get("horizon-config").unwrap();
         assert_eq!(skill.description, "Overridden description.");
         assert_eq!(skill.body(), "Overridden body.");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn discover_lets_a_nested_repository_skill_override_a_root_one_with_the_same_id() {
-        let root = temp_repo("nested-override");
+        let directory = temp_repo("nested-override");
+        let root = directory.path().to_path_buf();
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write_skill(&root, "dup", "dup", "root version", "root body");
@@ -609,13 +605,12 @@ mod tests {
         let registry = SkillRegistry::discover(&nested);
         let skill = registry.get("dup").unwrap();
         assert_eq!(skill.description, "nested version");
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn embedded_returns_only_embedded_skills_ignoring_repository_skills() {
-        let root = temp_repo("embedded-only");
+        let directory = temp_repo("embedded-only");
+        let root = directory.path().to_path_buf();
         write_skill(&root, "repo-skill", "repo-skill", "A repo skill.", "Body.");
 
         let registry = SkillRegistry::embedded();
@@ -623,13 +618,11 @@ mod tests {
         assert!(registry.get("horizon-config").is_some());
         // Repository skill is NOT present — embedded() does no discovery.
         assert!(registry.get("repo-skill").is_none());
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn execute_read_returns_the_body_for_a_known_id() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let output = execute_read(&registry, &serde_json::json!({ "id": "horizon-config" }));
         assert_eq!(output["id"], "horizon-config");
         assert!(output["body"].as_str().unwrap().contains("config.toml"));
@@ -638,7 +631,8 @@ mod tests {
 
     #[test]
     fn execute_read_rereads_a_repository_skill_body_after_it_changes_on_disk() {
-        let root = temp_repo("fresh-reread");
+        let directory = temp_repo("fresh-reread");
+        let root = directory.path().to_path_buf();
         write_skill(&root, "my-skill", "my-skill", "desc", "original body");
         let registry = SkillRegistry::discover(&root);
 
@@ -651,13 +645,11 @@ mod tests {
             second["body"], "edited body",
             "skill.read must re-read a repository skill's body from disk, not a cached copy"
         );
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
     fn execute_read_lists_available_ids_for_an_unknown_id() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let output = execute_read(&registry, &serde_json::json!({ "id": "no-such-skill" }));
         assert_eq!(output["is_error"], true);
         assert!(output["message"]
@@ -668,14 +660,15 @@ mod tests {
 
     #[test]
     fn execute_read_errors_on_a_missing_id_argument() {
-        let registry = SkillRegistry::discover(&std::env::temp_dir());
+        let registry = SkillRegistry::embedded();
         let output = execute_read(&registry, &serde_json::json!({}));
         assert_eq!(output["is_error"], true);
     }
 
     #[test]
     fn execute_read_caps_an_oversized_repository_skill_body() {
-        let root = temp_repo("oversized");
+        let directory = temp_repo("oversized");
+        let root = directory.path().to_path_buf();
         let big_body = "x".repeat(SKILL_BODY_CAP_CHARS + 1_000);
         write_skill(&root, "big", "big", "desc", &big_body);
         let registry = SkillRegistry::discover(&root);
@@ -683,8 +676,6 @@ mod tests {
         let output = execute_read(&registry, &serde_json::json!({ "id": "big" }));
         assert_eq!(output["truncated"], true);
         assert!(output["body"].as_str().unwrap().chars().count() <= SKILL_BODY_CAP_CHARS);
-
-        let _ = std::fs::remove_dir_all(&root);
     }
 
     // -- external skill source registration (docs/board-keeper-design.md §1) -

@@ -347,7 +347,7 @@ fn retry_backoff_grows_per_attempt_and_stays_bounded() {
 /// The loop itself, with a scripted attempt standing in for the provider: a
 /// pre-generation 503 is re-sent and the second attempt's response is the
 /// turn's response.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
@@ -381,7 +381,7 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
 
 /// A failure after the provider produced durable output ends the turn
 /// on the first attempt — the standing no-duplicate-generation rule.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
@@ -408,14 +408,13 @@ async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying()
 
 /// A cancel wins over a pending retry immediately: the backoff is never
 /// waited out, and no further attempt is made.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
     let token = tokio_util::sync::CancellationToken::new();
-    token.cancel();
     let attempts = std::cell::Cell::new(0u32);
 
-    let started = std::time::Instant::now();
-    let outcome = with_pre_generation_retry::<(), _, _>(
+    let started = tokio::time::Instant::now();
+    let retry = with_pre_generation_retry::<(), _, _>(
         &token,
         || async {
             attempts.set(attempts.get() + 1);
@@ -428,23 +427,37 @@ async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
             }
         },
         |_, _, _| {},
-    )
-    .await;
+    );
+    tokio::pin!(retry);
+    assert!(futures_util::poll!(&mut retry).is_pending());
+    // The first retry waits at least 500 ms. Cancel after the timer is armed.
+    tokio::time::advance(Duration::from_millis(50)).await;
+    assert!(futures_util::poll!(&mut retry).is_pending());
+    token.cancel();
+    let outcome = retry.await;
 
     assert!(matches!(outcome, Retried::Cancelled));
     assert_eq!(attempts.get(), 1);
-    assert!(
-        started.elapsed() < Duration::from_millis(400),
-        "a cancelled turn must not wait out the backoff"
-    );
+    assert_eq!(started.elapsed(), Duration::from_millis(50));
     assert!(!sleep_unless_cancelled(Duration::from_secs(60), &token).await);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancellation_wins_when_the_backoff_deadline_is_also_ready() {
+    let token = tokio_util::sync::CancellationToken::new();
+    let wait = sleep_unless_cancelled(Duration::from_secs(1), &token);
+    tokio::pin!(wait);
+    assert!(futures_util::poll!(&mut wait).is_pending());
+    tokio::time::advance(Duration::from_secs(1)).await;
+    token.cancel();
+    assert!(!wait.await);
 }
 
 /// 429 retries past the attempt budget: a pre-generation rate-limit rejection
 /// is safe to re-send, so the harness paces on time rather than giving up
 /// after a fixed count. The loop accepts an attempt past MAX_ATTEMPTS, and
 /// the on-retry callback fires for every rejected attempt.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_429_retries_past_the_attempt_budget() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);
@@ -484,7 +497,7 @@ async fn a_429_retries_past_the_attempt_budget() {
 
 /// 5xx still exhausts the attempt budget and fails: a 503 at the budget
 /// boundary is not retried, and the turn ends as Failed.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
     let token = tokio_util::sync::CancellationToken::new();
     let attempts = std::cell::Cell::new(0u32);

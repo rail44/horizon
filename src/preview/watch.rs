@@ -100,3 +100,6 @@ async fn debounce_loop(
         cx.update(|cx| on_change(cx));
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -33,7 +33,9 @@ pub use contract::{
     TerminalNotification, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
-pub use session_loop::{run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions};
+pub use session_loop::{
+    core_channels, run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions,
+};
 pub use types::{
     KeyEventKind, NamedColor, TerminalColor, TerminalCursor, TerminalCursorShape, TerminalFrame,
     TerminalLine, TerminalMouseButton, TerminalMouseKind, TerminalMouseModifiers,
