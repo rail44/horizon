@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "baseline_commit": "9af4e9341b9f0cc92eed225bd5bff3bdfd204887",
+  "reviewed_commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99",
+  "profile": "profiles/non-board.json",
+  "scope": "Eight scenario and ownership reviews across shell, terminal and agent view. Not an exhaustive line-by-line audit. Board-specific code is unchanged.",
+  "groups": [
+    {
+      "id": "workspace_commands_navigation",
+      "scenario": "Invoke shell commands, switch tabs/panes, enter or leave workspace mode and restore focus.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Keep the command model as operation dispatch and Workspace as layout/session truth. Move navigation effects out of rendering; preserve modal focus ownership, restore guards and close/detach/terminate distinctions. Every workspace function body retains identical syntax tokens.",
+      "files": {
+        "src/control_plane.rs": "87b374fa62a6ab273b62eaf15ac34463a2fa55baef2ab58f86143d56e5753dc8",
+        "src/keymap.rs": "3b768ee675737bcbf5ce4bd897d0334f6c9f2a40ac45aecd306f2b5d427d6f80",
+        "src/workspace/bindings.rs": "59e5c624f66970b4704408376490e9ad92f2dc9059fb85c8b0de9ac78e35621c",
+        "src/workspace/commands.rs": "408f1110c4ceac78d8c4783ebc9721a0f89c1c154a91a40da53f732345d2cea4",
+        "src/workspace/mod.rs": "d35cfd081b9fa344e9302f610f00959f629354affff0ff0e62bdd807fe45619c",
+        "src/workspace/modals.rs": "b00fbf768731184fbacba3e13ea2f5418ba035960e3b2f668c3968124cbf5b0c",
+        "src/workspace/navigation.rs": "17081b634536804032b93a3ebf901c0cc885cbbc0b0618dbdabb11f9727e4a11",
+        "src/workspace/render.rs": "48318ea9d810430bd0b522adeeb3a3cd11f0658a7ae4630a0147bd086e6b9cfe"
+      },
+      "validation": [
+        "Existing command, focus, modal and layout tests in the workspace gate; isolated restore of two tabs, a split and stable terminal IDs."
+      ]
+    },
+    {
+      "id": "workspace_creation_adoption",
+      "scenario": "Create from palette or CLI, attach survivors and reconcile entities and panes.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Creation owns origin/isolation/cwd selection and staged metadata. Reconciliation retains entity ownership and adoption checks. CLI issuer and explicit split priority differ from active-pane palette intent. Preview targeting is session-less. Board-specific branches and adoption hooks remain byte-identical.",
+      "files": {
+        "src/session_manager.rs": "21435e6a3df03ab1a424143c80071613ac8f83eabed989930e11acad3b4d47eb",
+        "src/view_chooser.rs": "8ff76dc78f80db05e322e19a9089ad80482077455305eaf638a4180bd3ab59be",
+        "src/workspace/preview.rs": "747aa05206fcaeb309058573e5134f9d2caa0199f02277e086b6ec13873b3fbc",
+        "src/workspace/session_creation.rs": "cbf383deff6a6a05cc8184709bbfef0072c7f0b15665fdbfa6f4a6d02beb5135",
+        "src/workspace/session_lifecycle.rs": "3f10fa9447b956f20caf4f3b97281b91294b25f39b2173f6e7073019b57ef1a8"
+      },
+      "validation": [
+        "Existing source-priority, pinned-cwd, adoption and resume-candidate tests moved alongside their owners; default gate and isolated GUI restore."
+      ]
+    },
+    {
+      "id": "workspace_async_restore",
+      "scenario": "Receive titles/root/exit/notifications and resume or replace either runtime.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Separate event routing from creation and daemon reloads. Preserve runtime-generation checks before applying asynchronous inventory/attachment results, restore barrier and authoritative daemon metadata. Agent reload preserves terminals; terminal reload destroys its PTYs and reseeds the workspace.",
+      "files": {
+        "src/runtime/agent.rs": "9a80c0d1406f18b5c2da28267e5251f4c8eb9a86e7b0d840ef2af9d38579b7a4",
+        "src/runtime/link.rs": "7b3dbd2565815c592b154e745aeb8429d43ea5daca0cc710659e1c3a2f876674",
+        "src/runtime/terminal.rs": "b5b83a8168688a5535aa691326f4b1e4c844c509372f599cee656fadfb63c769",
+        "src/workspace/restore.rs": "7abed676a459c0eb4504d6bfad6d2f3800c04def28bff3155d759befd43b5852",
+        "src/workspace/runtime_reload.rs": "8491ac9aed02ed47702a8a8f26742d66e346c788a66c3f884c6797b77fe25aa2",
+        "src/workspace/session_events.rs": "bb6b512b222df11465a0c7b90a264003c5f4c475eefc535c0e07dc91ec89f2ec"
+      },
+      "validation": [
+        "Restore selection and runtime integration tests; isolated UI restart reuses daemon sessions. No user daemon restart."
+      ]
+    },
+    {
+      "id": "terminal_keyboard",
+      "scenario": "Deliver physical keys, text commits and preedit updates to the session.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "KeyboardInput privately owns preedit, phantom-Enter and text-echo guards. Keep existing timeout/one-shot decisions and key press/repeat/release encoding. Painting reads only a preedit accessor. Font policy and frame diagnostics have separate owners.",
+      "files": {
+        "src/terminal/diagnostics.rs": "a9812efba0415b98802ac9cce176785d26099c8558da2d7377d76bb2901548c4",
+        "src/terminal/font.rs": "140a96de29bb142e2bd421e4fc1d2536fb5fb58e49ba4099cb4b97bca7623a55",
+        "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
+        "src/terminal/keyboard.rs": "dd0702df5f79b8ea701af08abfc096c3422ad7ffb44f3bd321c6290e691c28b1",
+        "src/terminal/mod.rs": "3a1eb23efb28ec03470ed614c46b958f35efcb1451e5b4457399cea2c6e1d90b",
+        "src/terminal/session.rs": "c34066f4f220329e4c52a513a1e4c0c82085969f4536f61627310379506e2e3d"
+      },
+      "validation": [
+        "Existing IME empty-preedit, phantom Enter, direct-mode commit, duplicate-echo and font tests; Xvfb/X11 key and text events through actual frontend handlers. Physical IME/Wayland not exercised."
+      ]
+    },
+    {
+      "id": "terminal_pointer_scrollback_paint",
+      "scenario": "Select, click a link, report mouse input, scroll held history and repaint.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "PointerInput owns drag/reporting/whole-line wheel state; primary-screen fractional scrolling stays with Scrollback. Keep live/history cache indices and generations distinct, preserve live-only cursor/selection/preedit and shared shaping/background painting. Geometry branches are meaningful.",
+      "files": {
+        "src/terminal/glyphs.rs": "0381c082d4be628dbdd45d2004dce44c28f98dc5fd3c04c5aa87f62d72830917",
+        "src/terminal/paint.rs": "2bed2d6aa47d7267be76983177c01e2ecb3c702825d1374a57a3c32c255dca41",
+        "src/terminal/pointer.rs": "99ef77c7a3f6c3147aad3d96ba0d5eb84ba4ffcedc7856b29eb431303ccd0840",
+        "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
+        "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea",
+        "src/terminal/shaping.rs": "65dabb353725f4a482bc7b4c4720e0794b4a5603c15c56c9fbeb174064c99a42"
+      },
+      "validation": [
+        "Existing wheel/window/cache/selection/URL/geometry tests; isolated frame checks for marker, indexed/truecolor and OSC8. Pixel appearance and platform clipboard not verified."
+      ]
+    },
+    {
+      "id": "terminal_input_order",
+      "scenario": "Type a final character followed by Enter while the core has pending work.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "The isolated GUI reproduced Enter overtaking text. The daemon previously demultiplexed key/text/paste to independently selected channels. CoreInput now carries those deliveries through one FIFO; PTY-query priority and paste notification behavior remain. Wire types and versions stay unchanged. Mouse/scroll channels retain their existing separate scheduling.",
+      "files": {
+        "crates/horizon-terminal-core/src/lib.rs": "032b49cd25bd56431460d552fecd149e7a78f96e6f86edc795d383d0cf0d5cf4",
+        "crates/horizon-terminal-core/src/session_loop.rs": "16d4babc4880bca994d88d14f8da6f71ae92c545e5601a3af506d824ae6f47fa",
+        "crates/horizon-terminal-core/src/session_loop/channels.rs": "7dc493492e77ef6b938f9bad8de21d2e36b8990a59213b865c06046008e1e9fc",
+        "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
+        "crates/horizon-terminald/src/terminal.rs": "adde69f8aa069b46253390ea0dd38f0da3c1cee2a3429c3205781bd7273af638"
+      },
+      "validation": [
+        "New 96-delivery queued regression fails before the fix and passes after it; existing query-priority/no-spurious-frame tests and default daemon tests; same X11 typing repro passes after integration."
+      ]
+    },
+    {
+      "id": "agent_projection_updates",
+      "scenario": "Fold streamed history, append/finish a turn, clear history and update the virtual list.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Transcript entity owns projection, list effects and expansion state under one private module. Initial and changed sessions use the same projection computation. Pure RowUpdate retains stable prefix measurements and remeasures descriptor-stable streaming tails; GPUI applies the plan. Remove the unread latest-user-row cache; projection semantics remain.",
+      "files": {
+        "crates/horizon-agent/src/frame/fold.rs": "3b167bacec8bf968cc798d372819aa97603688f26f87a38e0c7d62bfbbcebe77",
+        "crates/horizon-agent/src/transcript/grouping.rs": "aa0cb4dc4bb1a1878e5dbebae559aa68fab5eafb3e8f417fcec334a125daef3f",
+        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
+        "src/agent/view/mod.rs": "47ce970adcae0795f8c14943a09bfb452e7a906e6bfbe3ca27fd70d4a8f40e98",
+        "src/agent/view/transcript/mod.rs": "8cdd200bca5dd74b8303dc7157e260cae98ba962f852f76cb9c7135811f1d853",
+        "src/agent/view/transcript/projection.rs": "c9f6210fa6282e55df6dfeb26a617317cd0ed1a37aa5063178198fe49109fdcc",
+        "src/agent/view/transcript/scroll.rs": "c2be62ece4737a38f75c75d9025babe675cb6e1da142397f1aa1390ae69afd66"
+      },
+      "validation": [
+        "Three new regressions for streamed content, completed-prefix preservation across later-turn transitions, and empty-history removal; existing projection and frame tests."
+      ]
+    },
+    {
+      "id": "agent_rendering_actions",
+      "scenario": "Render visible items/tool rows/receipts/change summaries and submit or resolve an approval.",
+      "status": "reviewed",
+      "decision": "refactor",
+      "reason": "Separate item, receipt and change-summary rendering under transcript ownership. Preserve occurrence-index expansion keys, live versus historical approvals, command-model stop/continue, weak composer-to-transcript repin, and separately observing status/tasks/composer entities. The outer AgentView remains an uncached layout composite.",
+      "files": {
+        "crates/horizon-agent/src/transcript/tool_call/view.rs": "44e3fca2d904b92324ac554c50e14be40b230b4444652058dda3c32278a0ea50",
+        "src/agent/turns/tool_call.rs": "3308101382d5dacbde5ed895b2ecf340c139c544c22c51d4c841017f3fad3bbd",
+        "src/agent/view/composer.rs": "82ccfdc00c5374680eef533d6be00d21abbd5da10fdbb182cdc54c69124ff465",
+        "src/agent/view/status.rs": "ce88730b68759b39da8dc6b4e1238e7aadbedb6a620e7ae2723d9931ad3903d9",
+        "src/agent/view/tasks.rs": "0e772de03e6c7084d387d5b34c4ddb91abae6bc0faccf8b5d435a13fabdcb146",
+        "src/agent/view/transcript/changes.rs": "5ff435437f8ae5503c32f977be936cbcd6eb49c4713eee1d0173dd42fc84e71c",
+        "src/agent/view/transcript/items.rs": "b6c22a4a302b64acb7eedc936c92abb245e71d8d7b03a1fe32578178cdb8bbdb",
+        "src/agent/view/transcript/receipts.rs": "4b2e1f50dedb92d981dfe4fa666f33297db1fcc549d9440f02a54f70fe42f22c",
+        "src/agent/view/transcript/rows.rs": "5d3531d1f5d7fc86806b7ecfa35ebc925d54300ac9d7815027273c9e390de634"
+      },
+      "validation": [
+        "Existing markdown, receipt/status/tool classification, occurrence and composer tests; no pixel-level agent screenshot or live provider request."
+      ]
+    }
+  ],
+  "removed_files": {
+    "src/agent/view/transcript.rs": "5355a66e389bf00aae307dbc268dcb68368e57c5057ed32822e4ebd8f361da81",
+    "src/terminal/tests.rs": "91585b87e9b75df3066d74bc180ce3b86ff3380b86d795ef2e6e6318922430ac"
+  }
+}

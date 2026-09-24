@@ -13,11 +13,11 @@
         "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
         "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
         "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
-        "src/agent/view/projection.rs": "71ea9a26221b63c980ecdfba9b67428e9cb2d91a7d7fee403671e1d4bd20b55b"
+        "src/agent/view/transcript/projection.rs": "c9f6210fa6282e55df6dfeb26a617317cd0ed1a37aa5063178198fe49109fdcc"
       },
       "decision": "preserve",
-      "reason": "Event reduction owns delta promotion and turn boundaries. Preserve its exhaustive match and ephemeral sidecars. Durable input/outbox records enter LiveState after acknowledged commit; ordinary streaming retains asynchronous appends. UI row projection remains a separate owner. Appender now excludes every ephemeral notification at its own API boundary; direct live and durable paths preserve the same sidecar/history separation.",
-      "commit": "a4721b414573bc3b34395ed221ff77ca4119d2c4"
+      "reason": "Event reduction owns delta promotion and turn boundaries. Preserve its exhaustive match and ephemeral sidecars. Durable input/outbox records enter LiveState after acknowledged commit; ordinary streaming retains asynchronous appends. UI row projection remains a separate owner. Appender now excludes every ephemeral notification at its own API boundary; direct live and durable paths preserve the same sidecar/history separation. Transcript projection and update planning now live under the transcript entity; frame reduction is unchanged.",
+      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
     },
     {
       "target": {
@@ -81,17 +81,17 @@
       },
       "sha256": "c8dd0ea855ab2648d307a5ab03cbbcaf7e466840bc728187e49016bd20ab81b2",
       "related": {
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
         "crates/horizon-agent/src/frame/tool_calls.rs": "34e626cf098b6d38d028c5b2436e0371bbda446f67a6e115458a3e3795382f94",
         "crates/horizon-agent/src/transcript/tool_call/approval.rs": "880be1dabdfd28048c04fc26269dcf4f7c3fdbb2544984a9180bc67265f9a0a3",
         "crates/horizon-agent/src/transcript/tool_call/classify.rs": "4f450f383acbe07262f4aecee992d53c36799cdd2c78bc2954789d5bd3e49b9b",
         "crates/horizon-agent/src/transcript/tool_call/files.rs": "81aad8edc2a66755a8d9221c80ebe0926f650effcd7e107d716cb7eaa0bac912",
         "src/agent/turns/tool_call.rs": "3308101382d5dacbde5ed895b2ecf340c139c544c22c51d4c841017f3fad3bbd",
-        "src/agent/view/rows.rs": "532483d35799444839be73fef02f01155ea3e89a87fb8ea93b2fa1a42ca81b5e",
-        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f"
+        "src/agent/view/transcript/rows.rs": "5d3531d1f5d7fc86806b7ecfa35ebc925d54300ac9d7815027273c9e390de634"
       },
       "decision": "preserve",
-      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate. Retry metadata now belongs to contract. Display classification returns explicit recognition and named data; the UI no longer infers recognition from wording. Per-occurrence transcript rows and historical denial display remain distinct from provider replay.",
-      "commit": "aa2636049393e68bf668f03c35c9b70701efbb2d"
+      "reason": "Frame correlation owns occurrence matching for transcript and recovery. This function owns only tool/approval presentation; retain request order, superseded state and legacy latest-preceding matching. Body indices and absolute row identities keep reused IDs separate. Retry metadata now belongs to contract. Display classification returns explicit recognition and named data; the UI no longer infers recognition from wording. Per-occurrence transcript rows and historical denial display remain distinct from provider replay. Transcript row modules moved under their entity; tool occurrence and approval rendering contracts are unchanged.",
+      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
     },
     {
       "target": {
@@ -202,17 +202,17 @@
         "name": "run_terminal_core",
         "partition": "production"
       },
-      "sha256": "b5b1e28b68fb603be7e69c6421eba6a1e550b5edb2f031539419b7885be201d0",
+      "sha256": "edb76ccb2260fc8c07eda41324b9fcfc24a8b131621cc5881b8b9cd7c4d8dcf1",
       "related": {
+        "crates/horizon-terminal-core/src/session_loop/channels.rs": "7dc493492e77ef6b938f9bad8de21d2e36b8990a59213b865c06046008e1e9fc",
         "crates/horizon-terminal-core/src/session_loop/frames.rs": "a83b9b34abf24372d0f5c1bba3a8d01df8399fe30ba38954ae1ab2513e5f3d06",
-        "crates/horizon-terminald/src/terminal.rs": "7d7f48c9e388e3d293d17c8a126731dff0431055e1f585d3a1187202a84d96c6",
+        "crates/horizon-terminald/src/terminal.rs": "adde69f8aa069b46253390ea0dd38f0da3c1cee2a3429c3205781bd7273af638",
         "src/terminal/input.rs": "e0c98f5b43022462f453e7b0c7bf097be9dd3e5b55b54f59725de7fe09fffa14",
-        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
-        "crates/horizon-terminal-core/src/session_loop/channels.rs": "19588d3ffdd9b4d59ed8980ae871ca908476cbc57dc0f09b495d1552673b2283"
+        "src/terminal/session.rs": "c34066f4f220329e4c52a513a1e4c0c82085969f4536f61627310379506e2e3d"
       },
       "decision": "preserve",
-      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved. Channel pairs are now constructed inside terminal-core and shared by the host and tests. Receiver fields are internal; disconnecting either input owner still terminates the core, with the other input retained in regression coverage.",
-      "commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b"
+      "reason": "The select macro hides much of this state machine from function metrics. Preserve bounded PTY-query priority before keys/paste/text, synchronized-update deadlines, and latest-frame publication; encoding-only input must not consume the visible update slot. Normal output and timeout flushing share side-effect delivery while the loop retains priority and timing ownership. TerminalSize now applies engine minima at PTY/core entry; valid geometry and independent pixel dimensions are preserved. Channel pairs are now constructed inside terminal-core and shared by the host and tests. Receiver fields are internal; disconnecting either input owner still terminates the core, with the other input retained in regression coverage. Key, committed text and paste now share one ordered CoreInput FIFO after a GUI repro exposed cross-channel reordering. Bounded PTY-query priority, encoding-only notification behavior and paste notification remain unchanged.",
+      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
     },
     {
       "target": {
@@ -257,31 +257,32 @@
       },
       "sha256": "2bf5c2c8e03fa3f088e1173501127ffab91fd14e0f0d70ed0320b83b87c03062",
       "related": {
-        "src/terminal/mod.rs": "ddab8e6642937cf2bfe732e1cecae5221608765dccd1f9034fecb907eea80ea7",
+        "src/terminal/mod.rs": "3a1eb23efb28ec03470ed614c46b958f35efcb1451e5b4457399cea2c6e1d90b",
+        "src/terminal/paint.rs": "2bed2d6aa47d7267be76983177c01e2ecb3c702825d1374a57a3c32c255dca41",
         "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea",
-        "src/terminal/shaping.rs": "99850c11e70513f968ab3b93a178964191d80b70cebee6813d28c644e9566339"
+        "src/terminal/shaping.rs": "65dabb353725f4a482bc7b4c4720e0794b4a5603c15c56c9fbeb174064c99a42"
       },
       "decision": "preserve",
-      "reason": "Character branches encode distinct geometry. Shared row shaping and text decorations now live in shaping.rs; geometry and cache epoch semantics remain unchanged.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Character branches encode distinct geometry. Shared row shaping and text decorations now live in shaping.rs; geometry and cache epoch semantics remain unchanged. Paint/cache ownership moved to terminal/paint.rs; glyph geometry is unchanged.",
+      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
     },
     {
       "target": {
-        "file": "src/terminal/mod.rs",
+        "file": "src/terminal/paint.rs",
         "owner": "<free>",
         "name": "paint_terminal",
         "partition": "production"
       },
-      "sha256": "6b5a702e1c045ecb53eff2316b4eb6464b394b5c58e6b3ac2de1c62050c7aa3c",
+      "sha256": "1c30bce114847104257828d3f5672fbc743375cf2f1ca43769fe7c9e057cb1b0",
       "related": {
         "src/terminal/scrollback.rs": "93b59be605c6f903bf344444ce1c6e9d8d3224203808df03da67981ee8c5b343",
-        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57",
+        "src/terminal/session.rs": "c34066f4f220329e4c52a513a1e4c0c82085969f4536f61627310379506e2e3d",
         "src/terminal/shape_cache.rs": "30b59db5dc19321e2882d700e43f153f9850ee6f62c6943199109db9ee11d5ea",
-        "src/terminal/shaping.rs": "99850c11e70513f968ab3b93a178964191d80b70cebee6813d28c644e9566339"
+        "src/terminal/shaping.rs": "65dabb353725f4a482bc7b4c4720e0794b4a5603c15c56c9fbeb174064c99a42"
       },
       "decision": "preserve",
-      "reason": "Live and history painting have distinct cache indices and generations. Cursor, selection and IME belong to the live viewport; both paths use the same separately owned row shaping. Both paths now also share background painting, including empty-text colored spans.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Live and history painting have distinct cache indices and generations. Cursor, selection and IME belong to the live viewport; both paths use the same separately owned row shaping. Both paths now also share background painting, including empty-text colored spans. Painting now has its own module and reads preedit through KeyboardInput; live/history geometry and cache contracts are unchanged.",
+      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
     },
     {
       "target": {

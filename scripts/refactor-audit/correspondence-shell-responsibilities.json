@@ -1,0 +1,1759 @@
+[
+  {
+    "label": "Terminal font policy",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "font_from_stack",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "resolved_font",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "configured_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "font_size_store",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "adjust_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "reset_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "line_height",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "font_from_stack",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "resolved_font",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "configured_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "font_size_store",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "adjust_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "reset_font_size",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "line_height",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Keyboard and IME delivery state",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_key_up",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "keys_as_escape_codes",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_key",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "utf16_len",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "ime_marked_text_for",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "ImeCommitGuard",
+        "name": "note_commit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "ImeCommitGuard",
+        "name": "should_suppress",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "ImeCommitGuard",
+        "name": "should_suppress_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "KeyTextDedup",
+        "name": "note_key_sent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "KeyTextDedup",
+        "name": "is_duplicate_of_recent_key",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "KeyTextDedup",
+        "name": "is_duplicate_of_recent_key_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "text_for_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "selected_text_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "marked_text_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "unmark_text",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "replace_text_in_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "replace_and_mark_text_in_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "bounds_for_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "character_index_for_point",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "KeyboardInput",
+        "name": "marked_text",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "handle_key_up",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "keys_as_escape_codes",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "handle_key",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "utf16_len",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "ime_marked_text_for",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "ImeCommitGuard",
+        "name": "note_commit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "ImeCommitGuard",
+        "name": "should_suppress",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "ImeCommitGuard",
+        "name": "should_suppress_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "KeyTextDedup",
+        "name": "note_key_sent",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "KeyTextDedup",
+        "name": "is_duplicate_of_recent_key",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "KeyTextDedup",
+        "name": "is_duplicate_of_recent_key_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "text_for_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "selected_text_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "marked_text_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "unmark_text",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "replace_text_in_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "replace_and_mark_text_in_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "bounds_for_range",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "TerminalView",
+        "name": "character_index_for_point",
+        "partition": "production",
+        "variant": "trait:EntityInputHandler"
+      }
+    ]
+  },
+  {
+    "label": "Pointer and viewport routing",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "mouse_reporting",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "cell_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "hyperlink_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_down",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "paste_from_primary",
+        "partition": "production",
+        "variant": "cfg(any(target_os=\"linux\",target_os=\"freebsd\"))"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "paste_from_primary",
+        "partition": "production",
+        "variant": "cfg(not(any(target_os=\"linux\",target_os=\"freebsd\")))"
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_move",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_up",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "TerminalView",
+        "name": "handle_scroll_wheel",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "mouse_reporting",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "cell_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "hyperlink_at",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_down",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "paste_from_primary",
+        "partition": "production",
+        "variant": "cfg(any(target_os=\"linux\",target_os=\"freebsd\"))"
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "paste_from_primary",
+        "partition": "production",
+        "variant": "cfg(not(any(target_os=\"linux\",target_os=\"freebsd\")))"
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_move",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "handle_mouse_up",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/pointer.rs",
+        "owner": "TerminalView",
+        "name": "handle_scroll_wheel",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Painting caches and geometry",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_scrollback_window",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_row_backgrounds",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "paint_row_items",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "char_columns",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "PaintCaches",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "<free>",
+        "name": "paint_scrollback_window",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "<free>",
+        "name": "paint_terminal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "<free>",
+        "name": "paint_row_backgrounds",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "<free>",
+        "name": "paint_row_items",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/paint.rs",
+        "owner": "<free>",
+        "name": "char_columns",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Frame verification dump",
+    "before": [
+      {
+        "file": "src/terminal/mod.rs",
+        "owner": "<free>",
+        "name": "dump_frame",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/diagnostics.rs",
+        "owner": "<free>",
+        "name": "dump_frame",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Session creation intent",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "resolve_spawn_source",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "control_plane_spawn_source",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "terminal_fallback_cwd",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "pinned_terminal_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "pending_terminal_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "pending_agent_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "default_terminal_cwd",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "terminal_spawn_spec",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "create_session",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "open_terminal_in_directory",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_new_session",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "resolve_spawn_source",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "control_plane_spawn_source",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "terminal_fallback_cwd",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "pinned_terminal_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "pending_terminal_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "pending_agent_spawn",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "default_terminal_cwd",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "terminal_spawn_spec",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "create_session",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "open_terminal_in_directory",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_new_session",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Session event routing",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_host_tools",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_workspace_root_updates",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_terminal_exit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_session_title_updates",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_terminal_notifications",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_notification_responses",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reveal_session",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "handle_terminal_exited",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_host_tools",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_workspace_root_updates",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_terminal_exit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_session_title_updates",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_terminal_notifications",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "wire_notification_responses",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "reveal_session",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_events.rs",
+        "owner": "WorkspaceShell",
+        "name": "handle_terminal_exited",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Independent runtime reloads",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_agent_runtime",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_terminal_runtime",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/runtime_reload.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_agent_runtime",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/runtime_reload.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_terminal_runtime",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Preview targeting",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_open_preview",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "empty_preview_pane_under_cursor",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_preview_pane",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_active_preview",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/preview.rs",
+        "owner": "WorkspaceShell",
+        "name": "control_plane_open_preview",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/preview.rs",
+        "owner": "WorkspaceShell",
+        "name": "empty_preview_pane_under_cursor",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/preview.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_preview_pane",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/preview.rs",
+        "owner": "WorkspaceShell",
+        "name": "reload_active_preview",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Navigation effects",
+    "before": [
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "workspace_mode_blocked_by_restore",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "toggle_mode",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_move",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_commit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_cancel",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "cycle_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "next_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "prev_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_pane",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "workspace_mode_blocked_by_restore",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "toggle_mode",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_move",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_commit",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "mode_cancel",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "cycle_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "next_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "prev_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_tab",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "WorkspaceShell",
+        "name": "activate_pane",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Transcript entity and list effects",
+    "before": [
+      {
+        "file": "src/agent/view/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "bind_composer",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "repin_to_tail",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "render",
+        "partition": "production",
+        "variant": "trait:Render"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "sync_transcript_rows",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_transcript_row",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "new",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "bind_composer",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "repin_to_tail",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "render",
+        "partition": "production",
+        "variant": "trait:Render"
+      },
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "sync_transcript_rows",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/mod.rs",
+        "owner": "AgentTranscript",
+        "name": "render_transcript_row",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Transcript projection and update plan",
+    "before": [
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "build_transcript_rows",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "TranscriptProjection",
+        "name": "from_items",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "TranscriptProjection",
+        "name": "update_from",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "build_transcript_rows",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Individual transcript items",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_item",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_orphan_tool_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "item_call_id",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "escape_markdown",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "AgentTranscript",
+        "name": "render_item",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "AgentTranscript",
+        "name": "render_orphan_tool_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "<free>",
+        "name": "item_call_id",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "<free>",
+        "name": "escape_markdown",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Receipts and running cards",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_receipt",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt_chip",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_running_card",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "render_stop_button",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "render_continue_button",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "accent_tint",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "running_state_label",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_receipt",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "AgentTranscript",
+        "name": "render_receipt_chip",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "AgentTranscript",
+        "name": "render_running_card",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "<free>",
+        "name": "render_stop_button",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "<free>",
+        "name": "render_continue_button",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "<free>",
+        "name": "accent_tint",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "<free>",
+        "name": "running_state_label",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Change summary",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_changes",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_changes_bar",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "AgentTranscript",
+        "name": "render_changes_list",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/changes.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_changes",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/changes.rs",
+        "owner": "AgentTranscript",
+        "name": "render_changes_bar",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/changes.rs",
+        "owner": "AgentTranscript",
+        "name": "render_changes_list",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Tool rows",
+    "before": [
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expanded_receipt_rows",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expandable_tool_call_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_body",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_waiting_proposal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "ToolCallMark",
+        "name": "glyph_and_color",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "finished_tool_call_mark",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "tool_call_glyph",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "tool_call_line_text",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "approval_phrase",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "render_diff_line",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "render_line_body",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "truncation_note",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "toggle_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expanded_receipt_rows",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_expandable_tool_call_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_body",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_tool_call_row",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "AgentTranscript",
+        "name": "render_waiting_proposal",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "ToolCallMark",
+        "name": "glyph_and_color",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "finished_tool_call_mark",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "tool_call_glyph",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "tool_call_line_text",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "approval_phrase",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "render_diff_line",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "render_line_body",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "truncation_note",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Running turn clock",
+    "before": [
+      {
+        "file": "src/agent/view/scroll.rs",
+        "owner": "AgentTranscript",
+        "name": "sync_running_turn_clock",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/scroll.rs",
+        "owner": "AgentTranscript",
+        "name": "sync_running_turn_clock",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  }
+]

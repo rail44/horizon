@@ -1,0 +1,709 @@
+[
+  {
+    "label": "Terminal font policy",
+    "before": [
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "font_size_commands_move_clamp_and_reset",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "stack_parses_primary_and_fallbacks",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "single_family_has_no_fallbacks",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "trims_whitespace_around_entries",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "drops_empty_entries_between_commas",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "empty_string_falls_back_to_default_family",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "blank_string_falls_back_to_default_family",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "font_size_commands_move_clamp_and_reset",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "stack_parses_primary_and_fallbacks",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "single_family_has_no_fallbacks",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "trims_whitespace_around_entries",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "drops_empty_entries_between_commas",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "empty_string_falls_back_to_default_family",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/font.rs",
+        "owner": "<free>",
+        "name": "blank_string_falls_back_to_default_family",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Keyboard and IME delivery state",
+    "before": [
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "no_prior_composition_never_suppresses",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "enter_confirming_a_composition_is_suppressed_exactly_once",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "rapid_typing_after_commit_is_not_suppressed",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "commit_via_space_does_not_swallow_a_later_enter",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "consecutive_compositions_each_suppress_independently",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "phantom_enter_within_the_window_is_suppressed",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "enter_after_the_window_passes_through_a_mouse_click_commit",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "preedit_backspace_to_empty_clears_the_marked_text",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "cleared_marked_text_paints_nothing",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "kitty_mode_typing_drops_the_duplicate_echo",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "composition_commit_with_no_key_send_is_never_a_duplicate",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "direct_mode_commit_with_no_prior_key_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "mismatched_text_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "is_one_shot_like_ime_commit_guard",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "src/terminal/tests.rs",
+        "owner": "<free>",
+        "name": "stale_key_outside_the_window_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "no_prior_composition_never_suppresses",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "enter_confirming_a_composition_is_suppressed_exactly_once",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "rapid_typing_after_commit_is_not_suppressed",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "commit_via_space_does_not_swallow_a_later_enter",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "consecutive_compositions_each_suppress_independently",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "phantom_enter_within_the_window_is_suppressed",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "enter_after_the_window_passes_through_a_mouse_click_commit",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "preedit_backspace_to_empty_clears_the_marked_text",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "cleared_marked_text_paints_nothing",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "kitty_mode_typing_drops_the_duplicate_echo",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "composition_commit_with_no_key_send_is_never_a_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "direct_mode_commit_with_no_prior_key_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "mismatched_text_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "is_one_shot_like_ime_commit_guard",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/terminal/keyboard.rs",
+        "owner": "<free>",
+        "name": "stale_key_outside_the_window_is_not_a_duplicate",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Session creation intent",
+    "before": [
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "explicit_split_target_wins_over_the_fallback",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "missing_explicit_source_falls_back_to_the_provided_session",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "no_explicit_source_and_no_fallback_is_a_root_spawn",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "control_plane_source_prefers_split_then_issuer_then_root_ignoring_focus",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "terminal_fallback_prefers_current_dir_then_home_then_dot",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_lifecycle.rs",
+        "owner": "<free>",
+        "name": "open_terminal_in_directory_pins_the_target_cwd_with_no_source_inheritance",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "explicit_split_target_wins_over_the_fallback",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "missing_explicit_source_falls_back_to_the_provided_session",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "no_explicit_source_and_no_fallback_is_a_root_spawn",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "control_plane_source_prefers_split_then_issuer_then_root_ignoring_focus",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "terminal_fallback_prefers_current_dir_then_home_then_dot",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/session_creation.rs",
+        "owner": "<free>",
+        "name": "open_terminal_in_directory_pins_the_target_cwd_with_no_source_inheritance",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Navigation effects",
+    "before": [
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "failed_restore_allows_workspace_mode_to_reach_the_reload_command",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_steps_forward_wrapping_at_the_end",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_steps_backward_wrapping_at_the_start",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/render.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_swaps_for_a_two_tab_strip",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "failed_restore_allows_workspace_mode_to_reach_the_reload_command",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_steps_forward_wrapping_at_the_end",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_steps_backward_wrapping_at_the_start",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/workspace/navigation.rs",
+        "owner": "<free>",
+        "name": "cycle_tab_index_swaps_for_a_two_tab_strip",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Transcript projection and update plan",
+    "before": [
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "turn_end",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "projection_preserves_message_burst_receipt_and_prose_order",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "streaming_text_keeps_its_descriptor_stable_for_targeted_remeasurement",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "thinking_is_never_a_transcript_row_streaming_or_replayed",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/projection.rs",
+        "owner": "<free>",
+        "name": "thinking_shows_an_indicator_row_only_while_it_is_the_open_tail",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "turn_end",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "projection_preserves_message_burst_receipt_and_prose_order",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "streaming_text_keeps_its_descriptor_stable_for_targeted_remeasurement",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "thinking_is_never_a_transcript_row_streaming_or_replayed",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "thinking_shows_an_indicator_row_only_while_it_is_the_open_tail",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "streamed_content_remeasures_the_tail_without_replacing_rows",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "later_turn_changes_preserve_the_completed_prefix",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/projection.rs",
+        "owner": "<free>",
+        "name": "removing_the_history_clears_rows_and_empty_updates_do_nothing",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Individual transcript items",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_neutralizes_gfm_construct_prefixes",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_preserves_plain_text_and_newlines",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_keeps_backslashes_verbatim",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_neutralizes_gfm_construct_prefixes",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_preserves_plain_text_and_newlines",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/items.rs",
+        "owner": "<free>",
+        "name": "escape_markdown_keeps_backslashes_verbatim",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Receipts and running cards",
+    "before": [
+      {
+        "file": "src/agent/view/transcript.rs",
+        "owner": "<free>",
+        "name": "running_state_label_covers_in_flight_and_falls_back_for_quiet_states",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/receipts.rs",
+        "owner": "<free>",
+        "name": "running_state_label_covers_in_flight_and_falls_back_for_quiet_states",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Tool rows",
+    "before": [
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "finished_view",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/rows.rs",
+        "owner": "<free>",
+        "name": "finished_tool_call_mark_reads_superseded_not_success",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "finished_view",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "src/agent/view/transcript/rows.rs",
+        "owner": "<free>",
+        "name": "finished_tool_call_mark_reads_superseded_not_success",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Mixed user input FIFO and encoding-only notification policy",
+    "before": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "key_input_alone_never_triggers_a_snapshot_notification",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "key_input_alone_never_triggers_a_snapshot_notification",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-terminal-core/src/session_loop.rs",
+        "owner": "<free>",
+        "name": "mixed_user_input_retains_fifo_order_before_the_core_starts",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  }
+]
