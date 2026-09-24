@@ -32,7 +32,7 @@ use super::common::{
     SILENCE_MISMATCH_THRESHOLD,
 };
 use super::connection::connect_or_spawn_agentd_retrying;
-use super::routing::AgentRoutes;
+use super::routing::{AgentRoutes, RouteKey};
 
 /// The daemon this module talks to, named in every classified error.
 const DAEMON: &str = "horizon-agentd";
@@ -43,11 +43,12 @@ const DAEMON: &str = "horizon-agentd";
 /// command streams carry the receiving half of their handle's bridge.
 pub(super) enum Op {
     NewAgent {
+        route: RouteKey<contract::SessionId>,
         new: wire::SessionNew,
         commands: UnboundedReceiver<Command>,
     },
     AttachAgent {
-        session_id: contract::SessionId,
+        route: RouteKey<contract::SessionId>,
         commands: UnboundedReceiver<Command>,
     },
     SessionList {
@@ -490,36 +491,39 @@ fn spawn_skipped_lines_pump(mut skipped_lines: CappedReceiver<String, CONTROL_MA
 /// routes.
 fn handle_op(op: Op, live: &Live) {
     match op {
-        Op::NewAgent { new, commands } => {
-            let hub = live.hub.clone();
-            let routes = live.routes.clone();
-            tokio::spawn(async move {
-                let session_id = new.session_id;
-                match with_deadline(OP_TIMEOUT, "new_agent", hub.new_agent(new)).await {
-                    Ok(attachment) => {
-                        run_agent_attachment(routes, session_id, attachment, commands).await
-                    }
-                    Err(error) => routes.agent_failed(
-                        session_id,
-                        format!("failed to start the agent session: {error}"),
-                    ),
-                }
-            });
-        }
-        Op::AttachAgent {
-            session_id,
+        Op::NewAgent {
+            route,
+            new,
             commands,
         } => {
             let hub = live.hub.clone();
             let routes = live.routes.clone();
             tokio::spawn(async move {
-                match with_deadline(OP_TIMEOUT, "attach_agent", hub.attach_agent(session_id)).await
+                match with_deadline(OP_TIMEOUT, "new_agent", hub.new_agent(new)).await {
+                    Ok(attachment) => {
+                        run_agent_attachment(routes, route, attachment, commands).await
+                    }
+                    Err(error) => routes
+                        .agent_failed(route, format!("failed to start the agent session: {error}")),
+                }
+            });
+        }
+        Op::AttachAgent { route, commands } => {
+            let hub = live.hub.clone();
+            let routes = live.routes.clone();
+            tokio::spawn(async move {
+                match with_deadline(
+                    OP_TIMEOUT,
+                    "attach_agent",
+                    hub.attach_agent(route.session_id()),
+                )
+                .await
                 {
                     Ok(attachment) => {
-                        run_agent_attachment(routes, session_id, attachment, commands).await
+                        run_agent_attachment(routes, route, attachment, commands).await
                     }
                     Err(error) => routes.agent_failed(
-                        session_id,
+                        route,
                         format!("failed to attach to the agent session: {error}"),
                     ),
                 }
@@ -624,7 +628,7 @@ fn handle_op(op: Op, live: &Live) {
 /// routes events to the pane, until either side goes away.
 async fn run_agent_attachment(
     routes: Arc<AgentRoutes>,
-    session_id: contract::SessionId,
+    route: RouteKey<contract::SessionId>,
     attachment: horizon_agent::wire::AgentAttachment,
     mut commands: UnboundedReceiver<Command>,
 ) {
@@ -650,7 +654,7 @@ async fn run_agent_attachment(
                 None => break,
             },
             event = events.recv() => match event {
-                Ok(Some(event)) => routes.route_agent_event(session_id, event),
+                Ok(Some(event)) => routes.route_agent_event(route, event),
                 Ok(None) => break,
                 Err(err) if err.is_final() => break,
                 Err(err) => event_skips.note(&err),

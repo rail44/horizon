@@ -40,7 +40,7 @@ use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
-use routing::{AgentRoutes, TerminalRoutes};
+use routing::{AgentRoutes, RouteKey, TerminalRoutes};
 use uuid::Uuid;
 
 use common::RuntimeControl;
@@ -123,7 +123,7 @@ impl TerminaldSlot {
 
 pub(crate) struct AgentSessionHandle {
     inner: registry::SessionHandle,
-    session_id: contract::SessionId,
+    route: RouteKey<contract::SessionId>,
     routes: Arc<AgentRoutes>,
 }
 
@@ -136,7 +136,7 @@ pub(crate) struct TerminalSessionHandle {
     frames: tokio::sync::watch::Receiver<TerminalFrame>,
     /// The non-frame events (title/bell/clipboard/exit/error).
     events: Receiver<TerminalUpdate>,
-    session_id: Uuid,
+    route: RouteKey<Uuid>,
     routes: Arc<TerminalRoutes>,
 }
 
@@ -153,13 +153,13 @@ impl AgentSessionHandle {
     /// session by id (`SessionHub::set_session_model` -- the model picker's
     /// confirm path).
     pub(crate) fn session_id(&self) -> contract::SessionId {
-        self.session_id
+        self.route.session_id()
     }
 }
 
 impl Drop for AgentSessionHandle {
     fn drop(&mut self) {
-        self.routes.unregister_agent(self.session_id);
+        self.routes.unregister_agent(self.route);
     }
 }
 
@@ -179,7 +179,7 @@ impl TerminalSessionHandle {
 
 impl Drop for TerminalSessionHandle {
     fn drop(&mut self) {
-        self.routes.unregister_terminal(self.session_id);
+        self.routes.unregister_terminal(self.route);
     }
 }
 
@@ -294,6 +294,7 @@ impl AgentdHandle {
     ) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::NewAgent {
+            route: handle.route,
             new: wire::SessionNew {
                 session_id,
                 provider_id,
@@ -310,7 +311,7 @@ impl AgentdHandle {
     pub(crate) fn attach_session(&self, session_id: contract::SessionId) -> AgentSessionHandle {
         let (handle, commands) = self.register_agent(session_id);
         let _ = self.ops.send(agent::Op::AttachAgent {
-            session_id,
+            route: handle.route,
             commands,
         });
         handle
@@ -330,7 +331,7 @@ impl AgentdHandle {
     ) {
         let (command_tx, command_rx) = unbounded::<Command>();
         let (event_tx, event_rx) = unbounded::<ProviderEvent>();
-        self.routes.register_agent(session_id, event_tx);
+        let route = self.routes.register_agent(session_id, event_tx);
 
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
         std::thread::spawn(move || {
@@ -343,7 +344,7 @@ impl AgentdHandle {
         (
             AgentSessionHandle {
                 inner: registry::SessionHandle::new(command_tx, event_rx),
-                session_id,
+                route,
                 routes: self.routes.clone(),
             },
             bridge_rx,
@@ -540,7 +541,7 @@ impl TerminaldHandle {
     ) -> TerminalSessionHandle {
         let (handle, commands) = self.register_terminal(session_id);
         let _ = self.ops.send(terminal::Op::CreateTerminal {
-            session_id,
+            route: handle.route,
             spec: Box::new(spec),
             commands,
         });
@@ -562,8 +563,9 @@ impl TerminaldHandle {
         let (frame_tx, frame_rx) = tokio::sync::watch::channel(TerminalFrame::empty());
         let (event_tx, event_rx) = unbounded::<TerminalUpdate>();
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
-        self.routes
-            .register_terminal(session_id, frame_tx, event_tx, bridge_tx.clone());
+        let route =
+            self.routes
+                .register_terminal(session_id, frame_tx, event_tx, bridge_tx.clone());
 
         std::thread::spawn(move || {
             while let Ok(command) = command_rx.recv() {
@@ -578,7 +580,7 @@ impl TerminaldHandle {
                 commands: command_tx,
                 frames: frame_rx,
                 events: event_rx,
-                session_id,
+                route,
                 routes: self.routes.clone(),
             },
             bridge_rx,
@@ -622,7 +624,7 @@ impl TerminaldHandle {
             let sent = self
                 .ops
                 .send(terminal::Op::AttachTerminal {
-                    session_id,
+                    route: handle.route,
                     commands,
                     reply: reply_tx,
                 })

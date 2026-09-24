@@ -42,7 +42,7 @@ use super::common::{
     SILENCE_MISMATCH_THRESHOLD,
 };
 use super::connection::connect_or_spawn_terminald_retrying;
-use super::routing::TerminalRoutes;
+use super::routing::{RouteKey, TerminalRoutes};
 
 /// The daemon this module talks to, named in every classified error.
 const DAEMON: &str = "horizon-terminald";
@@ -68,12 +68,12 @@ const SKEW_REMEDY: &str = "rebuild (`cargo build --workspace`) and run `Reload T
 /// One typed request from the sync world to the terminal runtime.
 pub(super) enum Op {
     CreateTerminal {
-        session_id: Uuid,
+        route: RouteKey<Uuid>,
         spec: Box<TerminalSpawnSpec>,
         commands: UnboundedReceiver<TerminalCommand>,
     },
     AttachTerminal {
-        session_id: Uuid,
+        route: RouteKey<Uuid>,
         commands: UnboundedReceiver<TerminalCommand>,
         /// `true` exactly when the daemon reported a successful attach.
         reply: crossbeam_channel::Sender<bool>,
@@ -437,7 +437,7 @@ where
 fn handle_op(op: Op, live: &Live) {
     match op {
         Op::CreateTerminal {
-            session_id,
+            route,
             spec,
             commands,
         } => {
@@ -447,21 +447,21 @@ fn handle_op(op: Op, live: &Live) {
                 match with_deadline(
                     CREATE_TERMINAL_TIMEOUT,
                     "create_terminal",
-                    hub.create_terminal(session_id, *spec),
+                    hub.create_terminal(route.session_id(), *spec),
                 )
                 .await
                 {
                     Ok(attachment) => {
-                        run_terminal_attachment(routes, session_id, attachment, commands).await
+                        run_terminal_attachment(routes, route, attachment, commands).await
                     }
                     // What the JSONL wire delivered as a
                     // `TerminalUpdate::Error` on the update stream.
-                    Err(error) => routes.terminal_failed(session_id, error),
+                    Err(error) => routes.terminal_failed(route, error),
                 }
             });
         }
         Op::AttachTerminal {
-            session_id,
+            route,
             commands,
             reply,
         } => {
@@ -471,13 +471,13 @@ fn handle_op(op: Op, live: &Live) {
                 match with_deadline(
                     OP_TIMEOUT,
                     "attach_terminal",
-                    hub.attach_terminal(session_id),
+                    hub.attach_terminal(route.session_id()),
                 )
                 .await
                 {
                     Ok(attachment) => {
                         let _ = reply.send(true);
-                        run_terminal_attachment(routes, session_id, attachment, commands).await;
+                        run_terminal_attachment(routes, route, attachment, commands).await;
                     }
                     Err(_error) => {
                         let _ = reply.send(false);
@@ -509,7 +509,7 @@ fn handle_op(op: Op, live: &Live) {
 /// non-frame events to the pane, until either side goes away.
 async fn run_terminal_attachment(
     routes: Arc<TerminalRoutes>,
-    session_id: Uuid,
+    route: RouteKey<Uuid>,
     attachment: TerminalAttachment,
     mut commands: UnboundedReceiver<TerminalCommand>,
 ) {
@@ -536,7 +536,7 @@ async fn run_terminal_attachment(
     // `is_final() == false`) is skipped, self-healing on the next frame; a
     // final error means the frame port is gone, so stop polling it.
     match frames.borrow_and_update() {
-        Ok(seed) => routes.route_terminal_frame(session_id, seed.clone()),
+        Ok(seed) => routes.route_terminal_frame(route, seed.clone()),
         Err(err) if err.is_final() => frames_open = false,
         Err(err) => frame_skips.note(&err),
     }
@@ -565,7 +565,7 @@ async fn run_terminal_attachment(
                 // final value here (§5 Option A / spike §1c) — the client's
                 // own row-comparison then invalidates just the changed rows.
                 Ok(()) => match frames.borrow_and_update() {
-                    Ok(frame) => routes.route_terminal_frame(session_id, frame.clone()),
+                    Ok(frame) => routes.route_terminal_frame(route, frame.clone()),
                     // Non-final (a `Deserialize`/`MaxItemSizeExceeded` value
                     // the watch publishes but keeps the channel for): skip
                     // it and wait for the next frame, exactly like the events
@@ -582,7 +582,7 @@ async fn run_terminal_attachment(
             event = events.recv() => match event {
                 Ok(Some(update)) => {
                     let exited = matches!(update, TerminalUpdate::Exited);
-                    routes.route_terminal_update(session_id, update);
+                    routes.route_terminal_update(route, update);
                     if exited {
                         break;
                     }

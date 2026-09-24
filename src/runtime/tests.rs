@@ -549,10 +549,10 @@ fn local_terminal_frame_route_collapses_a_burst_to_its_latest_snapshot() {
     let (frame_tx, mut frame_rx) = tokio::sync::watch::channel(TerminalFrame::empty());
     let (event_tx, _event_rx) = unbounded();
     let (command_tx, _command_rx) = tokio::sync::mpsc::unbounded_channel();
-    routes.register_terminal(session_id, frame_tx, event_tx, command_tx);
+    let route = routes.register_terminal(session_id, frame_tx, event_tx, command_tx);
 
     for text in ["obsolete-1", "obsolete-2", "latest"] {
-        routes.route_terminal_frame(session_id, TerminalFrame::from_text(text.into()));
+        routes.route_terminal_frame(route, TerminalFrame::from_text(text.into()));
     }
 
     assert!(frame_rx.has_changed().unwrap());
@@ -1688,4 +1688,101 @@ async fn organizer_request_uses_existing_agent_connection() {
     };
     assert_eq!(root, expected_root);
     assert_eq!(request.await.unwrap().unwrap(), id);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replacing_an_agent_handle_keeps_the_new_wire_attachment_live() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let id = SessionId::new();
+    let old = agentd.attach_session(id);
+    let (mut calls, _conn, _serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
+    assert!(matches!(
+        next_agent_call(&mut calls).await,
+        AgentCall::Hello
+    ));
+    let AgentCall::AttachAgent {
+        peer: _old_peer, ..
+    } = next_agent_call(&mut calls).await
+    else {
+        panic!("expected the old attachment");
+    };
+    let current = agentd.attach_session(id);
+    let AgentCall::AttachAgent {
+        session_id,
+        mut peer,
+    } = next_agent_call(&mut calls).await
+    else {
+        panic!("expected the replacement attachment");
+    };
+    assert_eq!(session_id, id);
+    drop(old);
+    let event = Event::StateChanged(SessionState::WaitingForUser);
+    peer.events
+        .send(AgentWireEvent::Event(event.clone()))
+        .await
+        .unwrap();
+    assert_eq!(
+        current
+            .events()
+            .recv_timeout(Duration::from_secs(5))
+            .unwrap()
+            .event,
+        event
+    );
+    current.sender().send(Command::ContinueTurn).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Some(Command::ContinueTurn)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn replacing_a_terminal_handle_keeps_the_new_wire_attachment_live() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let terminald = TerminaldHandle::start_on_stream(client);
+    let id = Uuid::new_v4();
+    let old = terminald.start_terminal(id, spec());
+    let (mut calls, _conn, _serve) = serve_fake_terminal_hub(server, FakeBehavior::default()).await;
+    expect_terminald_handshake(&mut calls).await;
+    let TerminalCall::CreateTerminal {
+        peer: _old_peer, ..
+    } = next_terminal_call(&mut calls).await
+    else {
+        panic!("expected the old attachment");
+    };
+    let attacher = terminald.clone();
+    let attached = tokio::task::spawn_blocking(move || attacher.attach_terminals(vec![id]));
+    let TerminalCall::AttachTerminal {
+        peer: Some(mut peer),
+        ..
+    } = next_terminal_call(&mut calls).await
+    else {
+        panic!("expected the replacement attachment");
+    };
+    let (_, current) = attached.await.unwrap().pop().unwrap();
+    drop(old);
+    peer.frames
+        .send(TerminalFrame::from_text("replacement".into()))
+        .unwrap();
+    recv_frame(current.frames(), "replacement").await;
+    peer.events
+        .send(TerminalUpdate::Error("current diagnostic".into()))
+        .await
+        .unwrap();
+    assert!(
+        matches!(current.events().recv_timeout(Duration::from_secs(5)).unwrap(), TerminalUpdate::Error(message) if message == "current diagnostic")
+    );
+    let input = TerminalCommand::Input(b"still attached".to_vec());
+    current.sender().send(input.clone()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Some(input)
+    );
 }
