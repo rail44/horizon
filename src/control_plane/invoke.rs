@@ -4,13 +4,13 @@ use horizon_agent::contract::ToolCallId;
 use horizon_agent::roles::RoleId;
 use horizon_control::contract::Invoke;
 use horizon_workspace::commands::CommandId;
-use horizon_workspace::{PaneKind, SessionId, SplitAxis};
+use horizon_workspace::{SessionId, SessionKind, SplitAxis};
 use std::path::PathBuf;
 
 #[derive(Debug)]
 pub(super) enum Command {
     NewSession {
-        kind: PaneKind,
+        kind: SessionKind,
         role_id: Option<RoleId>,
         split: Option<(SessionId, SplitAxis)>,
         issuer: Option<SessionId>,
@@ -56,8 +56,8 @@ pub(super) enum Command {
 pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
     let args = &invoke.args;
     Ok(match invoke.command.as_str() {
-        "new-terminal" => new_session(args, PaneKind::Terminal)?,
-        "new-agent" => new_session(args, PaneKind::Agent)?,
+        "new-terminal" => new_session(args, SessionKind::Terminal)?,
+        "new-agent" => new_session(args, SessionKind::Agent)?,
         "preview" => Command::Preview {
             path: required_string_arg(args, "path")?.into(),
             name: optional_string_arg(args, "name")?,
@@ -102,7 +102,7 @@ pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
     })
 }
 
-fn new_session(args: &serde_json::Value, kind: PaneKind) -> Result<Command, String> {
+fn new_session(args: &serde_json::Value, kind: SessionKind) -> Result<Command, String> {
     let role_id = optional_string_arg(args, "role")?
         .map(|role| {
             let known = horizon_agent::roles::user_launchable();
@@ -118,14 +118,16 @@ fn new_session(args: &serde_json::Value, kind: PaneKind) -> Result<Command, Stri
     let activate = activate_arg(args)?;
     let prompt = match args.get("prompt") {
         None | Some(serde_json::Value::Null) => None,
-        Some(serde_json::Value::String(prompt)) if kind == PaneKind::Agent => Some(prompt.clone()),
+        Some(serde_json::Value::String(prompt)) if kind == SessionKind::Agent => {
+            Some(prompt.clone())
+        }
         Some(serde_json::Value::String(_)) => {
             return Err("`prompt` is only accepted for agent sessions".into())
         }
         Some(_) => return Err("`prompt` must be a string".into()),
     };
     let isolate = isolate_arg(args)?;
-    if isolate.is_some() && kind != PaneKind::Agent {
+    if isolate.is_some() && kind != SessionKind::Agent {
         return Err("`isolate` is only accepted for agent sessions".into());
     }
     Ok(Command::NewSession {
@@ -260,7 +262,7 @@ mod tests {
             assert!(matches!(
                 command,
                 Command::NewSession {
-                    kind: horizon_workspace::PaneKind::Agent,
+                    kind: horizon_workspace::SessionKind::Agent,
                     role_id: None,
                     split: None,
                     issuer: None,

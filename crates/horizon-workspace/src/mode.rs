@@ -274,7 +274,7 @@ mod tests {
             .expect("mvp() starts with a terminal session");
         workspace.split_session_with_new_session(
             target_session,
-            PaneKind::Terminal,
+            crate::SessionKind::Terminal,
             SplitAxis::Vertical,
             true,
         );
@@ -417,7 +417,7 @@ mod tests {
         workspace.terminate_active_session();
         assert!(workspace.is_workspace_mode_active());
 
-        workspace.open_tab_with_new_session_activated(PaneKind::Terminal, true);
+        workspace.open_tab_with_new_session_activated(crate::SessionKind::Terminal, true);
 
         assert!(!workspace.is_workspace_mode_active());
     }

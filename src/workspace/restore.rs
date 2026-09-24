@@ -326,7 +326,7 @@ impl WorkspaceShell {
 mod tests {
     use super::{RestoreCandidates, SessionSummary, TerminalSummary, Workspace};
     use horizon_agent::contract::{ProviderId, SessionId as AgentSessionId};
-    use horizon_workspace::{PaneKind, SessionId};
+    use horizon_workspace::SessionId;
     use std::collections::HashSet;
     use uuid::Uuid;
 
@@ -345,8 +345,9 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let saved_terminal = SessionId::new();
         let saved_agent = SessionId::new();
-        workspace.register_detached_session(PaneKind::Terminal, saved_terminal);
-        workspace.register_detached_session(PaneKind::Agent, saved_agent);
+        workspace
+            .register_detached_session(horizon_workspace::SessionKind::Terminal, saved_terminal);
+        workspace.register_detached_session(horizon_workspace::SessionKind::Agent, saved_agent);
         let conflict = Uuid::new_v4();
         let new_terminal = Uuid::new_v4();
         let new_agent = Uuid::new_v4();
@@ -373,7 +374,7 @@ mod tests {
     fn matching_agents_keep_daemon_workspace_and_lineage_metadata() {
         let mut workspace = Workspace::mvp();
         let id = SessionId::new();
-        workspace.register_detached_session(PaneKind::Agent, id);
+        workspace.register_detached_session(horizon_workspace::SessionKind::Agent, id);
         let parent = Uuid::new_v4();
         let mut summary = agent(id.as_uuid());
         summary.workspace_root = Some("/restored-worktree".into());

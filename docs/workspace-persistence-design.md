@@ -156,3 +156,17 @@ with isolated control/agentd sockets and state files. It creates a second
 terminal tab and a split through the CLI, stops only the UI, starts a new UI
 against the same daemon, and asserts stable tab/pane counts, terminal session
 ids, and a restored terminal frame.
+
+## Model mutation boundary (2026-09-24)
+
+`Workspace` owns its collections, active tab, display counters, and mode state.
+Callers read queries/snapshots and mutate through operations; they cannot edit
+those fields independently of layout and session bookkeeping. Pane and tab
+projections remain ordinary read-only borrowed data for rendering.
+
+New-session and detached-session registration operations accept `SessionKind`.
+Session-less views use the existing view operations, so an external caller
+cannot create a view carrying an orphan session id. The lower-level
+`open_tab(PaneKind, Option<SessionId>)` is crate-local. This changes the Rust
+construction API only; persisted workspace and CLI request formats, activation,
+restore validation, and close-versus-terminate semantics are unchanged.

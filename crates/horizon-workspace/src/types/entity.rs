@@ -6,12 +6,12 @@ use super::{LayoutNode, PaneId, PaneKind, SessionKind, TabId};
 
 #[derive(Clone, Debug)]
 pub struct Workspace {
-    pub tabs: Vec<Tab>,
-    pub panes: Vec<Pane>,
-    pub sessions: Vec<WorkspaceSession>,
-    pub active_tab: TabId,
-    pub next_terminal_display_number: usize,
-    pub next_agent_display_number: usize,
+    pub(crate) tabs: Vec<Tab>,
+    pub(crate) panes: Vec<Pane>,
+    pub(crate) sessions: Vec<WorkspaceSession>,
+    pub(crate) active_tab: TabId,
+    pub(crate) next_terminal_display_number: usize,
+    pub(crate) next_agent_display_number: usize,
     /// Workspace mode's cursor (`docs/workspace-mode-design.md`): `None`
     /// outside the mode, where the cursor is simply defined to be wherever
     /// focus is (see `Workspace::cursor_pane_id`) so the two can never
@@ -25,7 +25,7 @@ pub struct Workspace {
     /// with, so this can stay `None` even while the mode is active -- see
     /// `workspace_mode_active` for the independent "is the mode active at
     /// all" signal. See `workspace::mode` for the state transitions.
-    pub workspace_mode_cursor: Option<PaneId>,
+    pub(crate) workspace_mode_cursor: Option<PaneId>,
     /// The raw "explicitly entered via the reserved chord" bookkeeping,
     /// independent of whether `workspace_mode_cursor` currently holds a
     /// pane. Kept as its own field (rather than inferring "active" from
@@ -44,7 +44,7 @@ pub struct Workspace {
     /// need the entry chord first). See that method's doc comment for the
     /// full rationale; this field keeps its narrower, exact meaning for a
     /// non-empty workspace.
-    pub workspace_mode_active: bool,
+    pub(crate) workspace_mode_active: bool,
 }
 
 #[derive(Clone, Debug)]

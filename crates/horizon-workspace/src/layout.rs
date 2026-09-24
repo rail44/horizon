@@ -334,7 +334,7 @@ mod tests {
         workspace.activate_pane(first);
         workspace.split_session_with_new_session(
             workspace.active_session_id().expect("session"),
-            PaneKind::Agent,
+            crate::SessionKind::Agent,
             SplitAxis::Vertical,
             true,
         );

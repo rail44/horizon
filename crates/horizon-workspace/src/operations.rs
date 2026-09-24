@@ -44,7 +44,7 @@ impl Workspace {
         }
     }
 
-    pub fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
+    pub(crate) fn open_tab(&mut self, kind: PaneKind, session_id: Option<SessionId>) -> PaneId {
         self.ensure_session(kind, session_id);
         let pane = Pane::new(kind, session_id);
         let pane_id = pane.id;
@@ -73,12 +73,12 @@ impl Workspace {
     /// surface's dive, `false` for the control plane's default).
     pub fn open_tab_with_new_session_activated(
         &mut self,
-        kind: PaneKind,
+        kind: SessionKind,
         activate: bool,
     ) -> SessionId {
         let previous_active_tab = self.active_tab;
         let session_id = SessionId::new();
-        self.open_tab(kind, Some(session_id));
+        self.open_tab(kind.into(), Some(session_id));
         if !activate {
             self.active_tab = previous_active_tab;
         }
@@ -205,7 +205,7 @@ impl Workspace {
     pub fn split_session_with_new_session(
         &mut self,
         target_session_id: SessionId,
-        kind: PaneKind,
+        kind: SessionKind,
         axis: SplitAxis,
         activate: bool,
     ) -> Option<SessionId> {
@@ -214,7 +214,7 @@ impl Workspace {
         self.split_pane_in_tab(
             tab_id,
             Some(target_pane_id),
-            kind,
+            kind.into(),
             Some(session_id),
             activate,
             axis,

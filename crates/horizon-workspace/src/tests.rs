@@ -564,7 +564,7 @@ fn set_session_parent_is_reflected_in_session_summaries() {
     let mut workspace = Workspace::mvp();
     let parent_id = workspace.active_terminal_session_id().expect("session");
     let child_id = SessionId::new();
-    workspace.register_detached_session(PaneKind::Agent, child_id);
+    workspace.register_detached_session(crate::SessionKind::Agent, child_id);
 
     workspace.set_session_parent(child_id, parent_id);
 
@@ -625,7 +625,7 @@ fn a_registered_detached_session_is_attachable() {
         "an unregistered id must not attach"
     );
 
-    workspace.register_detached_session(PaneKind::Agent, session_id);
+    workspace.register_detached_session(crate::SessionKind::Agent, session_id);
     workspace
         .attach_existing_session_to_split_activated(session_id, true)
         .expect("the registered session attaches");
@@ -668,7 +668,7 @@ fn attach_existing_session_to_split_reuses_session_kind() {
 fn open_tab_with_new_session_attaches_requested_kind() {
     let mut workspace = Workspace::mvp();
 
-    let session_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
+    let session_id = workspace.open_tab_with_new_session_activated(crate::SessionKind::Agent, true);
 
     assert_eq!(workspace.visible_agent_session_id(0), Some(session_id));
     assert_eq!(workspace.visible_panes()[0].kind, PaneKind::Agent);
@@ -1008,7 +1008,7 @@ fn split_session_with_new_session_targets_the_sessions_own_pane() {
     let third_session = workspace
         .split_session_with_new_session(
             first_session,
-            PaneKind::Terminal,
+            crate::SessionKind::Terminal,
             SplitAxis::Horizontal,
             true,
         )
@@ -1040,7 +1040,12 @@ fn split_session_with_new_session_honors_the_vertical_axis() {
     let session = workspace.active_terminal_session_id().expect("session");
 
     workspace
-        .split_session_with_new_session(session, PaneKind::Terminal, SplitAxis::Vertical, true)
+        .split_session_with_new_session(
+            session,
+            crate::SessionKind::Terminal,
+            SplitAxis::Vertical,
+            true,
+        )
         .expect("split next to the session's pane");
 
     let root = &workspace.tabs[workspace.active_tab_index()].root;

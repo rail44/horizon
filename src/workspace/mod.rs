@@ -39,7 +39,7 @@ use gpui_component::list::ListState;
 use gpui_component::StyledExt as _;
 use horizon_terminal_core::TerminalNotification;
 use horizon_workspace::commands::CommandId;
-use horizon_workspace::{PaneId, PaneKind, SessionId, Workspace, WORKSPACE_STATE_VERSION};
+use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentSession, AgentView};
 use crate::board_pane::BoardPaneView;
@@ -195,8 +195,10 @@ fn load_workspace_state(store: &mut WorkspaceStateStore) -> (Workspace, bool, bo
 /// session is an operational side effect of restarting the runtime, not
 /// something the user asked to empty, so it still gets a pane back.
 fn ensure_workspace_has_pane(workspace: &mut Workspace) -> Option<SessionId> {
-    (workspace.tab_count() == 0)
-        .then(|| workspace.open_tab_with_new_session_activated(PaneKind::Terminal, true))
+    (workspace.tab_count() == 0).then(|| {
+        workspace
+            .open_tab_with_new_session_activated(horizon_workspace::SessionKind::Terminal, true)
+    })
 }
 
 /// One pane's view, by session kind -- plus one variant per first-party

@@ -1026,7 +1026,7 @@ mod tests {
     #[test]
     fn terminal_reload_prep_removes_terminals_but_retains_agent_model_and_pane() {
         let mut workspace = Workspace::mvp();
-        let agent_id = workspace.open_tab_with_new_session_activated(PaneKind::Agent, true);
+        let agent_id = workspace.open_tab_with_new_session_activated(SessionKind::Agent, true);
         assert!(workspace.pane_location_for_session(agent_id).is_some());
 
         prepare_workspace_for_terminal_runtime_reload(&mut workspace);

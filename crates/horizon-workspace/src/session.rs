@@ -101,8 +101,8 @@ impl Workspace {
     /// already does for a brand-new pane's session); one it's never seen
     /// shows up immediately as a detached session ("survival made
     /// visible"), attachable/terminable like any other.
-    pub fn register_detached_session(&mut self, kind: PaneKind, session_id: SessionId) {
-        self.ensure_session(kind, Some(session_id));
+    pub fn register_detached_session(&mut self, kind: SessionKind, session_id: SessionId) {
+        self.ensure_session(kind.into(), Some(session_id));
     }
 
     pub(crate) fn ensure_session(&mut self, kind: PaneKind, session_id: Option<SessionId>) {

@@ -245,7 +245,7 @@ impl Workspace {
         additions.sort_by_key(|(id, _)| id.as_uuid());
         let mut added = Vec::with_capacity(additions.len());
         for (id, kind) in additions {
-            self.register_detached_session(PaneKind::from(kind), id);
+            self.register_detached_session(kind, id);
             added.push(id);
         }
 
@@ -592,7 +592,7 @@ mod tests {
         let terminal = workspace.active_session_id().expect("terminal");
         let agent = SessionId::new();
         workspace.split_active(PaneKind::Agent, Some(agent));
-        workspace.register_detached_session(PaneKind::Terminal, SessionId::new());
+        workspace.register_detached_session(crate::SessionKind::Terminal, SessionId::new());
         workspace
             .sessions
             .iter_mut()
@@ -902,7 +902,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let attached = workspace.active_session_id().expect("terminal");
         let detached = SessionId::new();
-        workspace.register_detached_session(PaneKind::Agent, detached);
+        workspace.register_detached_session(crate::SessionKind::Agent, detached);
         let detached_before = workspace.session(detached).expect("detached").clone();
 
         let outcome = workspace

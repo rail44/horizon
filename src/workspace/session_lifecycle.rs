@@ -88,7 +88,7 @@ fn register_daemon_agent_summary(
     {
         return Err("the session id belongs to a different session kind".into());
     }
-    workspace.register_detached_session(PaneKind::Agent, adoption.session_id);
+    workspace.register_detached_session(SessionKind::Agent, adoption.session_id);
     // The daemon's own `SessionEntry` is authoritative for `workspace_root`
     // -- for an isolated session this is the worktree path agentd actually
     // created, which nothing on the shell side could have known at spawn
@@ -901,7 +901,7 @@ impl WorkspaceShell {
                         }
                         shell
                             .workspace
-                            .register_detached_session(PaneKind::Terminal, session_id);
+                            .register_detached_session(SessionKind::Terminal, session_id);
                         shell.install_terminal_session(session_id, wire, cx);
                     }
                     // See `spawn_workspace_restore`'s matching comment: an
@@ -1089,28 +1089,32 @@ impl WorkspaceShell {
             return;
         }
         self.workspace.exit_workspace_mode();
-        if let PaneKind::View(view_kind) = kind {
-            // A session-less first-party view: no session id to create,
-            // no agent-runtime spawn, and no `pending_terminal_spawns`/
-            // `pending_roles` bookkeeping -- those exist only for the
-            // session-backed kinds handled below.
-            match placement {
-                Placement::NewTab => {
-                    self.workspace.open_tab(kind, None);
+        let kind = match kind {
+            PaneKind::Terminal => SessionKind::Terminal,
+            PaneKind::Agent => SessionKind::Agent,
+            PaneKind::View(view_kind) => {
+                // A session-less first-party view: no session id to create,
+                // no agent-runtime spawn, and no `pending_terminal_spawns`/
+                // `pending_roles` bookkeeping -- those exist only for the
+                // session-backed kinds handled below.
+                match placement {
+                    Placement::NewTab => {
+                        self.workspace.open_tab_with_view_activated(view_kind, true);
+                    }
+                    Placement::SplitRight | Placement::SplitDown => {
+                        let axis = if placement == Placement::SplitRight {
+                            SplitAxis::Horizontal
+                        } else {
+                            SplitAxis::Vertical
+                        };
+                        self.workspace.split_active_tab_with_view(view_kind, axis);
+                    }
                 }
-                Placement::SplitRight | Placement::SplitDown => {
-                    let axis = if placement == Placement::SplitRight {
-                        SplitAxis::Horizontal
-                    } else {
-                        SplitAxis::Vertical
-                    };
-                    self.workspace.split_active_tab_with_view(view_kind, axis);
-                }
+                self.reconcile(window, cx);
+                self.focus_active(window, cx);
+                return;
             }
-            self.reconcile(window, cx);
-            self.focus_active(window, cx);
-            return;
-        }
+        };
         // Palette origin: the new session is a child of the focused pane
         // (the "current pane" gesture) -- the active session is the spawn
         // source, no explicit target. Contrast `control_plane_new_session`'s
@@ -1118,13 +1122,13 @@ impl WorkspaceShell {
         // 013).
         let active = self.workspace.active_session_id();
         let terminal_spawn =
-            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(active));
+            matches!(kind, SessionKind::Terminal).then(|| self.pending_terminal_spawn(active));
         // Palette origin defaults to shared, not isolated (`docs/session-
         // relationship-design.md` decision 3); `isolate` is the caller's
         // explicit opt-in (the view chooser's dedicated "Agent (Isolated
         // Worktree)…" choice), not a further default to apply here.
         let agent_spawn =
-            matches!(kind, PaneKind::Agent).then(|| self.pending_agent_spawn(active, isolate));
+            matches!(kind, SessionKind::Agent).then(|| self.pending_agent_spawn(active, isolate));
         let session_id = match placement {
             Placement::NewTab => Some(
                 self.workspace
@@ -1179,7 +1183,7 @@ impl WorkspaceShell {
         self.workspace.exit_workspace_mode();
         let session_id = self
             .workspace
-            .open_tab_with_new_session_activated(PaneKind::Terminal, true);
+            .open_tab_with_new_session_activated(SessionKind::Terminal, true);
         self.pending_terminal_spawns
             .insert(session_id, pinned_terminal_spawn(workspace_root));
         self.reconcile(window, cx);
@@ -1224,7 +1228,7 @@ impl WorkspaceShell {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn control_plane_new_session(
         &mut self,
-        kind: PaneKind,
+        kind: SessionKind,
         role_id: Option<horizon_agent::roles::RoleId>,
         split: Option<(SessionId, SplitAxis)>,
         issuer: Option<SessionId>,
@@ -1239,8 +1243,8 @@ impl WorkspaceShell {
         }
         let source = control_plane_spawn_source(split.map(|(target, _)| target), issuer);
         let terminal_spawn =
-            matches!(kind, PaneKind::Terminal).then(|| self.pending_terminal_spawn(source));
-        let agent_spawn = matches!(kind, PaneKind::Agent)
+            matches!(kind, SessionKind::Terminal).then(|| self.pending_terminal_spawn(source));
+        let agent_spawn = matches!(kind, SessionKind::Agent)
             .then(|| self.pending_agent_spawn(source, isolate.unwrap_or(true)));
         let session_id = match split {
             Some((target, axis)) => self
@@ -1375,7 +1379,7 @@ const DEFAULT_PREVIEW_NAME: &str = crate::preview::sample::NAME;
 #[cfg(test)]
 mod tests {
     use horizon_terminal_core::TerminalSummary;
-    use horizon_workspace::{PaneKind, SessionId, Workspace};
+    use horizon_workspace::{SessionId, SessionKind, Workspace};
 
     use super::{
         control_plane_spawn_source, daemon_summary_for, pinned_terminal_spawn,
@@ -1501,7 +1505,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let attached = workspace.active_terminal_session_id().expect("session");
         let detached = SessionId::new();
-        workspace.register_detached_session(PaneKind::Terminal, detached);
+        workspace.register_detached_session(SessionKind::Terminal, detached);
         assert!(!workspace.session_is_referenced(detached));
 
         assert!(workspace.terminate_session(attached));
@@ -1545,7 +1549,7 @@ mod tests {
         // leave the stale pre-spawn value standing.
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
-        workspace.register_detached_session(PaneKind::Agent, session_id);
+        workspace.register_detached_session(SessionKind::Agent, session_id);
 
         let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
         workspace.set_session_workspace_root(session_id, pre_spawn_root.clone());
@@ -1649,7 +1653,7 @@ mod tests {
         let mut workspace = Workspace::mvp();
         let session_id = SessionId::new();
         let parent_id = SessionId::new();
-        workspace.register_detached_session(PaneKind::Agent, session_id);
+        workspace.register_detached_session(SessionKind::Agent, session_id);
 
         let pre_spawn_root = std::path::PathBuf::from("/home/user/project");
         workspace.set_session_workspace_root(session_id, pre_spawn_root);
