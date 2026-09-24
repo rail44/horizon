@@ -1,10 +1,22 @@
 use serde_json::Value;
 
 use super::super::file_name;
-use super::approval::{is_superseded_output, SUPERSEDED_SUMMARY};
+use super::approval::SUPERSEDED_SUMMARY;
 use super::files::{distinct_edit_paths, edit_entries};
 use super::util::{command_head, line_diffstat, str_field};
 use super::view::ToolCallKind;
+use crate::contract::is_superseded_output;
+
+/// Display data plus an explicit recognition result. Consumers must not infer
+/// whether a tool is known from its human-facing verb or summary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCallClassification {
+    pub known: bool,
+    pub verb: String,
+    pub target: Option<String>,
+    pub summary: Option<String>,
+    pub kind: ToolCallKind,
+}
 
 /// Maps a tool id to its display verb, target, (would-be) result
 /// summary, and any tool-specific structured data -- the one place that
@@ -19,12 +31,11 @@ use super::view::ToolCallKind;
 /// `horizon` binary crate -- reuses this classifier's verb/target/summary
 /// for every tool id it doesn't special-case itself (see `transcript`'s
 /// module doc for why this one didn't cleanly split).
-pub fn classify(
-    tool_id: &str,
-    input: &Value,
-    output: Option<&Value>,
-) -> (String, Option<String>, Option<String>, ToolCallKind) {
-    let (verb, target, summary, kind) = classify_tool(tool_id, input, output);
+pub fn classify(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallClassification {
+    let classified = classify_tool(tool_id, input, output);
+    let known = classified.is_some();
+    let (verb, target, summary, kind) =
+        classified.unwrap_or_else(|| (tool_id.to_string(), None, None, ToolCallKind::Generic));
     // An abandoned denial-retry attempt's result carries only the
     // superseded marker, so every tool-specific summary below reads
     // `None` off it (no `exit_code`, no counts). Say what happened
@@ -35,15 +46,21 @@ pub fn classify(
     } else {
         summary
     };
-    (verb, target, summary, kind)
+    ToolCallClassification {
+        known,
+        verb,
+        target,
+        summary,
+        kind,
+    }
 }
 
 fn classify_tool(
     tool_id: &str,
     input: &Value,
     output: Option<&Value>,
-) -> (String, Option<String>, Option<String>, ToolCallKind) {
-    match tool_id {
+) -> Option<(String, Option<String>, Option<String>, ToolCallKind)> {
+    Some(match tool_id {
         "fs.edit" => {
             let edits = edit_entries(input);
             let paths = distinct_edit_paths(&edits);
@@ -199,6 +216,6 @@ fn classify_tool(
                 ToolCallKind::Generic,
             )
         }
-        other => (other.to_string(), None, None, ToolCallKind::Generic),
-    }
+        _ => return None,
+    })
 }

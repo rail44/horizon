@@ -1,8 +1,8 @@
-use crate::contract::ToolCallId;
+use crate::contract::{is_superseded_output, ToolCallId};
 use crate::frame::{pending_approval_call_ids_in, tool_call_occurrences, AgentFrameItem};
 
-use super::approval::{derive_approval_state, is_superseded_output};
-use super::classify::classify;
+use super::approval::derive_approval_state;
+use super::classify::{classify, ToolCallClassification};
 use super::files::affected_files;
 
 /// Structured, tool-specific data a receipt chip or running-card row
@@ -65,7 +65,7 @@ pub struct ToolCallView {
     pub is_error: bool,
     /// This row is a denial-retry attempt that was abandoned: it ran, was
     /// refused a domain or a path, and an approved retry took its place, so
-    /// its terminal result is the [`SUPERSEDED_BY_RETRY`] marker rather
+    /// its terminal result is the `superseded_by_retry` marker rather
     /// than the outcome the model ever saw (backlog 55; the marker is
     /// written by `crate::tools::approval`'s denial-retry approve path).
     /// Neither success nor failure -- the renderers give it a muted
@@ -117,8 +117,13 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
         .into_iter()
         .map(|entry| {
             let output = entry.result.map(|result| &result.output.0);
-            let (verb, target, result_summary, kind) =
-                classify(&entry.request.tool_id, &entry.request.input, output);
+            let ToolCallClassification {
+                verb,
+                target,
+                summary: result_summary,
+                kind,
+                ..
+            } = classify(&entry.request.tool_id, &entry.request.input, output);
             let affected_files =
                 affected_files(&entry.request.tool_id, &entry.request.input, output);
             ToolCallView {

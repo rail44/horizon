@@ -693,6 +693,51 @@ fn role_id_lands_in_agent_events_and_agent_sessions() {
 }
 
 #[test]
+fn live_and_rebuilt_tool_results_preserve_explicit_denial_errors() {
+    let session_id = SessionId::new();
+    let outputs = [
+        serde_json::json!({"message": "declined"}),
+        serde_json::json!({"is_error": false, "message": "declined"}),
+    ];
+    let records = outputs
+        .iter()
+        .enumerate()
+        .map(|(index, output)| {
+            label_record(
+                &format!("denied-{index}"),
+                index as u64,
+                session_id,
+                None,
+                None,
+                Event::ToolCallFinished(ToolCallResult::denied(
+                    ToolCallId(format!("call-{index}")),
+                    Some(OccurrenceId(format!("occurrence-{index}"))),
+                    output.clone(),
+                )),
+                index as u64 + 1,
+            )
+        })
+        .collect::<Vec<_>>();
+    let live = Store::open_in_memory().unwrap();
+    for record in &records {
+        live.append_record(record).unwrap();
+    }
+    let rebuilt = Store::open_in_memory().unwrap();
+    rebuilt.replace_from_event_log_records(records).unwrap();
+    for store in [&live, &rebuilt] {
+        let results = store.tool_results_for_session(session_id).unwrap();
+        assert_eq!(results.len(), outputs.len());
+        for (result, output) in results.iter().zip(&outputs) {
+            assert!(
+                result.is_error,
+                "the projection must retain the explicit denial outcome"
+            );
+            assert_eq!(&result.output, output, "tool payloads are not rewritten");
+        }
+    }
+}
+
+#[test]
 fn tool_result_is_error_reflects_the_output_jsons_own_flag() {
     let store = Store::open_in_memory().expect("store");
     let session_id = SessionId::new();

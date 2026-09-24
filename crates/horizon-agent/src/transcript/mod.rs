@@ -69,12 +69,11 @@ pub use diff::{aggregate_changes, reconstruct_line_diff, DiffLine, DiffLineKind,
 pub use grouping::{contains_user_message, group_into_turns, latest_turn_model, TurnEnd, TurnSpan};
 pub(crate) use receipt::CallClass;
 pub use receipt::{aggregate_receipt, ReceiptAggregate};
-pub(crate) use tool_call::SUPERSEDED_BY_RETRY;
 pub use tool_call::{
     build_tool_call_views, cap_lines_head, cap_lines_tail, cap_thinking_text, classify,
     edit_entries, is_approval_still_pending, progress, running_row_expandable, str_field,
-    truncate_chars, ApprovalState, EditEntry, FileEffect, ToolCallKind, ToolCallView,
-    SUPERSEDED_SUMMARY, THINKING_TAIL_LINES,
+    truncate_chars, ApprovalState, EditEntry, FileEffect, ToolCallClassification, ToolCallKind,
+    ToolCallView, SUPERSEDED_SUMMARY, THINKING_TAIL_LINES,
 };
 
 use std::path::Path;

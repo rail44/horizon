@@ -11,6 +11,7 @@
 //! rather than splitting the enum from its one constructor.
 
 use horizon_agent::frame::AgentFrameItem;
+use horizon_agent::transcript::ToolCallClassification;
 use serde_json::Value;
 
 use super::{cap_lines_head, cap_lines_tail, reconstruct_line_diff};
@@ -72,34 +73,17 @@ const BASH_OUTPUT_TAIL_LINES: usize = 100;
 /// Raw-JSON-fallback line cap (head-capped).
 const RAW_FALLBACK_MAX_LINES: usize = 200;
 
-/// Whether `classify` gives `tool_id` a dedicated arm. Derived from
-/// [`classify`] itself rather than re-listed here, so the two can't drift
-/// apart again -- `task_output` once had a dedicated arm in `classify` but
-/// was missing from the old hand-maintained list, so its calls fell through
-/// to the raw-JSON body instead of a summary. Shared with
-/// [`build_tool_call_body`] so a genuinely unrecognized tool id (a future
-/// tool this crate hasn't been taught about yet) still falls back to the
-/// raw-JSON body rather than a blank one, per decision 3's "raw JSON
-/// pretty-print only as the unknown-tool fallback".
-///
-/// `classify` returns a humanized verb for every dedicated arm and the raw
-/// id unchanged for its fallback arm, so "the verb differs from the id" is
-/// exactly "classify knows this tool". That relies on no dedicated arm's
-/// verb equaling its raw id (true for every arm today -- verbs are human
-/// labels like "Edit"/"Task Output", never the id itself); a future tool
-/// whose chosen verb literally equals its id would need a different tell.
-/// Calling with null input and no output is safe: every arm's field
-/// extractions coerce to defaults, never panic.
-fn is_known_tool_id(tool_id: &str) -> bool {
-    classify(tool_id, &Value::Null, None).0 != tool_id
-}
-
 /// A terse one-line summary for a known-but-not-specially-bodied tool
 /// call. fs.read/grep/glob get shapes derived from their actual output
 /// JSON (see `crates/horizon-agent/src/tools/fs/{read,grep,glob}.rs`);
 /// every other known tool id falls back to `classify`'s own
 /// verb/target/summary, reused rather than duplicated.
-fn terse_summary(tool_id: &str, input: &Value, output: Option<&Value>) -> String {
+fn terse_summary(
+    tool_id: &str,
+    input: &Value,
+    output: Option<&Value>,
+    classification: ToolCallClassification,
+) -> String {
     match tool_id {
         "fs.read" => {
             let path = str_field(input, "path").unwrap_or_default();
@@ -131,7 +115,12 @@ fn terse_summary(tool_id: &str, input: &Value, output: Option<&Value>) -> String
             }
         }
         _ => {
-            let (verb, target, result_summary, _kind) = classify(tool_id, input, output);
+            let ToolCallClassification {
+                verb,
+                target,
+                summary: result_summary,
+                ..
+            } = classification;
             match (target, result_summary) {
                 (Some(target), Some(summary)) => format!("{verb} {target} · {summary}"),
                 (Some(target), None) => format!("{verb} {target}"),
@@ -226,12 +215,14 @@ pub(crate) fn build_tool_call_body(
                 omitted,
             }
         }
-        _ if is_known_tool_id(tool_id) => {
-            ToolCallBody::Summary(terse_summary(tool_id, input, output))
-        }
         _ => {
-            let (lines, omitted) = raw_json_fallback(tool_id, input, output);
-            ToolCallBody::Raw { lines, omitted }
+            let classification = classify(tool_id, input, output);
+            if classification.known {
+                ToolCallBody::Summary(terse_summary(tool_id, input, output, classification))
+            } else {
+                let (lines, omitted) = raw_json_fallback(tool_id, input, output);
+                ToolCallBody::Raw { lines, omitted }
+            }
         }
     }
 }
@@ -680,12 +671,8 @@ mod tests {
     }
 
     #[test]
-    fn is_known_tool_id_recognizes_every_classify_arm() {
-        // Every id `classify` has a dedicated arm for is known here, so a
-        // future arm can't silently miss the Summary path the way
-        // `task_output` once did. The recognition itself is derived from
-        // `classify` (see `is_known_tool_id`); this is a snapshot of the
-        // known ids, not the mechanism that keeps them in sync.
+    fn classification_recognizes_every_displayed_tool() {
+        // Known generic tools need a Summary body even when their label changes.
         for known in [
             "fs.edit",
             "fs.write",
@@ -702,10 +689,13 @@ mod tests {
             "task",
             "task_output",
         ] {
-            assert!(is_known_tool_id(known), "{known:?} should be known");
+            assert!(
+                classify(known, &Value::Null, None).known,
+                "{known:?} should be known"
+            );
         }
         // An id `classify` falls back on stays unknown -- raw-JSON body.
-        assert!(!is_known_tool_id("some.future.tool"));
+        assert!(!classify("some.future.tool", &Value::Null, None).known);
     }
 
     #[test]

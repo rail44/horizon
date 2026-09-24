@@ -33,21 +33,9 @@ fn is_denied_output(output: &Value) -> bool {
         && output.get("message").and_then(Value::as_str) == Some("denied by user")
 }
 
-/// Output-JSON marker key for an abandoned denial-retry attempt's terminal
-/// result -- see [`ToolCallView::superseded`]. Defined here, next to
-/// [`is_denied_output`]'s convention, and used by the one writer
-/// (`crate::tools::approval::superseded_by_retry_result`) so the key exists
-/// exactly once.
-pub(crate) const SUPERSEDED_BY_RETRY: &str = "superseded_by_retry";
-
 /// The display register an abandoned attempt's row reports instead of a
 /// tool-specific summary.
 pub const SUPERSEDED_SUMMARY: &str = "superseded by retry";
-
-/// Whether `output` is an abandoned denial-retry attempt's terminal result.
-pub(crate) fn is_superseded_output(output: &Value) -> bool {
-    output.get(SUPERSEDED_BY_RETRY).and_then(Value::as_bool) == Some(true)
-}
 
 /// Derives a call's [`ApprovalState`] from whether it ever had an
 /// `ApprovalRequested` item and, if resolved, its `ToolCallStarted`/

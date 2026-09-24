@@ -1,4 +1,4 @@
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::contract::SessionId;
 use crate::contract::{
@@ -10,7 +10,6 @@ use crate::tools::bash;
 use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
 use crate::tools::error_output;
 use crate::tools::state::{session_runtime, SessionRuntime, ToolSessionState};
-use crate::transcript::SUPERSEDED_BY_RETRY;
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
 #[derive(Clone, Debug)]
@@ -627,10 +626,9 @@ fn begin_execution(
 ) -> ApprovalOutcome {
     let mut events = Vec::new();
     if let Some(prior) = prior_result {
-        events.push(Event::ToolCallFinished(superseded_by_retry_result(
-            prior,
-            request.occurrence_id.as_ref(),
-        )));
+        events.push(Event::ToolCallFinished(
+            prior.superseded_by_retry(request.occurrence_id.as_ref()),
+        ));
     }
     events.push(Event::StateChanged(SessionState::ToolRunning));
     events.push(Event::ToolCallStarted(request.call_id.clone()));
@@ -640,52 +638,8 @@ fn begin_execution(
     ApprovalOutcome::Started { events, frame }
 }
 
-/// The terminal outcome an *abandoned* denial-retry attempt receives when
-/// the retry is approved and becomes the live attempt (backlog 55, owner
-/// decision 2026-07-28).
-///
-/// Both denial-retry folds in `horizon-agentd`
-/// (`session::completion::fold_domain_denied`/`fold_filesystem_denied`)
-/// park the first attempt's genuine outcome on the reissued approval and
-/// emit no `ToolCallFinished` for it, because the two decisions want
-/// opposite things with it:
-///
-/// * **deny** -- [`forward_prior_result`] (and
-///   [`resolve_domain_denial_retry`]'s deny arm) hands the parked result
-///   to the first occurrence and to the provider, unchanged: the attempt
-///   that ran is the answer.
-/// * **approve** -- the parked result is discarded (the retry recomputes
-///   it), and without this the first occurrence would never receive any
-///   terminal event at all, rendering started-but-never-finished forever.
-///
-/// So this is the approve half of that pair. It is deliberately neither a
-/// success nor a failure: `is_error` stays false (the attempt did not fail
-/// on its own terms) and the output carries only the
-/// [`SUPERSEDED_BY_RETRY`] marker plus the occurrence that replaced it.
-/// It answers the *abandoned* occurrence -- `prior_result` was already
-/// stamped with it by the fold that parked it -- so the transcript's
-/// occurrence-first matching lands it on the row that produced it.
-///
-/// Not sent to the provider: `ApprovalOutcome::Started` carries no
-/// `Command`, and the retry's own result is the single answer this
-/// `call_id` owes.
-fn superseded_by_retry_result(
-    prior_result: &ToolCallResult,
-    retry_occurrence: Option<&crate::contract::OccurrenceId>,
-) -> ToolCallResult {
-    ToolCallResult::new(
-        prior_result.call_id.clone(),
-        prior_result.occurrence_id.clone(),
-        json!({
-            SUPERSEDED_BY_RETRY: true,
-            "retry_occurrence_id": retry_occurrence.map(|occurrence| occurrence.0.as_str()),
-            "message": "this attempt was abandoned; an approved retry of the same call replaced it",
-        }),
-    )
-}
-
 /// The deny half of the denial-retry pair (see
-/// [`superseded_by_retry_result`] for the approve half): the parked first
+/// [`ToolCallResult::superseded_by_retry`] for the approve half): the parked first
 /// attempt's genuine outcome becomes that occurrence's terminal result and
 /// the provider's answer, since the attempt that ran is what the decision
 /// settled on. Unchanged by backlog 55 -- it was already the path that

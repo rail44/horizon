@@ -15,9 +15,8 @@ mod files;
 mod util;
 mod view;
 
-pub(crate) use approval::SUPERSEDED_BY_RETRY;
 pub use approval::SUPERSEDED_SUMMARY;
-pub use classify::classify;
+pub use classify::{classify, ToolCallClassification};
 pub use files::{edit_entries, EditEntry};
 pub use util::{
     cap_lines_head, cap_lines_tail, cap_thinking_text, str_field, truncate_chars,
@@ -33,7 +32,7 @@ pub use view::{
 // single-file module's private `use` lines fed -- so they must live in this
 // module's namespace under test.
 #[cfg(test)]
-use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult, SUPERSEDED_BY_RETRY};
 #[cfg(test)]
 use crate::frame::AgentFrameItem;
 #[cfg(test)]

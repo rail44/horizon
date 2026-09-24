@@ -70,11 +70,9 @@ CREATE TABLE IF NOT EXISTS agent_tool_results (
     call_id TEXT NOT NULL,
     occurrence_id TEXT,
     output_json TEXT NOT NULL,
-    -- Derived at projection time from `output_json`'s own `is_error` key
-    -- (the convention every tool's error output already follows -- see
-    -- `docs/agent-feedback-design.md`'s decision 1), not re-parsed on every
-    -- read: `Store::insert_tool_result` sets this once, from the same
-    -- `serde_json::Value` it serializes into `output_json`.
+    -- Copied from ToolCallResult's explicit outcome. Its constructor owns
+    -- interpretation of the tool output; denial can be an error even when
+    -- the original payload has no error flag. Keep output_json unchanged.
     is_error BOOLEAN NOT NULL
 );
 

@@ -2030,7 +2030,7 @@
           "type": "boolean"
         },
         "is_error": {
-          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\n`persistence::projection::duckdb`'s `insert_tool_result` already\nreads that same convention independently) so a consumer like the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) has a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically.",
+          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\ndenial constructors also set it directly) so consumers such as the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) have a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically.",
           "type": "boolean"
         },
         "occurrence_id": {

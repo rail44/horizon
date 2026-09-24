@@ -224,15 +224,6 @@ impl Store {
         sequence: i64,
         result: &ToolCallResult,
     ) -> Result<()> {
-        // Every tool's error output carries `"is_error": true` (the
-        // convention every tool in `tools::` follows -- verified against
-        // fs/bash/config/skill/recall's own error outputs); absence means
-        // success. See `docs/agent-feedback-design.md`'s decision 1.
-        let is_error = result
-            .output
-            .get("is_error")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
         self.conn.execute(
             "INSERT INTO agent_tool_results (
                 event_id,
@@ -250,7 +241,7 @@ impl Store {
                 &result.call_id.0,
                 result.occurrence_id.as_ref().map(|o| o.0.as_str()),
                 serde_json::to_string(&result.output)?,
-                is_error,
+                result.is_error,
             ],
         )?;
         // A deny short-circuits without ever emitting `ToolCallStarted`

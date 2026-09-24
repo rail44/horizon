@@ -691,8 +691,8 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
 /// arrives asynchronously.
 #[test]
 fn should_fold_completion_ignores_the_superseded_close_of_an_abandoned_attempt() {
+    use crate::contract::SUPERSEDED_BY_RETRY;
     use crate::contract::{OccurrenceId, ToolCallRequest};
-    use crate::transcript::SUPERSEDED_BY_RETRY;
 
     let call_id = ToolCallId("denial-retry".to_string());
     let abandoned = OccurrenceId("occ-abandoned".to_string());

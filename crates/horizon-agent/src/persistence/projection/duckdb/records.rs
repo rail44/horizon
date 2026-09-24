@@ -90,7 +90,7 @@ pub(crate) struct AgentStoredToolResult {
     pub sequence: i64,
     pub call_id: ToolCallId,
     pub output: Value,
-    /// Derived from `output`'s own `is_error` key at projection time -- see
+    /// Copied from the result envelope's `is_error` field at projection time -- see
     /// `agent_tool_results.is_error`'s doc comment in `schema.rs`.
     pub is_error: bool,
 }

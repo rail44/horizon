@@ -3143,7 +3143,8 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
 #[test]
 fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     use crate::contract::OccurrenceId;
-    use crate::transcript::{SUPERSEDED_BY_RETRY, SUPERSEDED_SUMMARY};
+    use crate::contract::SUPERSEDED_BY_RETRY;
+    use crate::transcript::SUPERSEDED_SUMMARY;
 
     let workspace = temp_workspace("superseded-retry-workspace");
     let outside = temp_workspace("superseded-retry-outside");
