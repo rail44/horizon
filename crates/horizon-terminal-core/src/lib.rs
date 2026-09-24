@@ -34,7 +34,7 @@ pub use contract::{
 };
 pub use core::{TerminalColorScheme, DEFAULT_SCROLLBACK_LINES};
 pub use session_loop::{
-    core_channels, run_terminal_core, CoreReceivers, CoreSenders, TerminalCoreOptions,
+    core_channels, run_terminal_core, CoreInput, CoreReceivers, CoreSenders, TerminalCoreOptions,
 };
 pub use types::{
     fixed_palette_rgb, KeyEventKind, NamedColor, TerminalColor, TerminalCursor,

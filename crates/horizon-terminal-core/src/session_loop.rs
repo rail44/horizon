@@ -23,7 +23,7 @@ use std::time::Instant;
 mod channels;
 mod frames;
 
-pub use channels::{core_channels, CoreReceivers, CoreSenders};
+pub use channels::{core_channels, CoreInput, CoreReceivers, CoreSenders};
 
 use frames::FramePublisher;
 
@@ -35,9 +35,9 @@ use crate::contract::{
     ClipboardDestination, ScrollWindowRequest, SelectionCommand, TerminalCommand, TerminalUpdate,
 };
 use crate::core::{TerminalColorScheme, TerminalCore, TerminalEvents};
-#[cfg(test)]
-use crate::types::KeyEventKind;
 use crate::types::{TerminalFrame, TerminalSize};
+#[cfg(test)]
+use crate::{contract::TerminalKeyInput, types::KeyEventKind};
 
 /// Construction-time options a real session feeds into `TerminalCore`,
 /// mirroring host-config-derived values the crate itself has no way to read
@@ -236,9 +236,7 @@ pub fn run_terminal_core(
         resize_rx,
         scroll_rx,
         mouse_rx,
-        paste_rx,
-        key_rx,
-        text_rx,
+        input_rx,
         selection_rx,
         focus_rx,
         color_scheme_rx,
@@ -298,80 +296,29 @@ pub fn run_terminal_core(
                 }
                 frames.notify(&core);
             }
-            recv(paste_rx) -> text => {
-                let Ok(text) = text else {
-                    return;
-                };
-                // A paste routinely carries the trailing newline that execs
-                // the pasted command, so it gets the same priority drain as
-                // a keystroke (see `drain_pty_output`).
+            recv(input_rx) -> input => {
+                let Ok(input) = input else { return; };
+                // Keep already-received PTY queries ahead of every user
+                // delivery, while the shared input FIFO preserves key/text/
+                // paste order even when the core is busy draining output.
                 if !drain_pty_output(
-                    &mut core,
-                    &pty_rx,
-                    &command_tx,
-                    &update_tx,
-                    &mut frames,
-                    &mut sync_flush_rx,
-                    PTY_DRAIN_BUDGET,
-                ) {
-                    return;
-                }
-                let _ = command_tx.send(TerminalCommand::Input(core.paste_input(&text)));
-                frames.notify(&core);
-            }
-            recv(key_rx) -> key => {
-                let Ok((key, modifiers, event, text)) = key else {
-                    return;
+                    &mut core, &pty_rx, &command_tx, &update_tx, &mut frames,
+                    &mut sync_flush_rx, PTY_DRAIN_BUDGET,
+                ) { return; }
+                let is_paste = matches!(input, CoreInput::Paste(_));
+                let input = match input {
+                    CoreInput::Key(input) => core.key_input(
+                        input.key, input.modifiers, input.kind, input.text.as_deref(),
+                    ),
+                    CoreInput::Text(text) => core.text_input(&text),
+                    CoreInput::Paste(text) => core.paste_input(&text),
                 };
-                // A keystroke may be the Enter that execs the next program;
-                // any query already queued on `pty_rx` must be answered
-                // before this key is forwarded (see `drain_pty_output`).
-                if !drain_pty_output(
-                    &mut core,
-                    &pty_rx,
-                    &command_tx,
-                    &update_tx,
-                    &mut frames,
-                    &mut sync_flush_rx,
-                    PTY_DRAIN_BUDGET,
-                ) {
-                    return;
-                }
-                // `key_input` only encodes bytes for the PTY -- it never
-                // touches `core`'s visible state, so there is nothing to
-                // notify here. The real echo arrives back through `pty_rx`
-                // (below), which is what actually mutates the grid and
-                // takes `FramePublisher::notify`'s immediate slot.
-                let input = core.key_input(key, modifiers, event, text.as_deref());
-                if !input.is_empty() {
+                if is_paste || !input.is_empty() {
                     let _ = command_tx.send(TerminalCommand::Input(input));
                 }
-            }
-            recv(text_rx) -> text => {
-                let Ok(text) = text else {
-                    return;
-                };
-                // An IME commit can carry the newline that submits a
-                // command, so it gets the same priority drain as a
-                // keystroke (see `drain_pty_output`).
-                if !drain_pty_output(
-                    &mut core,
-                    &pty_rx,
-                    &command_tx,
-                    &update_tx,
-                    &mut frames,
-                    &mut sync_flush_rx,
-                    PTY_DRAIN_BUDGET,
-                ) {
-                    return;
-                }
-                // `text_input` encodes committed text (e.g. IME commits) for
-                // the PTY according to the live Kitty keyboard mode. Like
-                // `key_input`, it does not touch visible state.
-                let input = core.text_input(&text);
-                if !input.is_empty() {
-                    let _ = command_tx.send(TerminalCommand::Input(input));
-                }
+                // Key/text encoding alone changes no visible state. Paste
+                // keeps its existing notification; real echo comes via PTY.
+                if is_paste { frames.notify(&core); }
             }
             recv(selection_rx) -> command => {
                 let Ok(command) = command else {
@@ -712,7 +659,7 @@ mod tests {
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
-        let key_tx = senders.key_tx.clone();
+        let input_tx = senders.input_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -732,13 +679,13 @@ mod tests {
             .recv_timeout(Duration::from_millis(500))
             .expect("startup snapshot");
 
-        key_tx
-            .send((
-                KeyCode::Char('a'),
-                Modifiers::NONE,
-                KeyEventKind::Press,
-                None,
-            ))
+        input_tx
+            .send(CoreInput::Key(TerminalKeyInput {
+                key: KeyCode::Char('a'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+                text: None,
+            }))
             .unwrap();
 
         // The key must still be encoded and forwarded to the PTY writer --
@@ -1394,7 +1341,7 @@ mod tests {
         let (frame_tx, frame_rx) = crossbeam_channel::unbounded();
         let (update_tx, _update_rx) = crossbeam_channel::unbounded();
         let (senders, receivers) = core_channels();
-        let key_tx = senders.key_tx.clone();
+        let input_tx = senders.input_tx.clone();
 
         std::thread::spawn(move || {
             run_terminal_core(
@@ -1414,16 +1361,21 @@ mod tests {
 
         // Queue the query first, then the keystrokes it must not lose to.
         pty_tx.send(b"\x1b]11;?\x07".to_vec()).unwrap();
-        key_tx
-            .send((KeyCode::Enter, Modifiers::NONE, KeyEventKind::Press, None))
+        input_tx
+            .send(CoreInput::Key(TerminalKeyInput {
+                key: KeyCode::Enter,
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+                text: None,
+            }))
             .unwrap();
-        key_tx
-            .send((
-                KeyCode::Char('a'),
-                Modifiers::NONE,
-                KeyEventKind::Press,
-                None,
-            ))
+        input_tx
+            .send(CoreInput::Key(TerminalKeyInput {
+                key: KeyCode::Char('a'),
+                modifiers: Modifiers::NONE,
+                kind: KeyEventKind::Press,
+                text: None,
+            }))
             .unwrap();
 
         let first = command_rx
@@ -1453,6 +1405,69 @@ mod tests {
         assert!(
             command_rx.recv_timeout(Duration::from_millis(100)).is_err(),
             "the query must be answered exactly once"
+        );
+    }
+    #[test]
+    fn mixed_user_input_retains_fifo_order_before_the_core_starts() {
+        let (pty_tx, pty_rx) = crossbeam_channel::unbounded();
+        let (command_tx, command_rx) = crossbeam_channel::unbounded();
+        let (frame_tx, _frame_rx) = crossbeam_channel::unbounded();
+        let (update_tx, _update_rx) = crossbeam_channel::unbounded();
+        let (senders, receivers) = core_channels();
+        let mut expected = Vec::new();
+        // Queue before starting the consumer to cover a busy core, without a
+        // timing race between test setup and command processing.
+        for index in 0..32 {
+            let text = format!("input-{index}");
+            senders
+                .input_tx
+                .send(CoreInput::Text(text.clone()))
+                .unwrap();
+            expected.push(text.into_bytes());
+            senders
+                .input_tx
+                .send(CoreInput::Paste("日本語".to_string()))
+                .unwrap();
+            expected.push("日本語".as_bytes().to_vec());
+            senders
+                .input_tx
+                .send(CoreInput::Key(TerminalKeyInput {
+                    key: KeyCode::Enter,
+                    modifiers: Modifiers::NONE,
+                    kind: KeyEventKind::Press,
+                    text: None,
+                }))
+                .unwrap();
+            expected.push(b"\r".to_vec());
+        }
+        let worker = std::thread::spawn(move || {
+            run_terminal_core(
+                TerminalSize::new(20, 10),
+                TerminalCoreOptions::default(),
+                pty_rx,
+                receivers,
+                command_tx,
+                frame_tx,
+                update_tx,
+            )
+        });
+        let actual: Vec<_> = (0..expected.len())
+            .map(|_| {
+                match command_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .expect("encoded input")
+                {
+                    TerminalCommand::Input(bytes) => bytes,
+                    other => panic!("unexpected core command: {other:?}"),
+                }
+            })
+            .collect();
+        drop(senders);
+        drop(pty_tx);
+        worker.join().unwrap();
+        assert_eq!(
+            actual, expected,
+            "Enter must not overtake text or pasted input"
         );
     }
 }

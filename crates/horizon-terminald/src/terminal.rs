@@ -8,9 +8,9 @@ use std::time::Duration;
 
 use crossbeam_channel::{Receiver, Sender};
 use horizon_terminal_core::{
-    core_channels, run_terminal_core, CoreSenders, ScrollWindowRequest, SelectionCommand,
-    TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalSpawnSpec, TerminalSummary,
-    TerminalUpdate,
+    core_channels, run_terminal_core, CoreInput, CoreSenders, ScrollWindowRequest,
+    SelectionCommand, TerminalCommand, TerminalCoreOptions, TerminalFrame, TerminalKeyInput,
+    TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
 };
 use portable_pty::{native_pty_system, ChildKiller, CommandBuilder, MasterPty, PtySize};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -578,9 +578,7 @@ fn run_writer(
         resize_tx,
         scroll_tx,
         mouse_tx,
-        paste_tx,
-        key_tx,
-        text_tx,
+        input_tx,
         selection_tx,
         focus_tx,
         color_scheme_tx,
@@ -601,16 +599,21 @@ fn run_writer(
                 // Legacy key command: the v13 daemon treats it as a structured
                 // key input with no associated text, preserving wire
                 // compatibility with older clients.
-                let _ = key_tx.send((key, modifiers, event, None));
+                let _ = input_tx.send(CoreInput::Key(TerminalKeyInput {
+                    key,
+                    modifiers,
+                    kind: event,
+                    text: None,
+                }));
             }
             TerminalCommand::KeyInput(input) => {
-                let _ = key_tx.send((input.key, input.modifiers, input.kind, input.text));
+                let _ = input_tx.send(CoreInput::Key(input));
             }
             TerminalCommand::TextInput(text) => {
-                let _ = text_tx.send(text);
+                let _ = input_tx.send(CoreInput::Text(text));
             }
             TerminalCommand::Paste(text) => {
-                let _ = paste_tx.send(text);
+                let _ = input_tx.send(CoreInput::Paste(text));
             }
             TerminalCommand::Resize(size) => {
                 let size = size.normalized();
