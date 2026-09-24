@@ -97,7 +97,8 @@ impl Appender {
     }
 
     pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
-        for event in events {
+        // All append APIs share this boundary, including acknowledged commits.
+        for event in events.into_iter().filter(|event| !event.is_ephemeral()) {
             let turn_id = self.turn_tracker.turn_id_for_event(&event.event);
             let record = Record {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
@@ -135,4 +136,67 @@ fn unix_time_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{TaskProgress, TaskProgressState, ToolCallProgress};
+    use crate::live::LiveState;
+
+    #[test]
+    fn ephemeral_feedback_never_enters_history_or_jsonl_through_any_append_api() {
+        let feedback = vec![
+            ProviderEvent::tool_call_progress(ToolCallProgress {
+                key: "streaming-call".into(),
+                tool_id: Some("fs.read".into()),
+                bytes: 12,
+            }),
+            ProviderEvent::session_model("model".into()),
+            ProviderEvent::session_selection("provider".into(), "model".into()),
+            ProviderEvent::task_progress(TaskProgress {
+                task_session_id: SessionId::new(),
+                description: "inspect".into(),
+                state: TaskProgressState::Running,
+                activity: None,
+                started_at_epoch_ms: 1,
+            }),
+        ];
+        let mut failures = Vec::new();
+        for mode in ["appender", "live", "durable"] {
+            let path =
+                std::env::temp_dir().join(format!("horizon-feedback-{}.jsonl", Uuid::new_v4()));
+            let (writer, _) = WriterHandle::open(&path);
+            let session = SessionId::new();
+            let live = LiveState::with_event_log(session, None, None, writer.clone());
+            match mode {
+                "appender" => Appender::new(writer.clone(), session, None, None)
+                    .commit_provider_events(feedback.clone())
+                    .unwrap(),
+                "live" => {
+                    live.extend_provider_events(feedback.clone());
+                }
+                _ => {
+                    live.persist_provider_events(feedback.clone()).unwrap();
+                }
+            }
+            writer.flush().unwrap();
+            if !live.events().is_empty() || live.frame().state.is_some() {
+                failures.push(format!("{mode} folded placeholder events"));
+            }
+            let report = super::super::read(&path).unwrap();
+            if !report.records.is_empty() {
+                failures.push(format!(
+                    "{mode} wrote {} placeholder records",
+                    report.records.len()
+                ));
+            }
+            if mode != "appender" {
+                assert_eq!(live.session_model().as_deref(), Some("model"));
+                assert_eq!(live.session_selection().unwrap().provider, "provider");
+            }
+            std::fs::remove_file(path).unwrap();
+        }
+        assert!(failures.is_empty(), "{}", failures.join("; "));
+    }
 }

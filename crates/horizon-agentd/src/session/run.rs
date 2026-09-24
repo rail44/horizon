@@ -304,10 +304,8 @@ pub(super) fn run_session(
 /// so wrapping it in `Envelope::event` isn't an option. This restores the
 /// streaming-tool-call-argument-preview feature the module's step 3 notes in
 /// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
-/// `process_agent_provider_event` never mixes progress and real events in
-/// one `Processing` (a progress tick always comes back alone), so splitting
-/// `horizon_events` into the two forwarding shapes below is exhaustive in
-/// practice, not just by construction.
+/// Feedback keeps its dedicated wire variant through the shared conversion;
+/// its placeholder is never forwarded as a conversation event.
 #[allow(clippy::too_many_arguments)]
 fn handle_provider_event(
     host: &dyn HostTools,
@@ -327,13 +325,11 @@ fn handle_provider_event(
         &mut processing.provider_commands,
     );
 
-    let mut to_forward: Vec<AgentWireEvent> = Vec::new();
-    for event in &processing.horizon_events {
-        match &event.tool_call_progress {
-            Some(progress) => to_forward.push(AgentWireEvent::ToolCallProgress(progress.clone())),
-            None => to_forward.push(AgentWireEvent::Event(event.event.clone())),
-        }
-    }
+    let to_forward: Vec<AgentWireEvent> = processing
+        .horizon_events
+        .iter()
+        .map(AgentWireEvent::from)
+        .collect();
     let durable_result = processing.horizon_events.iter().any(|event| {
         matches!(
             event.event,

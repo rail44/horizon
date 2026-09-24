@@ -28,7 +28,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{
-    Event, JsonValue, ProviderId, RequestId, SessionId, TaskProgress, ToolCallProgress,
+    Event, JsonValue, ProviderEvent, ProviderId, RequestId, SessionId, TaskProgress,
+    ToolCallProgress,
 };
 use crate::roles::RoleId;
 
@@ -91,6 +92,22 @@ pub enum AgentWireEvent {
     /// that [`Self::SessionModel`] carries. An appended variant, so the wire
     /// stays additive (no protocol bump — the `TaskProgress` precedent).
     SessionSelection(ModelSelection),
+}
+
+impl From<&ProviderEvent> for AgentWireEvent {
+    fn from(event: &ProviderEvent) -> Self {
+        if let Some(progress) = &event.tool_call_progress {
+            Self::ToolCallProgress(progress.clone())
+        } else if let Some(model) = &event.session_model {
+            Self::SessionModel(model.clone())
+        } else if let Some(selection) = &event.session_selection {
+            Self::SessionSelection(selection.clone())
+        } else if let Some(progress) = &event.task_progress {
+            Self::TaskProgress(progress.clone())
+        } else {
+            Self::Event(event.event.clone())
+        }
+    }
 }
 
 /// [`AgentWireEvent::SessionSelection`]'s payload — the `(provider, model)`

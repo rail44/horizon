@@ -617,8 +617,8 @@ pub struct ProviderEvent {
     /// [`ProviderEvent::tool_call_progress`]. `event` is an unused
     /// placeholder whenever this is `Some`: `agent::live::State`'s reducer
     /// folds this field straight into the frame and never reads `event` for
-    /// it, and `agent::live::LiveState::extend_provider_events` excludes it
-    /// from the persisted event log before it reaches `Appender`. Piggy-
+    /// it, and `persistence::event_log::Appender` excludes it from every
+    /// append path before creating a persisted record. Piggy-
     /// backing on the existing `ProviderEvent` struct (rather than adding a
     /// new `Event` variant) means this "kind of event" never has to touch
     /// the event log's exhaustive `Event` matches in
@@ -709,6 +709,15 @@ pub struct ToolCallProgress {
 }
 
 impl ProviderEvent {
+    /// Feedback and session metadata carry no conversation event. Persistence
+    /// and tool dispatch must never interpret their placeholder `event`.
+    pub(crate) fn is_ephemeral(&self) -> bool {
+        self.tool_call_progress.is_some()
+            || self.session_model.is_some()
+            || self.session_selection.is_some()
+            || self.task_progress.is_some()
+    }
+
     pub(crate) fn new(event: Event) -> Self {
         Self {
             event,

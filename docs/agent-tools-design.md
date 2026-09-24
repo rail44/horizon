@@ -435,3 +435,13 @@ canonicalization, missing-root refusal, grant revalidation, and proxy/judge fall
 retain their existing behavior. The daemon finishes construction before registering
 or publishing the runtime. Board-host installation retains its separate existing
 entry point and is performed immediately after `build`, before sharing.
+
+### Ephemeral feedback at shared boundaries
+
+`ProviderEvent::is_ephemeral` identifies progress and session metadata before
+tool dispatch or persistence. `Appender` owns the exclusion for both streaming
+and acknowledged writes, so callers do not need to pre-filter a batch. `LiveState`
+folds tool progress and model metadata, and ignores child-task progress owned by
+the view. The wire conversion keeps each feedback kind in its dedicated variant;
+the unused conversation-event placeholder is never persisted or forwarded. The
+existing event envelope, JSONL format, and wire variants are unchanged.

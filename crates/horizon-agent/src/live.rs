@@ -89,6 +89,11 @@ impl State {
                 self.session_selection = Some(selection);
                 continue;
             }
+            // The view owns live child rows; their placeholder cannot change
+            // conversation state even when this API is called directly.
+            if event.task_progress.is_some() {
+                continue;
+            }
             apply_agent_event_to_frame(&mut self.frame, &event.event, &mut self.turn);
             self.events.push(event.event);
         }
@@ -137,24 +142,8 @@ impl LiveState {
     ) -> AgentFrame {
         let events = events.into_iter().collect::<Vec<_>>();
         if let Some(persistence) = &self.persistence {
-            // Ephemeral tool-call progress (`tool_call_progress.is_some()`)
-            // and a session-model announcement (`session_model.is_some()`)
-            // never reach the event log — this is the exclusion point:
-            // everything else about either (folding into the frame/sidecar
-            // state, skipping conversation history) happens in
-            // `State::extend_provider_events`.
-            let persistable = events
-                .iter()
-                .filter(|event| {
-                    event.tool_call_progress.is_none()
-                        && event.session_model.is_none()
-                        && event.session_selection.is_none()
-                })
-                .cloned()
-                .collect::<Vec<_>>();
-            if !persistable.is_empty() {
-                let _ = persistence.append_events(persistable);
-            }
+            // Appender owns ephemeral exclusion for every persistence entry.
+            let _ = persistence.append_events(events.clone());
         }
         self.inner.borrow_mut().extend_provider_events(events)
     }

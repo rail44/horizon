@@ -107,10 +107,8 @@ impl AgentSession {
                     if session.attachment_generation != attachment_generation {
                         return;
                     }
-                    // Ephemeral live-task progress never reaches the fold —
-                    // handed there it would land as its placeholder event
-                    // (see `ProviderEvent::task_progress`). Applied to the
-                    // running-task list instead, then dropped.
+                    // The view owns running-task rows; LiveState owns the
+                    // conversation frame and session metadata.
                     let mut event = event;
                     if let Some(progress) = event.task_progress.take() {
                         session.apply_task_progress(progress);

@@ -3783,3 +3783,28 @@ fn unregister_session_runtime_removes_registered_runtime() {
     // register in the first place).
     unregister_session_runtime(SessionId::new());
 }
+
+#[test]
+fn ephemeral_feedback_passes_processing_without_placeholder_events() {
+    let tools = ToolSessionState::without_root();
+    for feedback in [
+        ProviderEvent::session_model("resolved-model".into()),
+        ProviderEvent::session_selection("provider".into(), "selected-model".into()),
+        ProviderEvent::task_progress(crate::contract::TaskProgress {
+            task_session_id: SessionId::new(),
+            description: "inspect".into(),
+            state: crate::contract::TaskProgressState::Running,
+            activity: None,
+            started_at_epoch_ms: 1,
+        }),
+    ] {
+        let processing = process_agent_provider_event(
+            &StubHostTools,
+            &tools,
+            SessionId::new(),
+            feedback.clone(),
+        );
+        assert_eq!(processing.horizon_events, [feedback]);
+        assert!(processing.provider_commands.is_empty());
+    }
+}

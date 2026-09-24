@@ -18,12 +18,11 @@ pub fn process_agent_provider_event(
 ) -> Processing {
     let provider_event = provider_event.into();
 
-    // Ephemeral tool-call progress (`ProviderEvent::tool_call_progress`)
-    // carries a placeholder `event` — see its doc comment — so it must not
+    // Ephemeral feedback carries a placeholder `event`, so it must not
     // reach the approval/bash-kill/tool-execution logic below, which
     // assumes `event` is real. Pass it through untouched; `LiveState` folds
     // it into the frame and keeps it out of the persisted log.
-    if provider_event.tool_call_progress.is_some() {
+    if provider_event.is_ephemeral() {
         return Processing {
             horizon_events: vec![provider_event],
             provider_commands: Vec::new(),
