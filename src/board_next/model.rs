@@ -1,57 +1,76 @@
-//! The prototype's pure half: the steering order, unread counts, message
-//! folding, relative times, and the key map.
+//! The two views' pure half: the steering order, unread counts, post
+//! folding, the post cursor, relative times, the header's narrow decision,
+//! and the two key maps.
 //!
-//! Nothing here touches GPUI, so the decisions the view is built on are
-//! unit-testable on their own.
+//! Nothing here builds an element, so the decisions both views are built on
+//! are unit-testable on their own.
 
 use std::collections::HashMap;
 
+use gpui::{px, Pixels};
 use horizon_board::Item;
 
-use super::spec::Layout;
+use super::spec::{
+    ACTION_PAD, BODY, CELL_EM, GAP_TIGHT, GAP_UNIT, HEADER_TITLE_MIN_CELLS, PAD_X, T1,
+};
 use crate::board_pane::activity::BoardSessionActivity;
 
 // ---------------------------------------------------------------------------
 // Commands
 // ---------------------------------------------------------------------------
 
-/// Everything the prototype can be asked to do. Keys, buttons, and row
-/// clicks all resolve to one of these, so a chord is attached to behaviour
-/// in exactly one place ([`command_for_key`]).
+/// Everything the thread view can be asked to do. Keys, buttons, and clicks
+/// all resolve to one of these, so a chord is attached to behaviour in
+/// exactly one place ([`command_for_key`]).
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum Command {
-    SelectNext,
-    SelectPrevious,
-    SelectTask(u64),
+pub(crate) enum ThreadCommand {
+    NextPost,
+    PreviousPost,
+    /// Folds the post under the cursor away, or opens it back up.
+    ToggleCurrentPost,
+    /// The same for a named post, for the fold affordances inside it.
+    TogglePost(String),
+    /// Moves the cursor onto a post that was clicked.
+    SelectPost(usize),
     FocusComposer,
-    FocusList,
-    ToggleFinished,
-    /// Collapses the list to a counts-only rail, or opens it back out.
-    ToggleRail,
-    /// Expands every folded message in the open thread, or folds them all
-    /// back once none is folded.
-    ToggleLongMessages,
-    ToggleMessage(String),
-    ToggleBody,
-    SetStatus,
+    LeaveComposer,
     ToggleClosed,
     OpenTaskSession,
     PostMessage,
 }
 
-/// The key map. `key` is a GPUI keystroke key name; a chord carrying any
-/// modifier other than shift never reaches this. `layout` moves one key
-/// only: the rail direction has no finished band on screen while its list
-/// is collapsed, so `o` is the rail's own toggle there.
-pub(crate) fn command_for_key(key: &str, layout: Layout) -> Option<Command> {
+/// Everything the list view can be asked to do.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ListCommand {
+    SelectNext,
+    SelectPrevious,
+    SelectTask(u64),
+    ToggleFinished,
+    /// Opens the selected task's thread. A pane of its own holds that
+    /// thread, so the list reports the request rather than rendering it.
+    OpenThread,
+}
+
+/// The thread view's key map. `key` is a GPUI keystroke key name; a chord
+/// carrying any modifier other than shift never reaches this.
+pub(crate) fn command_for_key(key: &str) -> Option<ThreadCommand> {
     Some(match key {
-        "j" | "down" => Command::SelectNext,
-        "k" | "up" => Command::SelectPrevious,
-        "enter" => Command::FocusComposer,
-        "escape" => Command::FocusList,
-        "o" if layout == Layout::C => Command::ToggleRail,
-        "o" => Command::ToggleFinished,
-        "e" => Command::ToggleLongMessages,
+        "j" | "down" => ThreadCommand::NextPost,
+        "k" | "up" => ThreadCommand::PreviousPost,
+        "e" => ThreadCommand::ToggleCurrentPost,
+        "enter" => ThreadCommand::FocusComposer,
+        "escape" => ThreadCommand::LeaveComposer,
+        _ => return None,
+    })
+}
+
+/// The list view's key map.
+pub(crate) fn list_command_for_key(key: &str) -> Option<ListCommand> {
+    Some(match key {
+        "j" | "down" => ListCommand::SelectNext,
+        "k" | "up" => ListCommand::SelectPrevious,
+        "o" => ListCommand::ToggleFinished,
+        "enter" => ListCommand::OpenThread,
         _ => return None,
     })
 }
@@ -78,7 +97,6 @@ pub(crate) struct Row {
     pub(crate) item: Item,
     pub(crate) group: Group,
     pub(crate) unread: usize,
-    pub(crate) activity: Option<BoardSessionActivity>,
 }
 
 /// How many of `item`'s messages the reader has already seen: everything up
@@ -149,7 +167,6 @@ pub(crate) fn rows(
             Row {
                 group: group_of(item, unread, activity),
                 unread,
-                activity,
                 item: item.clone(),
             }
         })
@@ -198,59 +215,45 @@ pub(crate) fn step_selection(visible: &[u64], selected: Option<u64>, forward: bo
     visible.get(next).copied()
 }
 
-// ---------------------------------------------------------------------------
-// Message folding
-// ---------------------------------------------------------------------------
-
-/// A message longer than this many lines is folded to its first lines.
-pub(crate) const FOLD_LINES: usize = 12;
-
-/// A message longer than this many characters is folded even when it has
-/// few line breaks — one 5,000-character paragraph is as long to read as
-/// fifty short lines.
-pub(crate) const FOLD_CHARS: usize = 700;
-
-/// The head of a folded message, and how much of it stays hidden.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct Fold {
-    pub(crate) head: String,
-    pub(crate) hidden_lines: usize,
-}
-
-/// The fold for `text`, or `None` when it is short enough to show whole.
-pub(crate) fn fold(text: &str) -> Option<Fold> {
-    let total_lines = text.lines().count();
-    let mut head = String::new();
-    let mut kept = 0usize;
-    let mut cut_mid_line = false;
-    for line in text.lines() {
-        if kept == FOLD_LINES || head.chars().count() >= FOLD_CHARS {
-            break;
-        }
-        if kept > 0 {
-            head.push('\n');
-        }
-        let budget = FOLD_CHARS.saturating_sub(head.chars().count());
-        if line.chars().count() > budget {
-            head.extend(line.chars().take(budget));
-            head.push('…');
-            cut_mid_line = true;
-            kept += 1;
-            break;
-        }
-        head.push_str(line);
-        kept += 1;
-    }
-    if kept == total_lines && !cut_mid_line {
+/// The post the cursor lands on among `posts` posts. A folded post is still
+/// a post: folding takes nothing out of the order, and `e` on a folded post
+/// is what opens it.
+pub(crate) fn step_post(posts: usize, cursor: Option<usize>, forward: bool) -> Option<usize> {
+    if posts == 0 {
         return None;
     }
-    let hidden = total_lines
-        .saturating_sub(kept)
-        .max(usize::from(cut_mid_line));
-    Some(Fold {
-        head,
-        hidden_lines: hidden,
-    })
+    let next = match (cursor, forward) {
+        (None, _) => 0,
+        (Some(index), true) => (index + 1).min(posts - 1),
+        (Some(index), false) => index.saturating_sub(1),
+    };
+    Some(next.min(posts - 1))
+}
+
+// ---------------------------------------------------------------------------
+// The task header band
+// ---------------------------------------------------------------------------
+
+/// How wide the header band has to be to keep its title and its actions on
+/// one row: the band's own padding, the title's floor, the gap to the
+/// actions, and the actions themselves at their label widths.
+pub(crate) fn header_one_row_width(actions: &[&str]) -> Pixels {
+    let cell = BODY.size * CELL_EM;
+    let buttons = actions.iter().fold(px(0.0), |total, label| {
+        total + cell * display_width(label) as f32 + ACTION_PAD
+    });
+    let gaps = GAP_TIGHT * actions.len().saturating_sub(1) as f32;
+    PAD_X * 2.0 + measure_title_floor() + GAP_UNIT + buttons + gaps
+}
+
+fn measure_title_floor() -> Pixels {
+    T1.size * (CELL_EM * HEADER_TITLE_MIN_CELLS)
+}
+
+/// Whether the band stacks into two rows — the title on its own, the chips
+/// and the actions under it — instead of squeezing the title to nothing.
+pub(crate) fn header_stacks(available: Pixels, actions: &[&str]) -> bool {
+    available < header_one_row_width(actions)
 }
 
 // ---------------------------------------------------------------------------
@@ -373,19 +376,6 @@ pub(crate) fn voice(author: &str) -> Voice {
 pub(crate) fn relative_time(at_ms: u64, now_ms: u64) -> String {
     let seconds = now_ms.saturating_sub(at_ms) / 1_000;
     match seconds {
-        0..=59 => "just now".to_string(),
-        60..=3_599 => format!("{}m ago", seconds / 60),
-        3_600..=86_399 => format!("{}h ago", seconds / 3_600),
-        86_400..=604_799 => format!("{}d ago", seconds / 86_400),
-        _ => format!("{}w ago", seconds / 604_800),
-    }
-}
-
-/// `at` as an age, in the chrome language the layout directions are written
-/// in. Both arguments are unix milliseconds.
-pub(crate) fn relative_time_ja(at_ms: u64, now_ms: u64) -> String {
-    let seconds = now_ms.saturating_sub(at_ms) / 1_000;
-    match seconds {
         0..=59 => "たった今".to_string(),
         60..=3_599 => format!("{}分前", seconds / 60),
         3_600..=86_399 => format!("{}時間前", seconds / 3_600),
@@ -427,16 +417,34 @@ pub(crate) fn status_text(item: &Item) -> String {
     }
 }
 
+/// The list view's one header line: how much there is, and how much of it
+/// is unread.
+pub(crate) fn list_header_text(tasks: usize, unread: usize) -> String {
+    if unread == 0 {
+        format!("タスク {tasks}件")
+    } else {
+        format!("タスク {tasks}件 · 未読 {unread}件")
+    }
+}
+
+/// What the list reports when a task is opened. Opening a thread means
+/// putting it in a pane, which is the workspace's business, so the list
+/// states the request instead of carrying it out.
+pub(crate) fn open_notice(title: &str) -> String {
+    format!("スレッドを開く: {title}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        cell_width, command_for_key, display_width, finished_summary, fold, fold_preview,
-        is_active, is_finished, relative_time, relative_time_ja, rendered_lines, rows, status_text,
-        step_selection, unread_count, visible_rows, Command, Group, Voice, FOLD_CHARS, FOLD_LINES,
+        cell_width, command_for_key, display_width, finished_summary, fold_preview,
+        header_one_row_width, header_stacks, is_active, is_finished, list_command_for_key,
+        list_header_text, open_notice, relative_time, rendered_lines, rows, status_text, step_post,
+        step_selection, unread_count, visible_rows, Group, ListCommand, ThreadCommand, Voice,
         FOLD_RENDERED_LINES,
     };
-    use crate::board_next::spec::Layout;
     use crate::board_pane::activity::BoardSessionActivity;
+    use gpui::px;
     use horizon_board::{Comment, Item};
     use horizon_workspace::SessionId;
     use std::collections::HashMap;
@@ -461,24 +469,87 @@ mod tests {
     }
 
     #[test]
-    fn keys_map_to_one_command_each() {
-        let any = Layout::Prototype;
-        assert_eq!(command_for_key("j", any), Some(Command::SelectNext));
-        assert_eq!(command_for_key("down", any), Some(Command::SelectNext));
-        assert_eq!(command_for_key("k", any), Some(Command::SelectPrevious));
-        assert_eq!(command_for_key("up", any), Some(Command::SelectPrevious));
-        assert_eq!(command_for_key("enter", any), Some(Command::FocusComposer));
-        assert_eq!(command_for_key("escape", any), Some(Command::FocusList));
-        assert_eq!(command_for_key("o", any), Some(Command::ToggleFinished));
-        assert_eq!(command_for_key("e", any), Some(Command::ToggleLongMessages));
-        assert_eq!(command_for_key("x", any), None);
-        // Only the rail direction rebinds `o`.
+    fn the_thread_keys_move_a_post_cursor_and_the_list_keys_move_a_row() {
+        assert_eq!(command_for_key("j"), Some(ThreadCommand::NextPost));
+        assert_eq!(command_for_key("down"), Some(ThreadCommand::NextPost));
+        assert_eq!(command_for_key("k"), Some(ThreadCommand::PreviousPost));
+        assert_eq!(command_for_key("up"), Some(ThreadCommand::PreviousPost));
+        assert_eq!(command_for_key("e"), Some(ThreadCommand::ToggleCurrentPost));
+        assert_eq!(command_for_key("enter"), Some(ThreadCommand::FocusComposer));
         assert_eq!(
-            command_for_key("o", Layout::A),
-            Some(Command::ToggleFinished)
+            command_for_key("escape"),
+            Some(ThreadCommand::LeaveComposer)
         );
-        assert_eq!(command_for_key("o", Layout::C), Some(Command::ToggleRail));
-        assert_eq!(command_for_key("j", Layout::C), Some(Command::SelectNext));
+        // The list's own key is not the thread's.
+        assert_eq!(command_for_key("o"), None);
+        assert_eq!(command_for_key("x"), None);
+
+        assert_eq!(list_command_for_key("j"), Some(ListCommand::SelectNext));
+        assert_eq!(list_command_for_key("down"), Some(ListCommand::SelectNext));
+        assert_eq!(list_command_for_key("k"), Some(ListCommand::SelectPrevious));
+        assert_eq!(
+            list_command_for_key("up"),
+            Some(ListCommand::SelectPrevious)
+        );
+        assert_eq!(list_command_for_key("o"), Some(ListCommand::ToggleFinished));
+        assert_eq!(list_command_for_key("enter"), Some(ListCommand::OpenThread));
+        assert_eq!(list_command_for_key("e"), None);
+    }
+
+    #[test]
+    fn the_post_cursor_stops_at_both_ends_and_ignores_folding() {
+        assert_eq!(step_post(0, None, true), None);
+        assert_eq!(step_post(3, None, true), Some(0));
+        assert_eq!(step_post(3, None, false), Some(0));
+        assert_eq!(step_post(3, Some(0), true), Some(1));
+        assert_eq!(step_post(3, Some(2), true), Some(2));
+        assert_eq!(step_post(3, Some(1), false), Some(0));
+        assert_eq!(step_post(3, Some(0), false), Some(0));
+        // A cursor left behind by a thread that shrank lands inside it.
+        assert_eq!(step_post(2, Some(9), true), Some(1));
+
+        // Folding is not part of the order: a thread of three posts steps
+        // the same however many of them are folded away.
+        let long = "本文。\n".repeat(200);
+        assert!(fold_preview(&long, 72).is_some());
+        let folded_thread = [long.as_str(), "短い", long.as_str()];
+        let mut cursor = None;
+        let mut visited = Vec::new();
+        for _ in 0..folded_thread.len() {
+            cursor = step_post(folded_thread.len(), cursor, true);
+            visited.push(cursor);
+        }
+        assert_eq!(visited, vec![Some(0), Some(1), Some(2)]);
+    }
+
+    #[test]
+    fn the_header_stacks_once_the_title_would_lose_its_floor() {
+        let actions = ["返信", "閉じる", "セッション"];
+        let needed = header_one_row_width(&actions);
+        assert!(!header_stacks(needed, &actions));
+        assert!(!header_stacks(needed + px(200.0), &actions));
+        assert!(header_stacks(needed - px(1.0), &actions));
+        // Fewer actions need less room, so the same pane stacks later.
+        let fewer = ["返信", "閉じる"];
+        assert!(header_one_row_width(&fewer) < needed);
+        assert!(!header_stacks(needed, &fewer));
+        // A pane the width of a narrow split stacks; a wide one does not.
+        assert!(header_stacks(px(360.0), &actions));
+        assert!(!header_stacks(px(900.0), &actions));
+    }
+
+    #[test]
+    fn the_list_header_names_the_unread_only_when_there_is_some() {
+        assert_eq!(list_header_text(25, 3), "タスク 25件 · 未読 3件");
+        assert_eq!(list_header_text(0, 0), "タスク 0件");
+    }
+
+    #[test]
+    fn opening_a_task_is_reported_with_its_title() {
+        assert_eq!(
+            open_notice("貼り付け時に末尾の改行が落ちる"),
+            "スレッドを開く: 貼り付け時に末尾の改行が落ちる"
+        );
     }
 
     #[test]
@@ -545,14 +616,15 @@ mod tests {
     }
 
     #[test]
-    fn japanese_ages_read_in_the_largest_unit_that_fits() {
+    fn ages_read_in_the_largest_unit_that_fits() {
         let now = 10_000_000_000u64;
-        assert_eq!(relative_time_ja(now, now), "たった今");
-        assert_eq!(relative_time_ja(now - 120_000, now), "2分前");
-        assert_eq!(relative_time_ja(now - 3 * 3_600_000, now), "3時間前");
-        assert_eq!(relative_time_ja(now - 2 * 86_400_000, now), "2日前");
-        assert_eq!(relative_time_ja(now - 21 * 86_400_000, now), "3週間前");
-        assert_eq!(relative_time_ja(now + 1_000, now), "たった今");
+        assert_eq!(relative_time(now, now), "たった今");
+        assert_eq!(relative_time(now - 120_000, now), "2分前");
+        assert_eq!(relative_time(now - 3 * 3_600_000, now), "3時間前");
+        assert_eq!(relative_time(now - 2 * 86_400_000, now), "2日前");
+        assert_eq!(relative_time(now - 21 * 86_400_000, now), "3週間前");
+        // A clock behind the message reads as now rather than underflowing.
+        assert_eq!(relative_time(now + 1_000, now), "たった今");
     }
 
     #[test]
@@ -648,52 +720,11 @@ mod tests {
     }
 
     #[test]
-    fn short_messages_are_not_folded_and_long_ones_keep_their_first_lines() {
-        assert_eq!(fold("one line"), None);
-        let short = (0..FOLD_LINES).map(|i| i.to_string()).collect::<Vec<_>>();
-        assert_eq!(fold(&short.join("\n")), None);
-
-        let long = (0..FOLD_LINES + 5)
-            .map(|i| format!("line {i}"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        let folded = fold(&long).expect("a 17-line message folds");
-        assert_eq!(folded.hidden_lines, 5);
-        assert_eq!(folded.head.lines().count(), FOLD_LINES);
-        assert!(folded.head.starts_with("line 0"));
-        assert!(!folded.head.contains("line 12"));
-    }
-
-    #[test]
-    fn one_very_long_paragraph_folds_on_characters() {
-        let paragraph = "あ".repeat(FOLD_CHARS * 3);
-        let folded = fold(&paragraph).expect("a long paragraph folds");
-        assert_eq!(
-            folded.head.chars().count(),
-            FOLD_CHARS + 1,
-            "head plus the ellipsis"
-        );
-        assert_eq!(folded.hidden_lines, 1);
-    }
-
-    #[test]
     fn authorship_splits_into_three_voices() {
         assert_eq!(super::voice("owner"), Voice::Owner);
         assert_eq!(super::voice("system"), Voice::System);
         assert_eq!(super::voice("agent"), Voice::Agent);
         assert_eq!(super::voice("reviewer"), Voice::Agent);
-    }
-
-    #[test]
-    fn ages_read_in_the_largest_unit_that_fits() {
-        let now = 10_000_000_000u64;
-        assert_eq!(relative_time(now, now), "just now");
-        assert_eq!(relative_time(now - 120_000, now), "2m ago");
-        assert_eq!(relative_time(now - 7_200_000, now), "2h ago");
-        assert_eq!(relative_time(now - 3 * 86_400_000, now), "3d ago");
-        assert_eq!(relative_time(now - 21 * 86_400_000, now), "3w ago");
-        // A clock behind the message reads as now rather than underflowing.
-        assert_eq!(relative_time(now + 1_000, now), "just now");
     }
 
     #[test]

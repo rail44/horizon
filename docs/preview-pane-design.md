@@ -87,12 +87,14 @@ The previews in this build:
 | --- | --- |
 | `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
 | `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
-| `board-next`, `board-next-empty`, `board-next-long-thread` | A board prototype that exists only here: master–detail in one view, over the same kind of in-memory store (`src/board_next/`). The long-thread one opens on a forty-message thread whose third post is long enough to fold. |
-| `board-a`, `board-b`, `board-c` (and `-long` each) | Three layout directions of that same prototype over the same sample data: a list rail beside a capped body column, one bordered card per post, and one column with the list collapsed to a counts rail. One view renders all of them — `board_next::spec::Layout` is chosen at construction and only `Render` branches on it. The `-long` ones open on the forty-message thread. |
+| `board-next-thread`, `board-next-thread-long` | One task's thread, over the same kind of in-memory store (`src/board_next/`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
+| `board-next-list`, `board-next-list-empty` | The same board's task list as a view of its own: one row per task in steering order, with the finished band folded behind one row. |
 
-`src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It
-reads a store and emits no commands, so it carries no shell wiring and the
-shipped board pane is untouched by it.
+`src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It is
+two views, not one — a thread and a list, each taking a pane's whole width,
+with a pane split putting them side by side. Both read a store and emit no
+commands, so they carry no shell wiring and the shipped board pane is
+untouched by them.
 
 For a view to be previewable, the code that goes into the plugin must not
 reach sockets, subprocesses, or the filesystem directly — a wasm32-wasip2
@@ -193,15 +195,13 @@ primary entry point and the view chooser does not list the preview kind.
   titles from its sample store and the rows' activity icons reach the host
   as images, `board-list-empty` paints its chrome and no row, and
   `board-detail` paints the item's body and its comment thread. The
-  prototype's: `board-next` paints the selected task as both a row and the
-  thread header and `j` moves that pairing to the next task,
-  `board-next-empty` paints chrome and no row, and `board-next-long-thread`
-  folds its long post until `e` unfolds it. The directions': each of
-  `board-a`/`board-b`/`board-c` paints the selected task's title once more
-  than an unselected one's — twice where a list column draws it too, once
-  where the rail does not — paints that task's thread, and moves that one
-  extra onto the next task on `j`; `board-b-long` shows the long post's
-  first line and not its deep probe until `e`. A board
+  thread view's: `board-next-thread` paints its task's title exactly once —
+  the header band, with no list row beside it — and the first post's probe
+  under it, and `board-next-thread-long` shows the long post's first line
+  and not its deep probe until `j`, `j`, `e` put the post cursor on it and
+  unfold it. The list view's: `board-next-list` paints two row titles, and
+  `j` then Enter adds the open notice naming the row the cursor landed on;
+  `board-next-list-empty` paints chrome and no row. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.
@@ -265,7 +265,7 @@ what was measured is that the requests are unpaced, that the executor call
 driving the guest never returns, and that removing the animation returns
 both to idle.
 
-`src/preview/e2e.rs` drives a keystroke into the prototype's previews partly
+`src/preview/e2e.rs` drives a keystroke into the `board-next` previews partly
 for this: the run to quiescence after it does not return when the view
 paints a repeating animation. The board pane's own `board-list` preview is
 in that state — the row indicator for a running session is a spinner — and

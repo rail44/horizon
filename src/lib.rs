@@ -19,8 +19,8 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod agent;
-// A board prototype that exists only as named previews: it reads a store and
-// drives nothing, so it builds for both targets as it stands.
+// A board that exists only as named previews: two views that read a store
+// and drive nothing, so they build for both targets as they stand.
 mod board_next;
 // The shell drives a good part of this module: the subscriptions it installs
 // on the pane, the commands it executes, the accessors it reads. A plugin

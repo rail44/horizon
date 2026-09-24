@@ -653,9 +653,9 @@ async fn preview_plugin_paints_the_board_over_its_sample_store(cx: &mut TestAppC
 
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
-async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext) {
+async fn preview_plugin_paints_the_board_next_thread(cx: &mut TestAppContext) {
     let built = built_artifact();
-    let live = live_artifact("board-next");
+    let live = live_artifact("board-next-thread");
     std::fs::copy(&built, &live).expect("stage the built artifact");
 
     cx.update(gpui_component::init);
@@ -663,7 +663,7 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
 
     // The leading character of each title occurs in exactly one string the
     // sample board can paint (held by that module's own tests), so counting
-    // it separates a list row from a row plus the thread header.
+    // it separates "painted once" from "painted twice" and from "absent".
     let first_marker = board_next::FIRST_TASK_TITLE
         .chars()
         .next()
@@ -673,63 +673,45 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
         .next()
         .expect("a title");
 
-    // --- list and thread are one view ------------------------------------
-    let prototype = load(&live, board_next::NEXT, cx).expect("the prototype instantiates");
+    // --- one task's thread, with no list in it ---------------------------
+    let thread = load(&live, board_next::THREAD, cx).expect("the thread preview instantiates");
     let surface = cx.new(Surface::new);
-    mount(&prototype.host, &surface, BOARD_SLOT, cx);
-    let master = glyph_counts(&summary(&surface, cx));
+    mount(&thread.host, &surface, BOARD_SLOT, cx);
+    let open = glyph_counts(&summary(&surface, cx));
     assert_eq!(
-        count_of(&master, first_marker),
-        2,
-        "the selected task is painted as a list row and as the thread header: {master:?}"
-    );
-    assert_eq!(
-        count_of(&master, second_marker),
+        count_of(&open, first_marker),
         1,
-        "an unselected task is painted as a list row only: {master:?}"
+        "the thread view paints its task once, as the header band: {open:?}"
     );
     assert!(
-        painted(&master, board_next::THREAD_PROBE),
-        "the selected task's thread is not painted next to the list: {master:?}"
+        painted(&open, board_next::FIRST_TASK_TITLE),
+        "the thread view painted no task title: {open:?}"
+    );
+    assert_eq!(
+        count_of(&open, second_marker),
+        0,
+        "the thread view painted another task: the list is a pane of its own: {open:?}"
+    );
+    assert!(
+        painted(&open, board_next::THREAD_PROBE),
+        "the thread view painted no post under the title: {open:?}"
     );
 
-    // --- `j` moves the selection, and the thread follows it --------------
+    // A keystroke has to settle: a guest paces no frames, so a view that
+    // asks for another frame from inside the one it is drawing never lets
+    // `settle` return (see the module doc).
     press(&surface, "j", cx);
     let moved = glyph_counts(&summary(&surface, cx));
-    assert_eq!(
-        count_of(&moved, second_marker),
-        2,
-        "`j` did not carry the thread header onto the next task: {moved:?}"
-    );
-    assert_eq!(
-        count_of(&moved, first_marker),
-        1,
-        "the task `j` left is still painted as the thread header: {moved:?}"
-    );
     assert!(
-        !painted(&moved, board_next::THREAD_PROBE),
-        "the previous task's thread is still painted: {moved:?}"
+        painted(&moved, board_next::THREAD_PROBE),
+        "the post cursor left the thread it is reading: {moved:?}"
     );
-    cx.update(|_| drop(prototype));
+    cx.update(|_| drop(thread));
     settle(cx);
 
-    // --- the same view over an empty store -------------------------------
-    let empty = load(&live, board_next::NEXT_EMPTY, cx).expect("the empty prototype instantiates");
-    let empty_surface = cx.new(Surface::new);
-    mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
-    let blank = glyph_counts(&summary(&empty_surface, cx));
-    assert!(!blank.is_empty(), "the empty prototype painted no chrome");
-    assert_eq!(
-        count_of(&blank, first_marker),
-        0,
-        "the empty prototype painted a sample row: {blank:?}"
-    );
-    cx.update(|_| drop(empty));
-    settle(cx);
-
-    // --- a long post is folded to its first lines ------------------------
-    let long = load(&live, board_next::NEXT_LONG_THREAD, cx)
-        .expect("the long-thread preview instantiates");
+    // --- the long thread: `j` twice reaches the long report, `e` opens it -
+    let long =
+        load(&live, board_next::THREAD_LONG, cx).expect("the long-thread preview instantiates");
     let long_surface = cx.new(Surface::new);
     mount(&long.host, &long_surface, BOARD_SLOT, cx);
     let folded = glyph_counts(&summary(&long_surface, cx));
@@ -742,12 +724,13 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
         "the long post was not folded: {folded:?}"
     );
 
-    // --- `e` unfolds every folded post in the open thread ----------------
+    press(&long_surface, "j", cx);
+    press(&long_surface, "j", cx);
     press(&long_surface, "e", cx);
     let unfolded = glyph_counts(&summary(&long_surface, cx));
     assert!(
         painted(&unfolded, board_next::DEEP_PROBE),
-        "`e` did not unfold the long post: {unfolded:?}"
+        "`e` on the cursored post did not unfold it: {unfolded:?}"
     );
 
     cx.update(|_| drop(long));
@@ -757,9 +740,9 @@ async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext)
 
 #[gpui::test]
 #[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
-async fn preview_plugin_paints_the_three_board_directions(cx: &mut TestAppContext) {
+async fn preview_plugin_paints_the_board_next_list(cx: &mut TestAppContext) {
     let built = built_artifact();
-    let live = live_artifact("board-directions");
+    let live = live_artifact("board-next-list");
     std::fs::copy(&built, &live).expect("stage the built artifact");
 
     cx.update(gpui_component::init);
@@ -774,85 +757,55 @@ async fn preview_plugin_paints_the_three_board_directions(cx: &mut TestAppContex
         .next()
         .expect("a title");
 
-    // --- each direction opens on the same task, and `j` carries the
-    //     header title to the next one ----------------------------------
-    // The count relation, not an absolute count: the two-column directions
-    // paint the selected title twice (a row and the header band) while the
-    // rail direction paints it once (the header band alone), so what every
-    // direction has to satisfy is that the selected title outnumbers an
-    // unselected one by exactly one, and that `j` moves that one.
-    for name in [board_next::A, board_next::B, board_next::C] {
-        let direction = load(&live, name, cx).unwrap_or_else(|error| {
-            panic!("the {name} preview does not instantiate: {error}");
-        });
-        let surface = cx.new(Surface::new);
-        mount(&direction.host, &surface, BOARD_SLOT, cx);
-
-        let open = glyph_counts(&summary(&surface, cx));
-        assert!(
-            painted(&open, board_next::FIRST_TASK_TITLE),
-            "{name} painted no selected task title: {open:?}"
-        );
-        assert!(
-            painted(&open, board_next::THREAD_PROBE),
-            "{name} painted no thread under that title: {open:?}"
-        );
-        let first = count_of(&open, first_marker);
-        let second = count_of(&open, second_marker);
-        assert_eq!(
-            first,
-            second + 1,
-            "{name} does not paint the selected task's title once more than an unselected one's: {open:?}"
-        );
-
-        // A keystroke has to settle: a guest paces no frames, so a view
-        // that asks for another frame from inside the one it is drawing
-        // never lets `settle` return (see the module doc).
-        press(&surface, "j", cx);
-        let moved = glyph_counts(&summary(&surface, cx));
-        assert!(
-            painted(&moved, board_next::SECOND_TASK_TITLE),
-            "{name}: `j` painted no next task title: {moved:?}"
-        );
-        assert!(
-            !painted(&moved, board_next::THREAD_PROBE),
-            "{name}: the previous task's thread is still painted after `j`: {moved:?}"
-        );
-        assert_eq!(
-            (
-                count_of(&moved, first_marker),
-                count_of(&moved, second_marker)
-            ),
-            (first - 1, second + 1),
-            "{name}: `j` did not carry the header title onto the next task: {moved:?}"
-        );
-
-        cx.update(|_| drop(direction));
-        settle(cx);
-    }
-
-    // --- folding in the card direction -----------------------------------
-    let long = load(&live, board_next::B_LONG, cx).expect("the card long-thread preview loads");
-    let long_surface = cx.new(Surface::new);
-    mount(&long.host, &long_surface, BOARD_SLOT, cx);
-    let folded = glyph_counts(&summary(&long_surface, cx));
+    // --- the rows the sample events fold into -----------------------------
+    let list = load(&live, board_next::LIST, cx).expect("the list preview instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&list.host, &surface, BOARD_SLOT, cx);
+    let rows = glyph_counts(&summary(&surface, cx));
     assert!(
-        painted(&folded, board_next::FOLDED_PROBE),
-        "the folded card does not show the post's first line: {folded:?}"
+        painted(&rows, board_next::FIRST_TASK_TITLE),
+        "the list painted no first row: {rows:?}"
     );
     assert!(
-        !painted(&folded, board_next::DEEP_PROBE),
-        "the card direction did not fold the long post: {folded:?}"
+        painted(&rows, board_next::SECOND_TASK_TITLE),
+        "the list painted no second row: {rows:?}"
+    );
+    assert_eq!(
+        count_of(&rows, second_marker),
+        1,
+        "a task is painted as one row and nothing else: {rows:?}"
     );
 
-    press(&long_surface, "e", cx);
-    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    // --- `j` then Enter reports the task it landed on ---------------------
+    press(&surface, "j", cx);
+    press(&surface, "enter", cx);
+    let opened = glyph_counts(&summary(&surface, cx));
+    let notice = format!("スレッドを開く: {}", board_next::SECOND_TASK_TITLE);
     assert!(
-        painted(&unfolded, board_next::DEEP_PROBE),
-        "`e` did not unfold the long post in the card direction: {unfolded:?}"
+        painted(&opened, &notice),
+        "Enter painted no open notice: {opened:?}"
+    );
+    assert_eq!(
+        count_of(&opened, second_marker),
+        2,
+        "the notice names a task other than the selected row: {opened:?}"
+    );
+    cx.update(|_| drop(list));
+    settle(cx);
+
+    // --- the same view over an empty store --------------------------------
+    let empty = load(&live, board_next::LIST_EMPTY, cx).expect("the empty list instantiates");
+    let empty_surface = cx.new(Surface::new);
+    mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
+    let blank = glyph_counts(&summary(&empty_surface, cx));
+    assert!(!blank.is_empty(), "the empty list painted no chrome");
+    assert_eq!(
+        count_of(&blank, first_marker),
+        0,
+        "the empty list painted a sample row: {blank:?}"
     );
 
-    cx.update(|_| drop(long));
+    cx.update(|_| drop(empty));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }
