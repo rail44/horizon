@@ -1,0 +1,226 @@
+[
+  {
+    "label": "Human and judge validation followed by shared execution dispatch",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "resolve_auto_approval",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "try_execute",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "resolve_auto_approval",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "try_execute",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/approval.rs",
+        "owner": "<free>",
+        "name": "dispatch_approval",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Async and blocking output collection, including shared read-error policy",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/plain.rs",
+        "owner": "<free>",
+        "name": "pump",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "spawn_blocking_pump",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "<free>",
+        "name": "pump",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "<free>",
+        "name": "spawn_blocking_pump",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "<free>",
+        "name": "collect_read",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Child context across Linux production and macOS wrappers",
+    "before": [
+      {
+        "file": "crates/horizon-sandbox/src/linux/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "production",
+        "variant": "cfg(not(test))"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/macos/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "production",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-sandbox/src/linux/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "production",
+        "variant": "cfg(not(test))"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/macos/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-sandbox/src/command.rs",
+        "owner": "<free>",
+        "name": "configure_child",
+        "partition": "production",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Capture calls the shared platform-specific termination directly",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "collect",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "wait_child_with_timeout",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "kill_pid",
+        "partition": "production",
+        "variant": "cfg(unix)"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "kill_pid",
+        "partition": "production",
+        "variant": "cfg(not(unix))"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variant": "cfg(unix)"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variant": "cfg(not(unix))"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_group",
+        "partition": "production",
+        "variant": "cfg(unix)"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_group",
+        "partition": "production",
+        "variant": "cfg(not(unix))"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "collect",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs",
+        "owner": "<free>",
+        "name": "wait_child_with_timeout",
+        "partition": "production",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variant": "cfg(unix)"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_tree",
+        "partition": "production",
+        "variant": "cfg(not(unix))"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/process.rs",
+        "owner": "<free>",
+        "name": "kill_process_group",
+        "partition": "production",
+        "variant": "cfg(unix)"
+      }
+    ]
+  }
+]

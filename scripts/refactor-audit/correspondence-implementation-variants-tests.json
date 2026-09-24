@@ -1,0 +1,177 @@
+[
+  {
+    "label": "Both provider adapters through HTTP/SSE alongside existing request checks",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "openai_compatible_turns_explicitly_enable_parallel_tool_calls",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "openai_turn_completion_request_carries_the_explicit_max_tokens",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "openai_compatible_turns_explicitly_enable_parallel_tool_calls",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/tests.rs",
+        "owner": "<free>",
+        "name": "openai_turn_completion_request_carries_the_explicit_max_tokens",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/tests.rs",
+        "owner": "<free>",
+        "name": "serve",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/tests.rs",
+        "owner": "<free>",
+        "name": "response",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/providers/rig/completion/tests.rs",
+        "owner": "<free>",
+        "name": "provider_wire_contract_covers_both_adapters_and_rejections",
+        "partition": "tests",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Human and judge execution, stale candidates and duplicate approvals",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/tests.rs",
+        "owner": "<free>",
+        "name": "resolve_approval_executes_fs_write_on_approve",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/tests.rs",
+        "owner": "<free>",
+        "name": "resolve_approval_executes_fs_write_on_approve",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/tests.rs",
+        "owner": "<free>",
+        "name": "human_and_judge_approvals_share_execution_but_reject_stale_candidates",
+        "partition": "tests",
+        "variant": ""
+      }
+    ]
+  },
+  {
+    "label": "Output parity with interruption, EOF and permanent error fixtures",
+    "before": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/tests.rs",
+        "owner": "<free>",
+        "name": "echo_round_trip_reports_output_and_exit_zero",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/tests.rs",
+        "owner": "<free>",
+        "name": "lossy_non_utf8_output_does_not_panic",
+        "partition": "tests",
+        "variant": ""
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-agent/src/tools/bash/tests.rs",
+        "owner": "<free>",
+        "name": "echo_round_trip_reports_output_and_exit_zero",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/tests.rs",
+        "owner": "<free>",
+        "name": "lossy_non_utf8_output_does_not_panic",
+        "partition": "tests",
+        "variant": ""
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "Reader",
+        "name": "read",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:Read"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "Reader",
+        "name": "poll_read",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests / trait:AsyncRead"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "<free>",
+        "name": "reader",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      },
+      {
+        "file": "crates/horizon-agent/src/tools/bash/exec/stream.rs",
+        "owner": "<free>",
+        "name": "both_pumps_retry_interruptions_and_keep_bytes_until_eof_or_error",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  },
+  {
+    "label": "Linux test spawn plus actual child-context and stdio verification",
+    "before": [
+      {
+        "file": "crates/horizon-sandbox/src/linux/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "tests",
+        "variant": "cfg(test)"
+      }
+    ],
+    "after": [
+      {
+        "file": "crates/horizon-sandbox/src/linux/mod.rs",
+        "owner": "<free>",
+        "name": "spawn_with_grants",
+        "partition": "tests",
+        "variant": "cfg(test)"
+      },
+      {
+        "file": "crates/horizon-sandbox/src/command.rs",
+        "owner": "<free>",
+        "name": "wrapper_forwards_context_and_all_three_streams",
+        "partition": "tests",
+        "variant": "cfg(test) / mod:tests"
+      }
+    ]
+  }
+]

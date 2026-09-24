@@ -1,0 +1,172 @@
+{
+  "schema_version": 1,
+  "original_source_commit": "23455eeb6a979785b912cf781286fa7c06c46190",
+  "baseline_commit": "e931b5d240ea0dbc7f3e9a70104a3a08226a8ecc",
+  "reviewed_commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6",
+  "profile": "profiles/non-board.json",
+  "scope": "Nine implementation-family reviews. Evidence identifies scenarios, owners and tests, not an exhaustive line-by-line audit. Board-specific code is excluded; unchanged shared files may contain board wiring.",
+  "groups": [
+    {
+      "id": "provider_adapters",
+      "scenario": "Build requests and consume successful/rejected streams for OpenAI-compatible and Anthropic clients.",
+      "decision": "refactor",
+      "reason": "Keep typed client dispatch and provider-specific authentication/parameters. The generic request and collector already own common behavior. Correct the provider-specific failure label in their shared caller.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/completion.rs": "609d2a773b780d2e00958902f5701b141b2bfafa0650f553cecdf161fc8c9356",
+        "crates/horizon-agent/src/providers/rig/completion/response.rs": "e09fde763ada7713676c998f2f371c00c3da9090cc5ad63e0bc1152fca8fb7de",
+        "crates/horizon-agent/src/providers/rig/completion/response/tests.rs": "340f1726457385dced40c9a910c2065a007b4bb1ff040e3b6ef9d9be20b32041",
+        "crates/horizon-agent/src/providers/rig/completion/tests.rs": "14677254ad2164a960967f722f784b5663e2d44ddbb4de578f69cb2954bc25ef",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "ace4b544bbbce4ec417b2dd81a6d8a90e3a44a1acc00fb2b1a761cc46e638448"
+      },
+      "validation": [
+        "Local HTTP/SSE contract checks cover both wire formats, auth, max_tokens, tool advertisement, tool-call decoding, usage and non-retried 401 failures. No live provider was contacted."
+      ]
+    },
+    {
+      "id": "provider_retry_and_history",
+      "scenario": "Cancel, retry a rejected request, restore history and use deterministic fallback.",
+      "decision": "preserve",
+      "reason": "Keep one retry classifier and durable-output cutoff for both providers. Canonical history and clearing projection remain distinct; fallback has no network span. Do not replace these differences with a common transport abstraction.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/providers/rig/clearing.rs": "94e58823ee18d8593002a9b2f7305b368455a5cd69eb934430446e3e24e45242",
+        "crates/horizon-agent/src/providers/rig/completion.rs": "609d2a773b780d2e00958902f5701b141b2bfafa0650f553cecdf161fc8c9356",
+        "crates/horizon-agent/src/providers/rig/completion/response/tests.rs": "340f1726457385dced40c9a910c2065a007b4bb1ff040e3b6ef9d9be20b32041",
+        "crates/horizon-agent/src/providers/rig/history.rs": "9a1c140309969542a0c75bb96f35dc315880b5e5e8be44c0ca65e98bc684433e",
+        "crates/horizon-agent/src/providers/rig/retry.rs": "72c216a251a46b66fe189f91e01fd8f4ffcce0c94a4395e5c1675a4e91a2824b",
+        "crates/horizon-agent/src/providers/rig/tests.rs": "ace4b544bbbce4ec417b2dd81a6d8a90e3a44a1acc00fb2b1a761cc46e638448"
+      },
+      "validation": [
+        "Existing retry pacing, cancellation, durable-output, clearing and history tests pass. Adapter failure tests check request-span closure without committed output."
+      ]
+    },
+    {
+      "id": "approval_dispatch",
+      "scenario": "Resolve a displayed human approval or an exact automatic candidate.",
+      "decision": "refactor",
+      "reason": "Share dispatch only after each entry point checks its own evidence. Preserve approval source, kind, exact candidate checks, started/finished guards and forwarding behavior.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/approval.rs": "f1fdb1b84eb4a2c54c9c87a85924d796ea0bc73d0d08d2769b69f46bad07ac46",
+        "crates/horizon-agent/src/tools/tests.rs": "b518390d29eb044d47e17f0210fe5841bfcb498fb895239e1c481e7845bc6c88",
+        "crates/horizon-agentd/src/session/approval.rs": "ce574125bee5c0d35883f3f8a75f18a05e450083d72a69de3c4e5c2ed78597ad",
+        "crates/horizon-agentd/src/session/completion.rs": "9e8fbd7a18f6576ca734c4689298f7eebbb76ff2ad456e904fa02078cc3d3fd0"
+      },
+      "validation": [
+        "New parity regression checks actual writes, occurrence identity, event order, changed automatic candidates and duplicate decisions. Existing bash/domain/filesystem approval and retry checks pass."
+      ]
+    },
+    {
+      "id": "execution_completion_retry",
+      "scenario": "Run sync or async tools, refuse a grant, retry a contained attempt and handle late completion.",
+      "decision": "preserve",
+      "reason": "Sync results and async Started outcomes have different owners/timing. Keep live-occurrence correlation, session-owned turn completion, original results on refused retries and grant revalidation before effects. Board arms remain excluded.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/approval.rs": "f1fdb1b84eb4a2c54c9c87a85924d796ea0bc73d0d08d2769b69f46bad07ac46",
+        "crates/horizon-agent/src/tools/completion.rs": "24611d5c81efad490971858ab7e1142cf18f439ddbba31cbb019d2b9b2ed8dc5",
+        "crates/horizon-agent/src/tools/execution.rs": "dc813d40cb42fb49985a315eb0d5dbbfb2cf35860d6ddf13ff994efe8c82479f",
+        "crates/horizon-agent/src/tools/processing.rs": "0e125a865e71fb968decbb7c6ed22af24dc8376b06aaafe4b026a43386dbc1ef",
+        "crates/horizon-agent/src/tools/tests.rs": "b518390d29eb044d47e17f0210fe5841bfcb498fb895239e1c481e7845bc6c88",
+        "crates/horizon-agentd/src/session/completion.rs": "9e8fbd7a18f6576ca734c4689298f7eebbb76ff2ad456e904fa02078cc3d3fd0",
+        "crates/horizon-agentd/src/session/completion/tests.rs": "c503e45d15638d3e2983e729f641f2f39df3ad5a7f62dee22b485fa2135bcfb6"
+      },
+      "validation": [
+        "Full default suite covers real agentd execution, approved contained Git writes, grant retries and stale completion handling."
+      ]
+    },
+    {
+      "id": "sandbox_child_context",
+      "scenario": "Wrap a command for Linux supervision, macOS Seatbelt or Linux unit tests.",
+      "decision": "refactor",
+      "reason": "One preparation function owns cwd, explicit environment overrides/removals, scratch TMPDIR and stdin/stdout/stderr. Keep wrapper argv, policy installation, process-group creation and pre_exec safety OS-local.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-sandbox/src/command.rs": "e982640ad6c92d09faacc783135b3e4d6f495e4ee282c1463a8c016dff3f3beb",
+        "crates/horizon-sandbox/src/lib.rs": "7b0b03c6c6dff51b0c92909c6cbc931fc3223fb9d362eb79526df999fb631746",
+        "crates/horizon-sandbox/src/linux/mod.rs": "4ac577bfa9b0eda476b52aa51a5db8bb75fa623acfc3e56ac3e0e31daadf37bf",
+        "crates/horizon-sandbox/src/linux/tests.rs": "456b81795b6aa7762bff86498bc7d180ef20fd3570e15d62db76a6d50b423b3c",
+        "crates/horizon-sandbox/src/macos/mod.rs": "42d1b17784b9d49a33ea86659b18f128bc043fab866a28511e3442b603bb4e72",
+        "crates/horizon-sandbox/src/tmpdir.rs": "d3489525c7d9778f7bfaeb60aded547856dcfdc336475193689f783912006ea1",
+        "crates/horizon-sandbox/tests/linux_supervised_helper.rs": "f4f88e381e51da959e829a9ca2375466948026ff9f237cfa16b7d05c86566387"
+      },
+      "validation": [
+        "New real-child test checks cwd, set/removed environment, scratch creation and all three streams. Default tests exercise the production Linux helper separately from cfg(test) spawning. macOS cross-check stopped in aws-lc-sys because the host C compiler lacks Darwin support; no macOS execution claimed."
+      ]
+    },
+    {
+      "id": "output_collection",
+      "scenario": "Read normal and sandboxed stdout/stderr through temporary interruptions.",
+      "decision": "refactor",
+      "reason": "Keep async tasks and blocking threads but share collection/termination rules. Retry Interrupted reads; EOF and permanent errors retain their prior stopping behavior. Process waiting and bounded drain remain with each execution path.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/bash/exec.rs": "2e8f8c058e1293aba06f69cf39adcbbf30cb870ea176407a0764b9ecc22e62c3",
+        "crates/horizon-agent/src/tools/bash/exec/plain.rs": "4e0795f069206daa779bd56b6398a0813ba4ff38374d5d66802a508d1cd13076",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs": "3b209c73a82dc9367fca1fbbd7ec882fd658698f6efc28836d6a5511d697d133",
+        "crates/horizon-agent/src/tools/bash/exec/stream.rs": "4625ac48387520b634506fd1e62d790a4ad4e822bda3ba084be21ed65a7a9c9b",
+        "crates/horizon-agent/src/tools/bash/tests.rs": "c43c28da26bb8a518e035d582095c0c11e40ba85df03b77bbc5a2eb4980679e5"
+      },
+      "validation": [
+        "A scripted reader drives both pumps through interruption before/after data, binary bytes, EOF and permanent error. Real timeout, partial output, spill, cwd and held-pipe tests pass."
+      ]
+    },
+    {
+      "id": "process_termination",
+      "scenario": "Cancel queued/running commands and terminate descendant processes.",
+      "decision": "refactor",
+      "reason": "Remove duplicate cfg-specific forwarding wrappers and the unused non-Unix group stub. Keep OS behavior in process.rs: Linux snapshots descendants before killing the process group; other Unix hosts use group termination. Non-Unix tree termination remains unimplemented, not a new platform guarantee.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/bash/exec/plain.rs": "4e0795f069206daa779bd56b6398a0813ba4ff38374d5d66802a508d1cd13076",
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs": "3b209c73a82dc9367fca1fbbd7ec882fd658698f6efc28836d6a5511d697d133",
+        "crates/horizon-agent/src/tools/bash/process.rs": "112a48ce338614a159d1c41787ee9d3ffc78e9426cde75576d966ec3e97a0825",
+        "crates/horizon-agent/src/tools/bash/registry.rs": "36f1305104d02637858c32ce7047996d5c2d084f60832c5580f49278e4621a6e",
+        "crates/horizon-agent/src/tools/bash/tests.rs": "c43c28da26bb8a518e035d582095c0c11e40ba85df03b77bbc5a2eb4980679e5"
+      },
+      "validation": [
+        "Linux tests cover setsid descendants, cancellation, queue ordering, panic cleanup and registry removal. No macOS/FreeBSD runtime or non-Unix runtime verification."
+      ]
+    },
+    {
+      "id": "os_capabilities_and_primary_selection",
+      "scenario": "Query containment support and interact with the OS primary selection.",
+      "decision": "preserve",
+      "reason": "Keep Linux/macOS capability checks distinct and unsupported sandbox spawning fail-closed. Primary selection is supported only on Linux/FreeBSD; absence elsewhere is intentional. Capture keeps Linux authenticated supervisor reports distinct from macOS best-effort denial-log collection.",
+      "status": "reviewed",
+      "files": {
+        "crates/horizon-agent/src/tools/bash/exec/sandboxed/capture.rs": "3b209c73a82dc9367fca1fbbd7ec882fd658698f6efc28836d6a5511d697d133",
+        "crates/horizon-sandbox/src/bin/horizon-sandbox-helper.rs": "99ad6c95d70752e51ac9bbd098b16f5b2c76f1517f2474bb268229408ae3c5b3",
+        "crates/horizon-sandbox/src/lib.rs": "7b0b03c6c6dff51b0c92909c6cbc931fc3223fb9d362eb79526df999fb631746",
+        "src/terminal/mod.rs": "ddab8e6642937cf2bfe732e1cecae5221608765dccd1f9034fecb907eea80ea7",
+        "src/terminal/session.rs": "bf9698b70c0a397cd65f7cc48d80e04ca52a22e4a411abd780e3eebcbb033c57"
+      },
+      "validation": [
+        "Linux default gate exercises supported containment. horizon-sandbox --all-targets cargo check for x86_64-unknown-freebsd passes; it verifies compilation of the unsupported-platform branch only, not execution or the entire application."
+      ]
+    },
+    {
+      "id": "native_wasm_boundary",
+      "scenario": "Compile native host and WASM guest, share theme input and reload a real preview component.",
+      "decision": "preserve",
+      "reason": "Keep schema, registry and theme resolution shared; sockets, watcher, process-backed views and config publication remain native. Guest receipt/observer lifecycle is different from host publication. No board preview implementation was changed or selected for practical verification.",
+      "status": "reviewed",
+      "files": {
+        "src/lib.rs": "c1a21e3c9df3e3f70b8b30811504afbc090c353524f083977c01f74949ae30a7",
+        "src/preview/e2e.rs": "55004171516533f18c43510fa91fcf59f24feda7399ab9e4d19a67722a26ad44",
+        "src/preview/guest.rs": "51935d66f8aebd4592fd1a03d09fa4e330159adad91154d64528019afea77eba",
+        "src/preview/host.rs": "735e316a23e332f8e77c14f76261ae86fbf5bcfe86e8552e53576aa76b827128",
+        "src/preview/mod.rs": "6c19edd9d37ddd76a1aec04ecbdf8d2270573c816d43e8fdd0b90ef536976dc9",
+        "src/preview/registry.rs": "e5ae850696cde8f0c8874ddf0712320e54a2c68bda5165238d0889c1d393c062",
+        "src/preview/schema.rs": "3ecc880178f1bd5f4a0077ab05ea4bae5cfe3b8c91506154765e413602753740",
+        "src/preview/tests.rs": "3d0df04eb1075da448c421cecdda0cf531008a14d7fc734e9ee25e7031158003",
+        "src/theme/live.rs": "6825b811f1db29b8024ce49f9a03d43f0a272eb94afe84c724499f0621d3cde3",
+        "src/theme/scheme.rs": "fae4f4c9560ffac627997a53cb4c40e9a7fadfe4f91c47af748a02e646b1acfe"
+      },
+      "validation": [
+        "Mandatory wasm32-wasip2 library check passes. The real preview component builds and the non-board theme/paint/reload ignored test passes in wasmtime. This is not a physical GUI, IME or platform clipboard test."
+      ]
+    }
+  ]
+}

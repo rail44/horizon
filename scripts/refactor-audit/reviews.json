@@ -45,14 +45,14 @@
       },
       "sha256": "b0ceda0516388fddb35db5111ea1a3f28fdcfac60020dd93b78dc99fc99aa177",
       "related": {
-        "crates/horizon-agent/src/providers/rig/completion.rs": "43dec757679763d9bec9fcb9e26b16a2c49fd125cd46b2175cf33e1470221a3d",
+        "crates/horizon-agent/src/providers/rig/completion.rs": "609d2a773b780d2e00958902f5701b141b2bfafa0650f553cecdf161fc8c9356",
         "crates/horizon-agent/src/providers/rig/completion/response.rs": "e09fde763ada7713676c998f2f371c00c3da9090cc5ad63e0bc1152fca8fb7de",
         "crates/horizon-agent/src/providers/rig/history.rs": "9a1c140309969542a0c75bb96f35dc315880b5e5e8be44c0ca65e98bc684433e",
         "crates/horizon-agent/src/providers/rig/retry.rs": "72c216a251a46b66fe189f91e01fd8f4ffcce0c94a4395e5c1675a4e91a2824b"
       },
       "decision": "preserve",
-      "reason": "Clearing replaces only frozen tool-result occurrences in the provider view. Canonical history, current-round call/result pairs and memory projection have distinct contracts; preserve them.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Clearing replaces only frozen tool-result occurrences in the provider view. Canonical history, current-round call/result pairs and memory projection have distinct contracts; preserve them. Both provider adapters now have HTTP/SSE contract coverage; the shared failure label is provider-neutral. Request projection and clearing behavior remain unchanged.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
     },
     {
       "target": {
@@ -63,14 +63,14 @@
       },
       "sha256": "002f6a416110f571730eefdce6cfa8b5a1f834bcca7af17799c0a2646bd914ee",
       "related": {
-        "crates/horizon-agent/src/tools/approval.rs": "a6427bd3c07040bf0f3971db57f31638586d08dfd72fce44fa0d980d4c0b25df",
+        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
+        "crates/horizon-agent/src/tools/approval.rs": "f1fdb1b84eb4a2c54c9c87a85924d796ea0bc73d0d08d2769b69f46bad07ac46",
         "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
-        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb",
-        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f"
+        "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb"
       },
       "decision": "preserve",
-      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Filesystem authority, metadata revalidation and approval stay outside it. Passing dispatch occurrence through the web adapter changes neither permission policy nor lexer behavior. Retry bookkeeping now comes from contract rather than transcript; shell tokenization and approval capability decisions remain unchanged.",
-      "commit": "aa2636049393e68bf668f03c35c9b70701efbb2d"
+      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Filesystem authority, metadata revalidation and approval stay outside it. Passing dispatch occurrence through the web adapter changes neither permission policy nor lexer behavior. Retry bookkeeping now comes from contract rather than transcript; shell tokenization and approval capability decisions remain unchanged. Human and judge approvals now share only execution dispatch after their original validation. Shell classification and grant revalidation remain unchanged.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
     },
     {
       "target": {
@@ -126,11 +126,59 @@
         "crates/horizon-sandbox-runtime/src/linux/network.rs": "0607130ed577a1c61f40d3c1364b4267ad6d8b57b366d750e12cd52e02c5ebff",
         "crates/horizon-sandbox/src/caps.rs": "bba0760387ea55568db59b46a45aaff8d24d598412c1b4acf155d6ea247961be",
         "crates/horizon-sandbox/src/grant.rs": "8d7b32726a93dec65a7c43d5ab94928616cbad1bf4b9b344cdc23cdc4eada21d",
-        "crates/horizon-sandbox/src/linux/mod.rs": "f805285f845c90a90e7e70d64e4a1a6346dad0f93c71097950c097a9066ff2b1"
+        "crates/horizon-sandbox/src/linux/mod.rs": "4ac577bfa9b0eda476b52aa51a5db8bb75fa623acfc3e56ac3e0e31daadf37bf"
       },
       "decision": "preserve",
-      "reason": "Excluded subpaths must deny writes before selecting the longest sufficient capability. Coverage, sufficient access and refusal evidence are separate decisions; preserve the ordered matcher.",
-      "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+      "reason": "Excluded subpaths must deny writes before selecting the longest sufficient capability. Coverage, sufficient access and refusal evidence are separate decisions; preserve the ordered matcher. Linux and macOS wrappers now share cwd, environment and stdio preparation. Capability construction, helper protocol and path authorization remain unchanged.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-sandbox/src/lib.rs",
+        "owner": "<free>",
+        "name": "is_available",
+        "partition": "production",
+        "variant": "cfg(not(any(target_os=\"linux\",target_os=\"macos\")))"
+      },
+      "sha256": "2d01b3899bb79ad0fa18b168b96514ffef7c0fdc449a656361fa4f15f5a7ff72",
+      "related": {
+        "crates/horizon-sandbox/src/lib.rs": "7b0b03c6c6dff51b0c92909c6cbc931fc3223fb9d362eb79526df999fb631746"
+      },
+      "decision": "preserve",
+      "reason": "Keep the OS-specific capability probe and the unsupported-platform false result. Syntactic cfg identity is tracked separately; only Linux execution and FreeBSD cross-compilation were verified.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-sandbox/src/lib.rs",
+        "owner": "<free>",
+        "name": "is_available",
+        "partition": "production",
+        "variant": "cfg(target_os=\"linux\")"
+      },
+      "sha256": "ea2adb4e707c33f134c8aa207e08e4c30a74d712bfe492ed40ef5c364563f9ef",
+      "related": {
+        "crates/horizon-sandbox/src/lib.rs": "7b0b03c6c6dff51b0c92909c6cbc931fc3223fb9d362eb79526df999fb631746"
+      },
+      "decision": "preserve",
+      "reason": "Keep the OS-specific capability probe and the unsupported-platform false result. Syntactic cfg identity is tracked separately; only Linux execution and FreeBSD cross-compilation were verified.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-sandbox/src/lib.rs",
+        "owner": "<free>",
+        "name": "is_available",
+        "partition": "production",
+        "variant": "cfg(target_os=\"macos\")"
+      },
+      "sha256": "828b6396d1a8f56d3499b27465eae373c3b597cf414f71944dfaa8579cb56246",
+      "related": {
+        "crates/horizon-sandbox/src/lib.rs": "7b0b03c6c6dff51b0c92909c6cbc931fc3223fb9d362eb79526df999fb631746"
+      },
+      "decision": "preserve",
+      "reason": "Keep the OS-specific capability probe and the unsupported-platform false result. Syntactic cfg identity is tracked separately; only Linux execution and FreeBSD cross-compilation were verified.",
+      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
     },
     {
       "target": {
