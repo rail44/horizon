@@ -1,3 +1,6 @@
+mod builder;
+pub use builder::ToolSessionBuilder;
+
 use std::{
     cell::RefCell,
     collections::HashMap,
@@ -65,7 +68,7 @@ struct Inner {
     /// calls run with, snapshotted before each bash job is queued. Two
     /// sources feed it, and both are enforced identically: the trees
     /// `[grants]` names for this session's project, injected at spawn (see
-    /// [`ToolSessionState::with_filesystem_grants`]), and whatever a human
+    /// [`ToolSessionBuilder::with_filesystem_grants`]), and whatever a human
     /// or the judge approved after a containment denial (see
     /// [`ToolSessionState::approve_filesystem_grants`]). Stored as grants
     /// rather than as the denials that triggered them: an approved grant is
@@ -96,7 +99,7 @@ struct Inner {
     /// ([`SkillRegistry::default`]) at every construction site except the
     /// one production call site (`horizon-agentd`'s `session::run_session`),
     /// which installs the real per-session registry via
-    /// [`ToolSessionState::with_skills`] right after construction --
+    /// [`ToolSessionBuilder::with_skills`] right after construction --
     /// mirroring how [`RecallContext`] is threaded in, except this seat is
     /// set post-construction (via a builder method) rather than as a
     /// `for_current_dir` parameter, so that constructor's signature -- and
@@ -110,11 +113,11 @@ struct Inner {
     /// `tools::config`'s `config.read`/`config.write`.
     /// This crate can't resolve that path itself (see `config`'s module
     /// doc -- it has no dependency on `horizon-config`), so it's injected
-    /// post-construction the same way [`Self::with_skills`] injects the
+    /// post-construction the same way [`ToolSessionBuilder::with_skills`] injects the
     /// skill registry: the one production call site
     /// (`horizon-agentd`'s `session::run_session`, which resolves it via
     /// `horizon_config::resolved_path()`) calls
-    /// [`ToolSessionState::with_config_path`] right after construction.
+    /// [`ToolSessionBuilder::with_config_path`] right after construction.
     /// `None` everywhere else (this crate's own tests, Horizon's UI-side
     /// dummy-tool-state test helper), same as before this seam existed:
     /// `config.read`/`config.write` degrade to an actionable error instead
@@ -129,7 +132,7 @@ struct Inner {
     /// `.horizon/worktrees/`") -- the daemon already knows the real
     /// outcome of its own worktree creation (see `horizon-agentd`'s
     /// `resolve_and_create_isolated_worktree`), so this is threaded in
-    /// after construction the same way [`Self::with_skills`]/[`Self::
+    /// after construction the same way [`ToolSessionBuilder::with_skills`]/[`Self::
     /// with_config_path`] are, rather than re-derived. `false` everywhere
     /// except the one production call site.
     isolated_worktree: bool,
@@ -157,7 +160,7 @@ struct Inner {
     /// background thread (`tools::bash::exec::run_sandboxed` needs it to
     /// drain denied hosts) the same way `bash_cwd` already crosses that
     /// boundary. Injected post-construction the same way [`Self::
-    /// with_skills`]/[`Self::with_config_path`] are: the one production
+    /// with_skills`]/[`ToolSessionBuilder::with_config_path`] are: the one production
     /// call site (`horizon-agentd`'s `session::run_session`) is the only
     /// place that knows whether this session is isolated with an engaged
     /// sandbox, the precondition for starting one at all.
@@ -169,8 +172,8 @@ struct Inner {
     /// session proxy address -- the seccomp-notify enforcement matches each
     /// by full `SocketAddr` equality. Empty at every construction site except
     /// `horizon-agentd`'s `session::run_session`, which injects it via
-    /// [`Self::with_loopback_connect`] the same way filesystem grants are
-    /// injected via [`Self::with_filesystem_grants`].
+    /// [`ToolSessionBuilder::with_loopback_connect`] the same way filesystem grants are
+    /// injected via [`ToolSessionBuilder::with_filesystem_grants`].
     loopback_connect: Vec<SocketAddr>,
     /// One domain-grant store shared by sandboxed proxy traffic and
     /// host-side web tools. It exists even when this session cannot start a
@@ -189,9 +192,9 @@ struct Inner {
     /// means approval candidates go directly to the human (no
     /// `OPENAI_API_KEY`, no event-log writer, or -- every
     /// construction site in this crate's own tests except where a test
-    /// explicitly installs one via [`Self::with_judge`]) -- see
+    /// explicitly installs one via [`ToolSessionBuilder::with_judge`]) -- see
     /// `JudgeHandle::new`. Injected post-construction the same way
-    /// [`Self::with_network_proxy`] is: the one production call site
+    /// [`ToolSessionBuilder::with_network_proxy`] is: the one production call site
     /// (`horizon-agentd`'s `session::run_session`) is the only place that
     /// has both this session's resolved provider `base_url` and the
     /// process's event-log writer handle.
@@ -221,6 +224,27 @@ struct Inner {
 
 impl ToolSessionState {
     #[cfg(test)]
+    fn with_root(
+        workspace_root: Option<PathBuf>,
+        tools: AgentToolsConfig,
+        recall: RecallContext,
+    ) -> Self {
+        ToolSessionBuilder::with_root(workspace_root, tools, recall).build()
+    }
+
+    pub fn for_current_dir(tools: AgentToolsConfig, recall: RecallContext) -> Self {
+        ToolSessionBuilder::for_current_dir(tools, recall).build()
+    }
+
+    pub fn for_root(
+        workspace_root: PathBuf,
+        tools: AgentToolsConfig,
+        recall: RecallContext,
+    ) -> Self {
+        ToolSessionBuilder::for_root(workspace_root, tools, recall).build()
+    }
+
+    #[cfg(test)]
     pub(crate) fn new(workspace_root: PathBuf) -> Self {
         Self::with_root(
             Some(workspace_root),
@@ -236,98 +260,12 @@ impl ToolSessionState {
         Self::with_root(None, AgentToolsConfig::default(), RecallContext::default())
     }
 
-    fn with_root(
-        workspace_root: Option<PathBuf>,
-        tools: AgentToolsConfig,
-        recall: RecallContext,
-    ) -> Self {
-        // Bash's initial tracked cwd is "the workspace root"
-        // (`docs/agent-tools-design.md`); if no root could be established,
-        // fall back to the raw (non-canonicalized) current directory, and
-        // failing that, `/` — bash still needs *some* starting directory
-        // even when the file tools' stricter root requirement can't be met.
-        let bash_cwd = workspace_root
-            .clone()
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"));
-        Self {
-            inner: Rc::new(Inner {
-                workspace_root,
-                recorded_mtimes: RefCell::new(HashMap::new()),
-                filesystem_grants: RefCell::new(Vec::new()),
-                bash_cwd: Arc::new(Mutex::new(bash_cwd)),
-                tools,
-                recall,
-                skills: SkillRegistry::default(),
-                config_path: None,
-                isolated_worktree: false,
-                unattended: false,
-                network: None,
-                loopback_connect: Vec::new(),
-                domains: SessionDomainPolicy::default(),
-                mach_services: RefCell::new(Vec::new()),
-                judge: None,
-                exploration: None,
-                board: None,
-            }),
-        }
-    }
-
-    /// Installs this session's real skill registry after construction --
-    /// the one production call site (`horizon-agentd`'s
-    /// `session::run_session`) uses this to attach the per-session
-    /// [`SkillRegistry::discover`] result once it's built, without adding a
-    /// parameter to [`Self::for_current_dir`] (see [`Inner::skills`]'s doc
-    /// comment for why). Safe to call only right after construction, before
-    /// this `ToolSessionState` has been cloned anywhere else -- `Rc::
-    /// get_mut` silently does nothing if that invariant is violated (no
-    /// other production caller does).
-    pub fn with_skills(mut self, skills: SkillRegistry) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.skills = skills;
-        }
-        self
-    }
-
-    /// Installs the host-resolved config-file path after construction --
-    /// see [`Inner::config_path`]'s doc comment. Same safety contract as
-    /// [`Self::with_skills`]: call only right after construction, before
-    /// this `ToolSessionState` has been cloned anywhere else.
-    pub fn with_config_path(mut self, config_path: Option<PathBuf>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.config_path = config_path;
-        }
-        self
-    }
-
-    /// Records whether `workspace_root` is an isolated worktree the daemon
-    /// itself created for this session -- see [`Inner::isolated_worktree`]'s
-    /// doc comment. Same construction-time-only safety contract as
-    /// [`Self::with_skills`]/[`Self::with_config_path`].
-    pub fn with_isolated_worktree(mut self, isolated: bool) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.isolated_worktree = isolated;
-        }
-        self
-    }
-
     /// Whether this session's `workspace_root` is a daemon-created isolated
     /// worktree -- see [`Inner::isolated_worktree`]'s doc comment. `false`
     /// for every session that isn't (including one with no workspace root
     /// at all).
     pub(crate) fn is_isolated_worktree(&self) -> bool {
         self.inner.isolated_worktree
-    }
-
-    /// Records whether this session has nobody who could answer an approval
-    /// prompt -- see [`Inner::unattended`]'s doc comment. Same
-    /// construction-time-only safety contract as
-    /// [`Self::with_isolated_worktree`].
-    pub fn with_unattended(mut self, unattended: bool) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.unattended = unattended;
-        }
-        self
     }
 
     /// Whether an approval prompt raised for this session would reach
@@ -359,17 +297,6 @@ impl ToolSessionState {
         }
     }
 
-    /// Seeds config-declared mach services (`[[grants.project]]`
-    /// `mach_services`) the same way [`Self::with_filesystem_grants`] seeds
-    /// configured trees. Same construction-time-only safety contract as
-    /// [`Self::with_skills`].
-    pub fn with_mach_services(mut self, services: Vec<String>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.mach_services = RefCell::new(services);
-        }
-        self
-    }
-
     /// The grants merged into the next sandboxed spawn's policy: the
     /// revalidated filesystem grants plus, on macOS, the enforcement grants
     /// for this session's mach service set
@@ -395,35 +322,6 @@ impl ToolSessionState {
             debug_assert!(services.is_empty());
             grants
         }
-    }
-
-    /// Installs this session's own network-proxy pair after construction --
-    /// see [`Inner::network`]'s doc comment. Same construction-time-only
-    /// safety contract as [`Self::with_skills`]/[`Self::with_config_path`].
-    pub fn with_network_proxy(mut self, network: Option<Arc<SessionNetworkProxy>>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.network = network;
-        }
-        self
-    }
-
-    /// Installs this session's granted loopback-connect endpoints after
-    /// construction -- see [`Inner::loopback_connect`]'s doc comment. Same
-    /// construction-time-only safety contract as [`Self::with_network_proxy`].
-    pub fn with_loopback_connect(mut self, endpoints: Vec<SocketAddr>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.loopback_connect = endpoints;
-        }
-        self
-    }
-
-    /// Installs the domain store also passed to
-    /// [`SessionNetworkProxy::start_with_policy`] by agentd.
-    pub fn with_domain_policy(mut self, domains: SessionDomainPolicy) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.domains = domains;
-        }
-        self
     }
 
     pub(crate) fn allow_domain(&self, domain: impl Into<String>) {
@@ -455,33 +353,9 @@ impl ToolSessionState {
         self.inner.loopback_connect.clone()
     }
 
-    /// Installs this session's enforcing judge handle after construction
-    /// -- see [`Inner::judge`]'s doc comment. Same construction-time-only
-    /// safety contract as [`Self::with_skills`]/[`Self::with_config_path`]/
-    /// [`Self::with_network_proxy`].
-    pub fn with_judge(mut self, judge: Option<Arc<JudgeHandle>>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.judge = judge;
-        }
-        self
-    }
-
     /// This session's enforcing judge handle, if one is installed.
     pub(crate) fn judge_handle(&self) -> Option<Arc<JudgeHandle>> {
         self.inner.judge.clone()
-    }
-
-    /// Installs this session's exploration host after construction -- see
-    /// [`Inner::exploration`]'s doc comment. Same construction-time-only
-    /// safety contract as [`Self::with_judge`]/[`Self::with_network_proxy`].
-    pub fn with_exploration_host(
-        mut self,
-        exploration: Option<Arc<dyn crate::tools::explore::ExplorationHost>>,
-    ) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.exploration = exploration;
-        }
-        self
     }
 
     /// This session's exploration host, if one is installed -- what
@@ -494,7 +368,7 @@ impl ToolSessionState {
 
     /// Installs this session's board host after construction -- see
     /// [`Inner::board`]'s doc comment. Same construction-time-only safety
-    /// contract as [`Self::with_exploration_host`].
+    /// contract as [`ToolSessionBuilder::with_exploration_host`].
     pub fn with_board_host(
         mut self,
         board: Option<Arc<dyn crate::tools::board::BoardHost>>,
@@ -511,68 +385,8 @@ impl ToolSessionState {
         self.inner.board.clone()
     }
 
-    /// v1 workspace root: the process's current directory at session start,
-    /// canonicalized. If the current directory can't be read or
-    /// canonicalized, the session gets no root at all and every file-tool
-    /// path is rejected with an actionable error — never a panic, and
-    /// never a fallback root that fails open. `tools` is the resolved
-    /// `[agent]` tool tuning, and `recall` is this session's recall context
-    /// (see [`RecallContext`]) -- both passed in by the caller
-    /// (`horizon-agentd`'s `session::run_session`, the one production call
-    /// site) rather than resolved here — this crate can't read Horizon's
-    /// config file itself (see `config`'s module doc), and the caller has
-    /// already resolved a full `AgentConfig` (and knows its own session id)
-    /// by the time it spawns a session.
-    pub fn for_current_dir(tools: AgentToolsConfig, recall: RecallContext) -> Self {
-        let root = std::env::current_dir()
-            .and_then(|dir| dir.canonicalize())
-            .ok();
-        Self::with_root(root, tools, recall)
-    }
-
-    /// A session confined to an explicit directory rather than this
-    /// process's own current directory -- the per-session
-    /// `wire::SessionNew::workspace_root`, when a caller supplies one,
-    /// instead of the `for_current_dir` fallback. Canonicalized the same
-    /// way `for_current_dir` canonicalizes the process cwd: if
-    /// canonicalization fails, the session gets no root at all (see
-    /// [`Inner::workspace_root`]'s doc comment), never a fallback that
-    /// fails open.
-    pub fn for_root(
-        workspace_root: PathBuf,
-        tools: AgentToolsConfig,
-        recall: RecallContext,
-    ) -> Self {
-        let root = workspace_root.canonicalize().ok();
-        Self::with_root(root, tools, recall)
-    }
-
     pub fn workspace_root(&self) -> Option<&Path> {
         self.inner.workspace_root.as_deref()
-    }
-
-    /// Seeds this session's grant list with the trees its project's
-    /// `[grants]` entry names, so every sandboxed call in the session
-    /// starts with them writable and a write inside one is never a boundary
-    /// crossing. Same construction-time-only safety contract as
-    /// [`Self::with_skills`]/[`Self::with_config_path`]: the one production
-    /// call site is `horizon-agentd`'s `session::run_session`, which is
-    /// also the only place that can resolve this session's project root.
-    ///
-    /// Grants that no longer revalidate are dropped here rather than
-    /// stored: a `[grants]` entry naming a directory that has since been
-    /// deleted or replaced must not travel any further than the config
-    /// load that read it.
-    pub fn with_filesystem_grants(mut self, grants: Vec<horizon_sandbox::FilesystemGrant>) -> Self {
-        if let Some(inner) = Rc::get_mut(&mut self.inner) {
-            inner.filesystem_grants = RefCell::new(
-                grants
-                    .into_iter()
-                    .filter(|grant| horizon_sandbox::revalidate_grant(grant).is_ok())
-                    .collect(),
-            );
-        }
-        self
     }
 
     /// The grants merged into the next sandboxed spawn's policy, each

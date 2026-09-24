@@ -419,11 +419,12 @@ mod tests {
                 provider_id: ProviderId("builtin.agent.mock".to_string()),
                 workspace_root: None,
             });
-        let tool_state = ToolSessionState::for_current_dir(
+        let tool_state = horizon_agent::tools::ToolSessionBuilder::for_current_dir(
             AgentToolsConfig::default(),
             RecallContext::default(),
         )
-        .with_exploration_host(Some(host));
+        .with_exploration_host(Some(host))
+        .build();
         let live_state = LiveState::with_disabled_persistence();
         register_session_runtime(
             requester_id,

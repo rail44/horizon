@@ -580,7 +580,9 @@ fn the_refusal_names_the_workspace_root() {
     let outside_file = outside.join("Cargo.toml");
     fs::write(&outside_file, "[package]\n").unwrap();
 
-    let tool_state = ToolSessionState::new(root.clone()).with_unattended(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root.clone())
+        .with_unattended(true)
+        .build();
     let result = crate::tools::unattended_refusal_result(
         &tool_state,
         &read_request(
@@ -627,7 +629,9 @@ fn the_refusal_points_at_this_workspaces_copy_of_another_checkouts_path() {
         fs::write(tree.join("src").join("lib.rs"), "fn main() {}\n").unwrap();
     }
 
-    let tool_state = ToolSessionState::new(layout.workspace.clone()).with_unattended(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(layout.workspace.clone())
+        .with_unattended(true)
+        .build();
     let expected = layout
         .workspace
         .join("src")
@@ -2106,7 +2110,9 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
 #[test]
 fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     let root = temp_workspace("tier1-fs-write-isolated");
-    let tool_state = ToolSessionState::new(root.clone()).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root.clone())
+        .with_isolated_worktree(true)
+        .build();
     let target = root.join("new.txt");
     let request = ToolCallRequest {
         call_id: ToolCallId("call-1".to_string()),
@@ -2140,7 +2146,9 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
     let root = temp_workspace("tier1-fs-edit-isolated");
     let target = root.join("file.txt");
     fs::write(&target, "before").unwrap();
-    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root)
+        .with_isolated_worktree(true)
+        .build();
     // fs.edit's staleness gate needs a prior fs.read recorded -- mirrors
     // `fs_edit_success_updates_mtime_and_allows_chained_edit` above.
     fs_tools::execute_auto(
@@ -2183,7 +2191,9 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
 
 #[test]
 fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_fs_write() {
-    let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+        .with_isolated_worktree(true)
+        .build();
     let events = crate::policy::horizon_events_for_provider_event(
         &Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
@@ -2235,7 +2245,9 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
 #[test]
 fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox() {
     let root = temp_workspace("tier1-bash-sandboxed");
-    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root)
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2279,7 +2291,9 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
 #[test]
 fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
     let root = temp_workspace("tier1-bash-sandboxed-timeout");
-    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root)
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2345,7 +2359,9 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 #[test]
 fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     let root = temp_workspace("tier1-bash-sandboxed-tmp-leak");
-    let tool_state = ToolSessionState::new(root).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(root)
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2484,7 +2500,9 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     let (fixture_root, worktree) = linked_git_worktree("git-operation-approval");
     fs::write(worktree.join("change.txt"), "approved change\n").unwrap();
 
-    let tool_state = ToolSessionState::new(worktree.clone()).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone())
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2617,7 +2635,9 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
         hook_path.display()
     );
 
-    let tool_state = ToolSessionState::new(worktree.clone()).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(worktree.clone())
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2825,7 +2845,9 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
         }]
     );
 
-    let tool_state = ToolSessionState::new(workspace).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace)
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -2935,14 +2957,15 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
     let inside = granted.join("written.txt");
     let outside = ungranted.join("written.txt");
 
-    let tool_state = ToolSessionState::new(workspace)
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace)
         .with_isolated_worktree(true)
         .with_filesystem_grants(vec![horizon_sandbox::FilesystemGrant {
             path: granted.canonicalize().unwrap(),
             access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
             scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
             excluded_subpaths: Vec::new(),
-        }]);
+        }])
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();
@@ -3142,7 +3165,9 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
         horizon_sandbox::home_dir().as_deref(),
     );
 
-    let tool_state = ToolSessionState::new(workspace.clone()).with_isolated_worktree(true);
+    let tool_state = crate::tools::ToolSessionBuilder::new(workspace.clone())
+        .with_isolated_worktree(true)
+        .build();
     let session_id = SessionId::new();
     let live_state = LiveState::new();
     let (bash_results_tx, bash_results_rx) = crossbeam_channel::unbounded();

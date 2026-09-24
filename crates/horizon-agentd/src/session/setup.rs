@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use horizon_agent::config::AgentToolsConfig;
 use horizon_agent::contract::{Error as AgentError, Event, SessionId};
-use horizon_agent::tools::{RecallContext, ToolSessionState};
+use horizon_agent::tools::{RecallContext, ToolSessionBuilder};
 use horizon_agent::wire::{AgentWireEvent, WorkspaceRootResolved};
 
 use super::events::send_session_event;
@@ -17,19 +17,19 @@ use crate::worktree;
 /// Builds a session's file-tool confinement root (`tools::state::
 /// ToolSessionState::workspace_root`): an explicit `workspace_root` --
 /// carried by a fresh `wire::SessionNew`, when the caller supplied one --
-/// takes precedence over `ToolSessionState::for_current_dir`'s default of
+/// takes precedence over `ToolSessionBuilder::for_current_dir`'s default of
 /// this process's own cwd. Resumed sessions also carry the validated root
 /// recovered from their event-log context. Pulled out of
 /// [`super::run::run_session`] as its own function purely so this Some/None dispatch is
 /// unit-testable without spinning up a whole session thread.
-pub(super) fn tool_session_state_for(
+pub(super) fn tool_session_builder_for(
     workspace_root: Option<PathBuf>,
     tools: AgentToolsConfig,
     recall: RecallContext,
-) -> ToolSessionState {
+) -> ToolSessionBuilder {
     match workspace_root {
-        Some(root) => ToolSessionState::for_root(root, tools, recall),
-        None => ToolSessionState::for_current_dir(tools, recall),
+        Some(root) => ToolSessionBuilder::for_root(root, tools, recall),
+        None => ToolSessionBuilder::for_current_dir(tools, recall),
     }
 }
 
@@ -174,7 +174,7 @@ pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
 /// Resolves and creates this session's isolated worktree (`docs/
 /// session-relationship-design.md` decisions 2-3), returning the directory
 /// its file tools should actually be confined to, plus whether isolation
-/// actually succeeded -- the latter is what `ToolSessionState::
+/// actually succeeded -- the latter is what `ToolSessionBuilder::
 /// with_isolated_worktree` needs (`docs/agent-approval-design.md`'s tier 1:
 /// the per-call trust predicate's isolation input must reflect the real
 /// outcome, never merely the request). Runs on the session's own dedicated
@@ -256,12 +256,12 @@ mod tests {
         let dir = std::env::temp_dir()
             .canonicalize()
             .expect("canonicalize temp dir");
-        let state = tool_session_state_for(
+        let state = tool_session_builder_for(
             Some(dir.clone()),
             AgentToolsConfig::default(),
             RecallContext::default(),
         );
-        assert_eq!(state.workspace_root(), Some(dir.as_path()));
+        assert_eq!(state.build().workspace_root(), Some(dir.as_path()));
     }
 
     /// `None` (today's only value Horizon actually sends -- see
@@ -274,8 +274,11 @@ mod tests {
             .and_then(|dir| dir.canonicalize())
             .expect("canonicalize process cwd");
         let state =
-            tool_session_state_for(None, AgentToolsConfig::default(), RecallContext::default());
-        assert_eq!(state.workspace_root(), Some(expected_root.as_path()));
+            tool_session_builder_for(None, AgentToolsConfig::default(), RecallContext::default());
+        assert_eq!(
+            state.build().workspace_root(),
+            Some(expected_root.as_path())
+        );
     }
 
     /// The tool-side skill registry must prefer the session's resolved root

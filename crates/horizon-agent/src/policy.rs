@@ -823,7 +823,9 @@ mod tests {
 
     #[test]
     fn contained_fs_write_in_an_isolated_session_gets_no_approval_prompt() {
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_isolated_worktree(true)
+            .build();
         let events = horizon_events_for_provider_event(
             &requested("fs.write"),
             &tool_state,
@@ -869,7 +871,9 @@ mod tests {
         // process_agent_provider_event`) is the one place this now resolves
         // -- immediately, with a `ToolCallFinished` error result -- so this
         // seam must contribute nothing beyond the original event.
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_isolated_worktree(true)
+            .build();
         let events =
             horizon_events_for_provider_event(&requested("write"), &tool_state, SessionId::new());
 
@@ -885,7 +889,9 @@ mod tests {
 
     #[test]
     fn mock_approval_required_always_gets_a_prompt_even_when_isolated() {
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_isolated_worktree(true)
+            .build();
         let events = horizon_events_for_provider_event(
             &requested("mock.approval_required"),
             &tool_state,
@@ -902,7 +908,9 @@ mod tests {
     /// returns.
     #[test]
     fn boundary_crossing_produces_the_same_events_as_always_ask() {
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_isolated_worktree(true);
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_isolated_worktree(true)
+            .build();
         let session_id = SessionId::new();
 
         let boundary_events = horizon_events_for_provider_event(

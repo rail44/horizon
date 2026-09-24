@@ -55,13 +55,14 @@ fn test_runtime() -> Runtime {
 fn isolated_session_with_network(label: &str) -> (ToolSessionState, Arc<SessionNetworkProxy>) {
     let network =
         Arc::new(SessionNetworkProxy::start().expect("session network proxy should start"));
-    let tool_state = ToolSessionState::for_root(
+    let tool_state = horizon_agent::tools::ToolSessionBuilder::for_root(
         temp_workspace(label),
         AgentToolsConfig::default(),
         RecallContext::default(),
     )
     .with_isolated_worktree(true)
-    .with_network_proxy(Some(network.clone()));
+    .with_network_proxy(Some(network.clone()))
+    .build();
     (tool_state, network)
 }
 

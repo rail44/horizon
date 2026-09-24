@@ -424,3 +424,14 @@ its `ToolCallResult`. The daemon uses that same identity for acceptance and
 for locating the request to reissue; denial variants do not repeat the call ID.
 A redirect grant has no completed result and therefore carries its own origin.
 This is an internal worker/daemon boundary; persisted and wire types are unchanged.
+
+### Configure tool capabilities before sharing runtime state
+
+`ToolSessionBuilder` owns initial non-board configuration and is not cloneable.
+Its consuming `build` creates the shared `ToolSessionState`; configuration setters
+are unavailable on that state, so cloning can no longer silently discard a later
+configuration change. Live approvals still update the shared grant stores. Root
+canonicalization, missing-root refusal, grant revalidation, and proxy/judge fallback
+retain their existing behavior. The daemon finishes construction before registering
+or publishing the runtime. Board-host installation retains its separate existing
+entry point and is performed immediately after `build`, before sharing.

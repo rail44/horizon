@@ -77,7 +77,8 @@ pub use execution::{cancelled_tool_call_result, execute_agent_tool, Execution, H
 pub use network::{SessionDomainPolicy, SessionNetworkProxy};
 pub use processing::process_agent_provider_event;
 pub use state::{
-    register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionState,
+    register_session_runtime, unregister_session_runtime, RecallContext, ToolSessionBuilder,
+    ToolSessionState,
 };
 // Narrow, crate-internal-only read for the approval judge --
 // see `state::live_frame_for_session`'s own doc comment for why this stays

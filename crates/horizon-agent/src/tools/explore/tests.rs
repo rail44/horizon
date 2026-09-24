@@ -122,7 +122,9 @@ struct Requester {
 impl Requester {
     fn new(host: Option<Arc<dyn ExplorationHost>>) -> Self {
         let session_id = SessionId::new();
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_exploration_host(host);
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_exploration_host(host)
+            .build();
         let live_state = LiveState::with_disabled_persistence();
         let (results_tx, _results) = crossbeam_channel::unbounded();
         register_session_runtime(

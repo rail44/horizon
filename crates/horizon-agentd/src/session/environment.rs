@@ -5,7 +5,7 @@ use super::events::send_session_event;
 use super::exploration::AgentdExplorationHost;
 use super::setup::{
     configured_domains, configured_filesystem_grants, configured_loopback_connect,
-    configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_state_for,
+    configured_mach_services, project_is_trusted, skill_discovery_root, tool_session_builder_for,
 };
 use super::state::{lock_unpoisoned, AgentdState};
 use crossbeam_channel::Sender;
@@ -158,9 +158,9 @@ impl SessionEnvironment<'_> {
         let loopback_connect = configured_loopback_connect(state, workspace_root.as_deref());
         let mach_services = configured_mach_services(state, workspace_root.as_deref());
         // Constructed before `workspace_root` is moved into
-        // `tool_session_state_for` below.
+        // `tool_session_builder_for` below.
         let board = board_host_for(workspace_root.as_deref(), state.clone());
-        let tool_state = tool_session_state_for(workspace_root, agent_config.tools, recall)
+        let tool_state = tool_session_builder_for(workspace_root, agent_config.tools, recall)
             .with_isolated_worktree(isolated)
             // An explore-role session (`task` children and Mixture-of-Agents
             // proposers) is never attached to a pane, so an approval prompt
@@ -179,6 +179,7 @@ impl SessionEnvironment<'_> {
             .with_network_proxy(network)
             .with_judge(judge)
             .with_exploration_host(exploration)
+            .build()
             .with_board_host(board);
         let persisted_context = PersistedSessionContext {
             workspace_root: tool_state.workspace_root().map(Path::to_path_buf),

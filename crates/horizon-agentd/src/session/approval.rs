@@ -328,12 +328,13 @@ mod tests {
     /// A session state with a real, canonical workspace root — what the
     /// out-of-root refusal needs in order to name anything.
     fn rooted_tool_state(root: &std::path::Path, unattended: bool) -> ToolSessionState {
-        ToolSessionState::for_root(
+        horizon_agent::tools::ToolSessionBuilder::for_root(
             root.to_path_buf(),
             horizon_agent::config::AgentToolsConfig::default(),
             horizon_agent::tools::RecallContext::default(),
         )
         .with_unattended(unattended)
+        .build()
     }
 
     fn out_of_root_read_events(

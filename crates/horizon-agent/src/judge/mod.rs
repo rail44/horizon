@@ -770,7 +770,9 @@ mod tests {
             ScriptedClient::text("N", None),
         )]));
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let session_id = SessionId::new();
         let expected = candidate(ApprovalKind::Standard);
         let (tx, rx) = crossbeam_channel::unbounded();
@@ -802,7 +804,9 @@ mod tests {
             anyhow::anyhow!("connection refused"),
         )]));
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
             start_approval_gate(
@@ -846,7 +850,9 @@ mod tests {
             10.0,
             5.0,
         );
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
             start_approval_gate(
@@ -889,7 +895,9 @@ mod tests {
             0.0,
             0.0,
         );
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let expected = candidate(ApprovalKind::FilesystemDenialRetry {
             denials: Vec::new(),
             grants: Vec::new(),
@@ -947,7 +955,9 @@ mod tests {
             ScriptedClient::text("N", None),
         )]));
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let candidate = git_candidate("git -c core.hooksPath=/dev/null commit -m test");
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(
@@ -972,7 +982,9 @@ mod tests {
             ScriptedClient::text("N", None),
         )]));
         let judge = JudgeHandle::for_test("test-judge-model", client, writer);
-        let tool_state = ToolSessionState::new(std::env::temp_dir()).with_judge(Some(judge));
+        let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
         let candidate = git_candidate("git commit -m test");
         let (tx, rx) = crossbeam_channel::unbounded();
         assert_eq!(

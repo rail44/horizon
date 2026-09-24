@@ -739,12 +739,13 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
     let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
     horizon_agent::tools::register_session_runtime(
         session_id,
-        horizon_agent::tools::ToolSessionState::for_root(
+        horizon_agent::tools::ToolSessionBuilder::for_root(
             root.clone(),
             horizon_agent::config::AgentToolsConfig::default(),
             horizon_agent::tools::RecallContext::default(),
         )
-        .with_unattended(true),
+        .with_unattended(true)
+        .build(),
         live_state.clone(),
         results_tx,
     );
@@ -819,12 +820,13 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
     let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
     horizon_agent::tools::register_session_runtime(
         session_id,
-        horizon_agent::tools::ToolSessionState::for_root(
+        horizon_agent::tools::ToolSessionBuilder::for_root(
             workspace,
             horizon_agent::config::AgentToolsConfig::default(),
             horizon_agent::tools::RecallContext::default(),
         )
-        .with_unattended(true),
+        .with_unattended(true)
+        .build(),
         live_state.clone(),
         results_tx,
     );
