@@ -10,12 +10,25 @@ IDENTITY = ("file", "owner", "name", "partition")
 DECISIONS = ("refactor", "preserve", "investigate")
 
 
-def identity(function):
+def family_identity(function):
     return tuple(function[key] for key in IDENTITY)
 
 
+def identity(function):
+    return (*family_identity(function), function.get("variant", ""))
+
+
 def selector(function):
-    return {key: function[key] for key in IDENTITY}
+    keys = (*IDENTITY, "variant") if "variant" in function else IDENTITY
+    return {key: function[key] for key in keys}
+
+
+def valid_selector(target):
+    return (
+        isinstance(target, dict)
+        and set(target) in (set(IDENTITY), set(IDENTITY) | {"variant"})
+        and all(isinstance(value, str) for value in target.values())
+    )
 
 
 def index_functions(report):
@@ -25,14 +38,18 @@ def index_functions(report):
     return index
 
 
+def matching_functions(report, target):
+    return [
+        function for function in report["functions"]
+        if family_identity(function) == family_identity(target)
+        and ("variant" not in target or function.get("variant", "") == target["variant"])
+    ]
+
+
 def select_function(report, target):
-    if (
-        not isinstance(target, dict)
-        or set(target) != set(IDENTITY)
-        or not all(isinstance(value, str) for value in target.values())
-    ):
-        raise AuditError(f"Function selector requires {', '.join(IDENTITY)}")
-    found = index_functions(report).get(identity(target), [])
+    if not valid_selector(target):
+        raise AuditError(f"Function selector requires {', '.join(IDENTITY)} and optional variant")
+    found = matching_functions(report, target)
     if len(found) != 1:
         raise AuditError(f"Expected one function, found {len(found)}: {target}")
     return found[0]
@@ -65,9 +82,7 @@ def read_reviews(path):
         if (
             not isinstance(review, dict)
             or set(review) != {"target", "sha256", "related", "decision", "reason", "commit"}
-            or not isinstance(review["target"], dict)
-            or set(review["target"]) != set(IDENTITY)
-            or not all(isinstance(value, str) for value in review["target"].values())
+            or not valid_selector(review["target"])
             or review["decision"] not in DECISIONS
             or not isinstance(review["reason"], str)
             or not review["reason"].strip()
@@ -112,11 +127,10 @@ def record_review(report, target, decision, reason, related, path):
 
 def assess_reviews(report, ledger):
     """Evidence equality carries a reason, never a new semantic approval or suppression."""
-    index = index_functions(report)
     sources = {row["file"]: row["sha256"] for row in report["sources"]}
     result = []
     for review in ledger["reviews"]:
-        found = index.get(identity(review["target"]), [])
+        found = matching_functions(report, review["target"])
         if not found:
             state = "absent_from_scope"
         elif len(found) > 1:

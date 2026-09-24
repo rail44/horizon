@@ -2,7 +2,7 @@
 
 import json
 
-from reviews import IDENTITY, identity, index_functions, read_report, select_function
+from reviews import IDENTITY, identity, index_functions, matching_functions, read_report, select_function
 from tooling import AuditError, write_json
 
 METRICS = ("physical_code_lines", "cyclomatic", "cognitive")
@@ -45,7 +45,7 @@ def select_correspondence(report, target):
             isinstance(target[key], str) for key in IDENTITY
         ):
             raise AuditError("Invalid all-variants selector")
-        found = index_functions(report).get(identity(target), [])
+        found = matching_functions(report, target)
         if not found:
             raise AuditError(f"No functions for all-variants selector: {target}")
         return found
@@ -73,10 +73,10 @@ def compare(before, after, mappings=()):
             functions = []
             for target in mapping[side]:
                 selected = select_correspondence(report, target)
-                key = identity(selected[0])
-                if key in used:
-                    raise AuditError(f"Function reused in correspondence: {key}")
-                used.add(key)
+                keys = {identity(function) for function in selected}
+                if keys & used:
+                    raise AuditError(f"Function reused in correspondence: {sorted(keys & used)}")
+                used.update(keys)
                 functions.extend(selected)
             sides.append(functions)
         groups.append({

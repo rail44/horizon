@@ -43,6 +43,51 @@ def attributes(node, data):
     return result, start
 
 
+def normalized_syntax(node, data):
+    """Ignore formatting/comments without changing strings inside cfg predicates."""
+    if node.type in ("line_comment", "block_comment"):
+        return ""
+    if not node.children:
+        return text(node, data)
+    return "".join(normalized_syntax(child, data) for child in node.children)
+
+
+def condition(node, data):
+    attr = next((child for child in node.named_children if child.type == "attribute"), None)
+    value = normalized_syntax(attr, data) if attr else ""
+    return value if value.startswith(("cfg(", "cfg_attr(")) else None
+
+
+def function_variant(node, data):
+    """Syntactic identity within this file, not evaluation of a build configuration."""
+    ancestors = []
+    parent = node
+    while parent:
+        ancestors.append(parent)
+        parent = parent.parent
+    parts = []
+    for item in reversed(ancestors):
+        attrs = []
+        previous = item.prev_named_sibling
+        while previous and previous.type in ("attribute_item", "line_comment", "block_comment"):
+            if previous.type == "attribute_item":
+                attrs.append(previous)
+            previous = previous.prev_named_sibling
+        attrs.reverse()
+        # Inner attributes apply to all items in a source file or module body.
+        attrs.extend(child for child in item.named_children if child.type == "inner_attribute_item")
+        parts.extend(value for attr in attrs if (value := condition(attr, data)))
+        if item.type == "mod_item":
+            parts.append("mod:" + text(item.child_by_field_name("name"), data))
+        elif item.type == "trait_item":
+            parts.append("trait_def:" + text(item.child_by_field_name("name"), data))
+        elif item.type == "impl_item" and (trait := item.child_by_field_name("trait")):
+            parts.append("trait:" + normalized_syntax(trait, data))
+        elif item.type == "function_item" and item != node:
+            parts.append("fn:" + text(item.child_by_field_name("name"), data))
+    return " / ".join(parts)
+
+
 def cfg_value(expression, test):
     """Evaluate only `test`; other cfg predicates remain unknown (None)."""
     tokens = iter(re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_]\w*|[(),=]', expression))
@@ -176,17 +221,27 @@ def partition(data, is_test_file, selection, test_attributes):
     parsed = PARSER.parse(bytes(masked))
     if parsed.root_node.has_error:
         raise AuditError("Partitioning produced invalid syntax; inspect test/cfg boundaries")
+    # Test partitioning can erase an enclosing impl/module while retaining
+    # a cfg(test) method. Identity must come from the unmasked syntax tree.
+    original_functions = {
+        n.start_byte: n for n in walk(original.root_node) if n.type == "function_item"
+    }
     functions = []
     for node in walk(parsed.root_node):
         if node.type != "function_item":
             continue
-        parent = node.parent
+        original_node = original_functions[node.start_byte]
+        parent = original_node.parent
         owner = "<free>"
         while parent:
             if parent.type == "impl_item":
-                owner = text(parent.child_by_field_name("type"), masked)
+                owner = text(parent.child_by_field_name("type"), data)
                 break
             parent = parent.parent
+        variant = function_variant(original_node, data)
+        fingerprint = data[node.start_byte:node.end_byte]
+        if variant:
+            fingerprint += b"\0" + variant.encode()
         functions.append(
             {
                 "name": text(node.child_by_field_name("name"), masked),
@@ -194,7 +249,8 @@ def partition(data, is_test_file, selection, test_attributes):
                 "start": node.start_point.row + 1,
                 "end": node.end_point.row + 1,
                 "partition": "tests" if test_bytes[node.start_byte] else "production",
-                "sha256": sha256(data[node.start_byte:node.end_byte]),
+                "variant": variant,
+                "sha256": sha256(fingerprint),
             }
         )
     return (

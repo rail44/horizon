@@ -130,7 +130,8 @@ Record a judgment after following its callers, callees, and tests:
 uv run --locked --script scripts/refactor-audit/run.py record BEFORE/report.json --file src/terminal/glyphs.rs --name box_draw_geometry --decision preserve --reason 'The branches describe distinct glyph geometry.' --related src/terminal/mod.rs --output scripts/refactor-audit/reviews.json
 ```
 
-Use `--owner TYPE` for methods. The report must identify exactly one function.
+Use `--owner TYPE` for methods and, when needed, `--variant` with the exact
+`variant` value from the report. The report must identify exactly one function.
 The ledger retains its source fingerprint, reason, decision, and optional
 related-file hashes. A scan with `--reviews` reports unchanged evidence,
 changed code/dependencies, absent targets, or ambiguous identities; it never
@@ -146,8 +147,8 @@ uv run --locked --script scripts/refactor-audit/run.py compare BEFORE/report.jso
 ```
 
 The optional mapping is an array of `{label, before, after}` objects. Both sides
-are nonempty arrays of `{file, owner, name, partition}` selectors; `<free>` is
-the owner of free functions. List the extracted helpers as well as the entry
+are nonempty arrays of `{file, owner, name, partition}` selectors with an
+optional `variant`; `<free>` is the owner of free functions. List the extracted helpers as well as the entry
 point. The summary compares maxima across that group. Unmapped identities are
 compared only when unambiguous and otherwise remain added, removed, or
 ambiguous in `comparison.json`; moves and splits are never guessed. Changed
@@ -157,5 +158,21 @@ improvement. Raw reports and comparison artifacts remain under `target/`.
 For a deliberately reviewed family of same-named functions (for example,
 `cfg`-selected OS implementations), add `"variants": "all"` to that selector.
 Every variant contributes to the group's maxima and count; individual variants
-are not automatically paired. Ordinary selectors and review records still
-require exactly one match. Missing families and reused selectors are errors.
+are not automatically paired within that explicit group. Ordinary selectors
+and review records still require exactly one match. Missing families and
+overlapping selectors are errors.
+
+Reports record same-file `cfg`/`cfg_attr` guards and lexical module, trait,
+and enclosing-function context in `variant`. Automatic comparison pairs exact
+variants; `"variant": ""` explicitly selects an unqualified implementation.
+These contexts also contribute to function fingerprints, so a guard-only
+change invalidates review evidence. Whitespace and comments in guards do not
+affect identity; logically equivalent predicates with different syntax can.
+Original syntax supplies identity even when tests-only masking erases the
+enclosing module or impl. Legacy selectors without `variant` remain valid
+when their family has exactly one function.
+
+This is syntactic tracking, not a list of builds that compile: non-test cfg
+predicates and cfg_attr are not evaluated, external-module guards are not
+propagated, and macros are not expanded. Unsupported ambiguities remain
+visible. Rescan the baseline after changing the analysis implementation.

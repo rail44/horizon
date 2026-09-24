@@ -123,7 +123,7 @@ def scan(
         "history": None,
         "dependencies": None,
         "limitations": [
-            "Non-test cfg/features are not evaluated; macros are not expanded.",
+            "Non-test cfg/features are recorded syntactically, not evaluated; macros are not expanded.",
             "Conditional test attributes such as cfg_attr are not evaluated.",
             "External test modules use configured test_paths; module cfg is not propagated across files.",
             "Metrics include nested closures; clone matches may cross function/test-mask boundaries.",

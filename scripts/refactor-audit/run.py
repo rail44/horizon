@@ -54,6 +54,7 @@ def main():
     record.add_argument("--owner", default="<free>")
     record.add_argument("--name", required=True)
     record.add_argument("--partition", choices=["production", "tests"], default="production")
+    record.add_argument("--variant", help="Exact variant from report.json; omit only for a unique family")
     record.add_argument("--decision", choices=DECISIONS, required=True)
     record.add_argument("--reason", required=True)
     record.add_argument("--related", action="append", default=[], help="Related source path from the same report; repeatable")
@@ -79,6 +80,7 @@ def main():
         elif args.command == "record":
             record_review(read_report(args.report), {
                 "file": args.file, "owner": args.owner, "name": args.name, "partition": args.partition,
+                **({"variant": args.variant} if args.variant is not None else {}),
             }, args.decision, args.reason, args.related, args.output)
             print(f"Review recorded: {args.output}")
         elif args.command == "verify":
