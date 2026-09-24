@@ -218,7 +218,7 @@ fn dispatch_query(
                 .into_iter()
                 .map(|summary| SessionEntry {
                     session_id: summary.id.as_uuid().to_string(),
-                    kind: format!("{:?}", summary.kind).to_ascii_lowercase(),
+                    kind: summary.kind.label().to_string(),
                     attached: summary.attached,
                     title: summary.title,
                 })

@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
     ProviderSide, ToolCallId, ToolCallRequest, ToolCallResult,
@@ -16,6 +14,10 @@ use rig_core::completion::ToolDefinition;
 use crate::{contract::ToolPermission, tools::Definition};
 
 mod replay;
+mod tool_calls;
+
+#[cfg(test)]
+mod tests;
 pub(super) use replay::repair_replayed_message_pairing;
 
 pub(super) const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
@@ -105,35 +107,25 @@ pub(super) fn horizon_tool_definition_from_rig(
 }
 
 pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
-    // rig 0.42 requires the *executed* tool name on every tool result
-    // (`Message::tool_result`'s `name` argument), so index each result's
-    // call id to the `tool_id` its `ToolCallRequested` announced.
-    let tool_names: HashMap<String, String> = events
-        .iter()
-        .filter_map(|event| match event {
-            Event::ToolCallRequested(request) => {
-                Some((request.call_id.0.clone(), request.tool_id.clone()))
-            }
-            _ => None,
-        })
-        .collect();
+    let mut calls = tool_calls::ReplayedToolCalls::default();
     let messages = events
         .iter()
         .filter_map(|event| match event {
             Event::MessageCommitted(message) => Some(match message.role.provider_side() {
-                ProviderSide::User => Message::user(message.text.clone()),
+                ProviderSide::User => {
+                    if message.role == MessageRole::User {
+                        calls.start_turn();
+                    }
+                    Message::user(message.text.clone())
+                }
                 ProviderSide::Assistant => Message::assistant(message.text.clone()),
             }),
-            Event::ToolCallRequested(request) => {
-                Some(Message::from(rig_tool_call_from_request(request)))
+            Event::ToolCallRequested(request) => calls.request(request),
+            Event::ToolCallFinished(result) => calls.result(result),
+            Event::ProviderRequestSent(_) | Event::TurnEnded(_) => {
+                calls.start_turn();
+                None
             }
-            Event::ToolCallFinished(result) => Some(rig_tool_result_message(
-                result,
-                tool_names
-                    .get(result.call_id.0.as_str())
-                    .map(String::as_str)
-                    .unwrap_or(""),
-            )),
             // A harness-detected fault (stream timeout, truncated response,
             // HTTP error) is an audit record for the event log. The model
             // is not shown one live, so a rebuilt history must not carry
@@ -154,7 +146,6 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // never received live.
             | Event::ApprovalResolved(_)
             | Event::ContinueTurnRequested(_)
-            | Event::ProviderRequestSent(_)
             | Event::ProviderRequestFirstToken
             | Event::ProviderRequestFinished
             | Event::ProviderRequestUsage(_)
@@ -166,8 +157,7 @@ pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message>
             // view* comes out identical either way.
             | Event::HistoryCleared(_)
             | Event::ProviderRateLimited(_)
-            | Event::Exited(_)
-            | Event::TurnEnded(_) => None,
+            | Event::Exited(_) => None,
             // Standing-agent memory events are consumed by the provider-view
             // projection (`history_for_provider_request`), not by the raw
             // history rebuild: the document is prepended there, and the
@@ -242,7 +232,7 @@ fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
 /// `tool_id` is the executed tool's id -- rig 0.42 requires it on every
 /// tool result (`Message::tool_result`'s `name`; several wires key the
 /// replay on it). Callers source it from the `ToolCallRequested` that
-/// announced the call: the `tool_names` index, the pending-tool-call
+/// announced the call: the replayed call, the pending-tool-call
 /// descriptors, or the result-producing context.
 pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) -> Message {
     Message::tool_result(result.call_id.0.clone(), tool_id, result.output.to_string())

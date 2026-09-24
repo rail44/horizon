@@ -2,7 +2,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use rig_core::completion::{message::UserContent, AssistantContent, Message};
+use rig_core::completion::{
+    message::{ToolCall, UserContent},
+    AssistantContent, Message,
+};
 
 use crate::{contract::ToolCallId, tools::cancelled_tool_call_result};
 
@@ -54,49 +57,41 @@ pub(in crate::providers::rig) fn repair_replayed_message_pairing(
     messages: Vec<Message>,
 ) -> Vec<Message> {
     let mut repair = PairingRepair::new(&messages);
-    for message in messages {
-        repair.push(message);
+    for (index, message) in messages.into_iter().enumerate() {
+        repair.push(index, message);
     }
     repair.finish()
 }
 
-/// Whole-history evidence: an answer counts only after its announcement.
-/// Looking ahead distinguishes a delayed answer from a missing answer.
+/// Look ahead by announcement occurrence, not provider id: an id can be reused
+/// after a missing answer. Each real result consumes one preceding announcement.
 struct ReplayIndex {
-    answered: HashSet<String>,
-    tool_names: HashMap<String, String>,
+    answered: HashSet<usize>,
+    accepted_results: HashSet<usize>,
 }
 
 impl ReplayIndex {
     fn new(messages: &[Message]) -> Self {
-        let mut seen = HashSet::new();
+        let mut pending = HashMap::new();
         let mut answered = HashSet::new();
-        for message in messages {
-            match answered_tool_call_id(message) {
-                Some(call_id) if seen.contains(call_id) => {
-                    answered.insert(call_id.to_string());
+        let mut accepted_results = HashSet::new();
+        let mut next_call = 0;
+        for (index, message) in messages.iter().enumerate() {
+            if let Some(call_id) = answered_tool_call_id(message) {
+                if let Some(announcement) = pending.remove(call_id) {
+                    answered.insert(announcement);
+                    accepted_results.insert(index);
                 }
-                Some(_) => {}
-                None => seen.extend(announced_tool_call_ids(message)),
+            } else if let Message::Assistant { content, .. } = message {
+                for call in announced_tool_calls(content) {
+                    pending.insert(call.id.as_str(), next_call);
+                    next_call += 1;
+                }
             }
         }
-        let tool_names = messages
-            .iter()
-            .filter_map(|message| match message {
-                Message::Assistant { content, .. } => Some(content),
-                _ => None,
-            })
-            .flatten()
-            .filter_map(|item| match item {
-                AssistantContent::ToolCall(call) => {
-                    Some((call.id.as_str().to_string(), call.function.name.clone()))
-                }
-                _ => None,
-            })
-            .collect();
         Self {
             answered,
-            tool_names,
+            accepted_results,
         }
     }
 }
@@ -105,8 +100,8 @@ impl ReplayIndex {
 /// results without a preceding announcement never enter the rebuilt history.
 struct PairingRepair {
     index: ReplayIndex,
-    announced: HashSet<String>,
-    unanswered: Vec<String>,
+    next_call: usize,
+    unanswered: Vec<(String, String)>,
     dropped: Vec<String>,
     synthesized: Vec<String>,
     repaired: Vec<Message>,
@@ -116,7 +111,7 @@ impl PairingRepair {
     fn new(messages: &[Message]) -> Self {
         Self {
             index: ReplayIndex::new(messages),
-            announced: HashSet::new(),
+            next_call: 0,
             unanswered: Vec::new(),
             dropped: Vec::new(),
             synthesized: Vec::new(),
@@ -124,9 +119,9 @@ impl PairingRepair {
         }
     }
 
-    fn push(&mut self, message: Message) {
+    fn push(&mut self, index: usize, message: Message) {
         if let Some(call_id) = answered_tool_call_id(&message) {
-            if self.announced.contains(call_id) {
+            if self.index.accepted_results.contains(&index) {
                 self.repaired.push(message);
             } else {
                 self.dropped.push(call_id.to_string());
@@ -143,7 +138,16 @@ impl PairingRepair {
     }
 
     fn push_assistant(&mut self, id: Option<String>, content: Vec<AssistantContent>) {
-        let call_ids = announced_tool_call_ids_in(&content);
+        if !matches!(self.repaired.last(), Some(Message::Assistant { .. })) {
+            self.close_unanswered_calls();
+        }
+        for call in announced_tool_calls(&content) {
+            if !self.index.answered.contains(&self.next_call) {
+                self.unanswered
+                    .push((call.id.as_str().to_string(), call.function.name.clone()));
+            }
+            self.next_call += 1;
+        }
         match self.repaired.last_mut() {
             Some(Message::Assistant {
                 id: run_id,
@@ -156,28 +160,17 @@ impl PairingRepair {
                 run_content.extend(content);
             }
             _ => {
-                self.close_unanswered_calls();
                 self.repaired.push(Message::Assistant { id, content });
             }
-        }
-        for call_id in call_ids {
-            if !self.index.answered.contains(&call_id) {
-                self.unanswered.push(call_id.clone());
-            }
-            self.announced.insert(call_id);
         }
     }
 
     /// Close calls that will never be answered where their results would sit.
     fn close_unanswered_calls(&mut self) {
-        for call_id in self.unanswered.drain(..) {
+        for (call_id, tool_name) in self.unanswered.drain(..) {
             self.repaired.push(rig_tool_result_message(
                 &cancelled_tool_call_result(ToolCallId(call_id.clone())),
-                self.index
-                    .tool_names
-                    .get(&call_id)
-                    .map(String::as_str)
-                    .unwrap_or(""),
+                &tool_name,
             ));
             self.synthesized.push(call_id);
         }
@@ -189,7 +182,7 @@ impl PairingRepair {
         if !self.dropped.is_empty() {
             eprintln!(
                 "horizon-agent: dropped {} orphaned tool result(s) while rebuilding provider \
-                 history (no assistant message announced them): {}",
+                 history (no unanswered assistant call precedes them): {}",
                 self.dropped.len(),
                 self.dropped.join(", ")
             );
@@ -206,23 +199,11 @@ impl PairingRepair {
     }
 }
 
-/// Every tool-call id an assistant message announces; empty for any other
-/// message.
-fn announced_tool_call_ids(message: &Message) -> Vec<String> {
-    match message {
-        Message::Assistant { content, .. } => announced_tool_call_ids_in(content),
-        _ => Vec::new(),
-    }
-}
-
-fn announced_tool_call_ids_in(content: &[AssistantContent]) -> Vec<String> {
-    content
-        .iter()
-        .filter_map(|item| match item {
-            AssistantContent::ToolCall(call) => Some(call.id.as_str().to_string()),
-            _ => None,
-        })
-        .collect()
+fn announced_tool_calls(content: &[AssistantContent]) -> impl Iterator<Item = &ToolCall> {
+    content.iter().filter_map(|item| match item {
+        AssistantContent::ToolCall(call) => Some(call),
+        _ => None,
+    })
 }
 
 /// The call id a tool-result message answers. Rig models a tool result as a

@@ -40,7 +40,7 @@ pub fn workspace_snapshot(workspace: &Workspace) -> serde_json::Value {
             .into_iter()
             .map(|session| json!({
                 "id": format!("{:?}", session.id),
-                "kind": format!("{:?}", session.kind).to_ascii_lowercase(),
+                "kind": session.kind.label(),
                 "display_number": session.display_number,
                 "title": session.title,
                 "attached": session.attached,
