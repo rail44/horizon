@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 /// The activity of one session a board item is bound to.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(super) enum BoardSessionActivity {
+pub(crate) enum BoardSessionActivity {
     /// Bound to a session the shell has not resolved yet.
     Loading,
     /// Bound to a session the shell cannot reach.
@@ -33,11 +33,11 @@ pub(super) enum BoardSessionActivity {
 }
 
 impl BoardSessionActivity {
-    fn is_running(self) -> bool {
+    pub(crate) fn is_running(self) -> bool {
         matches!(self, Self::Running | Self::ToolRunning)
     }
 
-    pub(super) fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Loading => "Loading",
             Self::Unavailable => "Unavailable",
@@ -70,7 +70,7 @@ impl BoardSessionActivity {
         }
     }
 
-    pub(super) fn color(self) -> Hsla {
+    pub(crate) fn color(self) -> Hsla {
         match self {
             Self::Failed => theme::danger(),
             Self::Running | Self::ToolRunning | Self::WaitingForApproval => theme::accent(),
@@ -78,7 +78,7 @@ impl BoardSessionActivity {
         }
     }
 
-    pub(super) fn indicator(self, item: u64, selected: bool) -> impl IntoElement {
+    pub(crate) fn indicator(self, item: u64, selected: bool) -> impl IntoElement {
         let color = if selected {
             theme::readable_on(self.color(), theme::surface_selected())
         } else {
@@ -143,7 +143,7 @@ fn session_activity(
 
 /// The one activity a row shows for an item that may be bound to both a task
 /// session and a reviewer session.
-pub(super) fn task_session_state(
+pub(crate) fn task_session_state(
     item: &Item,
     states: &HashMap<SessionId, BoardSessionActivity>,
 ) -> Option<BoardSessionActivity> {

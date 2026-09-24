@@ -17,6 +17,19 @@
 //!   the scene is serialized, so glyphs from different strings interleave.
 //!   Every assertion here is on the character multiset, never on order.
 //!
+//! What driving input asserts beyond the keystroke itself: that the guest
+//! settles at all. A guest paces no frames of its own — the host runs one
+//! turn per exchange with it, and a turn that draws leads to the next one —
+//! so a view that asks for another frame from inside the frame it is
+//! drawing (any repeating `gpui::Animation`, e.g. gpui-component's
+//! `Spinner`) keeps handing itself work and `settle` never returns. Nothing
+//! turns a quiet guest, so such a view looks idle until the first input
+//! event arrives. A test that hangs here after a `press` is reporting that,
+//! not a slow guest; `.config/nextest.toml` turns the hang into a failure.
+//! The board pane's `board-list` is in that state today — its rows draw the
+//! shipped animated activity indicator — so it is driven with no input
+//! here. See `docs/preview-pane-design.md`, "Frame pacing".
+//!
 //! What it cannot assert: the painted *colors*. `Surface::scene_summary()`
 //! counts primitives and reports glyph ids; the primitives' colors are not
 //! exposed. The sample preview paints its accent role's hex as text, so a
@@ -39,6 +52,7 @@ use gpui::{
 };
 use horizon_config::{RawConfig, RawThemeConfig};
 
+use crate::board_next::previews as board_next;
 use crate::board_pane::previews as board;
 use crate::preview::host::{PreviewHostRoot, PreviewThemeSource};
 use crate::preview::schema::{PreviewPlugin, PreviewPluginCaller as _};
@@ -258,6 +272,34 @@ fn settle(cx: &mut TestAppContext) {
         cx.executor().advance_clock(Duration::from_millis(100));
     }
     cx.executor().run_until_parked();
+}
+
+/// Send one keystroke to the guest's view and let it settle.
+///
+/// A guest paces no frames of its own, so a view that asks for another
+/// frame from inside the frame it is drawing never lets [`settle`] return
+/// (see the module doc). Driving a keystroke is therefore also the check
+/// that the view under test does not.
+fn press(surface: &Entity<Surface>, key: &str, cx: &mut TestAppContext) {
+    use embedded_gpui::surface::{KeyEvent, Keystroke, ViewApiCaller as _};
+
+    let view = surface
+        .read_with(cx, |surface, _| surface.view().cloned())
+        .expect("the guest attached a view");
+    cx.update(|cx| {
+        view.key(
+            KeyEvent::Down {
+                keystroke: Keystroke {
+                    modifiers: Default::default(),
+                    key: key.to_string(),
+                    key_char: Some(key.to_string()),
+                },
+                is_held: false,
+            },
+            cx,
+        )
+    });
+    settle(cx);
 }
 
 /// Hand the guest a surface of `slot` and drive one frame on it.
@@ -605,6 +647,212 @@ async fn preview_plugin_paints_the_board_over_its_sample_store(cx: &mut TestAppC
     );
 
     cx.update(|_| drop(detail));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_board_next_prototype(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-next");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    // The leading character of each title occurs in exactly one string the
+    // sample board can paint (held by that module's own tests), so counting
+    // it separates a list row from a row plus the thread header.
+    let first_marker = board_next::FIRST_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+    let second_marker = board_next::SECOND_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+
+    // --- list and thread are one view ------------------------------------
+    let prototype = load(&live, board_next::NEXT, cx).expect("the prototype instantiates");
+    let surface = cx.new(Surface::new);
+    mount(&prototype.host, &surface, BOARD_SLOT, cx);
+    let master = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&master, first_marker),
+        2,
+        "the selected task is painted as a list row and as the thread header: {master:?}"
+    );
+    assert_eq!(
+        count_of(&master, second_marker),
+        1,
+        "an unselected task is painted as a list row only: {master:?}"
+    );
+    assert!(
+        painted(&master, board_next::THREAD_PROBE),
+        "the selected task's thread is not painted next to the list: {master:?}"
+    );
+
+    // --- `j` moves the selection, and the thread follows it --------------
+    press(&surface, "j", cx);
+    let moved = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&moved, second_marker),
+        2,
+        "`j` did not carry the thread header onto the next task: {moved:?}"
+    );
+    assert_eq!(
+        count_of(&moved, first_marker),
+        1,
+        "the task `j` left is still painted as the thread header: {moved:?}"
+    );
+    assert!(
+        !painted(&moved, board_next::THREAD_PROBE),
+        "the previous task's thread is still painted: {moved:?}"
+    );
+    cx.update(|_| drop(prototype));
+    settle(cx);
+
+    // --- the same view over an empty store -------------------------------
+    let empty = load(&live, board_next::NEXT_EMPTY, cx).expect("the empty prototype instantiates");
+    let empty_surface = cx.new(Surface::new);
+    mount(&empty.host, &empty_surface, BOARD_SLOT, cx);
+    let blank = glyph_counts(&summary(&empty_surface, cx));
+    assert!(!blank.is_empty(), "the empty prototype painted no chrome");
+    assert_eq!(
+        count_of(&blank, first_marker),
+        0,
+        "the empty prototype painted a sample row: {blank:?}"
+    );
+    cx.update(|_| drop(empty));
+    settle(cx);
+
+    // --- a long post is folded to its first lines ------------------------
+    let long = load(&live, board_next::NEXT_LONG_THREAD, cx)
+        .expect("the long-thread preview instantiates");
+    let long_surface = cx.new(Surface::new);
+    mount(&long.host, &long_surface, BOARD_SLOT, cx);
+    let folded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&folded, board_next::FOLDED_PROBE),
+        "the long post's first line is not painted: {folded:?}"
+    );
+    assert!(
+        !painted(&folded, board_next::DEEP_PROBE),
+        "the long post was not folded: {folded:?}"
+    );
+
+    // --- `e` unfolds every folded post in the open thread ----------------
+    press(&long_surface, "e", cx);
+    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&unfolded, board_next::DEEP_PROBE),
+        "`e` did not unfold the long post: {unfolded:?}"
+    );
+
+    cx.update(|_| drop(long));
+    settle(cx);
+    std::fs::remove_file(&live).ok();
+}
+
+#[gpui::test]
+#[ignore = "needs the preview plugin built; run scripts/check-preview-plugin.sh"]
+async fn preview_plugin_paints_the_three_board_directions(cx: &mut TestAppContext) {
+    let built = built_artifact();
+    let live = live_artifact("board-directions");
+    std::fs::copy(&built, &live).expect("stage the built artifact");
+
+    cx.update(gpui_component::init);
+    cx.update(|cx| crate::theme::live::apply_scheme(&RawConfig::default(), cx));
+
+    let first_marker = board_next::FIRST_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+    let second_marker = board_next::SECOND_TASK_TITLE
+        .chars()
+        .next()
+        .expect("a title");
+
+    // --- each direction opens on the same task, and `j` carries the
+    //     header title to the next one ----------------------------------
+    // The count relation, not an absolute count: the two-column directions
+    // paint the selected title twice (a row and the header band) while the
+    // rail direction paints it once (the header band alone), so what every
+    // direction has to satisfy is that the selected title outnumbers an
+    // unselected one by exactly one, and that `j` moves that one.
+    for name in [board_next::A, board_next::B, board_next::C] {
+        let direction = load(&live, name, cx).unwrap_or_else(|error| {
+            panic!("the {name} preview does not instantiate: {error}");
+        });
+        let surface = cx.new(Surface::new);
+        mount(&direction.host, &surface, BOARD_SLOT, cx);
+
+        let open = glyph_counts(&summary(&surface, cx));
+        assert!(
+            painted(&open, board_next::FIRST_TASK_TITLE),
+            "{name} painted no selected task title: {open:?}"
+        );
+        assert!(
+            painted(&open, board_next::THREAD_PROBE),
+            "{name} painted no thread under that title: {open:?}"
+        );
+        let first = count_of(&open, first_marker);
+        let second = count_of(&open, second_marker);
+        assert_eq!(
+            first,
+            second + 1,
+            "{name} does not paint the selected task's title once more than an unselected one's: {open:?}"
+        );
+
+        // A keystroke has to settle: a guest paces no frames, so a view
+        // that asks for another frame from inside the one it is drawing
+        // never lets `settle` return (see the module doc).
+        press(&surface, "j", cx);
+        let moved = glyph_counts(&summary(&surface, cx));
+        assert!(
+            painted(&moved, board_next::SECOND_TASK_TITLE),
+            "{name}: `j` painted no next task title: {moved:?}"
+        );
+        assert!(
+            !painted(&moved, board_next::THREAD_PROBE),
+            "{name}: the previous task's thread is still painted after `j`: {moved:?}"
+        );
+        assert_eq!(
+            (
+                count_of(&moved, first_marker),
+                count_of(&moved, second_marker)
+            ),
+            (first - 1, second + 1),
+            "{name}: `j` did not carry the header title onto the next task: {moved:?}"
+        );
+
+        cx.update(|_| drop(direction));
+        settle(cx);
+    }
+
+    // --- folding in the card direction -----------------------------------
+    let long = load(&live, board_next::B_LONG, cx).expect("the card long-thread preview loads");
+    let long_surface = cx.new(Surface::new);
+    mount(&long.host, &long_surface, BOARD_SLOT, cx);
+    let folded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&folded, board_next::FOLDED_PROBE),
+        "the folded card does not show the post's first line: {folded:?}"
+    );
+    assert!(
+        !painted(&folded, board_next::DEEP_PROBE),
+        "the card direction did not fold the long post: {folded:?}"
+    );
+
+    press(&long_surface, "e", cx);
+    let unfolded = glyph_counts(&summary(&long_surface, cx));
+    assert!(
+        painted(&unfolded, board_next::DEEP_PROBE),
+        "`e` did not unfold the long post in the card direction: {unfolded:?}"
+    );
+
+    cx.update(|_| drop(long));
     settle(cx);
     std::fs::remove_file(&live).ok();
 }

@@ -81,6 +81,19 @@ pub struct Preview {
 shows, the way a story sits next to a component. One plugin contains every
 registered preview; the host selects one by name.
 
+The previews in this build:
+
+| Name | Shows |
+| --- | --- |
+| `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
+| `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
+| `board-next`, `board-next-empty`, `board-next-long-thread` | A board prototype that exists only here: master–detail in one view, over the same kind of in-memory store (`src/board_next/`). The long-thread one opens on a forty-message thread whose third post is long enough to fold. |
+| `board-a`, `board-b`, `board-c` (and `-long` each) | Three layout directions of that same prototype over the same sample data: a list rail beside a capped body column, one bordered card per post, and one column with the list collapsed to a counts rail. One view renders all of them — `board_next::spec::Layout` is chosen at construction and only `Render` branches on it. The `-long` ones open on the forty-message thread. |
+
+`src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It
+reads a store and emits no commands, so it carries no shell wiring and the
+shipped board pane is untouched by it.
+
 For a view to be previewable, the code that goes into the plugin must not
 reach sockets, subprocesses, or the filesystem directly — a wasm32-wasip2
 guest has none of them. Whatever the view uses to reach the outside world
@@ -179,7 +192,16 @@ primary entry point and the view chooser does not list the preview kind.
   load without disturbing the pane. The board's: `board-list` paints row
   titles from its sample store and the rows' activity icons reach the host
   as images, `board-list-empty` paints its chrome and no row, and
-  `board-detail` paints the item's body and its comment thread. A board
+  `board-detail` paints the item's body and its comment thread. The
+  prototype's: `board-next` paints the selected task as both a row and the
+  thread header and `j` moves that pairing to the next task,
+  `board-next-empty` paints chrome and no row, and `board-next-long-thread`
+  folds its long post until `e` unfolds it. The directions': each of
+  `board-a`/`board-b`/`board-c` paints the selected task's title once more
+  than an unselected one's — twice where a list column draws it too, once
+  where the rail does not — paints that task's thread, and moves that one
+  extra onto the next task on `j`; `board-b-long` shows the long post's
+  first line and not its deep probe until `e`. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.
@@ -221,3 +243,31 @@ own fallback, not to the configured chain.
 compiles the component, and the thread is not stopped when compilation
 fails, so each failed load leaves one idle thread behind until the app
 exits.
+
+## Frame pacing
+
+A guest window has none. Nothing inside the guest drives frames: the host
+runs one guest turn per exchange with it, and a turn draws a dirty window
+once and reports the delay until the guest's earliest pending timer. A
+quiet guest therefore costs nothing — the pane sits at 0% CPU with the
+window's frame request pending and no turn to service it.
+
+The consequence is that `window.request_animation_frame` has no rate. A
+turn that draws leads to the next turn, so a view that requests an
+animation frame from inside the frame it draws (every repeating
+`gpui::Animation`, including gpui-component's `Spinner`) keeps handing
+itself another one, as fast as the host can turn one around: measured at
+about 500 guest frames a second on a 900×1600 surface, with the host
+repainting each. Nothing starts that exchange while the guest is quiet, so
+such a view idles until the first input event and then never goes idle
+again. Which frame of the exchange carries the next turn was not traced;
+what was measured is that the requests are unpaced, that the executor call
+driving the guest never returns, and that removing the animation returns
+both to idle.
+
+`src/preview/e2e.rs` drives a keystroke into the prototype's previews partly
+for this: the run to quiescence after it does not return when the view
+paints a repeating animation. The board pane's own `board-list` preview is
+in that state — the row indicator for a running session is a spinner — and
+is therefore driven with no input; an arrow key into it does not return, and
+on a real display the pane burns whole cores from the first click onwards.

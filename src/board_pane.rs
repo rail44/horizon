@@ -22,9 +22,9 @@ use horizon_board::{tree_order, Item, Position, Store, StoreError};
 use crate::theme;
 use horizon_workspace::commands::CommandId;
 
-mod activity;
+pub(crate) mod activity;
 mod detail;
-mod execute;
+pub(crate) mod execute;
 mod list;
 mod model;
 mod operations;
