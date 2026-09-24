@@ -29,19 +29,22 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
         }
         BashCompletion::Finished(result) => result,
         BashCompletion::DomainDenied {
-            call_id, domains, ..
+            result: ToolCallResult { call_id, .. },
+            domains,
         } => panic!(
             "expected a finished bash completion, got a domain-denied request for \
              {call_id:?} ({domains:?})"
         ),
         BashCompletion::FilesystemDenied {
-            call_id, denials, ..
+            result: ToolCallResult { call_id, .. },
+            denials,
         } => panic!(
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
         BashCompletion::MachServiceDenied {
-            call_id, services, ..
+            result: ToolCallResult { call_id, .. },
+            services,
         } => panic!(
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"

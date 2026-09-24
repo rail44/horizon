@@ -290,7 +290,6 @@ fn status_output(
 
 fn domain_denied(call_id: &ToolCallId, domains: Vec<String>, output: Value) -> BashCompletion {
     BashCompletion::DomainDenied {
-        call_id: call_id.clone(),
         domains,
         // The owning BashJob binds every outcome to its dispatch occurrence.
         result: ToolCallResult::new(call_id.clone(), None, output),

@@ -148,19 +148,22 @@ fn expect_finished(completion: BashCompletion) -> ToolCallResult {
         }
         BashCompletion::Finished(result) => result,
         BashCompletion::DomainDenied {
-            call_id, domains, ..
+            result: ToolCallResult { call_id, .. },
+            domains,
         } => panic!(
             "expected a finished bash completion, got a domain-denied request for \
              {call_id:?} ({domains:?})"
         ),
         BashCompletion::FilesystemDenied {
-            call_id, denials, ..
+            result: ToolCallResult { call_id, .. },
+            denials,
         } => panic!(
             "expected a finished bash completion, got a filesystem-denied request for \
              {call_id:?} ({denials:?})"
         ),
         BashCompletion::MachServiceDenied {
-            call_id, services, ..
+            result: ToolCallResult { call_id, .. },
+            services,
         } => panic!(
             "expected a finished bash completion, got a mach-service-denied request for \
              {call_id:?} ({services:?})"
@@ -1607,7 +1610,7 @@ fn fs_grep_respects_gitignore_in_a_git_repository() {
 /// non-git workspace roots.
 #[test]
 fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
-    let root = temp_workspace("glob-gitignore-no-git");
+    let root = crate::instructions::non_repository_test_dir();
     fs::write(root.join(".gitignore"), "secret.log\n").unwrap();
     fs::write(root.join("secret.log"), "content").unwrap();
     let tool_state = ToolSessionState::new(root.clone());
@@ -1621,6 +1624,7 @@ fn fs_glob_ignores_gitignore_file_outside_a_git_repository() {
 
     assert!(!is_error(&output));
     assert_eq!(output["total_matches"], 1);
+    fs::remove_dir_all(root).unwrap();
 }
 
 /// Locks in the decision to keep walking plain dotfiles/dotdirs (anything
@@ -2396,7 +2400,8 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
             );
         }
         BashCompletion::DomainDenied {
-            call_id, domains, ..
+            result: ToolCallResult { call_id, .. },
+            domains,
         } => {
             panic!(
                 "expected a finished, ungrantable-annotated result, got a domain-denied \
@@ -2404,7 +2409,8 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
             );
         }
         BashCompletion::FilesystemDenied {
-            call_id, denials, ..
+            result: ToolCallResult { call_id, .. },
+            denials,
         } => {
             panic!(
                 "a /tmp attempt must never raise a filesystem approval -- no grant for it \
@@ -2412,7 +2418,8 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
             );
         }
         BashCompletion::MachServiceDenied {
-            call_id, services, ..
+            result: ToolCallResult { call_id, .. },
+            services,
         } => {
             panic!(
                 "expected a finished, ungrantable-annotated result, got a mach-service-denied \

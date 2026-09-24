@@ -49,11 +49,10 @@ pub(super) fn fold_mach_service_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
-    call_id: ToolCallId,
     services: Vec<String>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &call_id) else {
+    let Some(original_request) = pending_request(live_state, &result.call_id) else {
         // Should be unreachable (this call_id was necessarily requested to
         // have gotten this far) -- nothing sane to reissue against.
         return;
@@ -74,7 +73,7 @@ pub(super) fn fold_mach_service_denied(
         session_id,
         original_request.clone(),
         ApprovalRequest {
-            call_id,
+            call_id: result.call_id.clone(),
             // See the matching site in `fold_domain_denied` --
             // `begin_reissued_approval` mints the fresh `OccurrenceId` for
             // the reissued request; the `prior_result` is the *first*
@@ -105,11 +104,10 @@ pub(super) fn fold_domain_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
-    call_id: ToolCallId,
     domains: Vec<String>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &call_id) else {
+    let Some(original_request) = pending_request(live_state, &result.call_id) else {
         // Should be unreachable (this call_id was necessarily requested to
         // have gotten this far) -- nothing sane to reissue against.
         return;
@@ -128,7 +126,7 @@ pub(super) fn fold_domain_denied(
         session_id,
         original_request.clone(),
         ApprovalRequest {
-            call_id,
+            call_id: result.call_id.clone(),
             // The reissue gets a new ID; prior_result retains the completed
             // attempt's dispatch identity (or the legacy request fallback).
             occurrence_id: None,
@@ -180,11 +178,10 @@ pub(super) fn fold_filesystem_denied(
     state: &Arc<AgentdState>,
     live_state: &LiveState,
     session_id: SessionId,
-    call_id: ToolCallId,
     denials: Vec<horizon_sandbox::FilesystemDenial>,
     result: ToolCallResult,
 ) {
-    let Some(original_request) = pending_request(live_state, &call_id) else {
+    let Some(original_request) = pending_request(live_state, &result.call_id) else {
         return;
     };
     let attempted = denials
@@ -228,7 +225,7 @@ pub(super) fn fold_filesystem_denied(
         session_id,
         original_request.clone(),
         ApprovalRequest {
-            call_id,
+            call_id: result.call_id.clone(),
             // See the matching site in `fold_domain_denied` --
             // `begin_reissued_approval` mints a fresh `OccurrenceId` for
             // the reissued request and stamps it on both the new

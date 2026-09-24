@@ -53,24 +53,18 @@ pub(super) fn fold_tool_completion(
         ToolCompletion::Finished(result) => {
             fold_finished_bash_result(state, live_state, commands_tx, session_id, result)
         }
-        ToolCompletion::DomainDenied {
-            call_id,
-            domains,
-            result,
-        } => fold_domain_denied(state, live_state, session_id, call_id, domains, result),
+        ToolCompletion::DomainDenied { domains, result } => {
+            fold_domain_denied(state, live_state, session_id, domains, result)
+        }
         ToolCompletion::DomainGrantRequired {
             call_id, domains, ..
         } => fold_domain_grant_required(state, live_state, session_id, call_id, domains),
-        ToolCompletion::FilesystemDenied {
-            call_id,
-            denials,
-            result,
-        } => fold_filesystem_denied(state, live_state, session_id, call_id, denials, result),
-        ToolCompletion::MachServiceDenied {
-            call_id,
-            services,
-            result,
-        } => fold_mach_service_denied(state, live_state, session_id, call_id, services, result),
+        ToolCompletion::FilesystemDenied { denials, result } => {
+            fold_filesystem_denied(state, live_state, session_id, denials, result)
+        }
+        ToolCompletion::MachServiceDenied { services, result } => {
+            fold_mach_service_denied(state, live_state, session_id, services, result)
+        }
     }
 }
 

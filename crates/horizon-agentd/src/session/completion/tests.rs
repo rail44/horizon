@@ -40,17 +40,14 @@ fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() 
         let completion = match kind {
             0 => ToolCompletion::Finished(result),
             1 => ToolCompletion::DomainDenied {
-                call_id,
                 domains: vec!["example.test".into()],
                 result,
             },
             2 => ToolCompletion::FilesystemDenied {
-                call_id,
                 denials: vec![tree_denial(&dir.path().join("file"))],
                 result,
             },
             3 => ToolCompletion::MachServiceDenied {
-                call_id,
                 services: vec!["com.apple.securityd".into()],
                 result,
             },
@@ -95,17 +92,14 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         );
         let completion = match kind {
             0 => ToolCompletion::DomainDenied {
-                call_id: call_id.clone(),
                 domains: vec!["example.test".into()],
                 result,
             },
             1 => ToolCompletion::FilesystemDenied {
-                call_id: call_id.clone(),
                 denials: vec![tree_denial(&dir.path().join("file"))],
                 result,
             },
             2 => ToolCompletion::MachServiceDenied {
-                call_id: call_id.clone(),
                 services: vec!["com.apple.securityd".into()],
                 result,
             },
@@ -540,7 +534,6 @@ fn approval_for_denials(
         &commands_tx,
         session_id,
         ToolCompletion::FilesystemDenied {
-            call_id: call_id.clone(),
             denials,
             result: ToolCallResult::new(
                 call_id.clone(),

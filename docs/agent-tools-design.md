@@ -416,3 +416,11 @@ section), every one of them is a fixed built-in constant in
   (edit.ts match cascade); goose source (developer extension).
 - Agent Client Protocol (agentclientprotocol.com) — cancellation and
   permission-request semantics.
+
+### Completed containment attempts own their identity
+
+`ToolCompletion` carries a completed attempt's call and occurrence IDs only in
+its `ToolCallResult`. The daemon uses that same identity for acceptance and
+for locating the request to reissue; denial variants do not repeat the call ID.
+A redirect grant has no completed result and therefore carries its own origin.
+This is an internal worker/daemon boundary; persisted and wire types are unchanged.

@@ -162,6 +162,20 @@ pub(crate) fn cap_to_chars(body: String, cap_chars: usize) -> (String, bool) {
     }
 }
 
+/// A host-boundary fixture for repository-aware instruction, skill, and file discovery.
+/// A temporary directory can itself be inside a checkout on the test host.
+#[cfg(test)]
+pub(crate) fn non_repository_test_dir() -> PathBuf {
+    let base = [std::env::temp_dir(), PathBuf::from("/var/tmp")]
+        .into_iter()
+        .find(|path| path.is_dir() && git_root(path).is_none())
+        .expect("repository-boundary tests need a temporary directory outside any checkout");
+    let root = base.join(format!("horizon-non-repository-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir(&root).expect("create a directory outside the repository");
+    root.canonicalize()
+        .expect("canonicalize non-repository fixture")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,7 +271,7 @@ mod tests {
     /// ancestors.
     #[test]
     fn extra_sections_checks_only_cwd_outside_a_git_repository() {
-        let root = temp_dir("non-git-root");
+        let root = non_repository_test_dir();
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write(&root, "AGENTS.md", "PARENT_MARKER_SHOULD_NOT_APPEAR");
@@ -268,6 +282,7 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert!(sections[0].contains("CWD_MARKER"));
         assert!(!sections[0].contains("PARENT_MARKER_SHOULD_NOT_APPEAR"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     /// A cap smaller than the composed body truncates and appends a note,

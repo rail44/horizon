@@ -70,7 +70,6 @@ pub(super) fn complete(
             annotate_denied_domains(&mut value, &denied_domains);
         }
         return BashCompletion::FilesystemDenied {
-            call_id: call_id.clone(),
             denials: denials.filesystem,
             // The daemon's fold stamps the originating request's occurrence
             // identity, keeping reused call IDs and denial retries distinct.
@@ -84,7 +83,6 @@ pub(super) fn complete(
             annotate_denied_domains(&mut value, &denied_domains);
         }
         return BashCompletion::MachServiceDenied {
-            call_id: call_id.clone(),
             services: denials.mach_services,
             result: ToolCallResult::new(call_id.clone(), None, value),
         };

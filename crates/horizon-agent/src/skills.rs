@@ -562,10 +562,7 @@ mod tests {
 
     #[test]
     fn discover_does_not_search_ancestors_outside_a_git_repository() {
-        let root = std::env::temp_dir().join(format!(
-            "horizon-agent-skills-non-git-{}",
-            uuid::Uuid::new_v4()
-        ));
+        let root = crate::instructions::non_repository_test_dir();
         let nested = root.join("nested");
         std::fs::create_dir_all(&nested).unwrap();
         write_skill(

@@ -35,7 +35,6 @@ pub enum ToolCompletion {
     /// `domains` to this session's allowlist and reruns the same call,
     /// still sandboxed; denying forwards `result` as-is.
     DomainDenied {
-        call_id: ToolCallId,
         domains: Vec<String>,
         result: ToolCallResult,
     },
@@ -49,7 +48,6 @@ pub enum ToolCompletion {
         domains: Vec<String>,
     },
     FilesystemDenied {
-        call_id: ToolCallId,
         denials: Vec<horizon_sandbox::FilesystemDenial>,
         result: ToolCallResult,
     },
@@ -60,7 +58,6 @@ pub enum ToolCompletion {
     /// approval records the service set for this session and reruns the
     /// same call, still sandboxed; denying forwards `result` as-is.
     MachServiceDenied {
-        call_id: ToolCallId,
         services: Vec<String>,
         result: ToolCallResult,
     },
