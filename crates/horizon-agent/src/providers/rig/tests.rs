@@ -46,9 +46,13 @@ use rig_core::completion::{
 };
 use rig_core::ProviderResponseError;
 
-fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
+fn recv_provider(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> ProviderEvent {
     rx.recv_timeout(std::time::Duration::from_secs(1))
         .expect("expected a provider event within timeout")
+}
+
+fn recv(rx: &crossbeam_channel::Receiver<ProviderEvent>) -> Event {
+    recv_provider(rx).into_event().expect("conversation event")
 }
 
 #[tokio::test]
@@ -89,7 +93,7 @@ fn provider_request_span_finishes_when_an_error_path_drops_it() {
     let (tx, rx) = crossbeam_channel::unbounded();
     drop(ProviderRequestSpan::new(tx));
 
-    assert!(matches!(recv(&rx).event, Event::ProviderRequestFinished));
+    assert!(matches!(recv(&rx), Event::ProviderRequestFinished));
 }
 
 /// The exact shape rig renders a non-2xx streaming response as: the status
@@ -712,7 +716,7 @@ fn converts_rig_tool_call_to_provider_event_with_payload() {
 
     assert!(matches!(
         events.as_slice(),
-        [ProviderEvent {
+        [ProviderEvent::Event {
             event: Event::ToolCallRequested(request),
             provider_payload: Some(payload),
             ..
@@ -729,9 +733,9 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
 
     // A name chunk flushes immediately, before any arguments have streamed.
     buffer.note_name("internal-call-1", "fs.write".to_string());
-    let progress = recv(&rx)
-        .tool_call_progress
-        .expect("name chunk produces a progress tick");
+    let ProviderEvent::ToolCallProgress(progress) = recv_provider(&rx) else {
+        panic!("name chunk produces a progress tick");
+    };
     assert_eq!(progress.key, "internal-call-1");
     assert_eq!(progress.tool_id.as_deref(), Some("fs.write"));
     assert_eq!(progress.bytes, 0);
@@ -740,9 +744,9 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
     // normal time-gated cadence so the test doesn't need to sleep.
     buffer.note_delta("internal-call-1", "{\"path\":\"/tmp/x\"}");
     buffer.flush_for_tests();
-    let progress = recv(&rx)
-        .tool_call_progress
-        .expect("delta chunk produces a progress tick");
+    let ProviderEvent::ToolCallProgress(progress) = recv_provider(&rx) else {
+        panic!("delta chunk produces a progress tick");
+    };
     assert_eq!(progress.tool_id.as_deref(), Some("fs.write"));
     assert_eq!(progress.bytes, "{\"path\":\"/tmp/x\"}".len());
 
@@ -1867,7 +1871,7 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
 
     // The first event is the cap-truncation error, naming the output limit
     // and the token count that hit it.
-    match &events[0].event {
+    match &events[0].clone().into_event().expect("conversation event") {
         Event::Error(error) => {
             assert!(
                 error.message.contains("output limit"),
@@ -1885,19 +1889,23 @@ async fn handle_truncation_recovery_auto_continues_a_cap_truncated_turn() {
     }
 
     // The turn is closed as Failed, not Completed.
-    assert_eq!(events[1].event, Event::TurnEnded(TurnEndReason::Failed));
+    assert_eq!(
+        events[1].clone().into_event().expect("conversation event"),
+        Event::TurnEnded(TurnEndReason::Failed)
+    );
 
     // The harness auto-continues: signals Running and injects an
     // AutoContinue prompt, same as tool-call truncation recovery.
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(&e.event, Event::StateChanged(SessionState::Running))),
+        events.iter().any(|e| matches!(
+            &e.clone().into_event().expect("conversation event"),
+            Event::StateChanged(SessionState::Running)
+        )),
         "must signal Running for the auto-continue"
     );
     assert!(
         events.iter().any(|e| matches!(
-            &e.event,
+            &e.clone().into_event().expect("conversation event"),
             Event::MessageCommitted(AgentMessage {
                 role: MessageRole::AutoContinue,
                 ..
@@ -2002,7 +2010,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
                     if text.text.contains("cancelled")))));
 
     assert!(state.pending_tool_calls.is_empty());
-    match recv(&rx).event {
+    match recv(&rx) {
         Event::ToolCallFinished(result) => {
             assert_eq!(
                 result.call_id, id_b,
@@ -2013,13 +2021,10 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         other => panic!("expected ToolCallFinished, got {other:?}"),
     }
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
     );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert!(
         rx.try_recv().is_err(),
         "halt must emit exactly one cancelled finish for B, TurnEnded(HaltedByIterationCap), \
@@ -2056,11 +2061,8 @@ fn apply_turn_outcome_emits_turn_ended_failed_for_a_failed_provider_request() {
         ..TurnCompletion::default()
     });
 
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Failed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Failed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert!(
         rx.try_recv().is_err(),
         "a failed turn must emit exactly TurnEnded(Failed) then WaitingForUser"
@@ -2148,15 +2150,15 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     let _ = tx.send(Command::UserMessage {
         text: "snapshot please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
-    let call_id = match recv(&rx).event {
+    let call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
         other => panic!("expected a tool call request, got {other:?}"),
     };
@@ -2171,9 +2173,9 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
             crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
-        assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+        assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
         assert!(matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::ToolCallRequested(request) if request.call_id == call_id
         ));
     }
@@ -2192,11 +2194,11 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
     );
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::StateChanged(SessionState::WaitingForUser),
         "no cancelled ToolCallFinished may be emitted for the real, already-executed result"
     );
@@ -2208,9 +2210,9 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // rather than just clearing the halt, exactly as if the guard had
     // never intervened.
     let _ = tx.send(Command::ContinueTurn);
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::ToolCallRequested(request) if request.call_id == call_id
     ));
 
@@ -2221,44 +2223,38 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
         crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 
     // The session is still usable: a fresh user message runs a normal turn.
     let _ = tx.send(Command::UserMessage {
         text: "hello again".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             text,
         }) if text == "hello again"
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 /// `docs/agent-explore-design.md`'s 2026-07-27 addendum, end to end through
@@ -2286,15 +2282,15 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     let _ = tx.send(Command::UserMessage {
         text: "snapshot please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
-    let call_id = match recv(&rx).event {
+    let call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
         other => panic!("expected a tool call request, got {other:?}"),
     };
@@ -2305,9 +2301,9 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
             crate::contract::OccurrenceId(call_id.0.clone()),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
-        assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+        assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
         assert!(matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::ToolCallRequested(request) if request.call_id == call_id
         ));
     }
@@ -2322,23 +2318,20 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
         crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(
         matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
                 if text.contains("turn limit")
         ),
         "the forced wrap-up's summary must be committed as an ordinary assistant message"
     );
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::TurnEnded(TurnEndReason::HaltedByIterationCap)
     );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 
     // Nothing was stashed -- the forced summary already resolved the halt,
     // so Continue has nothing to resume.
@@ -2377,26 +2370,23 @@ fn continue_turn_on_a_freshly_started_session_is_a_no_op_not_an_auto_resume() {
     let _ = tx.send(Command::UserMessage {
         text: "hello".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             text,
         }) if text == "hello"
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 #[test]
@@ -2421,26 +2411,23 @@ fn rig_session_drops_unsolicited_tool_result_without_running_a_turn() {
     let _ = tx.send(Command::UserMessage {
         text: "hello".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             text,
         }) if text == "hello"
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 #[test]
@@ -2607,9 +2594,9 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
     let _ = tx.send(Command::UserMessage {
         text: "multi tool please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
@@ -2618,7 +2605,7 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
 
     let mut call_ids = Vec::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallRequested(request) => call_ids.push(request.call_id),
             other => panic!("expected a tool call request, got {other:?}"),
         }
@@ -2647,19 +2634,16 @@ fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
         crate::contract::OccurrenceId((call_ids[call_ids.len() - 1].clone()).0.clone()),
         serde_json::json!({ "ok": true }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert!(
         rx.try_recv().is_err(),
         "exactly one follow-up completion should run for the whole batch"
@@ -2673,9 +2657,9 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
     let _ = tx.send(Command::UserMessage {
         text: "multi tool please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
@@ -2684,7 +2668,7 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
 
     let mut old_call_ids = HashSet::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallRequested(request) => {
                 old_call_ids.insert(request.call_id);
             }
@@ -2701,7 +2685,7 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
 
     let mut cancelled_call_ids = HashSet::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallFinished(result) => {
                 assert_eq!(result.output["cancelled"], true);
                 cancelled_call_ids.insert(result.call_id);
@@ -2710,24 +2694,18 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
         }
     }
     assert_eq!(cancelled_call_ids, old_call_ids);
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Cancelled));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::Cancelled)
-    );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Cancelled));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Cancelled));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             text,
         }) if text == "snapshot please"
     ));
-    let new_call_id = match recv(&rx).event {
+    let new_call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
         other => panic!("expected the new turn's tool call, got {other:?}"),
     };
@@ -2753,19 +2731,16 @@ fn fresh_user_message_retires_old_tool_batch_before_new_tool_turn() {
         crate::contract::OccurrenceId(new_call_id.0.clone()),
         serde_json::json!({ "ok": true }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 #[test]
@@ -2775,9 +2750,9 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     let _ = tx.send(Command::UserMessage {
         text: "multi tool please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
@@ -2786,7 +2761,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
 
     let mut call_ids = Vec::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallRequested(request) => call_ids.push(request.call_id),
             other => panic!("expected a tool call request, got {other:?}"),
         }
@@ -2808,7 +2783,7 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     let remaining = &call_ids[1..];
     let mut cancelled_ids: HashSet<ToolCallId> = HashSet::new();
     for _ in remaining {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallFinished(result) => {
                 assert_eq!(result.output["cancelled"], true);
                 cancelled_ids.insert(result.call_id);
@@ -2818,15 +2793,9 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     }
     let remaining_ids: HashSet<ToolCallId> = remaining.iter().cloned().collect();
     assert_eq!(cancelled_ids, remaining_ids);
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Cancelled));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::Cancelled)
-    );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Cancelled));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Cancelled));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 
     // The real results for the cancelled calls arrive late: accepted and
     // dropped silently — no turn restart, nothing observable on the wire.
@@ -2847,26 +2816,23 @@ fn rig_session_cancel_mid_batch_drops_remaining_results_and_recovers() {
     let _ = tx.send(Command::UserMessage {
         text: "hello again".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             text,
         }) if text == "hello again"
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 #[test]
@@ -2886,9 +2852,9 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     let _ = tx.send(Command::UserMessage {
         text: "multi tool please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
@@ -2903,7 +2869,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     for _ in 0..2 {
         let mut call_ids = Vec::new();
         for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-            match recv(&rx).event {
+            match recv(&rx) {
                 Event::ToolCallRequested(request) => call_ids.push(request.call_id),
                 other => panic!("expected a tool call request, got {other:?}"),
             }
@@ -2921,7 +2887,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
                 output,
             )));
             if is_last {
-                assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+                assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
             } else {
                 assert!(
                     rx.recv_timeout(std::time::Duration::from_millis(200))
@@ -2936,7 +2902,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     // of running.
     let mut call_ids = Vec::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
-        match recv(&rx).event {
+        match recv(&rx) {
             Event::ToolCallRequested(request) => call_ids.push(request.call_id),
             other => panic!("expected a tool call request, got {other:?}"),
         }
@@ -2957,14 +2923,11 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
         }
     }
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::TurnEnded(TurnEndReason::HaltedByIterationCap),
         "a guard halt is a pause, not an Event::Error"
     );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 // --- rig_tool_definitions' allowed_tool_ids extension point ----------------
@@ -3683,15 +3646,15 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
     let _ = tx.send(Command::UserMessage {
         text: "snapshot please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
-    let call_id = match recv(&rx).event {
+    let call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
         other => panic!("expected a tool call request, got {other:?}"),
     };
@@ -3708,8 +3671,8 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
         crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
-    let notification = match recv(&rx).event {
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
+    let notification = match recv(&rx) {
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::TaskNotification,
             text,
@@ -3738,17 +3701,14 @@ fn a_mid_turn_task_completion_injects_exactly_one_coalesced_notification() {
     // test sees what actually reached the provider.
     assert!(
         matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
                 if text.contains("map the emit sites") && text.contains("list the consumers")
         ),
         "the notification must be the message the provider round actually carried"
     );
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
     assert!(
         rx.recv_timeout(std::time::Duration::from_millis(200))
             .is_err(),
@@ -3776,26 +3736,23 @@ fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
     let _ = tx.send(Command::UserMessage {
         text: "hello".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 
     deliver_task(
         session_id,
@@ -3804,11 +3761,11 @@ fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
     );
 
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::StateChanged(SessionState::Running),
         "a completion with no round left to ride on must start one"
     );
-    let notification = match recv(&rx).event {
+    let notification = match recv(&rx) {
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::TaskNotification,
             text,
@@ -3821,21 +3778,18 @@ fn a_task_completing_after_the_turn_ended_starts_an_auto_turn() {
     );
     assert!(
         matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
                 if text.contains("Emitted at session.rs:1747.")
         ),
         "the auto-turn's input must be the notification itself"
     );
     assert_eq!(
-        recv(&rx).event,
+        recv(&rx),
         Event::TurnEnded(TurnEndReason::Completed),
         "an auto-started turn is an ordinary turn: TurnEnded still bounds it"
     );
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 }
 
 /// A child that produced no usable report is reported on the requester's
@@ -3858,26 +3812,23 @@ fn a_task_child_with_no_usable_report_is_reported_as_an_error() {
     let _ = tx.send(Command::UserMessage {
         text: "hello".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             ..
         })
     ));
-    assert_eq!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed));
-    assert_eq!(
-        recv(&rx).event,
-        Event::StateChanged(SessionState::WaitingForUser)
-    );
+    assert_eq!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser));
 
     let child = SessionId::new();
     crate::tools::explore::deliver_test_completion(
@@ -3892,8 +3843,8 @@ fn a_task_child_with_no_usable_report_is_reported_as_an_error() {
         }),
     );
 
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
-    let notification = match recv(&rx).event {
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
+    let notification = match recv(&rx) {
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::TaskNotification,
             text,
@@ -3904,7 +3855,7 @@ fn a_task_child_with_no_usable_report_is_reported_as_an_error() {
         notification.contains("produced no usable report"),
         "{notification}"
     );
-    let error = match recv(&rx).event {
+    let error = match recv(&rx) {
         Event::Error(error) => error.message,
         other => panic!("expected the failure to be reported as an error, got {other:?}"),
     };
@@ -3940,15 +3891,15 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
     let _ = tx.send(Command::UserMessage {
         text: "snapshot please".to_string(),
     });
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
             ..
         })
     ));
-    let call_id = match recv(&rx).event {
+    let call_id = match recv(&rx) {
         Event::ToolCallRequested(request) => request.call_id,
         other => panic!("expected a tool call request, got {other:?}"),
     };
@@ -3970,9 +3921,9 @@ fn a_task_completion_is_deferred_while_a_tool_call_is_still_outstanding() {
         crate::contract::OccurrenceId(call_id.0.clone()),
         serde_json::json!({ "done": true }),
     )));
-    assert_eq!(recv(&rx).event, Event::StateChanged(SessionState::Running));
+    assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
     assert!(matches!(
-        recv(&rx).event,
+        recv(&rx),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::TaskNotification,
             ..
@@ -3996,7 +3947,7 @@ fn identified_input_additions_wait_for_tool_results_and_keep_answer_destinations
         .unwrap();
     let mut calls = Vec::new();
     while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
-        if let Event::ToolCallRequested(call) = recv(&rx).event {
+        if let Event::ToolCallRequested(call) = recv(&rx) {
             calls.push(call.call_id);
         }
     }
@@ -4014,7 +3965,7 @@ fn identified_input_additions_wait_for_tool_results_and_keep_answer_destinations
     }
     let mut outcomes = Vec::new();
     while outcomes.len() < 2 {
-        let event = recv(&rx).event;
+        let event = recv(&rx);
         assert!(!matches!(event, Event::TurnEnded(TurnEndReason::Cancelled)));
         if let Event::InputOutcome(outcome) = event {
             outcomes.push(outcome);
@@ -4036,7 +3987,7 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
     .unwrap();
     let mut calls = Vec::new();
     while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
-        if let Event::ToolCallRequested(call) = recv(&rx).event {
+        if let Event::ToolCallRequested(call) = recv(&rx) {
             calls.push(call.call_id);
         }
     }
@@ -4062,7 +4013,7 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
     )))
     .unwrap();
     loop {
-        if let Event::EnvironmentReady { base } = recv(&rx).event {
+        if let Event::EnvironmentReady { base } = recv(&rx) {
             assert_eq!(base, "explicit-base");
             break;
         }
@@ -4076,7 +4027,7 @@ fn activation_waits_for_the_complete_tool_batch_and_blocks_the_next_provider_rou
     })
     .unwrap();
     loop {
-        if matches!(recv(&rx).event, Event::TurnEnded(TurnEndReason::Completed)) {
+        if matches!(recv(&rx), Event::TurnEnded(TurnEndReason::Completed)) {
             break;
         }
     }
@@ -4098,23 +4049,20 @@ fn cancel_preserves_queued_requests_without_automatically_starting_them() {
     tx.send(input("active", "multi tool please")).unwrap();
     let mut count = 0;
     while count < MULTI_TOOL_TEST_BATCH_SIZE {
-        if matches!(recv(&rx).event, Event::ToolCallRequested(_)) {
+        if matches!(recv(&rx), Event::ToolCallRequested(_)) {
             count += 1;
         }
     }
     tx.send(input("queued", "later question")).unwrap();
     tx.send(Command::Cancel { request_id: None }).unwrap();
     loop {
-        if matches!(
-            recv(&rx).event,
-            Event::StateChanged(SessionState::WaitingForUser)
-        ) {
+        if matches!(recv(&rx), Event::StateChanged(SessionState::WaitingForUser)) {
             break;
         }
     }
     for event in rx.try_iter() {
         assert!(!matches!(
-            event.event,
+            event.clone().into_event().expect("conversation event"),
             Event::InputOutcome(crate::contract::SessionInputOutcome {
                 outcome: crate::contract::InputResult::Success { .. },
                 ..
@@ -4145,7 +4093,7 @@ fn cancel_preserves_queued_requests_without_automatically_starting_them() {
     .unwrap();
     loop {
         if matches!(
-            recv(&rx).event,
+            recv(&rx),
             Event::InputOutcome(crate::contract::SessionInputOutcome {
                 outcome: crate::contract::InputResult::Success { .. },
                 ..
@@ -4166,7 +4114,7 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
     .unwrap();
     let mut calls = Vec::new();
     while calls.len() < MULTI_TOOL_TEST_BATCH_SIZE {
-        if let Event::ToolCallRequested(call) = recv(&rx).event {
+        if let Event::ToolCallRequested(call) = recv(&rx) {
             calls.push(call.call_id);
         }
     }
@@ -4183,7 +4131,7 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
         .unwrap();
     }
     loop {
-        if matches!(recv(&rx).event, Event::EnvironmentReady { .. }) {
+        if matches!(recv(&rx), Event::EnvironmentReady { .. }) {
             break;
         }
     }
@@ -4194,7 +4142,7 @@ fn shutdown_during_environment_handoff_never_starts_another_provider_round() {
     })
     .unwrap();
     loop {
-        let event = recv(&rx).event;
+        let event = recv(&rx);
         assert!(!matches!(
             event,
             Event::MessageCommitted(AgentMessage {

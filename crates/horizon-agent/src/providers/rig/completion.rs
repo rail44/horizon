@@ -193,7 +193,8 @@ pub(super) async fn complete_rig_turn(
     let requested_tool_calls = requested.into_iter().collect();
     let final_text = events
         .iter()
-        .filter_map(|event| match &event.event {
+        .filter_map(ProviderEvent::as_event)
+        .filter_map(|event| match event {
             Event::MessageCommitted(message) if message.role == MessageRole::Assistant => {
                 Some(message.text.clone())
             }
@@ -783,7 +784,8 @@ fn tool_call_requests_from_events(
 ) -> Vec<(ToolCallId, ToolCallDescriptor)> {
     events
         .iter()
-        .filter_map(|event| match &event.event {
+        .filter_map(ProviderEvent::as_event)
+        .filter_map(|event| match event {
             Event::ToolCallRequested(request) => Some((
                 request.call_id.clone(),
                 ToolCallDescriptor {

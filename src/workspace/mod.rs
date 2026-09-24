@@ -16,7 +16,6 @@
 use std::collections::HashMap;
 
 use gpui::*;
-use gpui_component::list::ListState;
 use gpui_component::StyledExt as _;
 use horizon_terminal_core::TerminalNotification;
 use horizon_workspace::commands::CommandId;
@@ -38,6 +37,7 @@ use crate::workspace_state::{InvalidState, LoadResult, WorkspaceStateStore};
 mod bindings;
 mod commands;
 mod modals;
+use modals::ListModal;
 mod navigation;
 mod preview;
 mod recovery;
@@ -352,21 +352,10 @@ pub(crate) struct WorkspaceShell {
     // Focused while workspace mode is active, so mode keys dispatch here
     // instead of reaching the terminal.
     focus_handle: FocusHandle,
-    palette: Option<Entity<ListState<PaletteDelegate>>>,
-    _palette_subscription: Option<Subscription>,
-    session_manager: Option<Entity<ListState<SessionManagerDelegate>>>,
-    _session_manager_subscription: Option<Subscription>,
-    view_chooser: Option<Entity<ListState<ViewChooserDelegate>>>,
-    _view_chooser_subscription: Option<Subscription>,
-    // The placement the open view chooser will apply on confirm.
-    pending_placement: Option<Placement>,
-    model_picker: Option<Entity<ListState<ModelPickerDelegate>>>,
-    _model_picker_subscription: Option<Subscription>,
-    // The agent session the open model picker will switch, captured at open
-    // (parent task #1's Phase 2) -- the confirm path resolves the
-    // daemon-side session id from it. Cleared on close/cancel so a stale
-    // confirm can never apply to a session the picker wasn't opened for.
-    model_picker_target: Option<Entity<AgentSession>>,
+    palette: Option<ListModal<PaletteDelegate>>,
+    session_manager: Option<ListModal<SessionManagerDelegate>>,
+    view_chooser: Option<ListModal<ViewChooserDelegate, Placement>>,
+    model_picker: Option<ListModal<ModelPickerDelegate, Entity<AgentSession>>>,
     // Live state for an in-progress split-handle drag (`render_node`'s
     // `LayoutNode::Split` arm) -- set on a handle's `on_mouse_down`,
     // updated on the split container's `on_mouse_move` (live reflow),
@@ -434,15 +423,9 @@ impl WorkspaceShell {
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
             palette: None,
-            _palette_subscription: None,
             session_manager: None,
-            _session_manager_subscription: None,
             view_chooser: None,
-            _view_chooser_subscription: None,
-            pending_placement: None,
             model_picker: None,
-            _model_picker_subscription: None,
-            model_picker_target: None,
             active_split_drag: None,
             last_focused_terminal: None,
             terminal_exit_tx,

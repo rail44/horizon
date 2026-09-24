@@ -329,7 +329,7 @@ mod tests {
                 _ => None,
             })
             .expect("the read resolves with a result of its own");
-        assert!(refusal.is_error);
+        assert!(refusal.is_error());
         assert!(
             refusal.output["message"]
                 .as_str()

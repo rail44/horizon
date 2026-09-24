@@ -161,10 +161,12 @@ impl Requester {
         let output = processing
             .horizon_events
             .iter()
-            .find_map(|event| match &event.event {
-                Event::ToolCallFinished(result) => Some(result.output.0.clone()),
-                _ => None,
-            })
+            .find_map(
+                |event| match &event.clone().into_event().expect("conversation event") {
+                    Event::ToolCallFinished(result) => Some(result.output.0.clone()),
+                    _ => None,
+                },
+            )
             .expect("every task/task_output call resolves synchronously");
         self.live_state
             .extend_provider_events(processing.horizon_events);

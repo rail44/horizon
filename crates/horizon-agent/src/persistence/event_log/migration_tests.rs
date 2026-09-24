@@ -26,21 +26,22 @@ fn old_record(sequence: u64, session_id: SessionId, event: Value) -> Value {
 
 #[test]
 fn old_log_cannot_be_opened_for_append_before_explicit_conversion() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("events.jsonl");
-    let original = format!(
-        "{}\n",
-        old_record(42, SessionId::new(), json!({"TurnEnded":"Completed"}))
-    );
-    std::fs::write(&path, &original).unwrap();
-    let error = read(&path).unwrap_err();
-    assert!(error.to_string().contains("explicit format conversion"));
-    let (_writer, ready) = WriterHandle::open(&path);
-    let initialized = ready
-        .recv_timeout(std::time::Duration::from_secs(5))
-        .unwrap();
-    assert!(matches!(initialized, WriterInit::Failed(_)));
-    assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    for version in [1, 2] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("events.jsonl");
+        let mut record = old_record(42, SessionId::new(), json!({"TurnEnded":"Completed"}));
+        record["version"] = json!(version);
+        let original = format!("{record}\n");
+        std::fs::write(&path, &original).unwrap();
+        let error = read(&path).unwrap_err();
+        assert!(error.to_string().contains("explicit format conversion"));
+        let (_writer, ready) = WriterHandle::open(&path);
+        let initialized = ready
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .unwrap();
+        assert!(matches!(initialized, WriterInit::Failed(_)));
+        assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
 }
 
 #[test]
@@ -196,9 +197,135 @@ fn conversion_preflight_rejects_skipped_events_and_projection_failures() {
         json!({"TurnEnded": "Completed"}),
     ] {
         let mut record = old_record(1, SessionId::new(), event);
-        record["version"] = json!(2);
+        record["version"] = json!(AGENT_EVENT_LOG_VERSION);
         record["turn_id"] = Value::Null;
         std::fs::write(&path, format!("{record}\n")).unwrap();
         assert!(crate::persistence::validate_history(&path).is_err());
     }
+}
+
+#[test]
+fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inference() {
+    use crate::contract::ToolOutcome;
+    use crate::transcript::{aggregate_receipt, build_tool_call_views, ApprovalState};
+
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("v2.jsonl");
+    let output = dir.path().join("v3");
+    let session = SessionId::new();
+    let cases = [
+        (
+            json!({"ok": true}),
+            false,
+            false,
+            ToolOutcome::Succeeded,
+            ApprovalState::Approved,
+            "approved",
+        ),
+        (
+            json!({"message": "denied by user"}),
+            true,
+            false,
+            ToolOutcome::Failed,
+            ApprovalState::Approved,
+            "approved",
+        ),
+        (
+            json!({"is_error": false}),
+            true,
+            true,
+            ToolOutcome::Denied,
+            ApprovalState::Denied,
+            "denied",
+        ),
+        (
+            json!({"cancelled": true}),
+            false,
+            false,
+            ToolOutcome::Cancelled,
+            ApprovalState::Cancelled,
+            "cancelled",
+        ),
+        (
+            json!({"superseded_by_retry": true, "retry_occurrence_id": "retry", "message": "replaced"}),
+            false,
+            false,
+            ToolOutcome::Superseded {
+                retry_occurrence_id: crate::contract::OccurrenceId("retry".into()),
+            },
+            ApprovalState::Superseded,
+            "superseded",
+        ),
+    ];
+    let mut rows = vec![];
+    let mut push = |event| {
+        let mut row = old_record(rows.len() as u64, session, event);
+        row["version"] = json!(2);
+        rows.push(row);
+    };
+    for (index, (body, error, denied, _, _, _)) in cases.iter().enumerate() {
+        let call = format!("call-{index}");
+        let occurrence = format!("attempt-{index}");
+        push(
+            json!({"ToolCallRequested": {"call_id": call, "occurrence_id": occurrence,
+            "tool_id": "bash", "input": {"command": "pwd"}}}),
+        );
+        push(
+            json!({"ApprovalRequested": {"call_id": call, "occurrence_id": occurrence,
+            "reason": "approval", "kind": "Standard"}}),
+        );
+        if index == 4 {
+            push(
+                json!({"ToolCallRequested": {"call_id": call, "occurrence_id": "retry",
+                "tool_id": "bash", "input": {"command": "pwd"}}}),
+            );
+        }
+        push(
+            json!({"ToolCallFinished": {"call_id": call, "occurrence_id": occurrence,
+            "output": body, "is_error": error, "denied": denied}}),
+        );
+    }
+    let original = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    std::fs::write(&source, &original).unwrap();
+    let result = std::process::Command::new("python3")
+        .arg(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../scripts/migrate-agent-history.py"))
+        .arg(&source)
+        .arg(&output)
+        .output()
+        .unwrap();
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
+    let report = read(output.join("events.jsonl")).unwrap();
+    assert_eq!(report.records.len(), rows.len());
+    assert!(report.skipped_summary().is_none());
+    let store = Store::open_in_memory().unwrap();
+    let imported = store
+        .replace_from_event_log_records(report.records)
+        .unwrap();
+    assert_eq!(imported.skipped, 0, "{:?}", imported.first_skip_error);
+    let frame = store.frame_for_session(session).unwrap();
+    let views = build_tool_call_views(&frame.items);
+    let approvals = store.approvals_for_session(session).unwrap();
+    for (index, (_, _, _, outcome, approval, stored)) in cases.iter().enumerate() {
+        assert_eq!(views[index].outcome.as_ref(), Some(outcome));
+        assert_eq!(&views[index].approval, approval);
+        assert_eq!(approvals[index].outcome.as_deref(), Some(*stored));
+    }
+    let receipt = aggregate_receipt(&views);
+    assert_eq!(
+        receipt.bash_count, 1,
+        "only the successful execution counts"
+    );
+    assert_eq!(
+        receipt.individual_calls.len(),
+        4,
+        "failure, denial, cancellation and pending retry remain visible"
+    );
 }

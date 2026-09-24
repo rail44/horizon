@@ -3,9 +3,11 @@ use crate::prompt::{system_prompt, SessionEnvironment};
 use crate::registry;
 use crate::{contract as agent, frame::*, policy::horizon_events_for_provider_event};
 
-fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::ProviderEvent {
+fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::Event {
     rx.recv_timeout(std::time::Duration::from_secs(1))
         .expect("expected a provider event within timeout")
+        .into_event()
+        .expect("conversation event")
 }
 
 #[test]
@@ -25,10 +27,16 @@ fn mock_agent_emits_initial_session_events() {
 
     let first = handle.events().recv().expect("first event");
     assert_eq!(
-        first.event,
+        first.clone().into_event().expect("conversation event"),
         agent::Event::StateChanged(agent::SessionState::Created)
     );
-    assert_eq!(first.provider_payload, None);
+    assert!(matches!(
+        first,
+        agent::ProviderEvent::Event {
+            provider_payload: None,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -63,7 +71,7 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
         let rx = handle.events();
         // Created, initialization message, then input readiness.
         for _ in 0..3 {
-            events.push(recv_event(&rx).event);
+            events.push(recv_event(&rx));
         }
         handle
             .sender()
@@ -73,7 +81,7 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
                 role_id: None,
             }))
             .unwrap();
-        let initialized = recv_event(&rx).event;
+        let initialized = recv_event(&rx);
         assert_eq!(
             initialized,
             agent::Event::StateChanged(agent::SessionState::WaitingForUser)
@@ -715,20 +723,20 @@ fn tool_call_result_new_derives_is_error_from_the_output_convention() {
         crate::contract::OccurrenceId((agent::ToolCallId("call-1".to_string())).0.clone()),
         serde_json::json!({ "ok": true }),
     );
-    assert!(!ok.is_error);
+    assert!(!ok.is_error());
 
     let failed = agent::ToolCallResult::new(
         (agent::ToolCallId("call-2".to_string())).clone(),
         crate::contract::OccurrenceId((agent::ToolCallId("call-2".to_string())).0.clone()),
         serde_json::json!({ "is_error": true, "message": "boom" }),
     );
-    assert!(failed.is_error);
+    assert!(failed.is_error());
 
     // Folded straight into the frame item, so the UI reads it off
     // `AgentFrameItem::ToolCallFinished`'s `ToolCallResult` directly.
     let frame = agent_frame_from_events(&[agent::Event::ToolCallFinished(failed.clone())]);
     match frame.items.as_slice() {
-        [AgentFrameItem::ToolCallFinished(result)] => assert!(result.is_error),
+        [AgentFrameItem::ToolCallFinished(result)] => assert!(result.is_error()),
         other => panic!("expected exactly one ToolCallFinished item, got {other:?}"),
     }
 }
@@ -744,7 +752,7 @@ fn tool_call_result_denied_marker_round_trips() {
     );
     let round_tripped: agent::ToolCallResult =
         serde_json::from_str(&serde_json::to_string(&denied).unwrap()).unwrap();
-    assert!(round_tripped.denied);
+    assert!(round_tripped.is_denied());
 }
 
 #[test]
@@ -901,7 +909,7 @@ fn mock_agent_accepts_tool_call_result_command() {
         .take(5)
         .any(|provider_event| {
             matches!(
-                provider_event.event,
+                provider_event.clone().into_event().expect("conversation event"),
                 agent::Event::MessageCommitted(agent::Message {
                     role: agent::MessageRole::Assistant,
                     text,
@@ -939,11 +947,11 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
     });
 
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
     assert!(matches!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             ..
@@ -954,19 +962,16 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
     // doc comment) bracket the turn before any streamed content: sent, then
     // first token, matching the order asserted end-to-end in
     // `mock_agent_slow_turn_emits_provider_request_lifecycle_in_order`.
-    match recv_event(&rx).event {
+    match recv_event(&rx) {
         agent::Event::ProviderRequestSent(sent) => assert_eq!(sent.model, "mock"),
         other => panic!("expected ProviderRequestSent, got {other:?}"),
     }
-    assert_eq!(
-        recv_event(&rx).event,
-        agent::Event::ProviderRequestFirstToken
-    );
+    assert_eq!(recv_event(&rx), agent::Event::ProviderRequestFirstToken);
 
     // Cancel as soon as the first streamed chunk arrives, well before the
     // mock's simulated turn would finish on its own.
     assert!(matches!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::AssistantTextDelta(_)
     ));
     let _ = tx.send(agent::Command::Cancel { request_id: None });
@@ -975,7 +980,7 @@ fn mock_agent_cancel_mid_turn_keeps_partial_and_marks_cancelled() {
     let mut saw_cancelled_state = false;
     let mut saw_request_finished = false;
     loop {
-        match recv_event(&rx).event {
+        match recv_event(&rx) {
             agent::Event::AssistantTextDelta(_) => {}
             agent::Event::ProviderRequestFinished => saw_request_finished = true,
             agent::Event::MessageCommitted(agent::Message {
@@ -1045,7 +1050,7 @@ fn mock_agent_slow_turn_emits_provider_request_lifecycle_in_order() {
 
     let mut markers = Vec::new();
     loop {
-        match recv_event(&rx).event {
+        match recv_event(&rx) {
             agent::Event::ProviderRequestSent(sent) => {
                 assert_eq!(sent.model, "mock");
                 markers.push(Marker::Sent);
@@ -1090,17 +1095,17 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         text: "please use a tool".to_string(),
     });
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
     assert!(matches!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             ..
         })
     ));
-    let identity = match recv_event(&rx).event {
+    let identity = match recv_event(&rx) {
         agent::Event::ToolCallRequested(request) => {
             assert_eq!(request.tool_id, "mock.approval_required");
             request.identity()
@@ -1111,7 +1116,7 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
     // Cancel while the approval is still pending.
     let _ = tx.send(agent::Command::Cancel { request_id: None });
 
-    match recv_event(&rx).event {
+    match recv_event(&rx) {
         agent::Event::ToolCallFinished(result) => {
             assert_eq!(result.call_id, identity.call_id);
             assert_eq!(result.output["cancelled"], true);
@@ -1119,11 +1124,11 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         other => panic!("expected the pending tool call to finish as cancelled, got {other:?}"),
     }
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Cancelled)
     );
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::WaitingForUser)
     );
 
@@ -1145,25 +1150,25 @@ fn mock_agent_cancel_marks_pending_approval_cancelled_and_recovers() {
         text: "hello again".to_string(),
     });
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::Running)
     );
     assert!(matches!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::User,
             text,
         }) if text == "hello again"
     ));
     assert!(matches!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::MessageCommitted(agent::Message {
             role: agent::MessageRole::Assistant,
             text,
         }) if text == "Mock response: hello again"
     ));
     assert_eq!(
-        recv_event(&rx).event,
+        recv_event(&rx),
         agent::Event::StateChanged(agent::SessionState::WaitingForUser)
     );
 }
@@ -1410,7 +1415,7 @@ fn provider_registry_starts_builtin_provider() {
 
     let first = handle.events().recv().expect("first event");
     assert_eq!(
-        first.event,
+        first.clone().into_event().expect("conversation event"),
         agent::Event::StateChanged(agent::SessionState::Created)
     );
 }
@@ -1607,8 +1612,8 @@ fn denied_result_is_an_error_independent_of_tool_payload() {
             crate::contract::OccurrenceId((agent::ToolCallId("denied".into())).0.clone()),
             output.clone(),
         );
-        assert!(denied.denied);
-        assert!(denied.is_error);
+        assert!(denied.is_denied());
+        assert!(denied.is_error());
         assert_eq!(denied.output, output);
     }
 }

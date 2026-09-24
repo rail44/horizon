@@ -35,6 +35,15 @@ const RESULT_CALL_JOIN: &str = "LEFT JOIN agent_tool_calls tc
     AND tc.occurrence_id = r.occurrence_id AND tc.sequence < r.sequence";
 
 impl Store {
+    pub(crate) fn has_current_event_format(&self) -> Result<bool> {
+        let version: Option<u32> = self.conn.query_row(
+            "SELECT MAX(event_log_version) FROM agent_projection_format",
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(version == Some(crate::persistence::event_log::AGENT_EVENT_LOG_VERSION))
+    }
+
     /// Test-only: both current callers (`session_snapshots` below and
     /// `projection.rs`'s `rebuild_projections`) are themselves `cfg(test)`,
     /// and this crate's own tests assert what actually landed in the

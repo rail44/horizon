@@ -48,7 +48,7 @@ pub struct FileChange {
 pub fn aggregate_changes(tool_calls: &[ToolCallView]) -> Vec<FileChange> {
     let mut changes: Vec<FileChange> = Vec::new();
     for call in tool_calls {
-        if call.is_error || !call.finished || classify_call(&call.tool_id) != CallClass::Edit {
+        if !call.is_success() || classify_call(&call.tool_id) != CallClass::Edit {
             continue;
         }
         for file in &call.affected_files {

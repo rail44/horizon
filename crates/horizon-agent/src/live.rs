@@ -70,25 +70,21 @@ impl State {
         events: impl IntoIterator<Item = ProviderEvent>,
     ) -> AgentFrame {
         for event in events {
-            if let Some(progress) = event.tool_call_progress {
-                apply_tool_call_progress_to_frame(&mut self.frame, progress);
-                continue;
+            match event {
+                ProviderEvent::Event { event, .. } => {
+                    apply_agent_event_to_frame(&mut self.frame, &event, &mut self.turn);
+                    self.events.push(event);
+                }
+                ProviderEvent::ToolCallProgress(progress) => {
+                    apply_tool_call_progress_to_frame(&mut self.frame, progress);
+                }
+                ProviderEvent::SessionModel(model) => self.session_model = Some(model),
+                ProviderEvent::SessionSelection(selection) => {
+                    self.session_selection = Some(selection)
+                }
+                // The view owns the live child rows.
+                ProviderEvent::TaskProgress(_) => {}
             }
-            if let Some(model) = event.session_model {
-                self.session_model = Some(model);
-                continue;
-            }
-            if let Some(selection) = event.session_selection {
-                self.session_selection = Some(selection);
-                continue;
-            }
-            // The view owns live child rows; their placeholder cannot change
-            // conversation state even when this API is called directly.
-            if event.task_progress.is_some() {
-                continue;
-            }
-            apply_agent_event_to_frame(&mut self.frame, &event.event, &mut self.turn);
-            self.events.push(event.event);
         }
         self.frame.clone()
     }

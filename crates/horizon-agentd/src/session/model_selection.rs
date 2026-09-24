@@ -11,16 +11,18 @@ pub(super) fn resolve(state: &AgentdState, provider: &str, model: &str) -> Resul
 }
 
 pub(super) fn record_applied(state: &AgentdState, session_id: SessionId, event: &ProviderEvent) {
-    if event.session_model.is_none() && event.session_selection.is_none() {
+    if !matches!(
+        event,
+        ProviderEvent::SessionModel(_) | ProviderEvent::SessionSelection(_)
+    ) {
         return;
     }
     let mut sessions = lock_unpoisoned(&state.sessions);
     if let Some(entry) = sessions.get_mut(&session_id) {
-        if let Some(model) = &event.session_model {
-            entry.model = Some(model.clone());
-        }
-        if let Some(selection) = &event.session_selection {
-            entry.selection = Some(selection.clone());
+        match event {
+            ProviderEvent::SessionModel(model) => entry.model = Some(model.clone()),
+            ProviderEvent::SessionSelection(selection) => entry.selection = Some(selection.clone()),
+            _ => {}
         }
     }
 }

@@ -1,5 +1,5 @@
 use crate::tools::bash;
-use serde_json::{json, Value};
+use serde_json::Value;
 
 use crate::contract::{
     Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallRequest, ToolCallResult,
@@ -346,7 +346,7 @@ pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
 
 /// Finish one cancelled execution with the identity of its original request.
 pub fn cancelled_tool_call_result(identity: crate::contract::ToolCallIdentity) -> ToolCallResult {
-    identity.result(json!({ "cancelled": true }))
+    ToolCallResult::cancelled(identity)
 }
 
 /// Stop turn-owned asynchronous work before recording its cancellation. Task

@@ -17,18 +17,16 @@ pub fn process_agent_provider_event(
 ) -> Processing {
     let provider_event = provider_event.into();
 
-    // Ephemeral feedback carries a placeholder `event`, so it must not
-    // reach the approval/bash-kill/tool-execution logic below, which
-    // assumes `event` is real. Pass it through untouched; `LiveState` folds
-    // it into the frame and keeps it out of the persisted log.
-    if provider_event.is_ephemeral() {
+    let ProviderEvent::Event {
+        event,
+        provider_payload,
+    } = provider_event
+    else {
         return Processing {
             horizon_events: vec![provider_event],
             provider_commands: Vec::new(),
         };
-    }
-
-    let event = provider_event.event.clone();
+    };
 
     // A provider-originated `ToolCallFinished` is the turn-cancellation (or
     // loop-guard-halt) signal for any call still pending on the provider's
@@ -55,13 +53,9 @@ pub fn process_agent_provider_event(
         .enumerate()
         .map(|(index, event)| {
             if index == 0 {
-                ProviderEvent {
+                ProviderEvent::Event {
                     event,
-                    provider_payload: provider_event.provider_payload.clone(),
-                    tool_call_progress: None,
-                    session_model: None,
-                    task_progress: None,
-                    session_selection: None,
+                    provider_payload: provider_payload.clone(),
                 }
             } else {
                 event.into()

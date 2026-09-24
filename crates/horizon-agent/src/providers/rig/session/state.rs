@@ -519,12 +519,13 @@ mod tests {
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
         assert_eq!(
-            events_rx.try_recv().unwrap().session_model.as_deref(),
-            Some("m-opus")
+            events_rx.try_recv().unwrap(),
+            ProviderEvent::SessionModel("m-opus".into())
         );
-        let announced = events_rx.try_recv().unwrap().session_selection.unwrap();
-        assert_eq!(announced.provider, "claude");
-        assert_eq!(announced.model, "m-opus");
+        assert_eq!(
+            events_rx.try_recv().unwrap(),
+            ProviderEvent::session_selection("claude".into(), "m-opus".into())
+        );
         assert!(events_rx.try_recv().is_err());
     }
 

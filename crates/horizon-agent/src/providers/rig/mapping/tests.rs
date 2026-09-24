@@ -52,6 +52,8 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
         Event::ToolCallRequested(first.clone()),
         Event::ToolCallRequested(retry.clone()),
         Event::ToolCallFinished(result(&first, "denied").superseded_by_retry(&retry.occurrence_id)),
+        // A physical completion can arrive after the retired attempt closed.
+        Event::ToolCallFinished(result(&first, "stale physical completion")),
         Event::ToolCallRequested(final_attempt.clone()),
         Event::ToolCallFinished(
             result(&retry, "denied again").superseded_by_retry(&final_attempt.occurrence_id),
@@ -144,4 +146,36 @@ fn an_unknown_occurrence_cannot_answer_a_known_provider_id() {
             rig_tool_result_message(&cancelled_tool_call_result(announced.identity()), "fs.read"),
         ]
     );
+}
+
+#[test]
+fn provider_results_preserve_outcome_separately_from_arbitrary_tool_data() {
+    use crate::contract::ToolOutcome;
+    let request = request("bash", "attempt");
+    for outcome in [
+        ToolOutcome::Succeeded,
+        ToolOutcome::Failed,
+        ToolOutcome::Denied,
+        ToolOutcome::Cancelled,
+    ] {
+        let mut result = result(&request, "denied by user");
+        result.outcome = outcome.clone();
+        let message = rig_tool_result_message(&result, "bash");
+        assert_eq!(
+            message,
+            Message::tool_result(
+                "reused",
+                "bash",
+                serde_json::json!({
+                    "outcome": outcome, "output": {"text": "denied by user"}
+                })
+                .to_string()
+            )
+        );
+        let replay = rig_messages_from_horizon_events(&[
+            Event::ToolCallRequested(request.clone()),
+            Event::ToolCallFinished(result),
+        ]);
+        assert_eq!(replay.last(), Some(&message));
+    }
 }

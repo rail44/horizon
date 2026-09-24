@@ -72,5 +72,5 @@ Review the two files before installing the converted one. The old
 use `horizon new-agent --role config`; the converter refuses to change its meaning.
 
 Real user configuration is not modified by repository integration. Agent history
-also needs the separate [format-v2 conversion](agent-history-format-v2.md) before
-the agent wire-v23 restart.
+also needs the separate [history conversion](agent-history-format.md) before
+the agent wire-v24 restart.

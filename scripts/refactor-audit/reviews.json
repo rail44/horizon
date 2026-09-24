@@ -10,14 +10,13 @@
       },
       "sha256": "049f83f1ceb7f7dd95df7ad5b30540cd69984e7de331ca4ace604c42bb119217",
       "related": {
-        "crates/horizon-agent/src/frame/status.rs": "8435d400213c68c62bec5e22ebb6cd9a009ad83b60425812cbc7207938c472fa",
-        "crates/horizon-agent/src/live.rs": "2e032c75fbc91d4e1e6d79da01c84bdc556b8bbb52f154b143a32c4a2e3d765e",
-        "src/agent/session.rs": "cf6616a8b6359791d500b9549b3a0c45b55ceb0e553dc0a567f693f8eae3a65d",
-        "src/agent/view/transcript/projection.rs": "c9f6210fa6282e55df6dfeb26a617317cd0ed1a37aa5063178198fe49109fdcc"
+        "crates/horizon-agent/src/contract/provider_event.rs": "6467df7b659f18a38762b26f18ea4a0aab786f7f4a7ce7cf80c4573a7a6e32e3",
+        "crates/horizon-agent/src/live.rs": "7ab5dcc645aa8b5f7ffa08d42da0c93055b108c186ffe063cfd1b5e71c7ba131",
+        "crates/horizon-agent/src/persistence/event_log/appender.rs": "85aa3486d692715762c1053d098751796c130e5baa25ad3b556764566af2cbc2"
       },
       "decision": "preserve",
-      "reason": "Event reduction owns delta promotion and turn boundaries. Preserve its exhaustive match and ephemeral sidecars. Durable input/outbox records enter LiveState after acknowledged commit; ordinary streaming retains asynchronous appends. UI row projection remains a separate owner. Appender now excludes every ephemeral notification at its own API boundary; direct live and durable paths preserve the same sidecar/history separation. Transcript projection and update planning now live under the transcript entity; frame reduction is unchanged.",
-      "commit": "9f820cce09a10f701143d9037c7a4b70f2fa7f99"
+      "reason": "The conversation reducer still owns frame history. ProviderEvent now separates persisted events from notifications; LiveState, Appender and wire forwarding each match those variants explicitly. No dummy event reaches this reducer.",
+      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
     },
     {
       "target": {
@@ -28,13 +27,14 @@
       },
       "sha256": "6a53502e60293338994f61206c9f628597d0df6589d3737c4330e343cdc6b424",
       "related": {
-        "crates/horizon-agent/src/persistence/event_log/mod.rs": "933bf3b8c0c178f6861d61c12bdd4bff37080b2acf872b46ce5eee2a97fbe92a",
-        "crates/horizon-agent/src/persistence/mod.rs": "5fcd95b754a790684fbf2818980ef77405a10ae7d1aa7c2b3781af705b0cad40",
-        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "a06cab5a4bfa626e856670564ac7537a678a20d578bbc0d7ef3f1d922cd2ddba"
+        "crates/horizon-agent/src/persistence/event_log/mod.rs": "5ce6ec917368f75135884be6696a869dcbf94b0f1931bb952c4e59f88a4db22b",
+        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "5b69fd8f6380c949a39a713ea81c33bc3538938952b460004880f59b6add2a0f",
+        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "b1d5aad1642a34a3da387ab77715db49e53cda9b2778cf7ad07eaf26b054ed68",
+        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "783f4c51f519e50ca48c300d67c7d1a8932abb8e46b76e5f4311e27b6a11188e"
       },
       "decision": "preserve",
-      "reason": "Current projection, incremental catch-up and full rebuild remain distinct recovery paths. The inert schema migration flag and branch are removed. JSONL remains authoritative; format-v2 cutover rebuilds a fresh projection offline and validates every row before activation.",
-      "commit": "06a52e22c620c0dc7b4d7f7d5d8c00b9db4af060"
+      "reason": "Keep current, incremental and full-rebuild paths distinct. Currency now requires the current event-format stamp as well as the sequence mark, so converted v3 history cannot silently reuse an old projection. JSONL remains authoritative; conversion and strict preflight are offline.",
+      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
     },
     {
       "target": {
@@ -79,16 +79,16 @@
         "name": "build_tool_call_views",
         "partition": "production"
       },
-      "sha256": "c8dd0ea855ab2648d307a5ab03cbbcaf7e466840bc728187e49016bd20ab81b2",
+      "sha256": "21dfab46a7eaf0bd0cb1327e46ec580882454ec5ef39b1d2ad5f142d1e5aa5eb",
       "related": {
-        "crates/horizon-agent/src/contract.rs": "09926b287a7fb787f5cf819fe496021b850fc05185ca25191d8e7fc599ceb2d2",
-        "crates/horizon-agent/src/frame/queries.rs": "193c4916a3a7d46c59721cc12a86c29ed1c22575521ff94eb3901cdfbd37a6d3",
-        "crates/horizon-agent/src/frame/tool_calls.rs": "bdabf31ad39ce79ed5e394836424db977d7ae2132b2637b824a749fe9fb36b91",
-        "crates/horizon-agent/src/providers/rig/mapping/tool_calls.rs": "bcf5811dd9ddf0cc1ad904af007e094992badcba2af72813f0770e7294859b41"
+        "crates/horizon-agent/src/contract/tool_result.rs": "25d98881b41fce2a22b67bd2bf026fcf2929143f05ebb299570c6601e8f7cbbb",
+        "crates/horizon-agent/src/persistence/projection/duckdb/projection.rs": "ec681ae88b6131a15b45edb58d0cc0fda1eab1db4d825189f7d91ca5df6fa825",
+        "crates/horizon-agent/src/transcript/receipt.rs": "e3dbade00cf257dc21a91e5fb2475141ab16e27550ac6b641162baeb52ba3e24",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "22a2237c66ca66113a39dd18ba26ea12b817aa8e46085365b685f80f43fa5341"
       },
       "decision": "preserve",
-      "reason": "The frame layer now correlates required call and occurrence identities exactly; latest-preceding fallback is removed. This function owns tool and approval presentation, preserving request order, per-execution rows and source indices. Provider replay still answers one logical call across retries; that responsibility stays separate.",
-      "commit": "06a52e22c620c0dc7b4d7f7d5d8c00b9db4af060"
+      "reason": "Keep exact execution correlation separate from presentation. One optional ToolOutcome replaces the finished/error/superseded flag combination; cancellation and denial are explicit, and only success contributes to completed-action counts. Approval state agrees with the DuckDB projection.",
+      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
     },
     {
       "target": {
@@ -299,6 +299,23 @@
       "decision": "preserve",
       "reason": "Color roles share one resolved seed and contrast policy. Preserve the cohesive derivation; live application and TOML persistence already have separate owners. The editor reuses the same contrast normalizer; config saving handles normal and inline TOML tables with errors for invalid shapes.",
       "commit": "9041ff900ff58e07fd98fe013e0e082fd135f998"
+    },
+    {
+      "target": {
+        "file": "src/workspace/modals.rs",
+        "owner": "WorkspaceShell",
+        "name": "fetch_picker",
+        "partition": "production"
+      },
+      "sha256": "a2e2a689003a94d6eeebc4851344e9d2add062a9936d7495772593c532ba1326",
+      "related": {
+        "src/model_picker.rs": "5b6dd72fa23409827d2592f6fa19d34407f47fc9e9210df9850bc20ec65434da",
+        "src/workspace/mod.rs": "1f562101ff003c5d07fb7bfef63512a5edb8519a2497939a66e3f8152bcac3ad",
+        "src/workspace/modals/owner.rs": "f44e0f32db29c4a20308505bcb9dfb77bbf11b7bbc7cbd4ce3034a7d7dc5598c"
+      },
+      "decision": "preserve",
+      "reason": "The modal owns its target, subscription and reply tasks. Delivery addresses the original list weakly and is cancelled on close; runtime identity remains checked. Off-stage model replies cache data without selecting a row in the current stage.",
+      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
     }
   ]
 }

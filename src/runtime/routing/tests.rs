@@ -95,7 +95,7 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
     routes.unregister_agent(old);
     routes.agent_failed(current, "current diagnostic".into());
     assert!(
-        matches!(new_rx.try_recv().unwrap().event, Event::Error(error) if error.message == "current diagnostic")
+        matches!(new_rx.try_recv().unwrap().clone().into_event().expect("conversation event"), Event::Error(error) if error.message == "current diagnostic")
     );
 }
 

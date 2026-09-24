@@ -98,8 +98,15 @@ impl Appender {
 
     pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
         // All append APIs share this boundary, including acknowledged commits.
-        for event in events.into_iter().filter(|event| !event.is_ephemeral()) {
-            let turn_id = self.turn_tracker.turn_id_for_event(&event.event);
+        for envelope in events {
+            let ProviderEvent::Event {
+                event,
+                provider_payload,
+            } = envelope
+            else {
+                continue;
+            };
+            let turn_id = self.turn_tracker.turn_id_for_event(&event);
             let record = Record {
                 schema: AGENT_EVENT_LOG_SCHEMA.to_string(),
                 version: AGENT_EVENT_LOG_VERSION,
@@ -110,9 +117,9 @@ impl Appender {
                 provider_id: self.provider_id.clone(),
                 role_id: self.role_id.clone(),
                 session_context: self.session_context.clone(),
-                event_kind: event_kind(&event.event).to_string(),
-                event: event.event,
-                provider_payload: event.provider_payload,
+                event_kind: event_kind(&event).to_string(),
+                event,
+                provider_payload,
                 created_at_unix_ms: unix_time_ms(),
             };
             self.writer.append(record)?;

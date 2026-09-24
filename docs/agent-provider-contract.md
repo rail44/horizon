@@ -225,38 +225,24 @@ boundary and emits the panic payload plus Rust source location first; the
 channel-close rule supplies the common terminal sequence. A dead provider can
 therefore never leave replay or the pane parked in `Running`.
 
-Provider runtime transport uses an event envelope:
+Provider runtime transport separates conversation events from notifications:
 
 ```rust
-struct ProviderEvent {
-    event: Event,
-    provider_payload: Option<serde_json::Value>,
-    tool_call_progress: Option<ToolCallProgress>,
+enum ProviderEvent {
+    Event { event: Event, provider_payload: Option<serde_json::Value> },
+    ToolCallProgress(ToolCallProgress),
+    SessionModel(String),
+    TaskProgress(TaskProgress),
+    SessionSelection(ModelSelection),
 }
 ```
 
-`event` is the Horizon-owned contract used by UI, policy, tools, and replay.
-`provider_payload` is provider-owned opaque JSON for replay or migration
-metadata. The Agent pane should render from `agent::contract::Event`, not from
-provider payload. This keeps the agent flow usable without the Horizon frontend
-while letting Horizon persist provider-specific details when present.
-
-`tool_call_progress` is a deliberate exception to "one envelope, one `Event`":
-it carries ephemeral tool-call-argument-streaming feedback (rig's
-`StreamedAssistantContent::ToolCallDelta` — a tool call's name and JSON
-arguments streamed piecemeal before it's complete) so the pane can show
-"preparing a tool call… (N bytes)" instead of going silent while a large
-argument (e.g. a multi-KB `fs.write`) streams in. It is **not** a new `Event`
-variant, on purpose: `Event` is matched exhaustively across the persisted
-event log (`persistence::event_log`, `persistence::projection::duckdb`), so
-every new variant is a durable schema commitment. `tool_call_progress`
-piggybacks on the existing `ProviderEvent` envelope instead — `event` is an
-unused placeholder whenever it's set — so this "kind of event" never touches
-that exhaustive matching or the log schema at all. `agent::live::LiveState`
-enforces both halves of that: it folds `tool_call_progress` straight into the
-`AgentFrame` (as an `AgentFrameItem::ToolCallPreparing`, superseded once the
-real `ToolCallRequested` arrives) and excludes it from what reaches the event
-log, so per-chunk ticks can't bloat persisted history.
+Only `Event` enters conversation history, policy execution, and persistence.
+Its optional provider payload is opaque replay metadata; the pane renders the
+Horizon event. The other variants contain no placeholder event: tool argument
+progress updates the preparing row, session metadata updates its sidecar state,
+and child-task progress belongs to the live view. None is persisted. Exhaustive
+matches at the reducer, writer, and wire boundary keep this distinction explicit.
 
 Persistence layers store provider payloads but do not interpret them.
 Provider-specific history reconstruction belongs to each provider. For example,
@@ -274,7 +260,7 @@ and events:
 - `agent::contract::Command` is the input contract from Horizon or another host.
 - `agent::contract::Event` is the portable output contract for UI, policy, tools, and
   replay.
-- `agent::contract::ProviderEvent.provider_payload` is optional host-persisted metadata,
+- `agent::contract::ProviderEvent::Event::provider_payload` is optional host-persisted metadata,
   not a dependency for normal pane rendering.
 
 This keeps richer Agent pane rendering open while avoiding a PTY-like
@@ -467,11 +453,17 @@ framework.
 - Should provider capability be attached to `PluginManifest` now or introduced
   with the Plugin View MVP?
 
-### Execution identity (agent wire v23)
+### Execution identity and outcomes (agent wire v24)
 
 Every published tool request, start, approval, approval decision, and result
 carries a required `occurrence_id` alongside the provider's `call_id`. A retry
 gets a fresh execution identity; a worker retains that pair through completion,
 cancellation, or failure. Only the matching live execution can accept its async
 completion. Provider history still returns one answer per logical provider call.
-See [history format v2](agent-history-format-v2.md) for the offline cutover.
+Results require a `ToolOutcome`: success, failure, denial, cancellation, or
+replacement by an identified retry. The same outcome drives provider messages,
+replay, approval projection and the transcript; arbitrary output text cannot
+supply it. Provider tool messages contain `{outcome, output}`. Superseded results
+retire an attempt without answering the pending provider call. Only a successful
+`memory.update` result applies a digest or satisfies its checkpoint.
+See [history format and conversion](agent-history-format.md) for the offline cutover.

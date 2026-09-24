@@ -370,10 +370,12 @@ mod outcome_tests {
             });
             let outcomes: Vec<_> = receiver
                 .try_iter()
-                .filter_map(|event| match event.event {
-                    Event::InputOutcome(outcome) => Some(outcome),
-                    _ => None,
-                })
+                .filter_map(
+                    |event| match event.clone().into_event().expect("conversation event") {
+                        Event::InputOutcome(outcome) => Some(outcome),
+                        _ => None,
+                    },
+                )
                 .collect();
             assert_eq!(outcomes.len(), 1);
             assert!(!matches!(outcomes[0].outcome, InputResult::Success { .. }));

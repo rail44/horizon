@@ -46,14 +46,21 @@ fn gate_processing_approval_with(
     provider_commands: &mut Vec<Command>,
     start_gate: impl FnOnce(ApprovalCandidate) -> ApprovalGate,
 ) {
-    let request = events.iter().find_map(|event| match &event.event {
-        Event::ToolCallRequested(request) => Some(request.clone()),
-        _ => None,
-    });
-    let approval = events.iter().find_map(|event| match &event.event {
-        Event::ApprovalRequested(approval) => Some(approval.clone()),
-        _ => None,
-    });
+    let request = events
+        .iter()
+        .filter_map(ProviderEvent::as_event)
+        .find_map(|event| match event {
+            Event::ToolCallRequested(request) => Some(request.clone()),
+            _ => None,
+        });
+    let approval =
+        events
+            .iter()
+            .filter_map(ProviderEvent::as_event)
+            .find_map(|event| match event {
+                Event::ApprovalRequested(approval) => Some(approval.clone()),
+                _ => None,
+            });
     let (Some(request), Some(approval)) = (request, approval) else {
         return;
     };
@@ -77,11 +84,11 @@ fn gate_processing_approval_with(
 fn withhold_prompt(events: &mut Vec<ProviderEvent>, call_id: &ToolCallId) {
     events.retain(|event| {
         !matches!(
-            &event.event,
-            Event::ApprovalRequested(approval) if &approval.call_id == call_id
+            event.as_event(),
+            Some(Event::ApprovalRequested(approval)) if &approval.call_id == call_id
         ) && !matches!(
-            &event.event,
-            Event::StateChanged(SessionState::WaitingForApproval)
+            event.as_event(),
+            Some(Event::StateChanged(SessionState::WaitingForApproval))
         )
     });
 }
@@ -464,7 +471,10 @@ mod tests {
             ApprovalGate::Pending
         });
         assert_eq!(pending.len(), 1);
-        assert!(matches!(pending[0].event, Event::ToolCallRequested(_)));
+        assert!(matches!(
+            pending[0].clone().into_event().expect("conversation event"),
+            Event::ToolCallRequested(_)
+        ));
         assert!(commands.is_empty());
 
         let mut human = original.clone();
@@ -493,20 +503,22 @@ mod tests {
 
         assert!(
             !events.iter().any(|event| matches!(
-                event.event,
+                event.clone().into_event().expect("conversation event"),
                 Event::ApprovalRequested(_) | Event::StateChanged(SessionState::WaitingForApproval)
             )),
             "no prompt may survive for a session nobody watches: {events:?}"
         );
         let result = events
             .iter()
-            .find_map(|event| match &event.event {
-                Event::ToolCallFinished(result) => Some(result.clone()),
-                _ => None,
-            })
+            .find_map(
+                |event| match &event.clone().into_event().expect("conversation event") {
+                    Event::ToolCallFinished(result) => Some(result.clone()),
+                    _ => None,
+                },
+            )
             .expect("the call resolves with a result of its own");
         assert_eq!(result.call_id, request.call_id);
-        assert!(result.is_error);
+        assert!(result.is_error());
         let message = result.output["message"].as_str().unwrap().to_string();
         assert!(message.contains(&root.display().to_string()), "{message}");
         assert!(
@@ -529,7 +541,10 @@ mod tests {
         });
 
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0].event, Event::ToolCallRequested(_)));
+        assert!(matches!(
+            events[0].clone().into_event().expect("conversation event"),
+            Event::ToolCallRequested(_)
+        ));
         assert!(
             commands.is_empty(),
             "a call the judge took must wait for its verdict, not resolve here"

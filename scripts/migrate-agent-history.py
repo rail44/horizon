@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert a stopped agent event log into a separate, reviewable v2 bundle.
+"""Convert a stopped agent event log into a separate, reviewable v3 bundle.
 
 Never modifies the source or activates the output. Sessions with ambiguous tool
 identity or retired events stay in the archive, together with their full history.
@@ -13,7 +13,7 @@ from pathlib import Path
 import uuid
 
 SCHEMA = "horizon.agent.event_log"
-VERSION = 2
+VERSION = 3
 NAMESPACE = uuid.UUID("bc822f0b-9ecd-4409-a508-f00be6df6d0a")
 
 
@@ -27,7 +27,60 @@ def identifier(value, label):
     return value
 
 
+def convert_result(payload, version, requests):
+    """Normalize only the result envelope, never arbitrary provider/tool JSON."""
+    output = payload["output"]
+    if version == VERSION:
+        if "is_error" in payload or "denied" in payload:
+            raise ConversionError("current result contains legacy outcome flags")
+        outcome = payload.get("outcome")
+    else:
+        if "outcome" in payload:
+            raise ConversionError("legacy result contains a current outcome")
+        error = payload.pop("is_error", None)
+        denied = payload.pop("denied", None)
+        if not isinstance(error, bool) or not isinstance(denied, bool):
+            raise ConversionError("legacy result lacks explicit error/denial evidence")
+        if denied and not error:
+            raise ConversionError("contradictory legacy denial flags")
+        superseded = isinstance(output, dict) and output.get("superseded_by_retry") is True
+        cancelled = (isinstance(output, dict) and output.get("cancelled") is True
+                     and output in ({"cancelled": True},
+                                    {"cancelled": True, "message": "retry was not executed"}))
+        if (superseded or cancelled) and (denied or error):
+            raise ConversionError("contradictory legacy result markers")
+        if superseded:
+            outcome = {"Superseded": {"retry_occurrence_id": output.get("retry_occurrence_id")}}
+            del output["superseded_by_retry"]
+            output.pop("retry_occurrence_id", None)
+        elif cancelled:
+            outcome = "Cancelled"
+        elif denied:
+            outcome = "Denied"
+        else:
+            outcome = "Failed" if error else "Succeeded"
+        payload["outcome"] = outcome
+    if isinstance(outcome, dict) and set(outcome) == {"Superseded"}:
+        details = outcome["Superseded"]
+        if not isinstance(details, dict) or set(details) != {"retry_occurrence_id"}:
+            raise ConversionError("invalid replacement identity")
+        retry = identifier(details["retry_occurrence_id"], "retry_occurrence_id")
+        if retry == payload["occurrence_id"] or requests.get(retry) != payload["call_id"]:
+            raise ConversionError("replacement does not name another request for the same call")
+    elif not isinstance(outcome, str) or outcome not in ("Succeeded", "Failed", "Denied", "Cancelled"):
+        raise ConversionError("invalid tool outcome")
+
+
 def convert_session(records):
+    # Replacement references can precede the reissued request (web domain
+    # grants close the interrupted attempt before publishing the retry).
+    all_requests = {}
+    for record in records:
+        event = record["event"]
+        if isinstance(event, dict) and "ToolCallRequested" in event:
+            request = event["ToolCallRequested"]
+            occurrence = request.get("occurrence_id") or str(uuid.uuid5(NAMESPACE, record["event_id"]))
+            all_requests[identifier(occurrence, "occurrence_id")] = request.get("call_id")
     requests = {}
     finished = set()
     retired = set()
@@ -88,10 +141,13 @@ def convert_session(records):
                     if isinstance(details, dict) and "prior_result" in details:
                         # Nested prior results are authoritative identity evidence,
                         # but do not count as a published ToolCallFinished.
-                        retired.add(resolve(details["prior_result"]))
+                        prior = details["prior_result"]
+                        retired.add(resolve(prior))
+                        convert_result(prior, record["version"], all_requests)
             resolve(payload, execution=True)
         elif kind == "ToolCallFinished":
             finished.add(resolve(payload))
+            convert_result(payload, record["version"], all_requests)
         record["version"] = VERSION
         output.append(record)
     return output
@@ -109,7 +165,7 @@ def convert_bytes(source):
             continue
         try:
             record = json.loads(line)
-            if record["schema"] != SCHEMA or record["version"] not in (1, VERSION):
+            if record["schema"] != SCHEMA or record["version"] not in (1, 2, VERSION):
                 raise ConversionError("unsupported schema or version")
             event_id = identifier(record["event_id"], "event_id")
             session = identifier(record["session_id"], "session_id")
@@ -133,12 +189,13 @@ def convert_bytes(source):
         history.sort(key=lambda record: record["sequence"])
         try:
             converted.extend(convert_session(history))
-        except (ConversionError, AttributeError, TypeError) as error:
+        except (ConversionError, AttributeError, TypeError, KeyError) as error:
             archived.extend(history)
             reasons[session] = str(error)
     converted.sort(key=lambda record: record["sequence"])
     archived.sort(key=lambda record: record["sequence"])
     manifest = {
+        "target_version": VERSION,
         "source_sha256": hashlib.sha256(source).hexdigest(),
         "source_records": len(records),
         "converted_records": len(converted),

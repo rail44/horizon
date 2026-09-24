@@ -312,13 +312,20 @@ mod tests {
 
     #[test]
     fn expanded_body_follows_occurrence_binding_when_an_old_attempt_finishes_last() {
-        use horizon_agent::contract::OccurrenceId;
+        use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallResult};
 
         let mut items = vec![
             tool_requested("dup", "bash", json!({"command": "first"})),
             tool_requested("dup", "bash", json!({"command": "retry"})),
             tool_finished("dup", json!({"exit_code": 0, "output": "retry result"})),
-            tool_finished("dup", json!({"superseded_by_retry": true})),
+            AgentFrameItem::ToolCallFinished(
+                ToolCallResult::new(
+                    ToolCallId("dup".into()),
+                    OccurrenceId("first".into()),
+                    json!({}),
+                )
+                .superseded_by_retry(&OccurrenceId("retry".into())),
+            ),
         ];
         for (item, id) in items.iter_mut().zip(["first", "retry", "retry", "first"]) {
             let occurrence = OccurrenceId(id.into());
@@ -329,7 +336,7 @@ mod tests {
             }
         }
         let views = build_tool_call_views(&items);
-        assert!(views[0].superseded);
+        assert!(views[0].superseded());
         assert_eq!(
             tool_call_body(&items, &views[0]),
             Some(ToolCallBody::Command {
@@ -596,13 +603,13 @@ mod tests {
 
         // The first occurrence keeps its own, correct resolution.
         assert_eq!(views[0].approval, ApprovalState::Approved);
-        assert!(views[0].finished);
+        assert!(views[0].finished());
         assert_eq!(views[0].target.as_deref(), Some("a.rs"));
 
         // The second occurrence -- the actionable one -- must render as
         // `Waiting`, not `None`, so the UI shows Approve/Deny for it.
         assert_eq!(views[1].approval, ApprovalState::Waiting);
-        assert!(!views[1].finished);
+        assert!(!views[1].finished());
         assert_eq!(views[1].target.as_deref(), Some("b.rs"));
 
         // Its proposal body must reflect the *second* call's own content,

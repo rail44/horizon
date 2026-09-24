@@ -150,11 +150,6 @@ fn run_sandboxed_job(
         completion.result_mut(),
     ) {
         annotate_git_operation_approval(&mut result.output, roots);
-        result.is_error = result
-            .output
-            .get("is_error")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
     }
     // Denial variants already carry their evidence; origin markers apply only
     // to Finished, matching the approval audit contract.
@@ -375,7 +370,7 @@ mod tests {
             panic!("panic must produce a finished result");
         };
         assert_eq!(first.call_id.0, "first");
-        assert!(first.is_error);
+        assert!(first.is_error());
         let BashCompletion::Finished(second) =
             completed.recv_timeout(Duration::from_secs(5)).unwrap()
         else {

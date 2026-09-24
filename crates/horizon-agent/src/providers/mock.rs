@@ -517,9 +517,12 @@ mod tests {
             commands
                 .send(Command::UserMessage { text: text.into() })
                 .unwrap();
-            assert_eq!(receive().event, Event::StateChanged(SessionState::Running));
+            assert_eq!(
+                receive().clone().into_event().expect("conversation event"),
+                Event::StateChanged(SessionState::Running)
+            );
             assert!(matches!(
-                receive().event,
+                receive().clone().into_event().expect("conversation event"),
                 Event::MessageCommitted(Message {
                     role: MessageRole::User,
                     ..
@@ -528,20 +531,27 @@ mod tests {
             if expected_call == "mock-streaming-tool-1" {
                 for expected_bytes in [0, 64, 512] {
                     let event = receive();
-                    assert_eq!(event.tool_call_progress.unwrap().bytes, expected_bytes);
+                    assert!(
+                        matches!(event, ProviderEvent::ToolCallProgress(progress) if progress.bytes == expected_bytes)
+                    );
                 }
             }
-            let Event::ToolCallRequested(request) = receive().event else {
+            let Event::ToolCallRequested(request) =
+                receive().clone().into_event().expect("conversation event")
+            else {
                 panic!("expected tool request")
             };
             assert_eq!(request.call_id.0, expected_call);
             assert_eq!(request.tool_id, expected_tool);
             commands.send(Command::Shutdown).unwrap();
             assert_eq!(
-                receive().event,
+                receive().clone().into_event().expect("conversation event"),
                 Event::StateChanged(SessionState::Terminated)
             );
-            assert!(matches!(receive().event, Event::Exited(_)));
+            assert!(matches!(
+                receive().clone().into_event().expect("conversation event"),
+                Event::Exited(_)
+            ));
         }
     }
 

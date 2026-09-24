@@ -662,11 +662,14 @@ mod tests {
             };
             let mut events = vec![request("first"), request("retry")];
             if first_finished {
-                events.push(Event::ToolCallFinished(ToolCallResult::new(
-                    ToolCallId("same-call".into()),
-                    OccurrenceId("first".into()),
-                    json!({"superseded_by_retry": true}),
-                )));
+                events.push(Event::ToolCallFinished(
+                    ToolCallResult::new(
+                        ToolCallId("same-call".into()),
+                        OccurrenceId("first".into()),
+                        json!({}),
+                    )
+                    .superseded_by_retry(&OccurrenceId("retry".into())),
+                ));
             }
             events.push(Event::StateChanged(SessionState::ToolRunning));
             appender
@@ -686,15 +689,15 @@ mod tests {
             let views = build_tool_call_views(&frame.items);
             assert_eq!(views.len(), 2);
             assert!(
-                views.iter().all(|view| view.finished),
+                views.iter().all(|view| view.finished()),
                 "every attempt must close: {views:?}"
             );
-            assert_eq!(views[0].superseded, first_finished);
+            assert_eq!(views[0].superseded(), first_finished);
             let cancelled: Vec<_> = retained
                 .iter()
                 .filter_map(|event| match event {
                     Event::ToolCallFinished(result)
-                        if result.output.get("cancelled") == Some(&json!(true)) =>
+                        if result.outcome == horizon_agent::contract::ToolOutcome::Cancelled =>
                     {
                         Some(result.occurrence_id.clone())
                     }

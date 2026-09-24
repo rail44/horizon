@@ -122,7 +122,7 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
         let forwarded = drain_events(&mut outgoing);
         let retry_events = if kind == 3 {
             assert!(matches!(&forwarded[0], Event::ToolCallFinished(result)
-                if result.occurrence_id == original && result.output["superseded_by_retry"] == true));
+                if result.occurrence_id == original && result.is_superseded()));
             &forwarded[1..]
         } else {
             &forwarded[..]
@@ -694,7 +694,7 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
         panic!("expected a tool result, got {forwarded:?}");
     };
     assert_eq!(result.call_id, request.call_id);
-    assert!(result.is_error);
+    assert!(result.is_error());
     assert!(result.output["message"]
         .as_str()
         .unwrap()
@@ -774,7 +774,7 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
     let Command::ToolCallResult(result) = forwarded else {
         panic!("expected a tool result, got {forwarded:?}");
     };
-    assert!(!result.is_error, "{:?}", result.output);
+    assert!(!result.is_error(), "{:?}", result.output);
     assert!(result.output["content"]
         .as_str()
         .unwrap()
@@ -915,7 +915,7 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
     assert_eq!(pending[0].occurrence_id, reissued_occurrence_id);
     assert!(matches!(&forwarded[0], Event::ToolCallFinished(result)
         if result.occurrence_id == original_request.occurrence_id
-            && result.output["superseded_by_retry"] == true));
+            && result.is_superseded()));
 
     let dir = tempfile::tempdir().unwrap();
     let (results, _) = unbounded();

@@ -77,10 +77,18 @@ execution identity changes is tracked in the
 The inert DuckDB migration state and old command aliases have been removed.
 Explicit model switches now resolve current config once and publish only after
 application. Tool execution identity is now required throughout the lifecycle
-(agent wire v23, event-log v2), with offline conversion and strict preflight.
+(agent wire v24, event-log v3), with offline conversion and strict preflight.
 Provider configuration uses named entries and a separate auxiliary-provider
 selection; see [configuration and conversion](provider-configuration.md).
 Integration does not activate old user data automatically.
+Conversation events and ephemeral notifications now use distinct variants.
+Tool outcomes are explicit throughout execution, replay, projection, and display;
+modal owners release their targets, subscriptions and pending replies together.
+The follow-up also corrects cancellation accounting, declined-retry closure,
+failed memory checkpoints and stale projection reuse; see
+[changes and validation](research/refactoring-event-lifetimes-2026-09-25.md)
+and the [current history conversion procedure](agent-history-format.md).
+
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

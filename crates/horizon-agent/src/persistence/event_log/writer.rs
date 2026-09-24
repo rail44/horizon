@@ -510,6 +510,11 @@ enum ProjectionCurrency {
 /// `event_log::read`, so its last element carries the log's overall maximum
 /// sequence.
 fn duckdb_projection_currency(store: &Store, records: &[Record]) -> Result<ProjectionCurrency> {
+    // Conversion preserves sequence numbers. An old projection can have the
+    // same high-water mark while still containing undecodable result envelopes.
+    if !store.has_current_event_format()? {
+        return Ok(ProjectionCurrency::RebuildNeeded);
+    }
     let log_final_sequence = records.last().map(|record| record.sequence as i64);
     let mark = store.max_last_sequence()?;
     Ok(match (mark, log_final_sequence) {
@@ -1014,6 +1019,42 @@ mod tests {
                 "a skipped record must still advance agent_sessions.last_sequence, so a \
                  re-check of the same log must read as current"
             ),
+        }
+    }
+
+    #[test]
+    fn an_old_projection_format_rebuilds_even_when_the_high_water_mark_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.duckdb");
+        let session = SessionId::new();
+        let records = vec![message_record(session, 10, "converted history")];
+        drop(rebuild_and_open_duckdb_projection(&path, &records).unwrap());
+        for version in [None, Some(2)] {
+            {
+                let conn = duckdb::Connection::open(&path).unwrap();
+                conn.execute_batch(
+                    "DELETE FROM agent_projection_format;
+                    UPDATE agent_messages SET text = 'old cached history';",
+                )
+                .unwrap();
+                if let Some(version) = version {
+                    conn.execute(
+                        "INSERT INTO agent_projection_format VALUES (true, ?)",
+                        [version],
+                    )
+                    .unwrap();
+                }
+            }
+            let rebuilt = rebuild_and_open_duckdb_projection(&path, &records).unwrap();
+            let store = rebuilt.lock().unwrap();
+            assert_eq!(
+                store.messages_for_session(session).unwrap()[0].text,
+                "converted history"
+            );
+            assert!(matches!(
+                duckdb_projection_currency(&store, &records).unwrap(),
+                ProjectionCurrency::Current
+            ));
         }
     }
 

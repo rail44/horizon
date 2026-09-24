@@ -43,19 +43,37 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     let before_finish: Vec<_> = rx.try_iter().collect();
     assert_eq!(before_finish.len(), 4);
     assert!(matches!(
-        before_finish[0].event,
+        before_finish[0]
+            .clone()
+            .into_event()
+            .expect("conversation event"),
         Event::ProviderRequestFirstToken
     ));
-    assert!(matches!(before_finish[1].event, Event::ReasoningDelta(_)));
     assert!(matches!(
-        before_finish[2].event,
+        before_finish[1]
+            .clone()
+            .into_event()
+            .expect("conversation event"),
+        Event::ReasoningDelta(_)
+    ));
+    assert!(matches!(
+        before_finish[2]
+            .clone()
+            .into_event()
+            .expect("conversation event"),
         Event::AssistantTextDelta(_)
     ));
-    let Event::ToolCallRequested(request) = &before_finish[3].event else {
+    let Event::ToolCallRequested(request) = &before_finish[3]
+        .clone()
+        .into_event()
+        .expect("conversation event")
+    else {
         panic!("tool request")
     };
     assert_eq!(request.input.0, serde_json::json!({"path":"README.md"}));
-    assert_eq!(before_finish[3].provider_payload, Some(payload));
+    assert!(
+        matches!(&before_finish[3], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+    );
 
     let (message, outcome) = response.finish(
         false,
@@ -79,7 +97,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     let after_finish: Vec<_> = rx.try_iter().collect();
     assert_eq!(after_finish.len(), 1);
     assert!(
-        matches!(&after_finish[0].event, Event::MessageCommitted(message) if message.text == "reading")
+        matches!(&after_finish[0].clone().into_event().expect("conversation event"), Event::MessageCommitted(message) if message.text == "reading")
     );
 }
 
@@ -99,7 +117,10 @@ fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
         // A stream error drops the collector without calling finish.
         drop(response);
         assert_eq!(durable, with_call);
-        let events: Vec<_> = rx.try_iter().map(|event| event.event).collect();
+        let events: Vec<_> = rx
+            .try_iter()
+            .filter_map(ProviderEvent::into_event)
+            .collect();
         assert!(!events
             .iter()
             .any(|event| matches!(event, Event::MessageCommitted(_))));

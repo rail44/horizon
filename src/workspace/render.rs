@@ -995,6 +995,13 @@ impl WorkspaceShell {
 
 impl Render for WorkspaceShell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let palette = self.palette.as_ref().map(|modal| modal.list.clone());
+        let chooser = self.view_chooser.as_ref().map(|modal| modal.list.clone());
+        let manager = self
+            .session_manager
+            .as_ref()
+            .map(|modal| modal.list.clone());
+        let picker = self.model_picker.as_ref().map(|modal| modal.list.clone());
         // Suppressed outright while a restore is in progress (unless it
         // failed, which still allows reaching `Reload Agent Runtime` --
         // same predicate `toggle_mode`/`mode_move`/`mode_commit`/
@@ -1101,7 +1108,7 @@ impl Render for WorkspaceShell {
                     .min_h_0()
                     .relative()
                     .children(content)
-                    .when_some(self.palette.clone(), |this, palette| {
+                    .when_some(palette, |this, palette| {
                         this.child(
                             div()
                                 .id("palette-backdrop")
@@ -1142,7 +1149,7 @@ impl Render for WorkspaceShell {
                                 ),
                         )
                     })
-                    .when_some(self.view_chooser.clone(), |this, chooser| {
+                    .when_some(chooser, |this, chooser| {
                         this.child(
                             div()
                                 .id("view-chooser-backdrop")
@@ -1157,7 +1164,6 @@ impl Render for WorkspaceShell {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
-                                        shell.pending_placement = None;
                                         shell.cancel_view_chooser(window, cx);
                                     }),
                                 )
@@ -1184,7 +1190,7 @@ impl Render for WorkspaceShell {
                                 ),
                         )
                     })
-                    .when_some(self.session_manager.clone(), |this, manager| {
+                    .when_some(manager, |this, manager| {
                         this.child(
                             div()
                                 .id("session-manager-backdrop")
@@ -1236,7 +1242,7 @@ impl Render for WorkspaceShell {
                                 ),
                         )
                     })
-                    .when_some(self.model_picker.clone(), |this, picker| {
+                    .when_some(picker, |this, picker| {
                         this.child(
                             div()
                                 .id("model-picker-backdrop")
@@ -1251,7 +1257,6 @@ impl Render for WorkspaceShell {
                                 .on_mouse_down(
                                     MouseButton::Left,
                                     cx.listener(|shell, _, window, cx| {
-                                        shell.model_picker_target = None;
                                         shell.cancel_model_picker(window, cx);
                                     }),
                                 )

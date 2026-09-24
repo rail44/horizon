@@ -22,7 +22,7 @@ use turn::TurnTracker;
 pub use writer::{WriterHandle, WriterInit};
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 2;
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 3;
 
 /// A format cutover requires operator action, not a persistence-disabled run.
 #[derive(Debug)]

@@ -379,7 +379,7 @@ mod tests {
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {
         Record {
             schema: "horizon.agent.event_log".to_string(),
-            version: 2,
+            version: 3,
             event_id: uuid::Uuid::new_v4().to_string(),
             sequence,
             session_id,

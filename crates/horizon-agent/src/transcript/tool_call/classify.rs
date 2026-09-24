@@ -1,11 +1,9 @@
 use serde_json::Value;
 
 use super::super::file_name;
-use super::approval::SUPERSEDED_SUMMARY;
 use super::files::{distinct_edit_paths, edit_entries};
 use super::util::{command_head, line_diffstat, str_field};
 use super::view::ToolCallKind;
-use crate::contract::is_superseded_output;
 
 /// Display data plus an explicit recognition result. Consumers must not infer
 /// whether a tool is known from its human-facing verb or summary.
@@ -36,16 +34,6 @@ pub fn classify(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCal
     let known = classified.is_some();
     let (verb, target, summary, kind) =
         classified.unwrap_or_else(|| (tool_id.to_string(), None, None, ToolCallKind::Generic));
-    // An abandoned denial-retry attempt's result carries only the
-    // superseded marker, so every tool-specific summary below reads
-    // `None` off it (no `exit_code`, no counts). Say what happened
-    // instead of leaving the row bare -- the row is closed, but neither
-    // succeeded nor failed.
-    let summary = if output.is_some_and(is_superseded_output) {
-        Some(SUPERSEDED_SUMMARY.to_string())
-    } else {
-        summary
-    };
     ToolCallClassification {
         known,
         verb,

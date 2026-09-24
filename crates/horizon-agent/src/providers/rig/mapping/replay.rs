@@ -167,7 +167,7 @@ impl PairingRepair {
             self.repaired.push(Message::tool_result(
                 call_id.clone(),
                 &tool_name,
-                serde_json::json!({"cancelled": true}).to_string(),
+                serde_json::json!({"outcome": crate::contract::ToolOutcome::Cancelled, "output": {"cancelled": true}}).to_string(),
             ));
             self.synthesized.push(call_id);
         }
@@ -271,12 +271,12 @@ mod tests {
                 Message::tool_result(
                     "first",
                     "fs.read",
-                    serde_json::json!({"cancelled": true}).to_string()
+                    serde_json::json!({"outcome": crate::contract::ToolOutcome::Cancelled, "output": {"cancelled": true}}).to_string()
                 ),
                 Message::tool_result(
                     "second",
                     "bash",
-                    serde_json::json!({"cancelled": true}).to_string()
+                    serde_json::json!({"outcome": crate::contract::ToolOutcome::Cancelled, "output": {"cancelled": true}}).to_string()
                 ),
                 Message::user("Stop."),
             ]
@@ -301,7 +301,7 @@ mod tests {
                 Message::tool_result(
                     "call-1",
                     "fs.read",
-                    serde_json::json!({"cancelled": true}).to_string()
+                    serde_json::json!({"outcome": crate::contract::ToolOutcome::Cancelled, "output": {"cancelled": true}}).to_string()
                 ),
             ]
         );

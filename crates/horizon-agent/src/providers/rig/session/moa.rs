@@ -465,9 +465,11 @@ mod tests {
     fn pass_record(
         events: &crossbeam_channel::Receiver<crate::contract::ProviderEvent>,
     ) -> Option<MoaPassStarted> {
-        events.try_iter().find_map(|event| match event.event {
-            Event::MoaPassStarted(record) => Some(record),
-            _ => None,
+        events.try_iter().find_map(|event| {
+            match event.clone().into_event().expect("conversation event") {
+                Event::MoaPassStarted(record) => Some(record),
+                _ => None,
+            }
         })
     }
 
@@ -476,10 +478,12 @@ mod tests {
     fn errors(events: &crossbeam_channel::Receiver<crate::contract::ProviderEvent>) -> Vec<String> {
         events
             .try_iter()
-            .filter_map(|event| match event.event {
-                Event::Error(error) => Some(error.message),
-                _ => None,
-            })
+            .filter_map(
+                |event| match event.clone().into_event().expect("conversation event") {
+                    Event::Error(error) => Some(error.message),
+                    _ => None,
+                },
+            )
             .collect()
     }
 

@@ -195,6 +195,21 @@ pub(crate) mod test_support {
         ))
     }
 
+    pub(crate) fn tool_superseded_with_occurrence(
+        call_id: &str,
+        occurrence_id: OccurrenceId,
+        retry: OccurrenceId,
+    ) -> AgentFrameItem {
+        AgentFrameItem::ToolCallFinished(
+            ToolCallResult::new(
+                ToolCallId(call_id.into()),
+                occurrence_id,
+                serde_json::json!({}),
+            )
+            .superseded_by_retry(&retry),
+        )
+    }
+
     pub(crate) fn history_cleared(call_ids: &[&str], recovered_chars: u64) -> AgentFrameItem {
         AgentFrameItem::HistoryCleared(crate::contract::HistoryCleared {
             cleared_call_ids: call_ids

@@ -323,7 +323,7 @@ mod tests {
             let completion = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
             match completion {
                 ToolCompletion::Finished(result) if url == "not a URL" => {
-                    assert!(result.is_error);
+                    assert!(result.is_error());
                     assert_eq!(result.occurrence_id, request.occurrence_id);
                 }
                 ToolCompletion::DomainGrantRequired { occurrence_id, .. } if url != "not a URL" => {

@@ -207,10 +207,8 @@ pub(super) fn run_session(
         crossbeam_channel::select! {
             recv(provider_events) -> message => match message {
                 Ok(provider_event) => {
-                    phase.set(SessionLoopPhase::ProviderEvent(contract::event_kind(
-                        &provider_event.event,
-                    )));
-                    if let Event::EnvironmentReady { base } = &provider_event.event {
+                    phase.set(SessionLoopPhase::ProviderEvent(provider_event.kind()));
+                    if let Some(Event::EnvironmentReady { base }) = provider_event.as_event() {
                         environment.activate(base, &live_state, &mut tool_state, &async_results_tx, &commands_tx);
                         continue;
                     }
@@ -305,7 +303,7 @@ pub(super) fn run_session(
 /// streaming-tool-call-argument-preview feature the module's step 3 notes in
 /// `docs/agent-runtime-split-design.md` recorded as trimmed for agentd mode.
 /// Feedback keeps its dedicated wire variant through the shared conversion;
-/// its placeholder is never forwarded as a conversation event.
+/// it cannot also carry a conversation event.
 #[allow(clippy::too_many_arguments)]
 fn handle_provider_event(
     host: &dyn HostTools,
@@ -317,13 +315,11 @@ fn handle_provider_event(
     session_id: SessionId,
     provider_event: ProviderEvent,
 ) {
-    if !provider_event.is_ephemeral() {
-        if let Event::ToolCallFinished(result) = &provider_event.event {
-            if !horizon_agent::tools::ToolCompletion::Finished(result.clone())
-                .matches_live_request(&live_state.frame())
-            {
-                return;
-            }
+    if let Some(Event::ToolCallFinished(result)) = provider_event.as_event() {
+        if !horizon_agent::tools::ToolCompletion::Finished(result.clone())
+            .matches_live_request(&live_state.frame())
+        {
+            return;
         }
     }
     let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
@@ -345,8 +341,8 @@ fn handle_provider_event(
         .collect();
     let durable_result = processing.horizon_events.iter().any(|event| {
         matches!(
-            event.event,
-            Event::InputOutcome(_) | Event::SessionInputSent { .. }
+            event.as_event(),
+            Some(Event::InputOutcome(_) | Event::SessionInputSent { .. })
         )
     });
     if durable_result {

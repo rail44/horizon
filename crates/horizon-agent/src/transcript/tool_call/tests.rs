@@ -16,8 +16,8 @@ fn build_tool_call_views_pairs_requests_with_their_results_in_request_order() {
     assert_eq!(views[0].call_id, ToolCallId("a".to_string()));
     assert_eq!(views[0].verb, "Grep");
     assert_eq!(views[0].result_summary.as_deref(), Some("3 matches"));
-    assert!(views[0].finished);
-    assert!(!views[0].is_error);
+    assert!(views[0].finished());
+    assert!(!views[0].is_error());
 
     assert_eq!(views[1].call_id, ToolCallId("b".to_string()));
     assert_eq!(views[1].verb, "Read");
@@ -47,7 +47,7 @@ fn a_task_call_is_labelled_with_its_description() {
     assert_eq!(views[0].verb, "Task");
     assert_eq!(views[0].target.as_deref(), Some("map the emit sites"));
     assert_eq!(views[0].result_summary.as_deref(), Some("started"));
-    assert!(!views[0].is_error);
+    assert!(!views[0].is_error());
 }
 
 /// The pull half of the same pair: `task_output` echoes the launch's
@@ -66,7 +66,7 @@ fn a_task_output_call_reports_running_and_finished_distinctly() {
     assert_eq!(running[0].verb, "Task Output");
     assert_eq!(running[0].target.as_deref(), Some("map the emit sites"));
     assert_eq!(running[0].result_summary.as_deref(), Some("running"));
-    assert!(!running[0].is_error);
+    assert!(!running[0].is_error());
 
     let finished = build_tool_call_views(&[
         tool_requested("o", "task_output", json!({"session_id": "3f2b"})),
@@ -88,9 +88,9 @@ fn a_still_running_tool_call_has_no_result_summary() {
     )];
     let views = build_tool_call_views(&items);
     assert_eq!(views.len(), 1);
-    assert!(!views[0].finished);
+    assert!(!views[0].finished());
     assert!(views[0].result_summary.is_none());
-    assert!(!views[0].is_error);
+    assert!(!views[0].is_error());
 }
 
 #[test]
@@ -103,7 +103,7 @@ fn an_errored_tool_call_is_marked_is_error_via_the_output_convention() {
         ),
     ];
     let views = build_tool_call_views(&items);
-    assert!(views[0].is_error);
+    assert!(views[0].is_error());
     assert_eq!(views[0].result_summary.as_deref(), Some("exit 1"));
 }
 
@@ -163,7 +163,7 @@ fn a_call_whose_tool_call_started_folded_is_approved_even_while_still_running() 
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(views[0].approval, ApprovalState::Approved);
-    assert!(!views[0].finished);
+    assert!(!views[0].finished());
 }
 
 #[test]
@@ -185,19 +185,15 @@ fn a_call_resolved_with_the_denied_marker_is_denied() {
 }
 
 #[test]
-fn a_call_resolved_with_the_denied_by_user_convention_is_denied() {
-    // The fallback path: `tool_finished` builds its `ToolCallResult`
-    // via `ToolCallResult::new`, which never sets `denied` -- exactly
-    // what a pre-marker persisted JSONL log deserializes as
-    // (`#[serde(default)]`). Classification must still land on
-    // `Denied` by recognizing the old message-text convention.
+fn a_failure_message_cannot_impersonate_a_user_denial() {
+    // Result kinds are authoritative; arbitrary tool text is not a decision.
     let items = vec![
         tool_requested("a", "bash", json!({"command": "rm -rf /tmp/x"})),
         approval_requested("a"),
         tool_finished("a", json!({"is_error": true, "message": "denied by user"})),
     ];
     let views = build_tool_call_views(&items);
-    assert_eq!(views[0].approval, ApprovalState::Denied);
+    assert_eq!(views[0].approval, ApprovalState::Approved);
 }
 
 #[test]
@@ -215,8 +211,7 @@ fn a_call_resolved_successfully_after_approval_is_approved() {
 fn an_approved_call_that_then_fails_on_its_own_is_still_approved_not_denied() {
     // Distinguishes a genuine denial from an *approved* call that
     // later fails for its own reasons (e.g. fs.edit's old_string not
-    // found) -- both are `is_error: true`, but only the denial
-    // carries the exact "denied by user" message.
+    // found). Their explicit outcome distinguishes failure from user denial.
     let items = vec![
         tool_requested(
             "a",
@@ -475,7 +470,7 @@ fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
     // that attached to it -- so a misattribution pairs a.txt with B's
     // failure (and vice versa) rather than going unnoticed.
     assert_eq!(views[0].call_id, ToolCallId("fs.edit:1".to_string()));
-    assert!(views[0].finished);
+    assert!(views[0].finished());
     assert_eq!(
         views[0]
             .affected_files
@@ -485,11 +480,11 @@ fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
         vec!["a.txt"],
     );
     assert!(
-        !views[0].is_error,
+        !views[0].is_error(),
         "a.txt's row must carry occurrence A's successful result, not B's failure"
     );
     assert_eq!(views[1].call_id, ToolCallId("fs.edit:1".to_string()));
-    assert!(views[1].finished);
+    assert!(views[1].finished());
     assert_eq!(
         views[1]
             .affected_files
@@ -499,7 +494,7 @@ fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
         vec!["b.txt"],
     );
     assert!(
-        views[1].is_error,
+        views[1].is_error(),
         "b.txt's row must carry occurrence B's failing result"
     );
 }
@@ -563,11 +558,11 @@ fn a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it() {
     // The result belongs to the attempt that ran, not to the reissue
     // that was declined.
     assert!(
-        views[0].finished && views[0].is_error,
+        views[0].finished() && views[0].is_error(),
         "the parked outcome must land on the first attempt's row"
     );
     assert!(
-        !views[1].finished,
+        !views[1].finished(),
         "the declined reissue produced no result of its own"
     );
     // The reissue is the row that carries the approval, and it
@@ -601,16 +596,7 @@ fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
         approval_requested_with_occurrence("bash:1", occ_2.clone()),
         // Approve: the abandoned attempt is closed, the retry starts.
-        tool_finished_with_occurrence(
-            "bash:1",
-            json!({
-                SUPERSEDED_BY_RETRY: true,
-                "retry_occurrence_id": occ_2.0,
-                "message": "this attempt was abandoned; an approved retry of the same call \
-                            replaced it",
-            }),
-            occ_1.clone(),
-        ),
+        tool_superseded_with_occurrence("bash:1", occ_1.clone(), occ_2.clone()),
         tool_started_with_occurrence("bash:1", occ_2.clone()),
         // ... and finishes on its own.
         tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
@@ -620,20 +606,20 @@ fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
     assert_eq!(views.len(), 2);
 
     assert!(
-        views[0].finished,
+        views[0].finished(),
         "the abandoned attempt must no longer render started-but-never-finished"
     );
-    assert!(views[0].superseded);
+    assert!(views[0].superseded());
     assert!(
-        !views[0].is_error,
+        !views[0].is_error(),
         "an attempt a retry replaced did not fail on its own terms"
     );
     assert_eq!(views[0].result_summary.as_deref(), Some(SUPERSEDED_SUMMARY));
     assert_eq!(views[0].approval, ApprovalState::None);
 
-    assert!(views[1].finished);
-    assert!(!views[1].superseded);
-    assert!(!views[1].is_error);
+    assert!(views[1].finished());
+    assert!(!views[1].superseded());
+    assert!(!views[1].is_error());
     assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
     assert_eq!(views[1].approval, ApprovalState::Approved);
 }
@@ -649,14 +635,14 @@ fn a_superseded_close_arriving_after_the_retrys_result_still_lands_on_its_own_ro
     let items = vec![
         tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
-        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2),
-        tool_finished_with_occurrence("bash:1", json!({ SUPERSEDED_BY_RETRY: true }), occ_1),
+        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
+        tool_superseded_with_occurrence("bash:1", occ_1, occ_2.clone()),
     ];
 
     let views = build_tool_call_views(&items);
     assert_eq!(views.len(), 2);
-    assert!(views[0].superseded && views[0].finished);
-    assert!(!views[1].superseded && views[1].finished);
+    assert!(views[0].superseded() && views[0].finished());
+    assert!(!views[1].superseded() && views[1].finished());
     assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
 }
 
@@ -672,8 +658,8 @@ fn the_collapsed_receipt_counts_a_superseded_attempt_once_not_twice() {
     let views = build_tool_call_views(&[
         tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
-        tool_finished_with_occurrence("bash:1", json!({ SUPERSEDED_BY_RETRY: true }), occ_1),
-        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2),
+        tool_superseded_with_occurrence("bash:1", occ_1, occ_2.clone()),
+        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
     ]);
 
     let aggregate = super::super::aggregate_receipt(&views);

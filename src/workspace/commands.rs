@@ -513,8 +513,6 @@ impl WorkspaceShell {
                 // leaving a surface whose confirm can only ever hit
                 // "Unknown session" and whose list can never load.
                 self.model_picker = None;
-                self._model_picker_subscription = None;
-                self.model_picker_target = None;
                 // Only the agent panes' views are dropped: a terminal
                 // pane's view holds live scrollback/selection state bound
                 // to a session that is still running, and rebuilding it

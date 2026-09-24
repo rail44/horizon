@@ -96,16 +96,12 @@ pub enum AgentWireEvent {
 
 impl From<&ProviderEvent> for AgentWireEvent {
     fn from(event: &ProviderEvent) -> Self {
-        if let Some(progress) = &event.tool_call_progress {
-            Self::ToolCallProgress(progress.clone())
-        } else if let Some(model) = &event.session_model {
-            Self::SessionModel(model.clone())
-        } else if let Some(selection) = &event.session_selection {
-            Self::SessionSelection(selection.clone())
-        } else if let Some(progress) = &event.task_progress {
-            Self::TaskProgress(progress.clone())
-        } else {
-            Self::Event(event.event.clone())
+        match event {
+            ProviderEvent::Event { event, .. } => Self::Event(event.clone()),
+            ProviderEvent::ToolCallProgress(progress) => Self::ToolCallProgress(progress.clone()),
+            ProviderEvent::SessionModel(model) => Self::SessionModel(model.clone()),
+            ProviderEvent::SessionSelection(selection) => Self::SessionSelection(selection.clone()),
+            ProviderEvent::TaskProgress(progress) => Self::TaskProgress(progress.clone()),
         }
     }
 }

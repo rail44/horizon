@@ -850,7 +850,7 @@ fn approval_outcome_is_denied_when_finished_arrives_with_no_prior_started() {
                 // A deny short-circuits: `ToolCallFinished` arrives with
                 // no `ToolCallStarted` in between (`tools::approval::
                 // synchronous_result(ran=false)`).
-                Event::ToolCallFinished(ToolCallResult::new(
+                Event::ToolCallFinished(ToolCallResult::denied(
                     call_id.clone(),
                     crate::contract::OccurrenceId(call_id.0.clone()),
                     serde_json::json!({
@@ -975,11 +975,10 @@ fn a_superseded_close_does_not_steal_the_retrys_pending_approval_outcome() {
                 }),
                 // Approve: the abandoned attempt closes, then the retry
                 // starts.
-                Event::ToolCallFinished(ToolCallResult::new(
-                    call_id.clone(),
-                    abandoned,
-                    serde_json::json!({ "superseded_by_retry": true }),
-                )),
+                Event::ToolCallFinished(
+                    ToolCallResult::new(call_id.clone(), abandoned, serde_json::json!({}))
+                        .superseded_by_retry(&retry),
+                ),
                 Event::ToolCallStarted(crate::contract::ToolCallIdentity {
                     call_id: call_id.clone(),
                     occurrence_id: retry.clone(),

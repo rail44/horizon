@@ -232,22 +232,24 @@ impl Store {
                 &result.call_id.0,
                 result.occurrence_id.0.as_str(),
                 serde_json::to_string(&result.output)?,
-                result.is_error,
+                result.is_error(),
             ],
         )?;
-        // A deny short-circuits without ever emitting `ToolCallStarted`
-        // (`tools::approval::synchronous_result(ran=false)`), so a call
-        // whose approval is still pending when its result lands must have
-        // been denied -- the order-derived counterpart to the `approved`
-        // case in `project_event`'s `ToolCallStarted` arm. A no-op if there
-        // was no approval row (never gated) or it's already resolved.
-        //
-        // A terminal result closes only its own still-pending approval.
+        // A result closes only its own pending approval. Cancellation is not
+        // a user denial; a started call has already recorded approval.
+        let approval_outcome = match result.outcome {
+            crate::contract::ToolOutcome::Denied => "denied",
+            crate::contract::ToolOutcome::Cancelled => "cancelled",
+            crate::contract::ToolOutcome::Superseded { .. } => "superseded",
+            crate::contract::ToolOutcome::Succeeded | crate::contract::ToolOutcome::Failed => {
+                "approved"
+            }
+        };
         self.mark_approval_outcome(
             session_id,
             &result.call_id.0,
             result.occurrence_id.0.as_str(),
-            "denied",
+            approval_outcome,
         )?;
         Ok(())
     }

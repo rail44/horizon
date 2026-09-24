@@ -31,7 +31,7 @@ non-boardの構造検索は、複数のbool、複数のOption、連動する代�
 - `ToolCallView`、commandの有効条件などの表示・問合せ用の値は元状態から組み立てる。今回整理した可変の状態源と同列に扱わない。
 - 子taskの失敗と上限到達、検索の走査打切りと出力打切りは同時に起こりうる。排他的なenumにしない。
 - provider処理とdaemon接続には既存共通部がある。さらにtraitで包む利益は確認できず、異なる起動・切断契約を維持する。
-- 永続イベント／一時通知の `ProviderEvent`、公開される結果の `is_error/denied`、modalとsubscriptionの所有権は別の整理候補として残る。これらは値の排他性・外部入力やcallbackの取扱いまで未評価であり、今回の8件と同じ確度での境界変更を採用していない。互換維持を必須とする判断ではない。
+- **当時の持越し（[次巡で実装](refactoring-event-lifetimes-2026-09-25.md)）:** 永続イベント／一時通知の `ProviderEvent`、公開される結果の `is_error/denied`、modalとsubscriptionの所有権は別の整理候補として残る。これらは値の排他性・外部入力やcallbackの取扱いまで未評価であり、今回の8件と同じ確度での境界変更を採用していない。互換維持を必須とする判断ではない。
 
 board固有の仕様は対象外。共有workspace状態を参照するboard用callbackのガード3か所だけを
 同等の状態判定へ置換した。通信schema、保存形式、利用者設定は変更していない。

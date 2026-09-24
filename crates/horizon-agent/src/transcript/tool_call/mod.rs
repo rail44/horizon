@@ -32,7 +32,7 @@ pub use view::{
 // single-file module's private `use` lines fed -- so they must live in this
 // module's namespace under test.
 #[cfg(test)]
-use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult, SUPERSEDED_BY_RETRY};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallResult};
 #[cfg(test)]
 use crate::frame::AgentFrameItem;
 #[cfg(test)]

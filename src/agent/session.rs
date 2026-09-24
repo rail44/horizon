@@ -109,8 +109,7 @@ impl AgentSession {
                     }
                     // The view owns running-task rows; LiveState owns the
                     // conversation frame and session metadata.
-                    let mut event = event;
-                    if let Some(progress) = event.task_progress.take() {
+                    if let horizon_agent::contract::ProviderEvent::TaskProgress(progress) = event {
                         session.apply_task_progress(progress);
                     } else {
                         session.frame = live.extend_provider_events(std::iter::once(event));

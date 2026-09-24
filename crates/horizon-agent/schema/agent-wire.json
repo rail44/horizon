@@ -2014,21 +2014,16 @@
       "type": "object"
     },
     "ToolCallResult": {
+      "additionalProperties": false,
       "properties": {
         "call_id": {
           "$ref": "#/$defs/ToolCallId"
         },
-        "denied": {
-          "description": "Explicit marker for a user's tool-call denial, set only by\n[`Self::denied`] (used by `tools::approval::synchronous_result`'s\n`ran = false` path -- the deny arms of `resolve_synchronous_tool`/\n`resolve_bash` in `crates/horizon-agent/src/tools/approval.rs`).\nReplaces the old convention of a consumer sniffing `output` for\n`denied_output`'s exact `{\"is_error\": true, \"message\": \"denied by\nuser\"}` shape -- documented as brittle when that convention shipped\n(`docs/agent-output-ui-amendment.md`'s round 3 note) since it\ncouldn't distinguish \"the field happens to read that way\" from \"this\nis contractually a denial\".",
-          "type": "boolean"
-        },
-        "is_error": {
-          "description": "Explicit success/failure outcome, lifted out of `output`'s\n`\"is_error\"` JSON convention (every tool in `tools::` already writes\nit on failure -- `docs/agent-feedback-design.md`'s decision 1;\ndenial constructors also set it directly) so consumers such as the\nturn-receipts UI (`docs/agent-output-ui-amendment.md`'s 2026-07-12\naddendum) have a typed field instead of having to sniff `output`\nitself. Use [`Self::new`] rather than a struct literal to keep this\nderived automatically.",
-          "type": "boolean"
-        },
         "occurrence_id": {
-          "$ref": "#/$defs/OccurrenceId",
-          "description": "Per-occurrence identity -- see [`OccurrenceId`]. Mirrors the\n`ToolCallRequest` field it answers to."
+          "$ref": "#/$defs/OccurrenceId"
+        },
+        "outcome": {
+          "$ref": "#/$defs/ToolOutcome"
         },
         "output": {
           "$ref": "#/$defs/JsonValue"
@@ -2038,10 +2033,42 @@
         "call_id",
         "occurrence_id",
         "output",
-        "is_error",
-        "denied"
+        "outcome"
       ],
       "type": "object"
+    },
+    "ToolOutcome": {
+      "oneOf": [
+        {
+          "enum": [
+            "Succeeded",
+            "Failed",
+            "Denied",
+            "Cancelled"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Superseded": {
+              "properties": {
+                "retry_occurrence_id": {
+                  "$ref": "#/$defs/OccurrenceId"
+                }
+              },
+              "required": [
+                "retry_occurrence_id"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Superseded"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "TurnEndReason": {
       "description": "Why a turn ended — see [`Event::TurnEnded`]. Named after the design doc's\nfour stop reasons verbatim: \"completed / cancelled / failed /\nhalted-by-guard\" -- `halted-by-guard` is now the two specific\nguard-sourced variants below rather than one bare `Halted`\n(`docs/issues/002-agent-iteration-cap-halts-real-work.md`'s resolution,\ndecision 2): the UI needs to know *which* guard fired to render the\nright calm reason text (\"paused after 100 consecutive tool-driven\nturns\" vs. \"...5 consecutive identical tool results\"), and since the\nguard's thresholds are now fixed built-in constants\n(`config::DEFAULT_ITERATION_CAP`/`DEFAULT_DOOM_LOOP_WINDOW`) rather than\nper-session config, the variant alone is enough for the UI to build\nthat text without carrying a number on the wire.",
@@ -2243,5 +2270,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 23
+  "x-session-protocol-version": 24
 }

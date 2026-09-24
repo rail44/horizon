@@ -215,7 +215,7 @@ fn standard_curl_denial_is_named_even_when_shell_exits_zero() {
         &origin.to_string(),
         "MUST-NOT-REACH",
     );
-    assert!(result.is_error);
+    assert!(result.is_error());
     assert_eq!(result.output["exit_code"], 0);
     unregister_session_runtime(session_id);
 }
@@ -298,7 +298,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
         other => panic!("approved retry did not finish normally: {other:?}"),
     };
     assert!(
-        !reached.is_error,
+        !reached.is_error(),
         "approved reach was marked failed: {reached:?}"
     );
     assert_eq!(reached.output["domain_approved"], true);

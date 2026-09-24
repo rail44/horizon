@@ -9,12 +9,63 @@ use gpui_component::IndexPath;
 use horizon_workspace::commands::{command_entries, CommandId};
 use horizon_workspace::PaneKind;
 
+mod owner;
+pub(super) use owner::ListModal;
+
 use super::WorkspaceShell;
 use crate::agent::AgentSession;
 use crate::model_picker::{ConfirmedModel, ModelPickerDelegate};
 use crate::palette::PaletteDelegate;
 use crate::session_manager::{subtree_session_ids, SessionManagerDelegate};
 use crate::view_chooser::{Placement, ViewChooserDelegate};
+
+enum ModelPickerQuery {
+    Providers,
+    Models { provider: usize, name: String },
+}
+
+enum ModelPickerReply {
+    Providers(Vec<horizon_agent::wire::ProviderSummary>),
+    Models { provider: usize, ids: Vec<String> },
+}
+
+impl ModelPickerQuery {
+    fn fetch(self, runtime: &crate::runtime::AgentdHandle) -> ModelPickerReply {
+        match self {
+            Self::Providers => {
+                ModelPickerReply::Providers(runtime.list_providers().unwrap_or_else(|error| {
+                    eprintln!("failed to list providers: {error}");
+                    Vec::new()
+                }))
+            }
+            Self::Models { provider, name } => ModelPickerReply::Models {
+                provider,
+                ids: runtime.list_provider_models(name).unwrap_or_else(|error| {
+                    eprintln!("failed to list models for provider {provider}: {error}");
+                    Vec::new()
+                }),
+            },
+        }
+    }
+}
+
+impl ModelPickerReply {
+    /// Cache off-stage model replies without disturbing the current selection.
+    fn apply(self, state: &mut crate::model_picker::PickerState) -> bool {
+        match self {
+            Self::Providers(providers) => {
+                state.set_providers(providers);
+                true
+            }
+            Self::Models { provider, ids } => {
+                let current =
+                    state.stage() == &crate::model_picker::PickerStage::Models { provider };
+                state.set_live_models(provider, ids);
+                current
+            }
+        }
+    }
+}
 
 /// The first row is selectable exactly when the list isn't empty — the
 /// pure predicate behind [`select_first_row_on_open`], kept free of
@@ -59,7 +110,6 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.pending_placement = Some(placement);
         let list = cx.new(|cx| {
             let mut list = ListState::new(ViewChooserDelegate::new(), window, cx).searchable(true);
             select_first_row_on_open(&mut list, window, cx);
@@ -71,7 +121,7 @@ impl WorkspaceShell {
             |shell, list, event: &ListEvent, window, cx| match event {
                 ListEvent::Confirm(index) => {
                     let choice = list.read(cx).delegate().choice_at(*index).cloned();
-                    let placement = shell.pending_placement.take();
+                    let placement = shell.view_chooser.take().map(|modal| modal.target);
                     shell.close_view_chooser(window, cx);
                     if let (Some(choice), Some(placement)) = (choice, placement) {
                         shell.create_session(
@@ -85,21 +135,18 @@ impl WorkspaceShell {
                     }
                 }
                 ListEvent::Cancel => {
-                    shell.pending_placement = None;
                     shell.cancel_view_chooser(window, cx);
                 }
                 ListEvent::Select(_) => {}
             },
         );
         window.focus(&list.focus_handle(cx), cx);
-        self.view_chooser = Some(list);
-        self._view_chooser_subscription = Some(subscription);
+        self.view_chooser = Some(ListModal::new(list, placement, subscription));
         cx.notify();
     }
 
     pub(super) fn close_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_chooser = None;
-        self._view_chooser_subscription = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -108,7 +155,6 @@ impl WorkspaceShell {
     /// active before the chooser opened.
     pub(super) fn cancel_view_chooser(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.view_chooser = None;
-        self._view_chooser_subscription = None;
         self.restore_focus_after_modal_cancel(window, cx);
     }
 
@@ -127,7 +173,6 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.model_picker_target = Some(session);
         let list = cx.new(|cx| {
             // Deliberately no `select_first_row_on_open` here: the delegate
             // starts empty (the fetch is in flight), and the fetch completion
@@ -144,7 +189,7 @@ impl WorkspaceShell {
                     });
                     match confirmed {
                         Some(confirmed) => {
-                            let target = shell.model_picker_target.take();
+                            let target = shell.model_picker.take().map(|modal| modal.target);
                             shell.close_model_picker(window, cx);
                             if let Some(session) = target {
                                 shell.switch_model(session, confirmed, cx);
@@ -185,7 +230,6 @@ impl WorkspaceShell {
                         walked_back
                     });
                     if !walked_back {
-                        shell.model_picker_target = None;
                         shell.cancel_model_picker(window, cx);
                     }
                 }
@@ -193,16 +237,13 @@ impl WorkspaceShell {
             },
         );
         window.focus(&list.focus_handle(cx), cx);
-        self.model_picker = Some(list);
-        self._model_picker_subscription = Some(subscription);
+        self.model_picker = Some(ListModal::new(list, session, subscription));
         cx.notify();
         self.fetch_providers(cx);
     }
 
     pub(super) fn close_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model_picker = None;
-        self._model_picker_subscription = None;
-        self.model_picker_target = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -211,85 +252,19 @@ impl WorkspaceShell {
     /// active before it opened (same rule as the view chooser).
     pub(super) fn cancel_model_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.model_picker = None;
-        self._model_picker_subscription = None;
-        self.model_picker_target = None;
         self.restore_focus_after_modal_cancel(window, cx);
     }
 
-    /// One `list_providers` pull off the UI thread (it blocks up to
-    /// `SYNC_REPLY_TIMEOUT`, exactly like `session_list` -- see
-    /// `spawn_agent_lookup_attach`'s doc comment for why this must never run
-    /// on the UI thread), delivered into the open modal. Guarded like the
-    /// other async continuations: a modal closed before the reply lands, or
-    /// a `Reload Agent Runtime` that swapped the daemon out from under it,
-    /// drops the result instead of reviving a dead surface. The per-open
-    /// fetch bounds staleness to the fetch window: entries edited *before*
-    /// the fetch are never shown stale, but a reload that lands *after* it
-    /// can still stale the open surface -- the daemon validates the confirm
-    /// and rejects unknown entries there, so a stale pick fails at the
-    /// daemon, never here. An errored fetch delivers an empty list ("no
-    /// providers configured") -- a retry is one close+reopen away, and the
-    /// chip is still there.
     fn fetch_providers(&mut self, cx: &mut Context<Self>) {
-        let Some(handle) = self.agentd.clone() else {
-            return;
-        };
-        let window_handle = self.window;
-        cx.spawn(async move |this, cx| {
-            let runtime = handle.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { runtime.list_providers() })
-                .await;
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |shell, cx| {
-                    if shell.model_picker.is_none()
-                        || shell
-                            .agentd
-                            .as_ref()
-                            .is_none_or(|current| !current.same_runtime(&handle))
-                    {
-                        return;
-                    }
-                    let providers = match result {
-                        Ok(providers) => providers,
-                        Err(error) => {
-                            eprintln!("failed to list providers: {error}");
-                            Vec::new()
-                        }
-                    };
-                    if let Some(list) = &shell.model_picker {
-                        list.update(cx, |list, cx| {
-                            list.delegate_mut().state_mut().set_providers(providers);
-                            // Now that rows exist, give Enter a target (the
-                            // same open-time selection the other modals get).
-                            select_first_row_on_open(list, window, cx);
-                            cx.notify();
-                        });
-                    }
-                });
-            });
-        })
-        .detach();
+        self.fetch_picker(ModelPickerQuery::Providers, cx);
     }
 
-    /// One `list_provider_models` pull for `provider`, off the UI thread —
-    /// the model picker's drill-in discovery (v22). Guarded like
-    /// [`Self::fetch_providers`]: a modal closed (or a runtime swapped out)
-    /// before the reply lands drops the result, and a reply is applied only
-    /// to the *same* picker instance that issued it (an Esc→reopen builds a
-    /// fresh list whose provider indices may name different entries). A
-    /// failed fetch delivers an empty list, so the stage shows "No models
-    /// listed" and a re-drill retries (the daemon caches only successful
-    /// listings).
     fn fetch_provider_models(&mut self, provider: usize, cx: &mut Context<Self>) {
-        let Some(handle) = self.agentd.clone() else {
+        let Some(modal) = &self.model_picker else {
             return;
         };
-        let Some(list) = self.model_picker.clone() else {
-            return;
-        };
-        let Some(provider_name) = list
+        let Some(name) = modal
+            .list
             .read(cx)
             .delegate()
             .state()
@@ -299,50 +274,47 @@ impl WorkspaceShell {
         else {
             return;
         };
-        let picker_id = list.entity_id();
-        let window_handle = self.window;
-        cx.spawn(async move |this, cx| {
-            let runtime = handle.clone();
-            let result = cx
-                .background_executor()
-                .spawn(async move { runtime.list_provider_models(provider_name) })
-                .await;
-            let _ = window_handle.update(cx, |_, window, cx| {
-                let _ = this.update(cx, |shell, cx| {
-                    // Drop the reply unless it belongs to the picker that
-                    // issued it (a stale reply's provider index may name a
-                    // different entry after an Esc→reopen).
-                    if shell.model_picker.as_ref().map(|list| list.entity_id()) != Some(picker_id)
-                        || shell
+        self.fetch_picker(ModelPickerQuery::Models { provider, name }, cx);
+    }
+
+    /// The continuation belongs to this opening of the picker. Closing it
+    /// cancels delivery, and the weak list reference can never address a
+    /// reopened picker. A blocking daemon request already underway may finish
+    /// in the background; it has no authority to update a replacement modal.
+    fn fetch_picker(&mut self, query: ModelPickerQuery, cx: &mut Context<Self>) {
+        let Some(handle) = self.agentd.clone() else {
+            return;
+        };
+        let Some(modal) = &mut self.model_picker else {
+            return;
+        };
+        let this = cx.weak_entity();
+        let runtime = handle.clone();
+        let reply = cx
+            .background_executor()
+            .spawn(async move { query.fetch(&runtime) });
+        modal.receive(
+            self.window,
+            reply,
+            move |reply, list, window, cx| {
+                let current_runtime = this
+                    .read_with(cx, |shell, _| {
+                        shell
                             .agentd
                             .as_ref()
-                            .is_none_or(|current| !current.same_runtime(&handle))
-                    {
-                        return;
-                    }
-                    let ids = match result {
-                        Ok(ids) => ids,
-                        Err(error) => {
-                            eprintln!("failed to list models for provider {provider}: {error}");
-                            Vec::new()
-                        }
-                    };
-                    if let Some(list) = &shell.model_picker {
-                        list.update(cx, |list, cx| {
-                            list.delegate_mut()
-                                .state_mut()
-                                .set_live_models(provider, ids);
-                            // The drill-in had nothing to select when the
-                            // stage was empty; point Enter at the first
-                            // discovered row now that there is one.
-                            select_first_row_on_open(list, window, cx);
-                            cx.notify();
-                        });
-                    }
-                });
-            });
-        })
-        .detach();
+                            .is_some_and(|current| current.same_runtime(&handle))
+                    })
+                    .unwrap_or(false);
+                if !current_runtime {
+                    return;
+                }
+                if reply.apply(list.delegate_mut().state_mut()) {
+                    select_first_row_on_open(list, window, cx);
+                }
+                cx.notify();
+            },
+            cx,
+        );
     }
 
     /// Fires `SessionHub::set_session_model` for the confirmed
@@ -435,14 +407,12 @@ impl WorkspaceShell {
             },
         );
         window.focus(&list.focus_handle(cx), cx);
-        self.session_manager = Some(list);
-        self._session_manager_subscription = Some(subscription);
+        self.session_manager = Some(ListModal::new(list, (), subscription));
         cx.notify();
     }
 
     pub(super) fn close_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.session_manager = None;
-        self._session_manager_subscription = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -451,7 +421,6 @@ impl WorkspaceShell {
     /// was active before the manager opened.
     pub(super) fn cancel_session_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.session_manager = None;
-        self._session_manager_subscription = None;
         self.restore_focus_after_modal_cancel(window, cx);
     }
 
@@ -486,7 +455,11 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(manager) = self.session_manager.clone() else {
+        let Some(manager) = self
+            .session_manager
+            .as_ref()
+            .map(|modal| modal.list.clone())
+        else {
             return;
         };
         let workspace_root = manager.read(cx).selected_index().and_then(|index| {
@@ -517,7 +490,11 @@ impl WorkspaceShell {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let Some(manager) = self.session_manager.clone() else {
+        let Some(manager) = self
+            .session_manager
+            .as_ref()
+            .map(|modal| modal.list.clone())
+        else {
             return;
         };
         let target = manager.read(cx).selected_index().and_then(|index| {
@@ -583,14 +560,12 @@ impl WorkspaceShell {
             },
         );
         window.focus(&list.focus_handle(cx), cx);
-        self.palette = Some(list);
-        self._palette_subscription = Some(subscription);
+        self.palette = Some(ListModal::new(list, (), subscription));
         cx.notify();
     }
 
     pub(super) fn close_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
-        self._palette_subscription = None;
         self.focus_active(window, cx);
         cx.notify();
     }
@@ -600,7 +575,6 @@ impl WorkspaceShell {
     /// back to the shell root so mode keys keep dispatching.
     pub(super) fn cancel_palette(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.palette = None;
-        self._palette_subscription = None;
         self.restore_focus_after_modal_cancel(window, cx);
     }
 }
@@ -620,5 +594,46 @@ mod tests {
     #[test]
     fn first_row_to_select_is_none_when_the_list_is_empty() {
         assert_eq!(first_row_to_select(0), None);
+    }
+    #[test]
+    fn an_off_stage_model_reply_keeps_the_current_stage() {
+        use super::ModelPickerReply;
+        use crate::model_picker::{PickerStage, PickerState};
+        use horizon_agent::wire::ProviderSummary;
+        let mut state = PickerState::new();
+        state.set_providers(
+            ["first", "second"]
+                .map(|name| ProviderSummary {
+                    name: name.into(),
+                    base_url: None,
+                    api_key_env: String::new(),
+                    default_model: None,
+                    available: true,
+                    default: false,
+                })
+                .into(),
+        );
+        state.confirm_at(IndexPath::new(0));
+        assert!(state.begin_live_load(0));
+        state.back();
+        state.confirm_at(IndexPath::new(1));
+        assert!(state.begin_live_load(1));
+        assert!(!ModelPickerReply::Models {
+            provider: 0,
+            ids: vec!["model-a".into()]
+        }
+        .apply(&mut state));
+        assert_eq!(state.stage(), &PickerStage::Models { provider: 1 });
+        assert!(state.items().is_empty());
+        state.back();
+        state.confirm_at(IndexPath::new(0));
+        assert!(
+            !state.begin_live_load(0),
+            "the off-stage answer is still cached"
+        );
+        assert_eq!(
+            state.confirm_at(IndexPath::new(0)).unwrap().model,
+            "model-a"
+        );
     }
 }

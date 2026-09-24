@@ -349,7 +349,7 @@ impl AgentTranscript {
         // sibling's arrow follows the same rule).
         let row_surface = if waiting {
             theme::tint_over_background(theme::warning(), 0.12)
-        } else if call.is_error {
+        } else if call.is_error() {
             theme::tint_over_background(theme::danger(), 0.1)
         } else {
             rgb(theme::background()).into()
@@ -377,7 +377,7 @@ impl AgentTranscript {
             .px_3()
             .py_1()
             .when(waiting, |this| this.bg(theme::warning().alpha(0.12)))
-            .when(call.is_error, |this| this.bg(theme::danger().alpha(0.1)))
+            .when(call.is_error(), |this| this.bg(theme::danger().alpha(0.1)))
             .child(
                 div()
                     .flex_none()
@@ -463,7 +463,7 @@ impl AgentTranscript {
             // otherwise -- there's nothing wrong to flag on a success row.
             // The whole row is still the click target, matching
             // `render_expandable_tool_call_row`'s convention.
-            let label_color = if call.is_error {
+            let label_color = if call.is_error() {
                 snap(theme::danger())
             } else {
                 theme::text_subtle()
@@ -550,6 +550,7 @@ pub(super) enum ToolCallMark {
     Superseded,
     Error,
     Success,
+    Cancelled,
 }
 
 impl ToolCallMark {
@@ -560,6 +561,7 @@ impl ToolCallMark {
     /// outcome (backlog 55).
     pub(super) fn glyph_and_color(self) -> (&'static str, Hsla) {
         match self {
+            ToolCallMark::Cancelled => ("−", theme::text_muted()),
             ToolCallMark::Superseded => ("↻", theme::text_subtle()),
             ToolCallMark::Error => ("✗", theme::danger()),
             ToolCallMark::Success => ("✓", theme::success()),
@@ -578,12 +580,15 @@ impl ToolCallMark {
 /// (the superseded-by-retry result carries no error), so without this
 /// branch first the chip read it as a plain success.
 pub(super) fn finished_tool_call_mark(call: &turns::ToolCallView) -> ToolCallMark {
-    if call.superseded {
-        ToolCallMark::Superseded
-    } else if call.is_error {
-        ToolCallMark::Error
-    } else {
-        ToolCallMark::Success
+    match &call.outcome {
+        Some(horizon_agent::contract::ToolOutcome::Superseded { .. }) => ToolCallMark::Superseded,
+        Some(horizon_agent::contract::ToolOutcome::Cancelled) => ToolCallMark::Cancelled,
+        Some(
+            horizon_agent::contract::ToolOutcome::Failed
+            | horizon_agent::contract::ToolOutcome::Denied,
+        ) => ToolCallMark::Error,
+        Some(horizon_agent::contract::ToolOutcome::Succeeded) => ToolCallMark::Success,
+        None => unreachable!("a running call has no finished mark"),
     }
 }
 
@@ -593,7 +598,7 @@ pub(super) fn finished_tool_call_mark(call: &turns::ToolCallView) -> ToolCallMar
 /// delegate to [`finished_tool_call_mark`] so they can't diverge from the
 /// receipt chip; only the live-running `●` is this renderer's own.
 fn tool_call_glyph(call: &turns::ToolCallView) -> (&'static str, Hsla) {
-    if !call.finished {
+    if !call.finished() {
         ("●", theme::accent())
     } else {
         finished_tool_call_mark(call).glyph_and_color()
@@ -608,7 +613,7 @@ fn tool_call_line_text(call: &turns::ToolCallView) -> String {
         text.push(' ');
         text.push_str(target);
     }
-    if call.finished {
+    if call.finished() {
         if let Some(summary) = &call.result_summary {
             text.push_str(" · ");
             text.push_str(summary);
@@ -628,6 +633,8 @@ fn tool_call_line_text(call: &turns::ToolCallView) -> String {
 fn approval_phrase(approval: turns::ApprovalState) -> Option<(&'static str, Hsla)> {
     match approval {
         turns::ApprovalState::Approved => Some(("approved", theme::text_muted())),
+        turns::ApprovalState::Superseded => Some(("superseded", theme::text_muted())),
+        turns::ApprovalState::Cancelled => Some(("cancelled", theme::text_muted())),
         turns::ApprovalState::Denied => Some(("denied", theme::danger())),
         turns::ApprovalState::None | turns::ApprovalState::Waiting => None,
     }
@@ -732,12 +739,9 @@ mod tests {
     use super::finished_tool_call_mark;
     use super::turns::{ApprovalState, ToolCallKind, ToolCallView};
     use super::ToolCallMark;
-    use horizon_agent::contract::ToolCallId;
+    use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolOutcome};
 
-    /// A finished `ToolCallView` with only the outcome flags varying -- the
-    /// mark only reads `superseded` and `is_error` (the `finished` split is
-    /// the caller's), so the rest is inert filler.
-    fn finished_view(superseded: bool, is_error: bool) -> ToolCallView {
+    fn finished_view(outcome: ToolOutcome) -> ToolCallView {
         ToolCallView {
             call_id: ToolCallId("c".to_string()),
             request_index: 0,
@@ -750,32 +754,26 @@ mod tests {
                 command_head: "echo".to_string(),
             },
             affected_files: Vec::new(),
-            finished: true,
-            is_error,
-            superseded,
+            outcome: Some(outcome),
             approval: ApprovalState::None,
         }
     }
 
-    /// A superseded attempt finished without error (the superseded-by-retry
-    /// result carries `superseded_by_retry: true` and leaves `is_error`
-    /// false), so the only thing distinguishing it from a plain success is
-    /// the `superseded` flag. The mark must read `Superseded`, not fall
-    /// through to `Success` -- the receipt chip once did exactly that
-    /// (backlog 55).
     #[test]
-    fn finished_tool_call_mark_reads_superseded_not_success() {
-        assert_eq!(
-            finished_tool_call_mark(&finished_view(true, false)),
-            ToolCallMark::Superseded
-        );
-        assert_eq!(
-            finished_tool_call_mark(&finished_view(false, false)),
-            ToolCallMark::Success
-        );
-        assert_eq!(
-            finished_tool_call_mark(&finished_view(false, true)),
-            ToolCallMark::Error
-        );
+    fn every_terminal_outcome_has_the_expected_mark() {
+        for (outcome, expected) in [
+            (ToolOutcome::Succeeded, ToolCallMark::Success),
+            (ToolOutcome::Failed, ToolCallMark::Error),
+            (ToolOutcome::Denied, ToolCallMark::Error),
+            (ToolOutcome::Cancelled, ToolCallMark::Cancelled),
+            (
+                ToolOutcome::Superseded {
+                    retry_occurrence_id: OccurrenceId("retry".into()),
+                },
+                ToolCallMark::Superseded,
+            ),
+        ] {
+            assert_eq!(finished_tool_call_mark(&finished_view(outcome)), expected);
+        }
     }
 }

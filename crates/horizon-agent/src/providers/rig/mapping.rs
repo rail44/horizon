@@ -27,7 +27,7 @@ pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
 pub(super) fn horizon_events_from_rig_message(message: Message) -> Vec<Event> {
     horizon_provider_events_from_rig_message(message)
         .into_iter()
-        .map(|event| event.event)
+        .filter_map(ProviderEvent::into_event)
         .collect()
 }
 
@@ -235,7 +235,11 @@ fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
 /// announced the call: the replayed call, the pending-tool-call
 /// descriptors, or the result-producing context.
 pub(super) fn rig_tool_result_message(result: &ToolCallResult, tool_id: &str) -> Message {
-    Message::tool_result(result.call_id.0.clone(), tool_id, result.output.to_string())
+    Message::tool_result(
+        result.call_id.0.clone(),
+        tool_id,
+        serde_json::json!({"outcome": result.outcome, "output": result.output}).to_string(),
+    )
 }
 
 /// One `fs.read` of `path` — the deterministic fallback's hook for driving

@@ -675,10 +675,11 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
 
     frame
         .items
-        .push(AgentFrameItem::ToolCallFinished(ToolCallResult::new(
-            call_id.clone(),
-            crate::contract::OccurrenceId(call_id.0.clone()),
-            json!({ "cancelled": true }),
+        .push(AgentFrameItem::ToolCallFinished(ToolCallResult::cancelled(
+            crate::contract::ToolCallIdentity {
+                call_id: call_id.clone(),
+                occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+            },
         )));
 
     assert!(
@@ -700,7 +701,6 @@ fn should_fold_completion_is_false_once_the_call_already_has_a_finish() {
 /// arrives asynchronously.
 #[test]
 fn should_fold_completion_ignores_the_superseded_close_of_an_abandoned_attempt() {
-    use crate::contract::SUPERSEDED_BY_RETRY;
     use crate::contract::{OccurrenceId, ToolCallRequest};
 
     let call_id = ToolCallId("denial-retry".to_string());
@@ -714,11 +714,10 @@ fn should_fold_completion_ignores_the_superseded_close_of_an_abandoned_attempt()
             occurrence_id: occurrence.clone(),
         })
     };
-    let superseded_close = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
-        call_id.clone(),
-        abandoned.clone(),
-        json!({ SUPERSEDED_BY_RETRY: true }),
-    ));
+    let superseded_close = AgentFrameItem::ToolCallFinished(
+        ToolCallResult::new(call_id.clone(), abandoned.clone(), json!({}))
+            .superseded_by_retry(&retry),
+    );
     let retry_result = AgentFrameItem::ToolCallFinished(ToolCallResult::new(
         call_id.clone(),
         retry.clone(),

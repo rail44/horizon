@@ -635,8 +635,8 @@ fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) 
         .tool_call_request(&prior_result.call_id)
     {
         if request.occurrence_id != prior_result.occurrence_id {
-            events.push(Event::ToolCallFinished(request.identity().result(
-                serde_json::json!({"cancelled": true, "message": "retry was not executed"}),
+            events.push(Event::ToolCallFinished(ToolCallResult::cancelled(
+                request.identity(),
             )));
         }
     }

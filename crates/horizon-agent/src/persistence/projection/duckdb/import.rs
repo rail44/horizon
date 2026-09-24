@@ -63,7 +63,12 @@ impl Store {
         records: impl IntoIterator<Item = Record>,
     ) -> Result<ApplyRecordsReport> {
         self.clear_all_agent_state()?;
-        self.apply_records(records)
+        let report = self.apply_records(records)?;
+        self.conn.execute(
+            "INSERT INTO agent_projection_format VALUES (true, ?)",
+            [crate::persistence::event_log::AGENT_EVENT_LOG_VERSION],
+        )?;
+        Ok(report)
     }
 
     /// Incremental catch-up: appends `records` -- expected to already be

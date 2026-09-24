@@ -107,7 +107,7 @@ pub fn segment_bursts(items: &[AgentFrameItem]) -> Vec<Burst> {
             item if is_assistant_text(item) => open.as_ref().is_some_and(|burst| {
                 build_tool_call_views(&items[burst.start..burst.end])
                     .iter()
-                    .all(|call| call.finished)
+                    .all(|call| call.finished())
             }),
             // Both markers close the burst before themselves. In particular,
             // compaction must remain a visible divider outside every receipt.

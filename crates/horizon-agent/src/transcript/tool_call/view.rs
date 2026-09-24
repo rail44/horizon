@@ -1,4 +1,4 @@
-use crate::contract::{is_superseded_output, ToolCallId};
+use crate::contract::{ToolCallId, ToolOutcome};
 use crate::frame::{pending_approval_call_ids_in, tool_call_occurrences, AgentFrameItem};
 
 use super::approval::derive_approval_state;
@@ -61,17 +61,8 @@ pub struct ToolCallView {
     pub result_summary: Option<String>,
     pub kind: ToolCallKind,
     pub affected_files: Vec<FileEffect>,
-    pub finished: bool,
-    pub is_error: bool,
-    /// This row is a denial-retry attempt that was abandoned: it ran, was
-    /// refused a domain or a path, and an approved retry took its place, so
-    /// its terminal result is the `superseded_by_retry` marker rather
-    /// than the outcome the model ever saw (backlog 55; the marker is
-    /// written by `crate::tools::approval`'s denial-retry approve path).
-    /// Neither success nor failure -- the renderers give it a muted
-    /// "superseded" register instead of the success check or the error
-    /// cross.
-    pub superseded: bool,
+    /// Absent while running; the same terminal outcome used for replay.
+    pub outcome: Option<ToolOutcome>,
     /// This call's approval lifecycle (owner feedback 2026-07-13, round
     /// 3: "which tool call corresponds to which approval" -- integrating
     /// approval into the row instead of a standalone box). `None` for a
@@ -79,10 +70,24 @@ pub struct ToolCallView {
     pub approval: ApprovalState,
 }
 
+impl ToolCallView {
+    pub fn finished(&self) -> bool {
+        self.outcome.is_some()
+    }
+    pub fn is_error(&self) -> bool {
+        self.outcome.as_ref().is_some_and(ToolOutcome::is_error)
+    }
+    pub fn is_success(&self) -> bool {
+        self.outcome == Some(ToolOutcome::Succeeded)
+    }
+    pub fn superseded(&self) -> bool {
+        matches!(self.outcome, Some(ToolOutcome::Superseded { .. }))
+    }
+}
+
 /// A tool call's approval lifecycle, derived in [`build_tool_call_views`]
 /// from whether the call ever had an `ApprovalRequested` item and, if so,
-/// how its `ToolCallStarted`/`ToolCallFinished` acks read (see [`is_denied`]
-/// for the denial detection).
+/// how its `ToolCallStarted`/`ToolCallFinished` acknowledgements read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ApprovalState {
     /// No `ApprovalRequested` item for this call at all -- an
@@ -102,16 +107,18 @@ pub enum ApprovalState {
     /// the click). Buttons/proposal body disappear here; the row's glyph
     /// stays ● running until `ToolCallFinished` also folds.
     Approved,
-    /// The user denied: `ToolCallFinished` folded with the "denied by
-    /// user" convention, with no `ToolCallStarted` at all (a deny never
-    /// starts the tool).
+    /// The user denied the request; denial is an explicit result outcome.
     Denied,
+    /// The turn was cancelled while this approval was still waiting.
+    Cancelled,
+    /// Another execution attempt replaced this pending approval.
+    Superseded,
 }
 
 /// Builds one [`ToolCallView`] per distinct tool call requested within
 /// `items` (a single turn span's slice), in first-request order. A call
 /// with no matching `ToolCallFinished` yet (the running turn's
-/// in-flight calls) gets `finished: false` and no result summary.
+/// in-flight calls) gets no outcome or result summary.
 pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
     tool_call_occurrences(items)
         .into_iter()
@@ -134,16 +141,18 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 tool_id: entry.request.tool_id.clone(),
                 verb,
                 target,
-                result_summary: if entry.result.is_some() {
-                    result_summary
-                } else {
-                    None
+                result_summary: match result.map(|result| &result.outcome) {
+                    Some(ToolOutcome::Superseded { .. }) => {
+                        Some(super::approval::SUPERSEDED_SUMMARY.into())
+                    }
+                    Some(ToolOutcome::Cancelled) => Some("cancelled".into()),
+                    Some(ToolOutcome::Denied) => Some("denied".into()),
+                    Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => result_summary,
+                    None => None,
                 },
                 kind,
                 affected_files,
-                finished: entry.result.is_some(),
-                is_error: result.is_some_and(|result| result.is_error),
-                superseded: output.is_some_and(is_superseded_output),
+                outcome: result.map(|result| result.outcome.clone()),
                 approval: derive_approval_state(entry.had_approval_request, entry.started, result),
             }
         })
@@ -164,7 +173,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
 /// check -- it already auto-shows its proposal body unconditionally
 /// (`AgentView::render_waiting_proposal`), untouched by this predicate.
 pub fn running_row_expandable(call: &ToolCallView) -> bool {
-    call.finished
+    call.finished()
 }
 
 /// Whether `call_id`'s approval request is still unresolved within
@@ -190,6 +199,6 @@ pub fn is_approval_still_pending(turn_items: &[AgentFrameItem], call_id: &ToolCa
 /// `(finished, total)` tool-call counts for a running card's `n / m`
 /// progress header.
 pub fn progress(tool_calls: &[ToolCallView]) -> (usize, usize) {
-    let finished = tool_calls.iter().filter(|call| call.finished).count();
+    let finished = tool_calls.iter().filter(|call| call.finished()).count();
     (finished, tool_calls.len())
 }

@@ -152,7 +152,7 @@ impl AgentTranscript {
     /// once failed, see below) for a failed fs.edit/fs.write, and a
     /// plain verb + mark for everything else.
     fn render_receipt_chip(&self, call: &turns::ToolCallView) -> AnyElement {
-        let (mark, mark_color) = if !call.finished {
+        let (mark, mark_color) = if !call.finished() {
             ("…", theme::text_subtle())
         } else {
             super::rows::finished_tool_call_mark(call).glyph_and_color()
@@ -173,7 +173,7 @@ impl AgentTranscript {
                         .text_color(theme::text_muted())
                         .child(file_name.clone()),
                 );
-                if call.is_error {
+                if call.is_error() {
                     // A failed edit/write applied nothing, or -- for an
                     // `fs.edit` batch that stopped partway -- only some
                     // prefix of its edits; either way the call's own
@@ -183,7 +183,7 @@ impl AgentTranscript {
                     // just the mark, not the attempted diffstat.
                     label =
                         label.child(div().text_size(px(11.0)).text_color(mark_color).child(mark));
-                } else if let Some((added, removed)) = diffstat.filter(|_| call.finished) {
+                } else if let Some((added, removed)) = diffstat.filter(|_| call.finished()) {
                     label = label
                         .child(
                             div()
@@ -197,7 +197,7 @@ impl AgentTranscript {
                                 .text_color(theme::danger())
                                 .child(format!("−{removed}")),
                         );
-                } else if !call.finished {
+                } else if !call.finished() {
                     label = label.child(
                         div()
                             .text_size(px(11.0))

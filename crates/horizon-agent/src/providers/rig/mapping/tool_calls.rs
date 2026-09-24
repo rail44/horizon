@@ -1,11 +1,9 @@
 //! Restore provider calls from execution attempts. Retries remain separate in
 //! the event log, but the provider waits for one final answer to its request.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::contract::{
-    is_superseded_output, OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult,
-};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallRequest, ToolCallResult};
 use rig_core::completion::Message;
 
 use super::{rig_tool_call_from_request, rig_tool_result_message};
@@ -14,6 +12,7 @@ use super::{rig_tool_call_from_request, rig_tool_result_message};
 pub(super) struct ReplayedToolCalls<'a> {
     calls: Vec<ProviderCall<'a>>,
     occurrences: HashMap<&'a OccurrenceId, usize>,
+    retired: HashSet<OccurrenceId>,
     pending: HashMap<&'a ToolCallId, usize>,
 }
 
@@ -51,7 +50,11 @@ impl<'a> ReplayedToolCalls<'a> {
     }
 
     pub(super) fn result(&mut self, result: &ToolCallResult) -> Option<Message> {
-        if is_superseded_output(&result.output) {
+        if result.is_superseded() {
+            self.retired.insert(result.occurrence_id.clone());
+            return None;
+        }
+        if self.retired.contains(&result.occurrence_id) {
             return None;
         }
         let index = self.occurrences.get(&result.occurrence_id).copied();

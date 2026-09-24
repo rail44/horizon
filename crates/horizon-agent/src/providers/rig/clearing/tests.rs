@@ -724,10 +724,12 @@ async fn a_session_over_the_threshold_runs_one_pass_and_keeps_turning() {
 
     let passes: Vec<HistoryCleared> = events_rx
         .try_iter()
-        .filter_map(|event| match event.event {
-            Event::HistoryCleared(cleared) => Some(cleared),
-            _ => None,
-        })
+        .filter_map(
+            |event| match event.clone().into_event().expect("conversation event") {
+                Event::HistoryCleared(cleared) => Some(cleared),
+                _ => None,
+            },
+        )
         .collect();
     assert_eq!(
         passes.len(),

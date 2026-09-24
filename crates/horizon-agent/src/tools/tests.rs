@@ -241,12 +241,20 @@ fn processing_preserves_provider_payload_on_original_event_only() {
         ),
     );
 
-    assert_eq!(processing.horizon_events[0].provider_payload, Some(payload));
+    assert!(
+        matches!(&processing.horizon_events[0], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+    );
     assert!(processing
         .horizon_events
         .iter()
         .skip(1)
-        .all(|event| { event.provider_payload.is_none() }));
+        .all(|event| matches!(
+            event,
+            ProviderEvent::Event {
+                provider_payload: None,
+                ..
+            }
+        )));
 }
 
 // --- fs.read -----------------------------------------------------------
@@ -594,7 +602,7 @@ fn the_refusal_names_the_workspace_root() {
     )
     .expect("an unattended session refuses instead of asking");
 
-    assert!(result.is_error);
+    assert!(result.is_error());
     let message = result.output["message"].as_str().unwrap().to_string();
     assert!(message.contains(&root.display().to_string()), "{message}");
     assert!(
@@ -845,13 +853,13 @@ fn unavailable_synchronous_tools_return_identified_failure_to_the_provider() {
         };
         assert_eq!(result.call_id, identity.call_id);
         assert_eq!(result.occurrence_id, identity.occurrence_id);
-        assert!(result.is_error, "{tool_id}: {result:?}");
+        assert!(result.is_error(), "{tool_id}: {result:?}");
         assert_eq!(
             processing
                 .horizon_events
                 .iter()
                 .filter(|event| {
-                    matches!(&event.event, Event::ToolCallFinished(finished) if finished == result)
+                    matches!(event.as_event(), Some(Event::ToolCallFinished(finished)) if finished == result)
                 })
                 .count(),
             1
@@ -919,10 +927,10 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
     );
 
     assert!(
-        !processing
-            .horizon_events
-            .iter()
-            .any(|event| matches!(event.event, Event::ApprovalRequested(_))),
+        !processing.horizon_events.iter().any(|event| matches!(
+            event.clone().into_event().expect("conversation event"),
+            Event::ApprovalRequested(_)
+        )),
         "an unknown tool id must never reach a human approval prompt: {:?}",
         processing.horizon_events
     );
@@ -930,10 +938,12 @@ fn process_agent_provider_event_never_asks_approval_for_an_unknown_tool_and_cont
     let result = processing
         .horizon_events
         .iter()
-        .find_map(|event| match &event.event {
-            Event::ToolCallFinished(result) => Some(result.clone()),
-            _ => None,
-        })
+        .find_map(
+            |event| match &event.clone().into_event().expect("conversation event") {
+                Event::ToolCallFinished(result) => Some(result.clone()),
+                _ => None,
+            },
+        )
         .expect("expected a ToolCallFinished error result the model can see");
     assert!(is_error(&result.output));
 
@@ -1968,7 +1978,7 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
             panic!("result delivery")
         };
         assert_eq!(result.occurrence_id, request.occurrence_id);
-        assert!(!result.is_error);
+        assert!(!result.is_error());
         assert_eq!(fs::read_to_string(&target).unwrap(), "approved content");
         fs::write(&target, "later edit").unwrap();
         let repeated = if automatic {
@@ -2021,7 +2031,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
     assert!(
-        result.denied,
+        result.is_denied(),
         "the contract-explicit denial marker must be set"
     );
     // Never ran: the file is untouched.
@@ -2066,7 +2076,7 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     };
     assert_eq!(result.output["is_error"], true);
     assert!(
-        !result.denied,
+        !result.is_denied(),
         "an approve that fails on its own is not a denial"
     );
     // Never mutated: the edit itself failed.
@@ -2672,7 +2682,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
             .expect("sandboxed read-only Git completion"),
     );
     assert!(
-        !status_result.is_error,
+        !status_result.is_error(),
         "Git failed: {:?}",
         status_result.output
     );
@@ -2720,7 +2730,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
             .recv_timeout(Duration::from_secs(10))
             .expect("sandboxed Git completion"),
     );
-    assert!(!result.is_error, "Git failed: {:?}", result.output);
+    assert!(!result.is_error(), "Git failed: {:?}", result.output);
     assert_eq!(result.output["sandboxed"], true);
     assert_eq!(result.output["git_operation_approved"], true);
     assert_eq!(
@@ -3237,7 +3247,6 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
 #[test]
 fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     use crate::contract::OccurrenceId;
-    use crate::contract::SUPERSEDED_BY_RETRY;
     use crate::transcript::SUPERSEDED_SUMMARY;
 
     let workspace = temp_workspace("superseded-retry-workspace");
@@ -3321,16 +3330,17 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
         panic!("the abandoned attempt must be closed before the retry starts: {events:?}");
     };
     assert_eq!(superseded.occurrence_id, abandoned);
-    assert_eq!(superseded.output[SUPERSEDED_BY_RETRY], json!(true));
     assert_eq!(
-        superseded.output["retry_occurrence_id"],
-        json!(retry.0.as_str())
+        superseded.outcome,
+        crate::contract::ToolOutcome::Superseded {
+            retry_occurrence_id: retry.clone()
+        }
     );
     assert!(
-        !superseded.is_error,
+        !superseded.is_error(),
         "an attempt a retry replaced did not fail on its own terms"
     );
-    assert!(!superseded.denied, "nobody denied this attempt");
+    assert!(!superseded.is_denied(), "nobody denied this attempt");
 
     assert!(
         frame.has_tool_call_finished(&call_id),
@@ -3357,9 +3367,9 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     );
     let views = crate::transcript::build_tool_call_views(&frame.items);
     assert_eq!(views.len(), 2);
-    assert!(views[0].finished && views[0].superseded && !views[0].is_error);
+    assert!(views[0].finished() && views[0].superseded() && !views[0].is_error());
     assert_eq!(views[0].result_summary.as_deref(), Some(SUPERSEDED_SUMMARY));
-    assert!(views[1].finished && !views[1].superseded && !views[1].is_error);
+    assert!(views[1].finished() && !views[1].superseded() && !views[1].is_error());
     assert_eq!(views[1].result_summary.as_deref(), Some("exit 0"));
 
     unregister_session_runtime(session_id);
@@ -3424,6 +3434,13 @@ fn domain_denial_retry_frame(
         crate::contract::OccurrenceId(call_id.0.clone()),
         json!({ "is_error": true, "denied_domains": domains, "exit_code": 0 }),
     );
+    let retry = crate::contract::OccurrenceId(format!("{}-retry", call_id.0));
+    live_state.extend_events([Event::ToolCallRequested(ToolCallRequest {
+        call_id: call_id.clone(),
+        tool_id: "bash".to_string(),
+        input: json!({"command": "curl https://example.com"}).into(),
+        occurrence_id: retry.clone(),
+    })]);
     let frame =
         live_state.extend_events([Event::ApprovalRequested(crate::contract::ApprovalRequest {
             call_id: call_id.clone(),
@@ -3432,7 +3449,7 @@ fn domain_denial_retry_frame(
                 domains: vec!["example.com".to_string()],
                 prior_result: prior_result.clone(),
             },
-            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+            occurrence_id: retry,
         })]);
     (frame, prior_result)
 }
@@ -3547,7 +3564,10 @@ fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
-        ApprovalOutcome::Executed { command, .. } => {
+        ApprovalOutcome::Executed {
+            command, events, ..
+        } => {
+            assert!(events.iter().any(|event| matches!(event, Event::ToolCallFinished(result) if result.outcome == crate::contract::ToolOutcome::Cancelled)));
             assert_eq!(command, Command::ToolCallResult(prior_result));
         }
         other => panic!("expected Executed forwarding the prior result, got {other:?}"),
@@ -3688,7 +3708,7 @@ fn resolve_approval_denies_bash_without_running_it() {
     assert_eq!(result.output["is_error"], true);
     assert_eq!(result.output["message"], "denied by user");
     assert!(
-        result.denied,
+        result.is_denied(),
         "the contract-explicit denial marker must be set"
     );
 

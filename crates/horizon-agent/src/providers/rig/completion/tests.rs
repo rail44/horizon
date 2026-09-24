@@ -152,7 +152,10 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     assert_eq!(request["tools"][0]["name"], "fs.read");
                 }
             }
-            let events: Vec<_> = rx.try_iter().map(|event| event.event).collect();
+            let events: Vec<_> = rx
+                .try_iter()
+                .filter_map(ProviderEvent::into_event)
+                .collect();
             assert_eq!(
                 events
                     .iter()

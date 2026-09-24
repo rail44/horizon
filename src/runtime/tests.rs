@@ -587,7 +587,9 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
         agent_event_rx
             .recv_timeout(Duration::from_secs(1))
             .unwrap()
-            .event,
+            .clone()
+            .into_event()
+            .expect("conversation event"),
         Event::Error(_)
     ));
     assert!(
@@ -697,7 +699,9 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
             .events()
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
-            .event,
+            .clone()
+            .into_event()
+            .expect("conversation event"),
         event
     );
     let mut commands = terminal_peer.commands;
@@ -1099,7 +1103,13 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     serve.abort();
 
     let agent_error = agent.events().recv_timeout(Duration::from_secs(5)).unwrap();
-    assert!(matches!(agent_error.event, Event::Error(_)));
+    assert!(matches!(
+        agent_error
+            .clone()
+            .into_event()
+            .expect("conversation event"),
+        Event::Error(_)
+    ));
 
     assert!(handle
         .session_list()
@@ -1166,7 +1176,7 @@ async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
         false,
     );
     let event = agent.events().recv_timeout(Duration::from_secs(5)).unwrap();
-    let Event::Error(error) = event.event else {
+    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
         panic!("expected the rejection to fan out as an error, got {event:?}");
     };
     assert!(
@@ -1315,7 +1325,7 @@ async fn a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop() {
         .events()
         .recv_timeout(Duration::from_secs(30))
         .unwrap();
-    let Event::Error(error) = event.event else {
+    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
         panic!("expected the unrecoverable mismatch to fan out as an error, got {event:?}");
     };
     assert!(
@@ -1376,7 +1386,7 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
         .events()
         .recv_timeout(Duration::from_secs(30))
         .unwrap();
-    let Event::Error(error) = event.event else {
+    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
         panic!("expected the fatal mismatch to fan out as an error, got {event:?}");
     };
     assert!(
@@ -1727,7 +1737,9 @@ async fn replacing_an_agent_handle_keeps_the_new_wire_attachment_live() {
             .events()
             .recv_timeout(Duration::from_secs(5))
             .unwrap()
-            .event,
+            .clone()
+            .into_event()
+            .expect("conversation event"),
         event
     );
     current.sender().send(Command::ContinueTurn).unwrap();

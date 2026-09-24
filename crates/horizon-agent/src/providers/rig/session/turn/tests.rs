@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::RigAgentConfig;
+use crate::contract::ProviderEvent;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -93,7 +94,7 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
     );
     assert_eq!(state.config, original_config);
     assert!(events.try_iter().any(|event| matches!(
-        event.event,
+        event.clone().into_event().expect("conversation event"),
         Event::MessageCommitted(AgentMessage { role: MessageRole::Assistant, text })
             if text == "Partial summary."
     )));
@@ -115,7 +116,10 @@ async fn memory_reminder_is_bounded_and_resets_for_the_next_interaction() {
     };
     for text in ["first interaction", "next interaction"] {
         state.handle_user_message(text.into()).await;
-        let emitted: Vec<_> = events.try_iter().map(|event| event.event).collect();
+        let emitted: Vec<_> = events
+            .try_iter()
+            .filter_map(ProviderEvent::into_event)
+            .collect();
         assert_eq!(
             emitted
                 .iter()
@@ -140,7 +144,7 @@ async fn memory_reminder_is_bounded_and_resets_for_the_next_interaction() {
     state.memory = None;
     state.handle_user_message("ordinary role".into()).await;
     assert!(!events.try_iter().any(|event| matches!(
-        event.event,
+        event.clone().into_event().expect("conversation event"),
         Event::MemoryCheckpointMissed
             | Event::MessageCommitted(AgentMessage {
                 role: MessageRole::AutoContinue,
@@ -193,9 +197,10 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
             state.memory.as_ref().unwrap().checkpoint,
             MemoryCheckpoint::Satisfied
         );
-        assert!(events
-            .try_iter()
-            .any(|event| matches!(event.event, Event::MemoryDigest(_))));
+        assert!(events.try_iter().any(|event| matches!(
+            event.clone().into_event().expect("conversation event"),
+            Event::MemoryDigest(_)
+        )));
         assert!(state
             .handle_memory_checkpoint(TurnCompletion::default())
             .await

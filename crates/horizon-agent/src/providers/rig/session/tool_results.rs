@@ -1,6 +1,6 @@
 //! Accept tool results and resume halted results before starting the next turn.
 
-use crate::contract::ToolCallResult;
+use crate::contract::{ToolCallResult, ToolOutcome};
 
 use super::turn::{fold_batched_tool_result, BatchStep};
 use super::{
@@ -10,6 +10,11 @@ use super::{
 
 impl SessionLoopState {
     pub(super) async fn handle_tool_result(&mut self, result: ToolCallResult) {
+        // A replacement is bookkeeping for an execution attempt, not the
+        // provider's final answer. Keep waiting for the replacement result.
+        if result.is_superseded() {
+            return;
+        }
         // The daemon validates execution identity before delivery. A declined
         // retry deliberately answers the provider call with the prior attempt's
         // real result, so the provider's pending key remains its call ID.
@@ -32,7 +37,9 @@ impl SessionLoopState {
         // emits the `MemoryDigest` event for persistence and
         // transcript display. Both `Updated` and `Skipped`
         // (no_update) satisfy the turn-end checkpoint.
-        if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID {
+        if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID
+            && result.outcome == ToolOutcome::Succeeded
+        {
             if let Some(memory) = self.memory.as_mut() {
                 if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
                     memory.document.apply(&digest);
@@ -160,5 +167,59 @@ mod tests {
         );
         assert!(!state.pending_tool_calls.contains_key(&reused));
         assert!(state.pending_tool_calls.contains_key(&sibling));
+    }
+    #[tokio::test]
+    async fn only_a_successful_memory_result_commits_the_checkpoint() {
+        use super::super::memory::{MemoryCheckpoint, StandingMemory};
+        for outcome in [
+            ToolOutcome::Succeeded,
+            ToolOutcome::Failed,
+            ToolOutcome::Denied,
+            ToolOutcome::Cancelled,
+            ToolOutcome::Superseded {
+                retry_occurrence_id: crate::contract::OccurrenceId::new(),
+            },
+        ] {
+            let call = ToolCallId("memory".into());
+            let descriptor = ToolCallDescriptor {
+                identity: crate::test_support::tool_identity(&call),
+                tool_id: crate::tools::MEMORY_UPDATE_TOOL_ID.into(),
+                args: serde_json::json!({"no_update": {"reason": "nothing changed"}}),
+            };
+            let (events_tx, events_rx) = crossbeam_channel::unbounded();
+            let mut state = SessionLoopState {
+                events_tx,
+                memory: Some(StandingMemory::default()),
+                pending_tool_calls: HashMap::from([
+                    (call.clone(), descriptor.clone()),
+                    (ToolCallId("sibling".into()), descriptor),
+                ]),
+                guard: super::super::TurnLoopGuard::new(20, 10),
+                ..SessionLoopState::default()
+            };
+            let mut result = ToolCallResult::new(
+                call.clone(),
+                crate::test_support::tool_identity(&call).occurrence_id,
+                serde_json::json!({}),
+            );
+            result.outcome = outcome.clone();
+            state.handle_tool_result(result).await;
+            let success = outcome == ToolOutcome::Succeeded;
+            assert_eq!(
+                state.memory.as_ref().unwrap().checkpoint == MemoryCheckpoint::Satisfied,
+                success
+            );
+            assert_eq!(
+                events_rx.try_iter().any(|event| matches!(
+                    event.as_event(),
+                    Some(crate::contract::Event::MemoryDigest(_))
+                )),
+                success
+            );
+            assert_eq!(
+                state.pending_tool_calls.contains_key(&call),
+                matches!(outcome, ToolOutcome::Superseded { .. })
+            );
+        }
     }
 }

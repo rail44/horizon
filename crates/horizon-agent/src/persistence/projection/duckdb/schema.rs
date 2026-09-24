@@ -1,4 +1,10 @@
 pub(super) const INITIALIZE_SCHEMA_SQL: &str = "
+-- Invalidates this derived cache when event representation changes.
+CREATE TABLE IF NOT EXISTS agent_projection_format (
+    singleton BOOLEAN PRIMARY KEY CHECK (singleton),
+    event_log_version INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS agent_sessions (
     session_id TEXT PRIMARY KEY,
     provider_id TEXT,
@@ -83,15 +89,8 @@ CREATE TABLE IF NOT EXISTS agent_approvals (
     call_id TEXT NOT NULL,
     occurrence_id TEXT NOT NULL,
     reason TEXT NOT NULL,
-    -- NULL while the approval is still pending; then 'approved' or
-    -- 'denied', derived from event *order* rather than any string match
-    -- (see `docs/agent-feedback-design.md`'s decision 1 and the addendum
-    -- at the bottom of that file): a `ToolCallStarted` for this `call_id`
-    -- means the human approved it (`Store::project_event`'s
-    -- `ToolCallStarted` arm); a `ToolCallFinished` for this `call_id`
-    -- arriving while `outcome` is still NULL means it was denied (a deny
-    -- short-circuits without ever starting -- `tools::approval::
-    -- synchronous_result(ran=false)`).
+    -- NULL while pending. A start acknowledges approval; a result before
+    -- start records its explicit denial, cancellation or replacement outcome.
     outcome TEXT
 );
 
@@ -121,6 +120,7 @@ pub(super) const PROJECTION_TABLES: &[&str] = &[
 ];
 
 pub(super) const CLEAR_ALL_AGENT_STATE_SQL: &str = "
+DELETE FROM agent_projection_format;
 DELETE FROM agent_messages;
 DELETE FROM agent_tool_calls;
 DELETE FROM agent_tool_results;

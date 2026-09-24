@@ -14,11 +14,11 @@ use schemars::JsonSchema;
 /// throughout this crate and its dependents.
 pub use horizon_wire::SessionId;
 
+mod provider_event;
+pub use provider_event::ProviderEvent;
+
 mod tool_result;
-pub(crate) use tool_result::is_superseded_output;
-pub use tool_result::ToolCallResult;
-#[cfg(test)]
-pub(crate) use tool_result::SUPERSEDED_BY_RETRY;
+pub use tool_result::{ToolCallResult, ToolOutcome};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct ProviderId(pub String);
@@ -607,51 +607,6 @@ pub fn event_kind(event: &Event) -> &'static str {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
-pub struct ProviderEvent {
-    pub event: Event,
-    pub provider_payload: Option<serde_json::Value>,
-    /// Ephemeral tool-call-argument-streaming progress (see
-    /// [`ToolCallProgress`]), set only via
-    /// [`ProviderEvent::tool_call_progress`]. `event` is an unused
-    /// placeholder whenever this is `Some`: `agent::live::State`'s reducer
-    /// folds this field straight into the frame and never reads `event` for
-    /// it, and `persistence::event_log::Appender` excludes it from every
-    /// append path before creating a persisted record. Piggy-
-    /// backing on the existing `ProviderEvent` struct (rather than adding a
-    /// new `Event` variant) means this "kind of event" never has to touch
-    /// the event log's exhaustive `Event` matches in
-    /// `persistence::projection::duckdb`.
-    pub tool_call_progress: Option<ToolCallProgress>,
-    /// The session's resolved model id, set only via
-    /// [`ProviderEvent::session_model`] -- the session-start counterpart to
-    /// `tool_call_progress` above: `event` is an unused placeholder whenever
-    /// this is `Some`, it's folded as sidecar state rather than a frame item
-    /// (`live::State::session_model`), and it's excluded from the persisted
-    /// event log the same way (see `LiveState::extend_provider_events`).
-    /// Sent once, session-scoped, by `horizon-agentd` at session start or
-    /// (re)attach (`wire::AgentWireEvent::SessionModel`) -- see
-    /// `docs/agent-output-ui-amendment.md`'s dated model-chip addendum.
-    pub session_model: Option<String>,
-    /// Live progress of one of this session's background `task` children,
-    /// set only via [`ProviderEvent::task_progress`] -- the same ephemeral
-    /// sidecar shape as `tool_call_progress` above: `event` is an unused
-    /// placeholder whenever this is `Some`, and the fold excludes it from
-    /// both the frame and the persisted event log. Emitted by the daemon's
-    /// task watcher (`wire::AgentWireEvent::TaskProgress`), never by a
-    /// provider.
-    pub task_progress: Option<TaskProgress>,
-    /// The session's last applied selection (the provider name plus the model
-    /// the caller asked for), set only via [`ProviderEvent::session_selection`]
-    /// -- the same ephemeral sidecar shape as `session_model` above: an unused
-    /// `event` placeholder, folded as sidecar state
-    /// (`live::State::session_selection`), never persisted. Distinct from
-    /// `session_model`: this is the display label (e.g. `moa` + `mix`), while
-    /// `session_model` is the aggregator's resolved model id. Sent by
-    /// `horizon-agentd` as `wire::AgentWireEvent::SessionSelection`.
-    pub session_selection: Option<crate::wire::ModelSelection>,
-}
-
 /// Live progress of one background `task` child, observed by the daemon and
 /// forwarded to the requester's attached client. Purely a UI feedback signal:
 /// never folded into conversation history and never persisted — see
@@ -705,83 +660,6 @@ pub struct ToolCallProgress {
     pub tool_id: Option<String>,
     /// Cumulative argument bytes streamed so far for this call.
     pub bytes: usize,
-}
-
-impl ProviderEvent {
-    /// Feedback and session metadata carry no conversation event. Persistence
-    /// and tool dispatch must never interpret their placeholder `event`.
-    pub fn is_ephemeral(&self) -> bool {
-        self.tool_call_progress.is_some()
-            || self.session_model.is_some()
-            || self.session_selection.is_some()
-            || self.task_progress.is_some()
-    }
-
-    pub(crate) fn new(event: Event) -> Self {
-        Self {
-            event,
-            provider_payload: None,
-            tool_call_progress: None,
-            session_model: None,
-            task_progress: None,
-            session_selection: None,
-        }
-    }
-
-    pub(crate) fn with_provider_payload(event: Event, provider_payload: serde_json::Value) -> Self {
-        Self {
-            provider_payload: Some(provider_payload),
-            ..Self::new(event)
-        }
-    }
-
-    /// Wraps ephemeral tool-call progress for delivery over the same
-    /// `Sender<ProviderEvent>` used for real provider events
-    /// (`SessionHandle::events`) — see [`ToolCallProgress`] for why `event`
-    /// here is an unused placeholder rather than a new `Event` variant.
-    pub fn tool_call_progress(progress: ToolCallProgress) -> Self {
-        Self {
-            tool_call_progress: Some(progress),
-            ..Self::new(Event::StateChanged(SessionState::Running))
-        }
-    }
-
-    /// Wraps a session's resolved model id for delivery over the same
-    /// channel -- see [`Self::session_model`]'s field doc comment. `event`
-    /// is the same unused placeholder [`Self::tool_call_progress`] uses.
-    pub fn session_model(model: String) -> Self {
-        Self {
-            session_model: Some(model),
-            ..Self::new(Event::StateChanged(SessionState::Running))
-        }
-    }
-
-    /// Wraps live background-task progress for delivery over the same
-    /// channel -- see [`TaskProgress`] and [`Self::task_progress`]'s field
-    /// doc comment. `event` is the same unused placeholder
-    /// [`Self::tool_call_progress`] uses.
-    pub fn task_progress(progress: TaskProgress) -> Self {
-        Self {
-            task_progress: Some(progress),
-            ..Self::new(Event::StateChanged(SessionState::Running))
-        }
-    }
-
-    /// Wraps a session's applied selection (provider name + the model the
-    /// caller asked for) for delivery over the same channel -- see
-    /// [`Self::session_selection`]'s field doc comment.
-    pub fn session_selection(provider: String, model: String) -> Self {
-        Self {
-            session_selection: Some(crate::wire::ModelSelection { provider, model }),
-            ..Self::new(Event::StateChanged(SessionState::Running))
-        }
-    }
-}
-
-impl From<Event> for ProviderEvent {
-    fn from(event: Event) -> Self {
-        Self::new(event)
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
@@ -1337,7 +1215,7 @@ mod json_value_tests {
             crate::contract::OccurrenceId("call-1".to_string()),
             serde_json::json!({"is_error": true, "message": "boom"}),
         );
-        assert!(result.is_error);
+        assert!(result.is_error());
     }
 
     #[test]

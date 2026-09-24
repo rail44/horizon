@@ -178,7 +178,7 @@ mod tests {
             panic!("filesystem denial must take precedence");
         };
         assert_eq!(denials, expected_denials);
-        assert!(result.is_error);
+        assert!(result.is_error());
         assert_eq!(result.occurrence_id.0, "result-precedence");
         assert_eq!(result.output["exit_code"], 0);
         assert_eq!(result.output["sandboxed"], true);
@@ -210,7 +210,7 @@ mod tests {
                 panic!("timeout and wait failure must not request filesystem retry");
             };
             assert_eq!(domains, ["example.test"]);
-            assert!(result.is_error);
+            assert!(result.is_error());
             assert_eq!(result.output["sandboxed"], true);
             assert_eq!(
                 result.output["denied_network_routes"][0]["operation"],
@@ -250,7 +250,7 @@ mod tests {
                 BashCompletion::Finished(result) if raw_status != 0 => result,
                 _ => panic!("unexpected completion"),
             };
-            assert_eq!(result.is_error, raw_status != 7 << 8);
+            assert_eq!(result.is_error(), raw_status != 7 << 8);
             assert_eq!(result.output["sandboxed"], true);
             assert!(result.output.get("note").is_none());
             if raw_status == 9 {
