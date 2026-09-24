@@ -28,6 +28,28 @@ Decisions:
 
 ## Provider Shape
 
+### Runtime model selection (2026-09-25)
+
+An explicit model switch resolves the daemon's current named-provider/MoA
+catalog once, when accepted. The daemon queues an owned resolved snapshot on
+the same command channel as user input. A running turn keeps its old config;
+the provider applies the snapshot at a turn boundary, refreshes its context
+window, then emits model/selection feedback. Only that feedback updates the
+daemon's reattach state and the pane's model display. RPC success means the
+switch was accepted, not that it has already taken effect.
+
+Provider sessions no longer keep a separate startup catalog. Reloading config
+still does not automatically switch running sessions. Later explicit switches
+use the reloaded catalog; another reload cannot change an already queued
+selection. Role tool restrictions and existing history/clearing state survive.
+
+`Command::ApplySessionModel` is an internal delivery variant excluded from
+serialization and the wire schema. External callers still supply only a
+configured provider name and model through `SetSessionModel` or the hub RPC.
+They cannot inject resolved endpoints or credential-variable names.
+
+### Session provider
+
 Conceptually, an agent provider is a capability-bearing session provider:
 
 ```text

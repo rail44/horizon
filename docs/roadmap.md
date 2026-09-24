@@ -72,8 +72,9 @@ for migration needs and remaining feature decisions. This is an investigation
 result. Implementation of the approved cleanup, provider/model selection, and
 execution identity changes is tracked in the
 [unification record](research/refactoring-spec-unification-2026-09-25.md).
-The inert DuckDB migration state and old command aliases have been removed;
-provider/model selection and execution identity are still in progress.
+The inert DuckDB migration state and old command aliases have been removed.
+Explicit model switches now resolve current config once and publish only after
+application; provider file syntax and execution identity are still in progress.
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring
 wave comes first**; the owner's near-term feature interest is worktree

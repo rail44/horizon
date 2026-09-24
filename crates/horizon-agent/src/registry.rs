@@ -122,8 +122,6 @@ impl ProviderRegistry {
             let provider = Arc::new(crate::providers::rig::Provider::for_entry(
                 id.clone(),
                 provider_config,
-                table.clone(),
-                moa.clone(),
                 duckdb_cell.clone(),
             ));
             registry.insert_under(id, provider.clone());
@@ -146,8 +144,6 @@ impl ProviderRegistry {
                 Arc::new(crate::providers::rig::Provider::for_entry(
                     id,
                     config,
-                    table.clone(),
-                    moa.clone(),
                     duckdb_cell.clone(),
                 )),
             );

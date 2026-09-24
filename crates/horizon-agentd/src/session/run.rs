@@ -325,6 +325,10 @@ fn handle_provider_event(
         &mut processing.provider_commands,
     );
 
+    for event in &processing.horizon_events {
+        super::model_selection::record_applied(state, session_id, event);
+    }
+
     let to_forward: Vec<AgentWireEvent> = processing
         .horizon_events
         .iter()

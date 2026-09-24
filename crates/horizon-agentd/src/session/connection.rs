@@ -140,62 +140,23 @@ impl Connection {
         }
     }
 
-    /// Applies a mid-session provider/model switch (latest turn wins):
-    /// validates the pair against the current surface, records the model id
-    /// on the session (so a (re)attach re-announces the switched model),
-    /// forwards `Command::SetSessionModel` to the session thread (its next
-    /// turn builds with the target entry), and re-announces
-    /// [`AgentWireEvent::SessionModel`] — the multi-provider design's
-    /// "resolution results ride the existing announcement".
-    ///
-    /// The command is forwarded before the announcement so a turn that
-    /// starts on the switch reports the switched model in its own
-    /// `ProviderRequestSent`, not the previous one.
+    /// Validate using current config and enqueue the resolved snapshot. Model
+    /// state and announcements change only after the provider applies it.
     pub(crate) fn set_session_model(
         &self,
         session_id: SessionId,
         provider: String,
         model: String,
     ) -> Result<(), String> {
-        let resolved = {
-            let config = lock_unpoisoned(&self.state.agent_config);
-            horizon_agent::config::resolve_model_selection(
-                &config.providers,
-                &config.moa,
-                &provider,
-                &model,
-            )?
-            .model()
-            .to_string()
-        };
-        let selection = horizon_agent::wire::ModelSelection {
-            provider: provider.clone(),
-            model: model.clone(),
-        };
-        {
-            let mut sessions = self.state.sessions.lock().unwrap();
-            let Some(entry) = sessions.get_mut(&session_id) else {
-                return Err(format!("Unknown session {session_id:?}."));
-            };
-            entry
-                .inbound
-                .send(Command::SetSessionModel { provider, model })
-                .map_err(|_| "Session is no longer accepting commands.".to_string())?;
-            entry.model = Some(resolved.clone());
-            entry.selection = Some(selection.clone());
-        }
-        send_session_event(
-            &self.state,
-            session_id,
-            AgentWireEvent::SessionModel(resolved),
-        );
-        // The display label alongside the resolved id: the chip reads
-        // `provider · model` (`moa · mix`) rather than the aggregator's id.
-        send_session_event(
-            &self.state,
-            session_id,
-            AgentWireEvent::SessionSelection(selection),
-        );
+        let command = super::model_selection::resolve(&self.state, &provider, &model)?;
+        let sessions = lock_unpoisoned(&self.state.sessions);
+        let entry = sessions
+            .get(&session_id)
+            .ok_or_else(|| format!("Unknown session {session_id:?}."))?;
+        entry
+            .inbound
+            .send(command)
+            .map_err(|_| "Session is no longer accepting commands.".to_string())?;
         Ok(())
     }
 
@@ -646,12 +607,9 @@ mod tests {
         assert_eq!(summaries[1].api_key_env, "ANTHROPIC_API_KEY");
     }
 
-    /// `set_session_model` records the model id on the session, forwards
-    /// `Command::SetSessionModel` to the session thread (the next turn builds
-    /// with it), and re-announces `SessionModel` — the multi-provider
-    /// design's "resolution results ride the existing announcement".
+    /// Acceptance queues a validated snapshot without changing applied state.
     #[test]
-    fn set_session_model_records_announces_and_forwards_the_switch() {
+    fn set_session_model_queues_a_snapshot_without_announcing_application() {
         let (state, _entries) = two_provider_state();
         let session_id = SessionId::new();
         let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -676,29 +634,17 @@ mod tests {
             .set_session_model(session_id, "claude".to_string(), "m-opus".to_string())
             .unwrap();
 
-        // The model id landed on the session — a re-attach would re-announce
-        // the switched model, not the old one.
         assert_eq!(
             connection.session_model(session_id).as_deref(),
-            Some("m-opus")
+            Some("test-model")
         );
-        // The switch command reached the session thread's inbound queue.
-        let command = inbound_rx.recv().unwrap();
-        assert!(
-            matches!(
-                &command,
-                Command::SetSessionModel { provider, model }
-                    if provider == "claude" && model == "m-opus"
-            ),
-            "{command:?}"
-        );
-        // And the resolution announcement rode the existing SessionModel
-        // event.
-        let sent = events.try_recv().unwrap();
-        assert!(
-            matches!(&sent, horizon_agent::wire::AgentWireEvent::SessionModel(model) if model == "m-opus"),
-            "{sent:?}"
-        );
+        let Command::ApplySessionModel(selection) = inbound_rx.recv().unwrap() else {
+            panic!("expected a resolved model switch");
+        };
+        assert_eq!(selection.model(), "m-opus");
+        assert_eq!(selection.requested_provider(), "claude");
+        assert_eq!(selection.requested_model(), "m-opus");
+        assert!(events.try_recv().is_err(), "queueing is not application");
     }
 
     #[test]
@@ -777,10 +723,9 @@ mod tests {
         assert!(connection.list_provider_models("moa").await.is_empty());
     }
 
-    /// Selecting a MoA entry announces the aggregator's model (what the
-    /// session's requests name) and forwards the selection unchanged.
+    /// MoA resolution captures the aggregator without prematurely announcing it.
     #[test]
-    fn set_session_model_accepts_a_moa_entry_and_announces_the_aggregator_model() {
+    fn set_session_model_captures_the_moa_aggregator_before_application() {
         let (state, _entries) = two_provider_state_with_moa(moa_table());
         let session_id = SessionId::new();
         let (inbound_tx, inbound_rx) = unbounded::<Command>();
@@ -805,17 +750,14 @@ mod tests {
             .unwrap();
         assert_eq!(
             connection.session_model(session_id).as_deref(),
-            Some("m-aggregate")
+            Some("test-model")
         );
-        let command = inbound_rx.recv().unwrap();
-        assert!(
-            matches!(
-                &command,
-                Command::SetSessionModel { provider, model }
-                    if provider == "moa" && model == "mix"
-            ),
-            "{command:?}"
-        );
+        let Command::ApplySessionModel(selection) = inbound_rx.recv().unwrap() else {
+            panic!("expected a resolved MoA selection");
+        };
+        assert_eq!(selection.model(), "m-aggregate");
+        assert_eq!(selection.requested_provider(), "moa");
+        assert_eq!(selection.requested_model(), "mix");
 
         let error = connection
             .set_session_model(session_id, "moa".to_string(), "typo".to_string())
@@ -832,7 +774,7 @@ mod tests {
         assert!(error.contains("CLAUDE_API_KEY"), "{error}");
         assert_eq!(
             connection.session_model(session_id).as_deref(),
-            Some("m-aggregate"),
+            Some("test-model"),
             "the refused switch left the previous selection in place"
         );
     }

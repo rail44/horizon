@@ -158,7 +158,9 @@ names with no per-item availability).
   the `[[providers]]` entry it names.
 - **Selection.** `registry.rs` registers `builtin.agent.moa.<name>` per
   entry, running the aggregator's `{provider, model}`.
-  `session/state.rs::apply_set_session_model` handles `provider == "moa"`.
+  `config/selection.rs::resolve_model_selection` handles `provider == "moa"`
+  against the daemon's current catalog. The provider applies the resolved
+  snapshot and then announces the aggregator model and MoA selection.
   `horizon-agentd/src/session/connection.rs` appends the `moa` group to
   `list_providers` as one more `ProviderSummary` and answers
   `list_provider_models("moa")` with the entry names from the config (no
@@ -204,7 +206,7 @@ names with no per-item availability).
   cannot tell that text from a model's answer.
 - **The clearing window follows the model.** A proposer's model is pinned
   after session construction, so the window discovered at construction
-  belongs to the entry's default model. `apply_set_session_model`
+  belongs to the entry's default model. `handle_set_session_model`
   re-discovers it (for every session, picker switches included);
   `ClearingState::adopt_window` moves only the window and leaves the
   frozen cleared set and the last measured input size in place.

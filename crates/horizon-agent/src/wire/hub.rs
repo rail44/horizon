@@ -288,10 +288,10 @@ pub trait SessionHub {
     /// its own selection. `provider` names a configured entry (see
     /// [`Self::list_providers`]); `model` is a model id — typically one the
     /// provider's `/models` listed, the same pass-through `role.model`
-    /// accepts. Validates the pair, re-announces
-    /// the model through the existing `AgentWireEvent::SessionModel`
-    /// announcement, and records it on the session so a (re)attach reports
-    /// the switched model. Unknown provider, unknown session, or an empty
+    /// accepts. Validates against current config and queues a resolved snapshot.
+    /// Success means acceptance; the provider announces the model only after
+    /// applying it. Reattach reports the last applied selection.
+    /// Unknown provider, unknown session, or an empty
     /// model is a [`HubError`].
     async fn set_session_model(
         &self,

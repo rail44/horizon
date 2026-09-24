@@ -64,7 +64,14 @@ impl Provider for MockProvider {
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
                     Command::UserMessage { text } => {
-                        if respond_to_user_message(&commands_rx, &events_tx, text, &mut pending_tool_call).is_break() {
+                        if respond_to_user_message(
+                            &commands_rx,
+                            &events_tx,
+                            text,
+                            &mut pending_tool_call,
+                        )
+                        .is_break()
+                        {
                             break;
                         }
                     }
@@ -165,11 +172,16 @@ impl Provider for MockProvider {
                     }
                     Command::EnvironmentPrepared { .. }
                     | Command::EnvironmentActivationFailed { .. }
-                    // The mock has no provider to switch; a switch is a
-                    // no-op here (tests assert the *rig* path's effect).
-                    | Command::SetSessionModel { .. }
                     | Command::AcknowledgeDelivery { .. }
                     | Command::SendSessionInput { .. } => {}
+                    Command::SetSessionModel { .. } | Command::ApplySessionModel(_) => {
+                        let _ = events_tx.send(
+                            Event::Error(crate::contract::Error {
+                                message: "This provider does not support model switching.".into(),
+                            })
+                            .into(),
+                        );
+                    }
                     Command::ContinueTurn => {
                         // The mock provider has no turn-loop guard, so it
                         // never halts a turn in the first place -- a safe

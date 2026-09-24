@@ -85,11 +85,6 @@ pub(crate) struct SessionLoopState {
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
-    /// The whole surface at spawn time — what a mid-session switch
-    /// (`Command::SetSessionModel`) resolves its target against.
-    pub(crate) table: crate::config::ProvidersTable,
-    /// The `[[moa]]` surface at spawn time, resolved the same way.
-    pub(crate) moa_table: crate::config::MoaTable,
     /// The owner messages and answers a Mixture-of-Agents pass hands its
     /// proposers. Maintained for every session (it costs one push per
     /// message) so switching into a `[[moa]]` entry mid-session starts with
@@ -126,11 +121,6 @@ impl Default for SessionLoopState {
             memory_reminded: false,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
-            table: crate::config::ProvidersTable {
-                entries: Vec::new(),
-                default_name: String::new(),
-            },
-            moa_table: crate::config::MoaTable::default(),
             moa_conversation: super::moa::MoaConversation::default(),
             moa_turn: None,
             environment: SessionEnvironment::for_workspace_root(None),
@@ -151,8 +141,6 @@ impl SessionLoopState {
         commands_rx: crossbeam_channel::Receiver<Command>,
         events_tx: Sender<ProviderEvent>,
         config: RigAgentConfig,
-        table: crate::config::ProvidersTable,
-        moa_table: crate::config::MoaTable,
         environment: SessionEnvironment,
         extra_sections: Vec<String>,
         role: Option<&'static RoleDefinition>,
@@ -188,8 +176,6 @@ impl SessionLoopState {
             memory_satisfied: false,
             memory_reminded: false,
             config,
-            table,
-            moa_table,
             moa_conversation,
             moa_turn: None,
             environment,
@@ -228,13 +214,16 @@ impl SessionLoopState {
             };
 
             match command {
-                // Mid-session provider/model switch, latest turn wins: swap
-                // what the *next turn* builds with. Announcing the resolved
-                // model is `horizon-agentd`'s job (the RPC handler owns
-                // `AgentWireEvent::SessionModel`); the loop only fails a
-                // switch it cannot resolve, as an ordinary error event.
-                Command::SetSessionModel { provider, model } => {
-                    self.handle_set_session_model(&provider, &model).await;
+                Command::ApplySessionModel(selection) => {
+                    self.handle_set_session_model(&selection).await;
+                }
+                Command::SetSessionModel { .. } => {
+                    let _ = self.events_tx.send(
+                        crate::contract::Event::Error(crate::contract::Error {
+                            message: "Model selection must be resolved by the daemon.".into(),
+                        })
+                        .into(),
+                    );
                 }
                 Command::SessionInput(input) => {
                     let resume_work = input.resume_work;
@@ -305,28 +294,20 @@ impl SessionLoopState {
 }
 
 impl SessionLoopState {
-    /// `Command::SetSessionModel`'s whole loop-side effect: swap what the
-    /// next turn builds with, or report a switch the loop cannot resolve as
-    /// an ordinary error event. Announcing the resolved model is NOT here —
-    /// the RPC handler owns `AgentWireEvent::SessionModel`. Named and
-    /// unit-tested separately because the command pump's arm is otherwise
-    /// the one untested join between the daemon-side forward and the next
-    /// turn's config.
-    async fn handle_set_session_model(&mut self, provider: &str, model: &str) {
-        match apply_set_session_model(
-            &mut self.config,
-            &self.table,
-            &self.moa_table,
-            provider,
-            model,
-        ) {
-            Ok(()) => self.rediscover_clearing_window().await,
-            Err(message) => {
-                let _ = self
-                    .events_tx
-                    .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
-            }
-        }
+    /// Apply a daemon-resolved snapshot at a turn boundary, then acknowledge it.
+    async fn handle_set_session_model(
+        &mut self,
+        selection: &crate::config::ResolvedModelSelection,
+    ) {
+        selection.apply(&mut self.config);
+        self.rediscover_clearing_window().await;
+        let _ = self
+            .events_tx
+            .send(ProviderEvent::session_model(selection.model().to_owned()));
+        let _ = self.events_tx.send(ProviderEvent::session_selection(
+            selection.requested_provider().to_owned(),
+            selection.requested_model().to_owned(),
+        ));
     }
 
     /// Re-reads the effective context window for the model this session now
@@ -341,45 +322,21 @@ impl SessionLoopState {
     }
 }
 
-/// Swaps a session's per-turn config to a resolved `[[providers]]` entry —
-/// `Command::SetSessionModel`'s whole effect, factored out pure so the
-/// switch's precedence rules are unit-testable without a session loop.
-///
-/// `model` is a model id (a declared one or a live `/models` id): it swaps
-/// the session's per-turn config onto the target entry's kind/key/base URL
-/// and sets that id verbatim. The owner-agreed priority is explicit
-/// selection > `role.model` > config default: an explicit switch replaces
-/// the provider bits wholesale (kind, key variable, base URL, model),
-/// while the role's other overrides (tool restrictions, iteration cap)
-/// stay, because they are not model-level knobs. Presence of the target
-/// entry's key variable is re-read at switch time (a key appearing or
-/// disappearing in the environment is honored here, mirroring how the
-/// entry's presence was resolved once at build); a target without its key
-/// runs the ordinary deterministic fallback, the same behavior a
-/// `[provider]`-only config with no key has always had.
-///
-/// Announcing the resolved model is NOT this fn's job: the RPC handler
-/// owns `AgentWireEvent::SessionModel`.
-/// `provider` names either a `[[providers]]` entry or the reserved
-/// [`crate::config::MOA_PROVIDER_NAME`] group, in which case `model` is a
-/// `[[moa]]` entry name: the session then runs that entry's aggregator and
-/// its owner messages open a pass. Switching to any other provider clears
-/// the pass.
-pub(super) fn apply_set_session_model(
-    config: &mut RigAgentConfig,
-    table: &crate::config::ProvidersTable,
-    moa_table: &crate::config::MoaTable,
-    provider: &str,
-    model: &str,
-) -> Result<(), String> {
-    crate::config::resolve_model_selection(table, moa_table, provider, model)?.apply(config);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
+
+    fn apply_set_session_model(
+        config: &mut RigAgentConfig,
+        table: &ProvidersTable,
+        moa: &crate::config::MoaTable,
+        provider: &str,
+        model: &str,
+    ) -> Result<(), String> {
+        crate::config::resolve_model_selection(table, moa, provider, model)?.apply(config);
+        Ok(())
+    }
 
     fn table() -> ProvidersTable {
         ProvidersTable {
@@ -542,39 +499,31 @@ mod tests {
         );
     }
 
-    /// The loop-side pump arm, driven directly through a real
-    /// `SessionLoopState`: the command mutates the state the next turn
-    /// reads (`run_turn` → `complete_rig_turn`), and an unresolvable
-    /// switch surfaces as an error event on the provider channel. This is
-    /// the join between the daemon-side forward (connection test) and the
-    /// next turn's config — the one piece a live provider-call round-trip
-    /// cannot observe hermetically, since a keyed turn's client
-    /// construction reads the environment per turn by design (mutating env
-    /// in a test would race the parallel suite).
+    /// A running session applies a resolved catalog snapshot without keeping
+    /// its own catalog, and acknowledges only after updating next-turn config.
     #[tokio::test]
     async fn the_session_loop_applies_a_switch_to_its_own_next_turn_config() {
         let (events_tx, events_rx) = crossbeam_channel::unbounded();
         let mut state = SessionLoopState {
             events_tx,
-            table: table(),
             ..Default::default()
         };
         state.config.model = "role-model".to_string();
 
-        state.handle_set_session_model("claude", "m-opus").await;
+        let selection =
+            crate::config::resolve_model_selection(&table(), &moa_table(), "claude", "m-opus")
+                .unwrap();
+        state.handle_set_session_model(&selection).await;
         assert_eq!(state.config.model, "m-opus");
         assert_eq!(state.config.kind, ProviderKind::Anthropic);
-        assert!(events_rx.try_recv().is_err(), "no error event on success");
-
-        // An unresolvable switch leaves the config untouched and reports
-        // the failure on the provider channel instead.
-        state.handle_set_session_model("typo", "m").await;
-        assert_eq!(state.config.model, "m-opus");
-        let received = events_rx.try_recv().unwrap();
-        assert!(
-            matches!(received.event, crate::contract::Event::Error(_)),
-            "{received:?}"
+        assert_eq!(
+            events_rx.try_recv().unwrap().session_model.as_deref(),
+            Some("m-opus")
         );
+        let announced = events_rx.try_recv().unwrap().session_selection.unwrap();
+        assert_eq!(announced.provider, "claude");
+        assert_eq!(announced.model, "m-opus");
+        assert!(events_rx.try_recv().is_err());
     }
 
     /// A switch re-reads the window for the model the session now runs.
@@ -587,7 +536,6 @@ mod tests {
         let (events_tx, _events_rx) = crossbeam_channel::unbounded();
         let mut state = SessionLoopState {
             events_tx,
-            table: table(),
             clearing: ClearingState::new(Some(500_000), 60),
             ..Default::default()
         };
@@ -596,7 +544,10 @@ mod tests {
             .seed_cleared(vec![crate::contract::ToolCallId("call-0".to_string())]);
         state.clearing.record_input_tokens(400_000);
 
-        state.handle_set_session_model("claude", "m-opus").await;
+        let selection =
+            crate::config::resolve_model_selection(&table(), &moa_table(), "claude", "m-opus")
+                .unwrap();
+        state.handle_set_session_model(&selection).await;
 
         assert_eq!(
             state.clearing.effective_window_tokens(),

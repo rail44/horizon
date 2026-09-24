@@ -233,22 +233,20 @@ pub enum Command {
     /// log -- replay must never auto-resume a halted turn, so nothing in
     /// bootstrap ever sends this on a session's behalf).
     ContinueTurn,
-    /// Mid-session provider/model switch, latest turn wins: `provider` names
-    /// a resolved `[[providers]]` entry and `model` is a model id the
-    /// provider's `/models` listing answered (the same pass-through
-    /// `role.model` accepts). Delivered on the
-    /// attachment's commands channel by `horizon-agentd`'s
-    /// `set_session_model` RPC handler, which owns validating the pair and
-    /// re-announcing the model (`AgentWireEvent::SessionModel`);
-    /// the session loop only swaps what the *next turn* builds with.
-    /// Not persisted: the override lives in the daemon's session state, the
-    /// same "running session keeps its spawn-time config" philosophy
-    /// `reload_provider_config` follows.
+    /// Request a model switch. The daemon resolves its current catalog before
+    /// forwarding an internal `ApplySessionModel`. The running turn finishes
+    /// on its previous selection; the provider announces only after application.
     SetSessionModel {
         provider: String,
         model: String,
     },
     Shutdown,
+    /// Daemon-to-provider delivery of an already validated selection. Explicitly
+    /// excluded from serialization/schema so clients cannot supply provider
+    /// endpoints or key-variable names instead of selecting configured entries.
+    #[serde(skip)]
+    #[schemars(skip)]
+    ApplySessionModel(Box<crate::config::ResolvedModelSelection>),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]

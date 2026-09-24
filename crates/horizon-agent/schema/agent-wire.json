@@ -618,7 +618,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Mid-session provider/model switch, latest turn wins: `provider` names\na resolved `[[providers]]` entry and `model` is a model id the\nprovider's `/models` listing answered (the same pass-through\n`role.model` accepts). Delivered on the\nattachment's commands channel by `horizon-agentd`'s\n`set_session_model` RPC handler, which owns validating the pair and\nre-announcing the model (`AgentWireEvent::SessionModel`);\nthe session loop only swaps what the *next turn* builds with.\nNot persisted: the override lives in the daemon's session state, the\nsame \"running session keeps its spawn-time config\" philosophy\n`reload_provider_config` follows.",
+          "description": "Request a model switch. The daemon resolves its current catalog before\nforwarding an internal `ApplySessionModel`. The running turn finishes\non its previous selection; the provider announces only after application.",
           "properties": {
             "SetSessionModel": {
               "properties": {

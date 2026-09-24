@@ -166,6 +166,18 @@ pub(super) fn dispatch_inbound_command(
     command: Command,
 ) {
     match command {
+        Command::SetSessionModel { provider, model } => {
+            match super::model_selection::resolve(state, &provider, &model) {
+                Ok(command) => {
+                    let _ = commands_tx.send(command);
+                }
+                Err(message) => send_session_event(
+                    state,
+                    session_id,
+                    AgentWireEvent::Event(Event::Error(horizon_agent::contract::Error { message })),
+                ),
+            }
+        }
         Command::SendSessionInput {
             session_id: recipient,
             input,

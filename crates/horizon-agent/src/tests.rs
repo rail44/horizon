@@ -41,11 +41,6 @@ fn provider_initialization_preserves_a_replayed_failed_turn() {
                 api_key_present: false,
                 ..Default::default()
             },
-            crate::config::ProvidersTable {
-                entries: Vec::new(),
-                default_name: String::new(),
-            },
-            crate::config::MoaTable::default(),
             crate::persistence::projection::duckdb::SharedDuckdbStore::unavailable(),
         )),
     ];

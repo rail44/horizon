@@ -472,6 +472,99 @@ async fn wait_for_persisted_event(
 // --- tests -----------------------------------------------------------------
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn reload_then_switch_updates_an_existing_session_and_reattach() {
+    async fn applied(
+        events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
+        expected_model: &str,
+    ) {
+        tokio::time::timeout(Duration::from_secs(30), async {
+            let mut model = None;
+            loop {
+                match events.recv().await.unwrap().unwrap() {
+                    AgentWireEvent::SessionModel(value) => model = Some(value),
+                    AgentWireEvent::SessionSelection(selection)
+                        if selection.provider == "added" && selection.model == expected_model =>
+                    {
+                        assert_eq!(model.as_deref(), Some(expected_model));
+                        break;
+                    }
+                    AgentWireEvent::Event(Event::Error(error)) => {
+                        panic!("model application failed: {}", error.message);
+                    }
+                    _ => {}
+                }
+            }
+        })
+        .await
+        .expect("applied selection must reach the client");
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let config_path = directory.path().join("config.toml");
+    let initial = r#"default_provider = "initial"
+[[providers]]
+name = "initial"
+api_key_env = "HORIZON_SWITCH_TEST_KEY"
+default_model = "before-model"
+"#;
+    std::fs::write(&config_path, initial).unwrap();
+    let agentd = agentd_spawn(AgentdPaths::scratch("agentd-switch"))
+        .env("HORIZON_CONFIG", &config_path)
+        .env_remove("HORIZON_SWITCH_TEST_KEY")
+        .spawn();
+    let client = connect_hub(&agentd.socket_path).await;
+    let session_id = SessionId::new();
+    let mut attachment = client
+        .hub
+        .new_agent(SessionNew {
+            provider_id: horizon_agent::registry::named_rig_provider_id("initial"),
+            ..session_new(session_id)
+        })
+        .await
+        .unwrap();
+    // Ensure the provider thread has captured its initial config before reload.
+    collect_events_until(&mut attachment.events, |event| {
+        matches!(event, Event::StateChanged(SessionState::WaitingForUser))
+    })
+    .await;
+
+    std::fs::write(
+        &config_path,
+        format!(
+            "{initial}\n[[providers]]\nname = \"added\"\nkind = \"anthropic\"\n\
+             api_key_env = \"HORIZON_SWITCH_TEST_KEY\"\ndefault_model = \"after-model\"\n"
+        ),
+    )
+    .unwrap();
+    client.hub.reload_provider_config().await.unwrap();
+    client
+        .hub
+        .set_session_model(session_id, "added".into(), "after-model".into())
+        .await
+        .unwrap();
+    applied(&mut attachment.events, "after-model").await;
+
+    // The command channel and the RPC use the same daemon resolution boundary.
+    attachment
+        .commands
+        .send(AgentCommand::SetSessionModel {
+            provider: "added".into(),
+            model: "wire-model".into(),
+        })
+        .await
+        .unwrap();
+    applied(&mut attachment.events, "wire-model").await;
+
+    assert!(client
+        .hub
+        .set_session_model(session_id, "missing".into(), "bad-model".into())
+        .await
+        .is_err());
+    let mut reattached = client.hub.attach_agent(session_id).await.unwrap();
+    applied(&mut reattached.events, "wire-model").await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn hello_negotiates_lists_agents_and_drains_over_the_real_socket() {
     let mut agentd = spawn_agentd();
     let client = connect_hub(&agentd.socket_path).await;

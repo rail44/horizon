@@ -57,6 +57,7 @@ mod events;
 mod exploration;
 mod host_tools;
 mod input;
+mod model_selection;
 mod panic;
 mod resume;
 mod run;

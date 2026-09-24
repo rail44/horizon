@@ -21,7 +21,7 @@ use session::spawn_rig_session;
 use stream::{StreamDeltaBuffer, StreamDeltaKind, ToolCallProgressBuffer};
 
 use crate::{
-    config::{MoaTable, ProviderKind, ProvidersTable, RigAgentConfig},
+    config::{ProviderKind, RigAgentConfig},
     contract::{ProviderId, StartSession},
     persistence::projection::duckdb::SharedDuckdbStore,
     registry::{Provider as AgentProvider, SessionHandle},
@@ -39,16 +39,6 @@ pub(crate) struct Provider {
     /// authoritative), for any other entry its `NamedProviderConfig::
     /// resolved`.
     config: RigAgentConfig,
-    /// The whole surface at build time, so a mid-session switch
-    /// (`Command::SetSessionModel`) can resolve any other entry against
-    /// this provider's spawn-time copy — a running session keeps its
-    /// spawn-time surface the same way it keeps its spawn-time entry
-    /// config.
-    table: ProvidersTable,
-    /// The MoA surface at build time, for the same reason `table` is here: a
-    /// mid-session switch into (or out of) a `[[moa]]` entry resolves
-    /// against this session's spawn-time copy.
-    moa: MoaTable,
     /// Shared, multi-reader-blocking handle onto the live DuckDB projection
     /// -- see [`SharedDuckdbStore`]'s doc comment. Cloned into every
     /// session's own dedicated rig thread (`start_session`/
@@ -66,15 +56,11 @@ impl Provider {
     pub(crate) fn for_entry(
         id: ProviderId,
         config: RigAgentConfig,
-        table: ProvidersTable,
-        moa: MoaTable,
         duckdb_cell: SharedDuckdbStore,
     ) -> Self {
         Self {
             id,
             config,
-            table,
-            moa,
             duckdb_cell,
         }
     }
@@ -95,14 +81,7 @@ impl AgentProvider for Provider {
     fn start_session(&self, request: StartSession) -> SessionHandle {
         let role = request.role_id.as_ref().and_then(crate::roles::resolve);
         let config = role_adjusted_config(&self.config, role);
-        spawn_rig_session(
-            request,
-            config,
-            self.table.clone(),
-            self.moa.clone(),
-            role,
-            self.duckdb_cell.clone(),
-        )
+        spawn_rig_session(request, config, role, self.duckdb_cell.clone())
     }
 
     /// The same role-adjusted `config.model` [`Self::start_session`] would

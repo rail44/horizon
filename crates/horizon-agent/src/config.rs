@@ -536,7 +536,7 @@ pub(crate) const DEFAULT_ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 /// precedence on top of it ([`Self::resolved`]). Secrets stay out: the
 /// config file records at most the environment variable's **name**
 /// ([`Self::api_key_env`]) — never a value.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct NamedProviderConfig {
     pub name: String,
     pub kind: ProviderKind,
@@ -667,8 +667,7 @@ impl ProvidersTable {
     }
 
     /// Finds an entry by name — a mid-session switch target's lookup
-    /// (`Command::SetSessionModel`), which must never panic on a name the
-    /// caller already validated but a reload since removed.
+    /// (`Command::SetSessionModel`). An absent name is a validation error.
     pub fn entry(&self, name: &str) -> Option<&NamedProviderConfig> {
         self.entries.iter().find(|entry| entry.name == name)
     }

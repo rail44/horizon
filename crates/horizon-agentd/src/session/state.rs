@@ -190,8 +190,8 @@ impl AgentdState {
     /// a missing file resolves to built-in defaults, the same outcome
     /// `Reload Config`'s UI-side `horizon_config::reload` already yields for
     /// `[theme]`/`[keybindings]`. The swap takes effect for the *next* session
-    /// -- a running session cloned its `RigAgentConfig` into its own thread
-    /// at spawn and is unaffected.
+    /// -- a running session keeps its current `RigAgentConfig` until an
+    /// explicit model switch resolves the newly loaded catalog.
     pub(crate) fn reload_provider_config(&self) -> Result<(), String> {
         let raw = horizon_config::reload_from_path(self.config_path.as_deref())?;
         // The same seam `main` uses at startup (`crate::providers`), so a
