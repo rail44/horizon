@@ -1,12 +1,9 @@
 use super::*;
-use crate::session::test_support::{drain_events, judge_candidate, judge_test_state};
+use crate::session::test_support::{drain_events, judge_candidate, test_state};
 use crate::session::Connection;
 use crossbeam_channel::unbounded;
-use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::SessionId;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, ToolCallId};
-use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
-use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::tools::ApprovalCandidate;
 
 #[test]
@@ -15,7 +12,7 @@ fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() 
     let dir = tempfile::tempdir().unwrap();
     let mut failures = Vec::new();
     for kind in 0..6 {
-        let state = judge_test_state();
+        let state = test_state();
         let live = LiveState::with_disabled_persistence();
         let session = SessionId::new();
         let mut outgoing = Connection::new(state.clone()).subscribe_agent(session);
@@ -78,7 +75,7 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
 
     let dir = tempfile::tempdir().unwrap();
     for kind in 0..4 {
-        let state = judge_test_state();
+        let state = test_state();
         let live = LiveState::with_disabled_persistence();
         let session = SessionId::new();
         let mut outgoing = Connection::new(state.clone()).subscribe_agent(session);
@@ -179,19 +176,7 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
 fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
     use horizon_agent::contract::{ApprovalRequest, ToolCallResult};
 
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -288,19 +273,7 @@ fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
 fn fold_bash_completion_reports_running_when_no_approval_is_pending() {
     use horizon_agent::contract::ToolCallResult;
 
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -350,19 +323,7 @@ fn fold_bash_completion_reports_running_when_no_approval_is_pending() {
 fn fold_finished_bash_result_stamps_the_requests_occurrence_on_the_result() {
     use horizon_agent::contract::{OccurrenceId, ToolCallResult};
 
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -422,19 +383,7 @@ fn fold_finished_bash_result_stamps_the_requests_occurrence_on_the_result() {
 fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
     use horizon_agent::contract::{OccurrenceId, ToolCallResult};
 
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -494,19 +443,7 @@ fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
 fn approval_for_denials(
     denials: Vec<horizon_sandbox::FilesystemDenial>,
 ) -> horizon_agent::contract::ApprovalRequest {
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -649,7 +586,7 @@ fn fold_filesystem_denial_falls_back_when_no_honest_ancestor_exists() {
 
 #[test]
 fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
-    let state = judge_test_state();
+    let state = test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -692,7 +629,7 @@ fn late_or_started_verdict_is_ignored() {
             serde_json::json!({ "cancelled": true }),
         )),
     ] {
-        let state = judge_test_state();
+        let state = test_state();
         let live_state = LiveState::with_disabled_persistence();
         let session_id = SessionId::new();
         let connection = Connection::new(state.clone());
@@ -731,7 +668,7 @@ fn late_or_started_verdict_is_ignored() {
 #[test]
 fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
     let root = std::env::temp_dir().canonicalize().unwrap();
-    let state = judge_test_state();
+    let state = test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -814,7 +751,7 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
     let workspace = outside.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
 
-    let state = judge_test_state();
+    let state = test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let (results_tx, _results_rx) = unbounded::<ToolCompletion>();
@@ -877,19 +814,7 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
 
 #[test]
 fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());
@@ -932,19 +857,7 @@ fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
 
 #[test]
 fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider() {
-    let agent_config = AgentConfig::from_env_and_provider(None, None);
-    let state = Arc::new(AgentdState::new(
-        ProviderRegistry::builtin_with_config(
-            agent_config.clone(),
-            SharedDuckdbStore::unavailable(),
-        ),
-        agent_config,
-        None,
-        SharedDuckdbStore::unavailable(),
-        None,
-        Vec::new(),
-        Vec::new(),
-    ));
+    let state = crate::session::test_support::test_state();
     let live_state = LiveState::with_disabled_persistence();
     let session_id = SessionId::new();
     let connection = Connection::new(state.clone());

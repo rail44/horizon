@@ -391,7 +391,7 @@ mod tests {
                 .expect("append enqueues while the startup read is still gated");
         }
 
-        let agent_config = AgentConfig::from_env_and_provider(None, None);
+        let agent_config = crate::session::test_support::test_config();
         let state = Arc::new(AgentdState::new(
             ProviderRegistry::builtin_with_config(
                 agent_config.clone(),

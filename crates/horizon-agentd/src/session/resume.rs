@@ -525,7 +525,7 @@ mod delivery_tests {
             ready.recv().unwrap(),
             horizon_agent::persistence::event_log::WriterInit::Ready(_)
         ));
-        let state = crate::session::test_support::judge_test_state();
+        let state = crate::session::test_support::test_state();
         state.set_writer(Some(writer.clone()));
         lock_unpoisoned(&state.agent_config)
             .persistence
@@ -594,7 +594,7 @@ mod delivery_tests {
             ready.recv().unwrap(),
             horizon_agent::persistence::event_log::WriterInit::Ready(_)
         ));
-        let state = crate::session::test_support::judge_test_state();
+        let state = crate::session::test_support::test_state();
         state.set_writer(Some(writer.clone()));
         lock_unpoisoned(&state.agent_config)
             .persistence
@@ -639,7 +639,7 @@ mod delivery_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::judge_test_state;
+    use crate::session::test_support::test_state;
     use horizon_agent::contract::{Exit, ToolCallId};
     use std::path::{Path, PathBuf};
 
@@ -800,7 +800,7 @@ mod tests {
     #[test]
     fn daemon_resume_terminates_a_never_completed_exploration_instead_of_adopting_it() {
         let (_dir, path, writer) = open_test_event_log("explore-resume");
-        let state = judge_test_state();
+        let state = test_state();
         state.set_writer(Some(writer.clone()));
 
         // The mock provider: a resumed session's thread parks on its command
@@ -878,7 +878,7 @@ mod tests {
             .expect("read event log again")
             .records;
         let before = persisted_events(&path, explore_id).len();
-        let fresh_state = judge_test_state();
+        let fresh_state = test_state();
         fresh_state.set_writer(Some(writer.clone()));
         resume_persisted_sessions(&fresh_state, records);
         writer.flush().expect("flush the second resume");
@@ -893,7 +893,7 @@ mod tests {
     fn startup_refuses_unrestorable_context_before_writing_or_spawning() {
         for missing_root in [false, true] {
             let (_dir, path, writer) = open_test_event_log("unrestorable-context");
-            let state = judge_test_state();
+            let state = test_state();
             state.set_writer(Some(writer.clone()));
             let session_id = SessionId::new();
             let context = PersistedSessionContext {
@@ -1005,7 +1005,7 @@ mod tests {
     fn resume_settles_pending_input_without_inventing_a_turn_end() {
         for finished_turn in [false, true] {
             let (_dir, path, writer) = open_test_event_log("pending-input");
-            let state = judge_test_state();
+            let state = test_state();
             state.set_writer(Some(writer.clone()));
             let session_id = SessionId::new();
             let mut appender = Appender::new(

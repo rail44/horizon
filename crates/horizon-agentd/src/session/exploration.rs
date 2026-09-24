@@ -120,7 +120,7 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
 mod tests {
     use super::*;
     use crate::session::host_tools::AgentdHostTools;
-    use crate::session::test_support::judge_test_state;
+    use crate::session::test_support::test_state;
     use crossbeam_channel::unbounded;
     use horizon_agent::config::AgentToolsConfig;
     use horizon_agent::contract::{Event, ToolCallId, ToolCallRequest};
@@ -185,7 +185,7 @@ mod tests {
     /// caller never gets a session id it then has to clean up.
     #[test]
     fn starting_on_an_unknown_provider_fails_without_spawning() {
-        let state = judge_test_state();
+        let state = test_state();
         let host = AgentdExplorationHost {
             state: state.clone(),
             requester_id: SessionId::new(),
@@ -409,7 +409,7 @@ mod tests {
     /// no event log are involved.
     #[test]
     fn task_spawns_a_real_peer_session_and_terminates_it_when_it_finishes() {
-        let state = judge_test_state();
+        let state = test_state();
         let requester_id = SessionId::new();
         let (results_tx, results_rx) = unbounded::<ToolCompletion>();
         let host: Arc<dyn horizon_agent::tools::ExplorationHost> =

@@ -382,7 +382,7 @@ mod tests {
             }
         }
 
-        let state = super::super::test_support::judge_test_state();
+        let state = super::super::test_support::test_state();
         let config = lock_unpoisoned(&state.agent_config).clone();
         let root = tempfile::tempdir().unwrap();
         let session_id = SessionId::new();

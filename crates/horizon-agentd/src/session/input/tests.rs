@@ -1,6 +1,6 @@
 use super::*;
 use crate::session::approval::dispatch_inbound_command;
-use crate::session::test_support::{drain_events, judge_test_state};
+use crate::session::test_support::{drain_events, test_state};
 use crate::session::Connection;
 use horizon_agent::contract::{Command, InputResult, SessionInputOutcome};
 use horizon_agent::persistence::event_log::{read, WriterHandle, WriterInit};
@@ -21,7 +21,7 @@ fn identified_inputs_publish_after_flush_and_deduplicate_delivery() {
     let path = dir.path().join("events.jsonl");
     let (writer, ready) = WriterHandle::open(&path);
     assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
-    let state = judge_test_state();
+    let state = test_state();
     state.set_writer(Some(writer.clone()));
     let session_id = SessionId::new();
     let live = LiveState::with_event_log_and_history(session_id, None, None, writer, Vec::new());
@@ -108,7 +108,7 @@ fn identified_inputs_publish_after_flush_and_deduplicate_delivery() {
 
 #[test]
 fn unavailable_persistence_never_forwards_or_publishes_an_input() {
-    let state = judge_test_state();
+    let state = test_state();
     let session_id = SessionId::new();
     let mut events = Connection::new(state.clone()).subscribe_agent(session_id);
     let (commands_tx, commands) = crossbeam_channel::unbounded();

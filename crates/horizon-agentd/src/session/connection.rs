@@ -428,7 +428,7 @@ impl Connection {
 mod tests {
     use super::*;
     use crate::session::state::SessionEntry;
-    use crate::session::test_support::{judge_test_state, state_with_rig_config};
+    use crate::session::test_support::{state_with_rig_config, test_state};
     use crossbeam_channel::{unbounded, Sender};
     use horizon_agent::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
     use horizon_agent::contract::ProviderId;
@@ -442,7 +442,7 @@ mod tests {
     /// session list so it can never be offered as something to attach to.
     #[test]
     fn a_live_exploration_session_is_withheld_from_the_client_session_list() {
-        let state = judge_test_state();
+        let state = test_state();
         let provider_id = ProviderId("builtin.agent.mock".to_string());
         let explore_id = SessionId::new();
         let ordinary_id = SessionId::new();

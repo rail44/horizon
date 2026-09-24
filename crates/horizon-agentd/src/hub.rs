@@ -329,19 +329,7 @@ mod tests {
     use std::sync::Arc;
 
     fn test_hub() -> Hub {
-        let agent_config = AgentConfig::from_env_and_provider(None, None);
-        let state = Arc::new(AgentdState::new(
-            ProviderRegistry::builtin_with_config(
-                agent_config.clone(),
-                SharedDuckdbStore::unavailable(),
-            ),
-            agent_config,
-            None,
-            SharedDuckdbStore::unavailable(),
-            None,
-            Vec::new(),
-            Vec::new(),
-        ));
+        let state = crate::session::test_support::test_state();
         // No `spawn_resume_task` here, so nothing would ever open the
         // readiness gate every post-hello agent method blocks on
         // (`wait_until_resume_ready`) -- open it directly, or a test that

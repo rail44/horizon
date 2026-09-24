@@ -190,7 +190,7 @@ pub(super) fn record_uncaught_session_panic(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::{drain_events, judge_test_state};
+    use crate::session::test_support::{drain_events, test_state};
     use crate::session::Connection;
     use horizon_agent::frame::agent_frame_from_events;
     use horizon_agent::persistence::event_log::WriterHandle;
@@ -250,7 +250,7 @@ mod tests {
             }
         }
 
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let provider_id = ProviderId("panic-test".to_string());
         let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);

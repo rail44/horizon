@@ -45,7 +45,7 @@ fn activation_publishes_matching_durable_context_and_rolls_back_if_persistence_f
         let log_path = dir.path().join("events.jsonl");
         let (writer, ready) = WriterHandle::open(&log_path);
         assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
-        let state = crate::session::test_support::judge_test_state();
+        let state = crate::session::test_support::test_state();
         state.set_writer(Some(writer.clone()));
         let config = lock_unpoisoned(&state.agent_config).clone();
         let session_id = SessionId::new();
@@ -181,7 +181,7 @@ fn environment_rebuild_retains_additional_grants_without_granting_the_old_root()
         scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
         excluded_subpaths: vec![],
     };
-    let state = super::super::test_support::judge_test_state();
+    let state = super::super::test_support::test_state();
     let config = lock_unpoisoned(&state.agent_config).clone();
     let PreparedEnvironment {
         tool_state: tools,

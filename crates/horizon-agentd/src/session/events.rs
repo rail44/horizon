@@ -51,13 +51,13 @@ pub(super) fn persist_and_send_session_event(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::judge_test_state;
+    use crate::session::test_support::test_state;
     use crate::session::Connection;
     use horizon_agent::contract::{Event, SessionState};
 
     #[test]
     fn agent_subscriber_mutex_recovers_after_poisoning() {
-        let state = judge_test_state();
+        let state = test_state();
         let poisoning_state = state.clone();
         let outcome = std::thread::spawn(move || {
             let _subscribers = poisoning_state.agent_subscribers.lock().unwrap();

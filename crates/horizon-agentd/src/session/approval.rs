@@ -318,7 +318,7 @@ pub(super) fn forward_approval_outcome(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::test_support::{drain_events, judge_candidate, judge_test_state};
+    use crate::session::test_support::{drain_events, judge_candidate, test_state};
     use horizon_agent::contract::{
         ApprovalDecisionPayload, ApprovalKind, ApprovalRequest, ApprovalResolved,
         ContinueTurnRequested, OccurrenceId, ProviderEvent, ToolCallRequest, TurnEndReason,
@@ -460,7 +460,7 @@ mod tests {
     /// motivation.
     #[test]
     fn continue_turn_records_resumed_from_when_halted() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, commands_rx) = crossbeam_channel::unbounded::<Command>();
@@ -509,7 +509,7 @@ mod tests {
     /// the attempt.
     #[test]
     fn continue_turn_records_none_when_no_halt_exists() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, commands_rx) = crossbeam_channel::unbounded::<Command>();
@@ -541,7 +541,7 @@ mod tests {
     /// `Event::ContinueTurnRequested`'s doc comment.
     #[test]
     fn continue_turn_records_the_most_recent_turn_ended_reason() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
@@ -580,7 +580,7 @@ mod tests {
     /// SQL `requested -> resolved` join survives a reused `call_id`.
     #[test]
     fn resolve_and_forward_records_approval_resolved_with_occurrence_id() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, commands_rx) = crossbeam_channel::unbounded::<Command>();
@@ -646,7 +646,7 @@ mod tests {
     /// tool, don't retry", and the deny reason is what told them apart).
     #[test]
     fn resolve_and_forward_records_deny_with_reason() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
@@ -693,7 +693,7 @@ mod tests {
     /// even though the audit row exists post-hoc.
     #[test]
     fn resolve_and_forward_fans_approval_resolved_to_subscribers() {
-        let state = judge_test_state();
+        let state = test_state();
         let session_id = SessionId::new();
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
