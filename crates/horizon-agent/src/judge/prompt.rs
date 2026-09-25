@@ -179,8 +179,8 @@ pub(super) fn user_content(input: &JudgeInput) -> String {
         );
     }
 
-    let open_marker = format!("<<<UNTRUSTED_ARGS_{}>>>", input.call_id);
-    let close_marker = format!("<<<END_UNTRUSTED_ARGS_{}>>>", input.call_id);
+    let open_marker = format!("<<<UNTRUSTED_ARGS_{}>>>", input.identity.call_id.0);
+    let close_marker = format!("<<<END_UNTRUSTED_ARGS_{}>>>", input.identity.call_id.0);
     content.push_str(&open_marker);
     content.push('\n');
     content.push_str(&serde_json::to_string(&input.args).unwrap_or_else(|_| "{}".to_string()));
@@ -201,7 +201,10 @@ mod tests {
 
     fn input(call_id: &str, args: serde_json::Value) -> JudgeInput {
         JudgeInput {
-            call_id: call_id.to_string(),
+            identity: crate::contract::ToolCallIdentity {
+                call_id: crate::contract::ToolCallId(call_id.into()),
+                occurrence_id: crate::contract::OccurrenceId("judge-occ".into()),
+            },
             tool_id: "bash".to_string(),
             args,
             tool_description: Some("Run a shell command.".to_string()),

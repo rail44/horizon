@@ -252,18 +252,12 @@ pub(crate) fn apply_agent_event_to_frame(
             frame.state = Some(SessionState::Terminated);
             frame.items.push(AgentFrameItem::Exited(exit.clone()));
         }
-        // Operator-intervention audit records (`Event::ApprovalResolved` /
-        // `Event::ContinueTurnRequested`): deliberately fold into no frame
-        // item. Their audit purpose is fully served by the raw record in
-        // `agent_events` (which `LiveState::extend_provider_events` already
-        // persists via the unconditional `self.events.push(event.event)`
-        // below the `apply_agent_event_to_frame` call in
-        // `live::State::extend_provider_events`), and the transcript already
-        // shows their visible effect through the existing approval row /
-        // `TurnEnded` receipt / next-turn events. Adding a frame item here
-        // would duplicate that signal in the UI without adding anything
-        // for SQL analytics that read `agent_events` directly.
-        Event::ApprovalResolved(_) | Event::ContinueTurnRequested(_) => {}
+        Event::ApprovalResolved(resolved) => {
+            frame
+                .items
+                .push(AgentFrameItem::ApprovalResolved(resolved.clone()));
+        }
+        Event::ContinueTurnRequested(_) => {}
         // The turn's receipt: see `Event::TurnEnded`'s doc comment and
         // `TurnClock`'s. `turn` is reset afterward so a stray second
         // `TurnEnded` with no intervening user message (shouldn't happen by
@@ -368,6 +362,7 @@ fn is_turn_boundary_item(item: &AgentFrameItem) -> bool {
             | AgentFrameItem::ToolCallStarted(_)
             | AgentFrameItem::ToolCallFinished(_)
             | AgentFrameItem::ApprovalRequested(_)
+            | AgentFrameItem::ApprovalResolved(_)
             | AgentFrameItem::Error(_)
             | AgentFrameItem::Exited(_)
             | AgentFrameItem::TurnEnded { .. }

@@ -84,6 +84,10 @@ application. Tool execution identity is now required throughout the lifecycle
 Provider configuration uses named entries and a separate auxiliary-provider
 selection; see [configuration and conversion](provider-configuration.md).
 Integration does not activate old user data automatically.
+Tool policy now produces one execution/approval plan. Automatic and approved starts
+share persistence acknowledgement, and human approvals name an exact occurrence
+through UI, CLI and daemon (agent wire v25). Stale and duplicate decisions cannot
+authorize a retry; see [the execution contract](agent-tools-design.md#execution-planning-and-exact-approval-2026-09-25).
 Conversation events and ephemeral notifications now use distinct variants.
 Tool outcomes are explicit throughout execution, replay, projection, and display;
 modal owners release their targets, subscriptions and pending replies together.

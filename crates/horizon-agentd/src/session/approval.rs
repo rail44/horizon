@@ -32,65 +32,37 @@ use super::state::AgentdState;
 pub(super) fn gate_processing_approval(
     tool_state: &ToolSessionState,
     session_id: SessionId,
-    events: &mut Vec<ProviderEvent>,
-    provider_commands: &mut Vec<Command>,
-) {
-    gate_processing_approval_with(tool_state, events, provider_commands, |candidate| {
+    candidate: ApprovalCandidate,
+) -> (Vec<ProviderEvent>, Vec<Command>) {
+    gate_processing_approval_with(tool_state, candidate, |candidate| {
         start_approval_gate(session_id, candidate)
-    });
+    })
 }
 
 fn gate_processing_approval_with(
     tool_state: &ToolSessionState,
-    events: &mut Vec<ProviderEvent>,
-    provider_commands: &mut Vec<Command>,
+    candidate: ApprovalCandidate,
     start_gate: impl FnOnce(ApprovalCandidate) -> ApprovalGate,
-) {
-    let request = events
-        .iter()
-        .filter_map(ProviderEvent::as_event)
-        .find_map(|event| match event {
-            Event::ToolCallRequested(request) => Some(request.clone()),
-            _ => None,
-        });
-    let approval =
-        events
-            .iter()
-            .filter_map(ProviderEvent::as_event)
-            .find_map(|event| match event {
-                Event::ApprovalRequested(approval) => Some(approval.clone()),
-                _ => None,
-            });
-    let (Some(request), Some(approval)) = (request, approval) else {
-        return;
-    };
-    let call_id = approval.call_id.clone();
-    let candidate = ApprovalCandidate { request, approval };
+) -> (Vec<ProviderEvent>, Vec<Command>) {
     match start_gate(candidate) {
-        ApprovalGate::Pending => withhold_prompt(events, &call_id),
+        ApprovalGate::Pending => (Vec::new(), Vec::new()),
         ApprovalGate::Human(candidate) => {
-            let Some(result) = unattended_refusal_result(tool_state, &candidate.request) else {
-                return;
-            };
-            withhold_prompt(events, &call_id);
-            events.push(ProviderEvent::from(Event::ToolCallFinished(result.clone())));
-            provider_commands.push(Command::ToolCallResult(result));
+            if let Some(result) = unattended_refusal_result(tool_state, &candidate.request) {
+                (
+                    vec![Event::ToolCallFinished(result.clone()).into()],
+                    vec![Command::ToolCallResult(result)],
+                )
+            } else {
+                (
+                    vec![
+                        Event::ApprovalRequested(candidate.approval).into(),
+                        Event::StateChanged(SessionState::WaitingForApproval).into(),
+                    ],
+                    Vec::new(),
+                )
+            }
         }
     }
-}
-
-/// Drops the prompt and the waiting state from this batch, leaving the tool
-/// request itself foldable.
-fn withhold_prompt(events: &mut Vec<ProviderEvent>, call_id: &ToolCallId) {
-    events.retain(|event| {
-        !matches!(
-            event.as_event(),
-            Some(Event::ApprovalRequested(approval)) if &approval.call_id == call_id
-        ) && !matches!(
-            event.as_event(),
-            Some(Event::StateChanged(SessionState::WaitingForApproval))
-        )
-    });
 }
 
 pub(super) fn emit_human_approval(
@@ -100,7 +72,11 @@ pub(super) fn emit_human_approval(
     approval: ApprovalRequest,
 ) {
     let frame = live_state.frame();
-    if !should_fold_completion(&frame, &approval.call_id) {
+    if !should_fold_completion(&frame, &approval.call_id)
+        || !frame
+            .tool_call_request(&approval.call_id)
+            .is_some_and(|request| request.identity() == approval.identity())
+    {
         return;
     }
     let events = vec![
@@ -223,20 +199,20 @@ pub(super) fn dispatch_inbound_command(
             super::input::acknowledge_delivery(state, live_state, session_id, delivery_id);
         }
 
-        Command::ApproveToolCall { call_id } => resolve_and_forward(
+        Command::ApproveToolCall { identity } => resolve_and_forward(
             state,
             live_state,
             commands_tx,
             session_id,
-            call_id,
+            identity,
             ApprovalDecision::Approve,
         ),
-        Command::DenyToolCall { call_id, reason } => resolve_and_forward(
+        Command::DenyToolCall { identity, reason } => resolve_and_forward(
             state,
             live_state,
             commands_tx,
             session_id,
-            call_id,
+            identity,
             ApprovalDecision::Deny { reason },
         ),
         Command::ContinueTurn => {
@@ -269,38 +245,24 @@ fn resolve_and_forward(
     live_state: &LiveState,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
-    call_id: ToolCallId,
+    identity: horizon_agent::contract::ToolCallIdentity,
     decision: ApprovalDecision,
 ) {
-    // `resolve_approval` moves `call_id`; keep a copy so the
-    // `AlreadyResolved` arm below can still name it in its log line.
-    let logged_call_id = call_id.clone();
     let frame = live_state.frame();
-
-    // Emit `Event::ApprovalResolved` *before* `resolve_approval` so the
-    // audit row exists regardless of which `ApprovalOutcome` variant
-    // resolves -- `Executed`/`Started`/`Forward` are real resolutions, and
-    // `AlreadyResolved` (a duplicate Approve/Deny click) is itself an
-    // operator action the analyst wants to count. `occurrence_id` is
-    // recovered from the frame's most-recent `ToolCallRequest` for this
-    // `call_id` (the same `.rev()` walk `tools::approval::try_execute`
-    // uses to find the matching approval kind) so the audit row pairs
-    // with the right `ApprovalRequested` occurrence under a reused
-    // `call_id` or a sandbox-denial retry.
-    let Some(request) = frame.tool_call_request(&logged_call_id) else {
-        return;
-    };
-    let occurrence_id = request.occurrence_id.clone();
-    let resolved_event = Event::ApprovalResolved(horizon_agent::contract::ApprovalResolved {
-        call_id: logged_call_id.clone(),
-        occurrence_id,
-        decision: approval_decision_payload(&decision),
-    });
-    if !apply_and_send_session_events(state, live_state, session_id, vec![resolved_event.into()]) {
+    if frame.actionable_approval(&identity).is_none() {
         return;
     }
-
-    let outcome = resolve_approval(&frame, session_id, call_id, decision);
+    let logged_call_id = identity.call_id.clone();
+    let resolved = Event::ApprovalResolved(horizon_agent::contract::ApprovalResolved {
+        call_id: identity.call_id.clone(),
+        occurrence_id: identity.occurrence_id.clone(),
+        decision: approval_decision_payload(&decision),
+    });
+    if !apply_and_send_session_events(state, live_state, session_id, vec![resolved.into()]) {
+        return;
+    }
+    // Resolve against the validated snapshot preceding this decision's acknowledgement.
+    let outcome = resolve_approval(&frame, session_id, identity, decision);
     forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
 }
 
@@ -435,59 +397,35 @@ mod tests {
         .build()
     }
 
-    fn out_of_root_read_events(
-        call_id: &str,
-        path: &std::path::Path,
-    ) -> (ToolCallRequest, Vec<ProviderEvent>) {
-        let request = ToolCallRequest {
-            call_id: ToolCallId(call_id.to_string()),
-            tool_id: "fs.read".to_string(),
-            input: serde_json::json!({ "path": path.display().to_string() }).into(),
-            occurrence_id: horizon_agent::contract::OccurrenceId(
-                (ToolCallId(call_id.to_string())).0.clone(),
-            ),
-        };
-        let events = vec![
-            ProviderEvent::from(Event::ToolCallRequested(request.clone())),
-            ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
-                call_id: request.call_id.clone(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(request.call_id.0.clone()),
-                reason: "outside the workspace root".to_string(),
-                kind: ApprovalKind::Standard,
-            })),
-            ProviderEvent::from(Event::StateChanged(SessionState::WaitingForApproval)),
-        ];
-        (request, events)
+    fn out_of_root_candidate(call_id: &str, path: &std::path::Path) -> ApprovalCandidate {
+        let mut candidate = judge_candidate(call_id);
+        candidate.request.tool_id = "fs.read".into();
+        candidate.request.input = serde_json::json!({"path": path.display().to_string()}).into();
+        candidate
     }
 
     #[test]
     fn gate_suppresses_prompt_while_pending_and_preserves_human_fallback() {
         let tool_state = rooted_tool_state(&std::env::temp_dir(), false);
         let candidate = judge_candidate("gate-shape");
-        let original = vec![
-            ProviderEvent::from(Event::ToolCallRequested(candidate.request.clone())),
-            ProviderEvent::from(Event::ApprovalRequested(candidate.approval.clone())),
-            ProviderEvent::from(Event::StateChanged(SessionState::WaitingForApproval)),
-        ];
-
-        let mut pending = original.clone();
-        let mut commands = Vec::new();
-        gate_processing_approval_with(&tool_state, &mut pending, &mut commands, |observed| {
-            assert_eq!(observed, candidate);
-            ApprovalGate::Pending
-        });
-        assert_eq!(pending.len(), 1);
-        assert!(matches!(
-            pending[0].clone().into_event().expect("conversation event"),
-            Event::ToolCallRequested(_)
-        ));
+        let (pending, commands) =
+            gate_processing_approval_with(&tool_state, candidate.clone(), |observed| {
+                assert_eq!(observed, candidate);
+                ApprovalGate::Pending
+            });
+        assert!(pending.is_empty());
         assert!(commands.is_empty());
-
-        let mut human = original.clone();
-        gate_processing_approval_with(&tool_state, &mut human, &mut commands, |candidate| {
-            ApprovalGate::Human(Box::new(candidate))
-        });
-        assert_eq!(human, original);
+        let (human, commands) =
+            gate_processing_approval_with(&tool_state, candidate.clone(), |candidate| {
+                ApprovalGate::Human(Box::new(candidate))
+            });
+        assert_eq!(
+            human,
+            vec![
+                Event::ApprovalRequested(candidate.approval).into(),
+                Event::StateChanged(SessionState::WaitingForApproval).into()
+            ]
+        );
         assert!(commands.is_empty());
     }
 
@@ -499,13 +437,13 @@ mod tests {
     fn an_unattended_session_is_refused_instead_of_prompted() {
         let root = std::env::temp_dir().canonicalize().unwrap();
         let tool_state = rooted_tool_state(&root, true);
-        let (request, mut events) =
-            out_of_root_read_events("unattended-read", std::path::Path::new("/etc/hostname"));
-        let mut commands = Vec::new();
-
-        gate_processing_approval_with(&tool_state, &mut events, &mut commands, |candidate| {
-            ApprovalGate::Human(Box::new(candidate))
-        });
+        let candidate =
+            out_of_root_candidate("unattended-read", std::path::Path::new("/etc/hostname"));
+        let request = candidate.request.clone();
+        let (events, commands) =
+            gate_processing_approval_with(&tool_state, candidate, |candidate| {
+                ApprovalGate::Human(Box::new(candidate))
+            });
 
         assert!(
             !events.iter().any(|event| matches!(
@@ -538,19 +476,11 @@ mod tests {
     #[test]
     fn a_judge_that_takes_the_call_refuses_nothing_in_an_unattended_session() {
         let tool_state = rooted_tool_state(&std::env::temp_dir(), true);
-        let (_, mut events) =
-            out_of_root_read_events("unattended-judged", std::path::Path::new("/etc/hostname"));
-        let mut commands = Vec::new();
-
-        gate_processing_approval_with(&tool_state, &mut events, &mut commands, |_| {
-            ApprovalGate::Pending
-        });
-
-        assert_eq!(events.len(), 1);
-        assert!(matches!(
-            events[0].clone().into_event().expect("conversation event"),
-            Event::ToolCallRequested(_)
-        ));
+        let candidate =
+            out_of_root_candidate("unattended-judged", std::path::Path::new("/etc/hostname"));
+        let (events, commands) =
+            gate_processing_approval_with(&tool_state, candidate, |_| ApprovalGate::Pending);
+        assert!(events.is_empty());
         assert!(
             commands.is_empty(),
             "a call the judge took must wait for its verdict, not resolve here"
@@ -722,7 +652,10 @@ mod tests {
             &commands_tx,
             session_id,
             Command::ApproveToolCall {
-                call_id: call_id.clone(),
+                identity: horizon_agent::contract::ToolCallIdentity {
+                    call_id: call_id.clone(),
+                    occurrence_id: occurrence_id.clone(),
+                },
             },
         );
 
@@ -748,7 +681,7 @@ mod tests {
             .try_recv()
             .expect("the original command forwarded");
         match forwarded {
-            Command::ApproveToolCall { call_id: cid } => assert_eq!(cid, call_id),
+            Command::ApproveToolCall { identity } => assert_eq!(identity.call_id, call_id),
             other => panic!("unexpected forward command: {other:?}"),
         }
     }
@@ -766,6 +699,7 @@ mod tests {
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
 
         let call_id = ToolCallId("approval-deny".to_string());
+        let occurrence_id = OccurrenceId(call_id.0.clone());
         live_state
             .extend_provider_events([Event::ToolCallRequested(
                 horizon_agent::contract::ToolCallRequest {
@@ -794,7 +728,10 @@ mod tests {
             &commands_tx,
             session_id,
             Command::DenyToolCall {
-                call_id: call_id.clone(),
+                identity: horizon_agent::contract::ToolCallIdentity {
+                    call_id: call_id.clone(),
+                    occurrence_id: occurrence_id.clone(),
+                },
                 reason: Some("wrong tool, try fs.read".to_string()),
             },
         );
@@ -828,6 +765,7 @@ mod tests {
             crate::session::Connection::new(state.clone()).subscribe_agent(session_id);
 
         let call_id = ToolCallId("approval-fanout".to_string());
+        let occurrence_id = OccurrenceId(call_id.0.clone());
         live_state
             .extend_provider_events([Event::ToolCallRequested(
                 horizon_agent::contract::ToolCallRequest {
@@ -855,7 +793,12 @@ mod tests {
             &live_state,
             &commands_tx,
             session_id,
-            Command::ApproveToolCall { call_id },
+            Command::ApproveToolCall {
+                identity: horizon_agent::contract::ToolCallIdentity {
+                    call_id,
+                    occurrence_id,
+                },
+            },
         );
 
         let drained = drain_events(&mut subscriber_rx);
@@ -869,5 +812,93 @@ mod tests {
             )),
             "subscriber must see the ApprovalResolved audit event; got {drained:?}"
         );
+    }
+
+    #[test]
+    fn stale_and_duplicate_human_decisions_never_consume_a_new_occurrence_even_after_replay() {
+        let state = test_state();
+        let session = SessionId::new();
+        let first = judge_candidate("reused");
+        let mut retry = first.clone();
+        retry.request.occurrence_id = OccurrenceId::new();
+        retry.approval.occurrence_id = retry.request.occurrence_id.clone();
+        let live = LiveState::with_disabled_persistence();
+        live.extend_provider_events([
+            Event::ToolCallRequested(first.request.clone()).into(),
+            Event::ApprovalRequested(first.approval.clone()).into(),
+            Event::ToolCallRequested(retry.request.clone()).into(),
+            Event::ApprovalRequested(retry.approval.clone()).into(),
+        ])
+        .unwrap();
+        let before = live.events();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        for command in [
+            Command::ApproveToolCall {
+                identity: first.request.identity(),
+            },
+            Command::DenyToolCall {
+                identity: first.request.identity(),
+                reason: None,
+            },
+        ] {
+            dispatch_inbound_command(&state, &live, &tx, session, command);
+        }
+        assert_eq!(live.events(), before);
+        assert!(rx.try_recv().is_err());
+        assert!(live
+            .frame()
+            .actionable_approval(&retry.request.identity())
+            .is_some());
+        let approve = Command::ApproveToolCall {
+            identity: retry.request.identity(),
+        };
+        dispatch_inbound_command(&state, &live, &tx, session, approve.clone());
+        assert_eq!(rx.try_recv().unwrap(), approve);
+        let accepted = live.events();
+        // Reconstruct the frame from the saved log before the provider acknowledges the command.
+        let replay = LiveState::with_disabled_persistence();
+        replay
+            .extend_provider_events(accepted.iter().cloned().map(Into::into))
+            .unwrap();
+        dispatch_inbound_command(&state, &replay, &tx, session, approve);
+        dispatch_inbound_command(
+            &state,
+            &replay,
+            &tx,
+            session,
+            Command::DenyToolCall {
+                identity: retry.request.identity(),
+                reason: None,
+            },
+        );
+        assert!(rx.try_recv().is_err());
+        assert_eq!(replay.events(), accepted);
+        assert!(replay
+            .frame()
+            .actionable_approval(&retry.request.identity())
+            .is_none());
+    }
+
+    #[test]
+    fn a_human_command_without_a_displayed_approval_cannot_authorize_a_tool() {
+        let state = test_state();
+        let session = SessionId::new();
+        let candidate = judge_candidate("unsolicited");
+        let live = LiveState::with_disabled_persistence();
+        live.extend_provider_events([Event::ToolCallRequested(candidate.request.clone()).into()])
+            .unwrap();
+        let before = live.events();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        dispatch_inbound_command(
+            &state,
+            &live,
+            &tx,
+            session,
+            Command::ApproveToolCall {
+                identity: candidate.request.identity(),
+            },
+        );
+        assert_eq!(live.events(), before);
+        assert!(rx.try_recv().is_err());
     }
 }

@@ -443,17 +443,17 @@ impl WorkspaceShell {
             }
             CommandId::ApproveToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = session.read(cx).pending_approval_call_ids();
-                    if let Some(call_id) = pending.first() {
-                        session.read(cx).approve(call_id.clone());
+                    let pending = session.read(cx).pending_approval_identities();
+                    if let Some(identity) = pending.first() {
+                        session.read(cx).approve(identity.clone());
                     }
                 }
             }
             CommandId::DenyToolCall => {
                 if let Some(session) = self.active_agent_session() {
-                    let pending = session.read(cx).pending_approval_call_ids();
-                    if let Some(call_id) = pending.first() {
-                        session.read(cx).deny(call_id.clone(), None);
+                    let pending = session.read(cx).pending_approval_identities();
+                    if let Some(identity) = pending.first() {
+                        session.read(cx).deny(identity.clone(), None);
                     }
                 }
             }
@@ -777,21 +777,21 @@ impl WorkspaceShell {
     pub(crate) fn control_plane_approve(
         &mut self,
         session_id: SessionId,
-        call_id: horizon_agent::contract::ToolCallId,
+        identity: horizon_agent::contract::ToolCallIdentity,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
         let session = self
             .agent_sessions
             .get(&session_id)
             .ok_or_else(|| "unknown session".to_string())?;
-        session.read(cx).approve(call_id);
+        session.read(cx).approve(identity);
         Ok(())
     }
 
     pub(crate) fn control_plane_deny(
         &mut self,
         session_id: SessionId,
-        call_id: horizon_agent::contract::ToolCallId,
+        identity: horizon_agent::contract::ToolCallIdentity,
         reason: Option<String>,
         cx: &mut Context<Self>,
     ) -> Result<(), String> {
@@ -799,7 +799,7 @@ impl WorkspaceShell {
             .agent_sessions
             .get(&session_id)
             .ok_or_else(|| "unknown session".to_string())?;
-        session.read(cx).deny(call_id, reason);
+        session.read(cx).deny(identity, reason);
         Ok(())
     }
 
@@ -918,7 +918,7 @@ impl WorkspaceShell {
             .active_agent_session()
             .map(|session| {
                 let session = session.read(cx);
-                let pending = !session.pending_approval_call_ids().is_empty();
+                let pending = !session.pending_approval_identities().is_empty();
                 let in_flight = session.turn_in_flight();
                 let paused = session.turn_halted();
                 (pending, in_flight, paused)

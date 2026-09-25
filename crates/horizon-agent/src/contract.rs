@@ -211,10 +211,10 @@ pub enum Command {
         request_id: Option<RequestId>,
     },
     ApproveToolCall {
-        call_id: ToolCallId,
+        identity: ToolCallIdentity,
     },
     DenyToolCall {
-        call_id: ToolCallId,
+        identity: ToolCallIdentity,
         #[serde(default)]
         reason: Option<String>,
     },
@@ -334,39 +334,11 @@ pub enum Event {
     /// stay in this very log and in the DuckDB projection, which is what
     /// makes the placeholder's "re-fetch via recall" pointer honest.
     HistoryCleared(HistoryCleared),
-    /// A human resolved a pending `ApprovalRequested`. Emitted at the
-    /// agentd seam where `Command::ApproveToolCall`/`DenyToolCall` lands
-    /// in `dispatch_inbound_command` (`crates/horizon-agentd/src/session/
-    /// approval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the
-    /// resolution may then go on to produce — so the audit row exists
-    /// regardless of which `ApprovalOutcome` variant `resolve_approval`
-    /// returns, including the `AlreadyResolved` duplicate-click case.
-    ///
-    /// This is the **authoritative** record of who resolved a pending
-    /// approval and how (the existing `agent_approvals.outcome` column
-    /// stays populated by the order-derived `ToolCallStarted`/`Tool
-    /// CallFinished` path for backward compatibility, but it is a derived
-    /// best-effort projection — collapsed rows and reused `call_id`s can
-    /// mis-stamp it; this event is what analysis reads first).
-    /// `Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the
-    /// `requested -> resolved` interval an analyst wants for wait-time
-    /// numbers; `ApprovalResolved::occurrence_id` carries the same
-    /// `OccurrenceId` the matching `ApprovalRequested` was minted with.
-    ///
-    /// Deliberately carries only the *human* decision: judge-issued
-    /// approvals (`tools::approval::resolve_auto_approval`, the enforcing
-    /// judge's auto-resolve path) do not produce this event, because the
-    /// whole point is to surface what the operator did, not what the
-    /// background model decided. Auto-approvals are still visible via
-    /// `agent_approvals.outcome` and the `judge_*` event log records
-    /// (`docs/agent-approval-design.md`'s "Judge design").
-    ///
-    /// Audit-only: no frame item, no projection table row. The transcript
-    /// already shows the resolution as the approval-row state changing
-    /// (approve → `ToolCallStarted` / `ToolCallFinished`; deny →
-    /// `ToolCallFinished` with `denied: true`); adding a row here would
-    /// duplicate that signal for the user while doing nothing for SQL
-    /// analytics that read `agent_events` directly.
+    /// A human resolved the exact pending approval occurrence. Persisted
+    /// before execution or forwarding; stale and duplicate decisions produce
+    /// no resolution. Replay retains it to prevent a second authorization
+    /// before a provider-owned tool reports its start or finish.
+    /// Judge decisions use the occurrence-tagged judge audit records instead.
     ApprovalResolved(ApprovalResolved),
     /// A human resumed a turn the turn-loop guard halted via
     /// `Command::ContinueTurn` (`docs/issues/002-agent-iteration-cap-
@@ -922,6 +894,15 @@ pub struct ToolCallIdentity {
 }
 
 impl ToolCallRequest {
+    pub fn identity(&self) -> ToolCallIdentity {
+        ToolCallIdentity {
+            call_id: self.call_id.clone(),
+            occurrence_id: self.occurrence_id.clone(),
+        }
+    }
+}
+
+impl ApprovalRequest {
     pub fn identity(&self) -> ToolCallIdentity {
         ToolCallIdentity {
             call_id: self.call_id.clone(),

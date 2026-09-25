@@ -102,10 +102,10 @@ impl Provider for MockProvider {
                         let _ = events_tx
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
-                    Command::ApproveToolCall { call_id } => {
+                    Command::ApproveToolCall { identity: approved } => {
                         let Some(identity) = pending_tool_call
                             .as_ref()
-                            .filter(|pending| pending.call_id == call_id)
+                            .filter(|pending| **pending == approved)
                             .cloned()
                         else {
                             continue;
@@ -116,7 +116,7 @@ impl Provider for MockProvider {
                         let _ = events_tx.send(Event::ToolCallStarted(identity.clone()).into());
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
-                                call_id.clone(),
+                                identity.call_id.clone(),
                                 identity.occurrence_id,
                                 serde_json::json!({
                                     "approved": true,
@@ -135,10 +135,13 @@ impl Provider for MockProvider {
                         let _ = events_tx
                             .send(Event::StateChanged(SessionState::WaitingForUser).into());
                     }
-                    Command::DenyToolCall { call_id, reason } => {
+                    Command::DenyToolCall {
+                        identity: denied,
+                        reason,
+                    } => {
                         let Some(identity) = pending_tool_call
                             .as_ref()
-                            .filter(|pending| pending.call_id == call_id)
+                            .filter(|pending| **pending == denied)
                             .cloned()
                         else {
                             continue;
@@ -146,7 +149,7 @@ impl Provider for MockProvider {
                         pending_tool_call = None;
                         let _ = events_tx.send(
                             Event::ToolCallFinished(ToolCallResult::new(
-                                call_id.clone(),
+                                identity.call_id.clone(),
                                 identity.occurrence_id,
                                 serde_json::json!({
                                     "approved": false,

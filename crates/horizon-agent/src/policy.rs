@@ -1,19 +1,12 @@
 //! The approval trust model's policy seam (`docs/agent-approval-design.md`).
-//! [`horizon_events_for_provider_event`]'s `RequireApproval` arm is the
-//! single point where `Event::ApprovalRequested` is emitted for a
-//! provider-requested tool call; [`classify_call`] is the per-call trust
-//! predicate that arm consults, replacing the old per-tool-id-only
-//! `ToolPermission::RequireApproval` ("bash always asks") with "this
-//! particular call is contained, or it must ask".
+//! `plan_tool_call` selects automatic execution, an exact approval candidate,
+//! or a terminal rejection. The execution coordinator consumes this decision.
 
 use std::path::PathBuf;
 
 use serde_json::Value;
 
-use crate::contract::{
-    ApprovalKind, ApprovalRequest, Error, Event, SessionId, SessionState, ToolCallRequest,
-    ToolPermission,
-};
+use crate::contract::{ApprovalKind, ApprovalRequest, ToolCallRequest, ToolPermission};
 use crate::tools::call_escapes_root;
 use crate::tools::ToolSessionState;
 
@@ -380,152 +373,110 @@ pub(crate) fn annotate_git_operation_approval(output: &mut Value, writable_roots
     }
 }
 
-pub fn horizon_events_for_provider_event(
-    event: &Event,
-    tool_state: &ToolSessionState,
-    _session_id: SessionId,
-) -> Vec<Event> {
-    let mut events = vec![event.clone()];
-    if let Event::ToolCallRequested(request) = event {
-        match crate::tools::permission_for_tool(&request.tool_id) {
-            // Clippy nightly suggests collapsing the nested `if` into a
-            // match guard, but a guard would leave a non-escaping
-            // auto-allowed call matching no arm (there is deliberately no
-            // catch-all, so the match would not even compile) — the nested
-            // `if` is the correct shape.
-            #[allow(clippy::collapsible_match)]
-            Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
-                // An fs read whose path escapes the workspace root is a
-                // boundary crossing — emit an `ApprovalRequested` so the
-                // judge/human gate can decide. `tools::execution`'s
-                // `execute_agent_tool` independently routes the same call to
-                // `RequiresApproval`, so the approval event and the
-                // execution path stay in sync (the same two-call-site
-                // invariant the `RequireApproval` arm below already
-                // maintains via its own `classify_call`).
-                if call_escapes_root(tool_state, &request.tool_id, &request.input) {
-                    let path = request
-                        .input
-                        .get("path")
-                        .or_else(|| request.input.get("base_path"))
-                        .and_then(Value::as_str)
-                        .expect("call_escapes_root only returns true for a valid string path");
-                    let verb = match request.tool_id.as_str() {
-                        "fs.grep" => "search",
-                        "fs.glob" => "find files in",
-                        _ => "read",
-                    };
-                    events.push(Event::ApprovalRequested(ApprovalRequest {
-                        call_id: request.call_id.clone(),
-                        occurrence_id: request.occurrence_id.clone(),
-                        reason: format!(
-                            "`{}` requested to {verb} `{path}`, which is outside the \
-                             session's workspace root. Allow this?",
-                            request.tool_id
-                        ),
-                        kind: ApprovalKind::Standard,
-                    }));
-                    events.push(Event::StateChanged(SessionState::WaitingForApproval));
+/// The single policy decision used by approval display and execution dispatch.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum ToolPlan {
+    Automatic(AutomaticTool),
+    Approval(ApprovalRequest),
+    Reject(Value),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum AutomaticTool {
+    Synchronous,
+    ContainedFilesystem,
+    SandboxedBash,
+    Web,
+}
+
+pub(crate) fn plan_tool_call(tool_state: &ToolSessionState, request: &ToolCallRequest) -> ToolPlan {
+    let approval = |reason, kind| {
+        ToolPlan::Approval(ApprovalRequest {
+            call_id: request.call_id.clone(),
+            occurrence_id: request.occurrence_id.clone(),
+            reason,
+            kind,
+        })
+    };
+    match crate::tools::permission_for_tool(&request.tool_id) {
+        Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
+            if call_escapes_root(tool_state, &request.tool_id, &request.input) {
+                let path = request
+                    .input
+                    .get("path")
+                    .or_else(|| request.input.get("base_path"))
+                    .and_then(Value::as_str)
+                    .expect("validated escaping path");
+                let verb = match request.tool_id.as_str() {
+                    "fs.grep" => "search",
+                    "fs.glob" => "find files in",
+                    _ => "read",
+                };
+                approval(format!("`{}` requested to {verb} `{path}`, which is outside the session's workspace root. Allow this?", request.tool_id), ApprovalKind::Standard)
+            } else {
+                ToolPlan::Automatic(AutomaticTool::Synchronous)
+            }
+        }
+        Some(ToolPermission::RequireApproval) => {
+            match classify_call(
+                &request.tool_id,
+                &request.input,
+                tool_state.is_isolated_worktree(),
+                horizon_sandbox::is_available(),
+            ) {
+                Classification::Contained => ToolPlan::Automatic(if request.tool_id == "bash" {
+                    AutomaticTool::SandboxedBash
+                } else {
+                    AutomaticTool::ContainedFilesystem
+                }),
+                Classification::BoundaryCrossing
+                    if boundary_disposition(tool_state, &request.tool_id, &request.input)
+                        == BoundaryDisposition::Auto =>
+                {
+                    ToolPlan::Automatic(AutomaticTool::Web)
+                }
+                Classification::BoundaryCrossing if request.tool_id == "web_fetch" => {
+                    let domain = crate::tools::web::domain_grant_from_input(&request.input);
+                    let reason = domain.as_ref().map_or_else(
+                        || "`web_fetch` requested an invalid or unavailable domain.".into(),
+                        |domain| {
+                            format!(
+                                "Allow `{domain}` for this session and fetch the requested URL?"
+                            )
+                        },
+                    );
+                    approval(
+                        reason,
+                        ApprovalKind::DomainGrant {
+                            domains: domain.into_iter().collect(),
+                        },
+                    )
+                }
+                Classification::BoundaryCrossing | Classification::AlwaysAsk => {
+                    let (reason, kind) = git_operation_approval(tool_state, request)
+                        .unwrap_or_else(|| {
+                            (standard_approval_reason(request), ApprovalKind::Standard)
+                        });
+                    approval(reason, kind)
                 }
             }
-            Some(ToolPermission::RequireApproval) => {
-                let classification = classify_call(
-                    &request.tool_id,
-                    &request.input,
-                    tool_state.is_isolated_worktree(),
-                    horizon_sandbox::is_available(),
-                );
-                match classification {
-                    // Contained: no approval prompt -- `tools::execution`'s
-                    // own (separately computed, same predicate) classify
-                    // call drives the actual auto-execution.
-                    Classification::Contained => {}
-                    Classification::BoundaryCrossing => {
-                        let disposition =
-                            boundary_disposition(tool_state, &request.tool_id, &request.input);
-                        if disposition == BoundaryDisposition::Human {
-                            let reason = if request.tool_id == "web_fetch" {
-                                crate::tools::web::domain_grant_from_input(&request.input)
-                                    .map_or_else(
-                                        || {
-                                            "`web_fetch` requested an invalid or unavailable domain."
-                                                .to_string()
-                                        },
-                                        |domain| {
-                                            format!(
-                                                "Allow `{domain}` for this session and fetch the requested URL?"
-                                            )
-                                        },
-                                    )
-                            } else {
-                                standard_approval_reason(request)
-                            };
-                            let kind = if request.tool_id == "web_fetch" {
-                                ApprovalKind::DomainGrant {
-                                    domains: crate::tools::web::domain_grant_from_input(
-                                        &request.input,
-                                    )
-                                    .into_iter()
-                                    .collect(),
-                                }
-                            } else {
-                                ApprovalKind::Standard
-                            };
-                            events.push(Event::ApprovalRequested(ApprovalRequest {
-                                call_id: request.call_id.clone(),
-                                // Approval attaches to the specific
-                                // occurrence the user is deciding -- see the
-                                // `ApprovalRequest.occurrence_id` field's own
-                                // doc comment. Without this, the approval
-                                // modal would target the call_id as a whole,
-                                // which on a reused call_id collapses to
-                                // whichever pending occurrence happened to
-                                // be last in the frame.
-                                occurrence_id: request.occurrence_id.clone(),
-                                reason,
-                                kind,
-                            }));
-                            events.push(Event::StateChanged(SessionState::WaitingForApproval));
-                        }
-                    }
-                    Classification::AlwaysAsk => {
-                        let (reason, kind) = git_operation_approval(tool_state, request)
-                            .unwrap_or_else(|| {
-                                (standard_approval_reason(request), ApprovalKind::Standard)
-                            });
-                        events.push(Event::ApprovalRequested(ApprovalRequest {
-                            call_id: request.call_id.clone(),
-                            occurrence_id: request.occurrence_id.clone(),
-                            reason,
-                            kind,
-                        }));
-                        events.push(Event::StateChanged(SessionState::WaitingForApproval));
-                    }
-                }
-            }
-            Some(ToolPermission::Deny) => {
-                events.push(Event::Error(Error {
-                    message: format!("Tool `{}` is denied by Horizon policy.", request.tool_id),
-                }));
-            }
-            // An unknown tool id (not in `tools::catalog::definitions` at
-            // all) must never reach a human approval prompt -- there is
-            // nothing for a human to approve, and defaulting it to
-            // `RequireApproval` (as this used to) was exactly the
-            // 2026-07-19 dogfooding bug: the model called a nonexistent
-            // `write` tool, a real `ApprovalRequested` reached the human,
-            // and only *after* approving did the call fail with a bare
-            // session `Event::Error` the model never saw as a tool outcome.
-            // No event here at all: `tools::execution::execute_agent_tool`
-            // (invoked separately, on this same `ToolCallRequested`, by
-            // `tools::processing::process_agent_provider_event`) already
-            // produces the one user- and model-visible outcome -- a
-            // `ToolCallFinished` error result -- for this case.
-            None => {}
+        }
+        Some(ToolPermission::Deny) => ToolPlan::Reject(crate::tools::error_output(format!(
+            "Tool `{}` is denied by Horizon policy.",
+            request.tool_id
+        ))),
+        None => {
+            let available = crate::tools::definitions()
+                .into_iter()
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>()
+                .join(", ");
+            ToolPlan::Reject(crate::tools::error_output(format!(
+                "Unknown tool `{}`; available: {available}.",
+                request.tool_id
+            )))
         }
     }
-
-    events
 }
 
 fn standard_approval_reason(request: &ToolCallRequest) -> String {
@@ -587,6 +538,8 @@ fn git_operation_approval(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::{Event, SessionId, SessionState};
+    use crate::tools::test_support::policy_events;
 
     // --- classify_call: the trust predicate's classification table --------
 
@@ -746,7 +699,7 @@ mod tests {
         );
     }
 
-    // --- horizon_events_for_provider_event ---------------------------------
+    // --- plan_tool_call ---------------------------------
 
     fn requested(tool_id: &str) -> Event {
         requested_with_input(tool_id, serde_json::json!({}))
@@ -768,7 +721,7 @@ mod tests {
     #[test]
     fn web_search_auto_crosses_without_a_human_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = horizon_events_for_provider_event(
+        let events = policy_events(
             &requested_with_input("web_search", serde_json::json!({ "query": "rust" })),
             &tool_state,
             SessionId::new(),
@@ -785,7 +738,7 @@ mod tests {
             "web_fetch",
             serde_json::json!({ "url": "https://Docs.Example.com/page" }),
         );
-        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        let events = policy_events(&request, &tool_state, SessionId::new());
         assert!(events.iter().any(|event| matches!(
             event,
             Event::ApprovalRequested(ApprovalRequest {
@@ -795,7 +748,7 @@ mod tests {
         )));
 
         tool_state.allow_domain("example.com");
-        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        let events = policy_events(&request, &tool_state, SessionId::new());
         assert!(events.iter().any(|event| matches!(
             event,
             Event::ApprovalRequested(ApprovalRequest {
@@ -805,7 +758,7 @@ mod tests {
         )));
 
         tool_state.allow_domain("docs.example.com");
-        let events = horizon_events_for_provider_event(&request, &tool_state, SessionId::new());
+        let events = policy_events(&request, &tool_state, SessionId::new());
         assert!(!events
             .iter()
             .any(|event| matches!(event, Event::ApprovalRequested(_))));
@@ -814,7 +767,7 @@ mod tests {
     #[test]
     fn invalid_web_fetch_input_fails_without_a_meaningless_human_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = horizon_events_for_provider_event(
+        let events = policy_events(
             &requested_with_input(
                 "web_fetch",
                 serde_json::json!({ "url": "file:///etc/passwd" }),
@@ -832,11 +785,7 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_isolated_worktree(true)
             .build();
-        let events = horizon_events_for_provider_event(
-            &requested("fs.write"),
-            &tool_state,
-            SessionId::new(),
-        );
+        let events = policy_events(&requested("fs.write"), &tool_state, SessionId::new());
 
         assert_eq!(
             events.len(),
@@ -851,11 +800,7 @@ mod tests {
     #[test]
     fn non_isolated_fs_write_still_gets_the_ordinary_approval_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = horizon_events_for_provider_event(
-            &requested("fs.write"),
-            &tool_state,
-            SessionId::new(),
-        );
+        let events = policy_events(&requested("fs.write"), &tool_state, SessionId::new());
 
         assert!(events
             .iter()
@@ -880,8 +825,7 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_isolated_worktree(true)
             .build();
-        let events =
-            horizon_events_for_provider_event(&requested("write"), &tool_state, SessionId::new());
+        let events = policy_events(&requested("write"), &tool_state, SessionId::new());
 
         assert_eq!(
             events.len(),
@@ -898,7 +842,7 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_isolated_worktree(true)
             .build();
-        let events = horizon_events_for_provider_event(
+        let events = policy_events(
             &requested("mock.approval_required"),
             &tool_state,
             SessionId::new(),
@@ -919,12 +863,12 @@ mod tests {
             .build();
         let session_id = SessionId::new();
 
-        let boundary_events = horizon_events_for_provider_event(
+        let boundary_events = policy_events(
             &requested("mock.boundary_crossing"),
             &tool_state,
             session_id,
         );
-        let always_ask_events = horizon_events_for_provider_event(
+        let always_ask_events = policy_events(
             &requested("mock.approval_required"),
             &tool_state,
             session_id,

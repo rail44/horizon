@@ -20,6 +20,7 @@ pub enum AgentFrameItem {
     ToolCallStarted(ToolCallIdentity),
     ToolCallFinished(ToolCallResult),
     ApprovalRequested(ApprovalRequest),
+    ApprovalResolved(ApprovalResolved),
     /// Ephemeral tool-call-argument-streaming progress (see
     /// [`ToolCallProgress`]): folded in place by
     /// [`apply_tool_call_progress_to_frame`] while arguments stream, and

@@ -86,10 +86,12 @@ pub enum Subcommand {
     Approve {
         session_id: String,
         call_id: String,
+        occurrence_id: String,
     },
     Deny {
         session_id: String,
         call_id: String,
+        occurrence_id: String,
         /// Optional human-supplied deny reason, forwarded to the wire
         /// `Command::DenyToolCall.reason` and recorded on the resulting
         /// `Event::ApprovalResolved`. `None` (the `--reason` flag omitted) is
@@ -166,8 +168,8 @@ Subcommands:\n  \
   attach <session-id> [--active]\n  \
   terminate-session <session-id>\n  \
   terminate-all-detached\n  \
-  approve <session-id> <call-id>\n  \
-  deny <session-id> <call-id> [--reason <text>]\n  \
+  approve <session-id> <call-id> <occurrence-id>\n  \
+  deny <session-id> <call-id> <occurrence-id> [--reason <text>]\n  \
   cancel-turn <session-id>\n  \
   continue-turn <session-id>\n  \
   send <session-id> [text]\n  \
@@ -252,19 +254,23 @@ pub fn parse(args: &[String]) -> Result<ParsedArgs, UsageError> {
         "approve" => {
             let session_id = next_required(&mut positionals, "approve", "session-id")?;
             let call_id = next_required(&mut positionals, "approve", "call-id")?;
+            let occurrence_id = next_required(&mut positionals, "approve", "occurrence-id")?;
             reject_extra(&mut positionals, "approve")?;
             Subcommand::Approve {
                 session_id,
                 call_id,
+                occurrence_id,
             }
         }
         "deny" => {
             let session_id = next_required(&mut positionals, "deny", "session-id")?;
             let call_id = next_required(&mut positionals, "deny", "call-id")?;
+            let occurrence_id = next_required(&mut positionals, "deny", "occurrence-id")?;
             reject_extra(&mut positionals, "deny")?;
             Subcommand::Deny {
                 session_id,
                 call_id,
+                occurrence_id,
                 reason: options.reason.take(),
             }
         }
@@ -790,17 +796,23 @@ mod tests {
     #[test]
     fn parses_approve_and_deny() {
         assert_eq!(
-            parse(&args(&["approve", "s-1", "c-1"])).unwrap().subcommand,
+            parse(&args(&["approve", "s-1", "c-1", "occ"]))
+                .unwrap()
+                .subcommand,
             Subcommand::Approve {
                 session_id: "s-1".to_string(),
-                call_id: "c-1".to_string()
+                call_id: "c-1".to_string(),
+                occurrence_id: "occ".into(),
             }
         );
         assert_eq!(
-            parse(&args(&["deny", "s-1", "c-1"])).unwrap().subcommand,
+            parse(&args(&["deny", "s-1", "c-1", "occ"]))
+                .unwrap()
+                .subcommand,
             Subcommand::Deny {
                 session_id: "s-1".to_string(),
                 call_id: "c-1".to_string(),
+                occurrence_id: "occ".into(),
                 reason: None,
             }
         );
@@ -808,22 +820,31 @@ mod tests {
         // optional deny reason; the flag is recognized anywhere in the
         // argument list, like the other global flags.
         assert_eq!(
-            parse(&args(&["deny", "s-1", "c-1", "--reason", "too risky"]))
-                .unwrap()
-                .subcommand,
+            parse(&args(&[
+                "deny",
+                "s-1",
+                "c-1",
+                "occ",
+                "--reason",
+                "too risky"
+            ]))
+            .unwrap()
+            .subcommand,
             Subcommand::Deny {
                 session_id: "s-1".to_string(),
                 call_id: "c-1".to_string(),
+                occurrence_id: "occ".into(),
                 reason: Some("too risky".to_string()),
             }
         );
         assert_eq!(
-            parse(&args(&["deny", "--reason=too risky", "s-1", "c-1"]))
+            parse(&args(&["deny", "--reason=too risky", "s-1", "c-1", "occ"]))
                 .unwrap()
                 .subcommand,
             Subcommand::Deny {
                 session_id: "s-1".to_string(),
                 call_id: "c-1".to_string(),
+                occurrence_id: "occ".into(),
                 reason: Some("too risky".to_string()),
             }
         );
@@ -1072,5 +1093,12 @@ mod tests {
     fn resolve_split_here_errors_with_no_environment_session_id() {
         assert!(resolve_split(Some(SplitFlag::Here), None).is_err());
         assert!(resolve_split(Some(SplitFlag::Here), Some(String::new())).is_err());
+    }
+
+    #[test]
+    fn approval_commands_require_an_explicit_occurrence() {
+        for command in ["approve", "deny"] {
+            assert!(parse(&args(&[command, "session", "call"])).is_err());
+        }
     }
 }

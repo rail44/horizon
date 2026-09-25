@@ -105,7 +105,7 @@ pub enum ApprovalGate {
 /// question for why that case stays unbuilt here).
 #[derive(Clone, Debug)]
 pub(crate) struct JudgeInput {
-    pub(crate) call_id: String,
+    pub(crate) identity: crate::contract::ToolCallIdentity,
     pub(crate) tool_id: String,
     pub(crate) args: serde_json::Value,
     pub(crate) tool_description: Option<String>,
@@ -423,7 +423,10 @@ mod tests {
 
     fn input(call_id: &str) -> JudgeInput {
         JudgeInput {
-            call_id: call_id.to_string(),
+            identity: crate::contract::ToolCallIdentity {
+                call_id: crate::contract::ToolCallId(call_id.into()),
+                occurrence_id: crate::contract::OccurrenceId("judge-occ".into()),
+            },
             tool_id: "bash".to_string(),
             args: serde_json::json!({ "command": "echo hi" }),
             tool_description: Some("Run a shell command.".to_string()),

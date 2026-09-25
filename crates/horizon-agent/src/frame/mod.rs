@@ -30,8 +30,8 @@ pub(crate) use fold::{
 
 pub(crate) use queries::pending_approval_call_ids_in;
 pub use queries::{
-    actionable_pending_approval_call_ids_in, halted_awaiting_continue,
-    state_indicates_turn_in_flight,
+    actionable_pending_approval_call_ids_in, actionable_pending_approval_identities_in,
+    halted_awaiting_continue, state_indicates_turn_in_flight,
 };
 pub(crate) use tool_calls::tool_call_occurrences;
 

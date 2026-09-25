@@ -149,6 +149,7 @@ impl Requester {
             &NoHostTools,
             &self.tool_state,
             self.session_id,
+            &self.live_state,
             ProviderEvent::from(Event::ToolCallRequested(ToolCallRequest {
                 call_id: ToolCallId(call_id.to_string()),
                 tool_id: tool_id.to_string(),
@@ -157,7 +158,8 @@ impl Requester {
                     (ToolCallId(call_id.to_string())).0.clone(),
                 ),
             })),
-        );
+        )
+        .unwrap();
         let output = processing
             .horizon_events
             .iter()
@@ -168,9 +170,7 @@ impl Requester {
                 },
             )
             .expect("every task/task_output call resolves synchronously");
-        self.live_state
-            .extend_provider_events(processing.horizon_events)
-            .unwrap();
+
         output
     }
 
@@ -186,15 +186,14 @@ impl Requester {
     /// session loop uses -- how a test reaches the turn-end and
     /// cancellation hooks in `tools::processing`.
     fn provider_event(&self, event: Event) {
-        let processing = process_agent_provider_event(
+        process_agent_provider_event(
             &NoHostTools,
             &self.tool_state,
             self.session_id,
+            &self.live_state,
             ProviderEvent::from(event),
-        );
-        self.live_state
-            .extend_provider_events(processing.horizon_events)
-            .unwrap();
+        )
+        .unwrap();
     }
 
     /// Blocks until this session has a notification queued, or `WAIT`
@@ -262,7 +261,7 @@ fn wait_until(mut ready: impl FnMut() -> bool, what: &str) {
 
 /// Decision 1: the launch is non-blocking. The call resolves right now with
 /// `{session_id, description, status: "started"}` -- there is no
-/// `Execution::Started`, and therefore no pending call for the requester's
+/// `ToolUpdate::Started`, and therefore no pending call for the requester's
 /// turn to wait on.
 #[test]
 fn a_launch_returns_immediately_with_a_started_receipt() {

@@ -79,7 +79,8 @@ impl ToolCompletion {
     pub fn live_request<'a>(&self, frame: &'a AgentFrame) -> Option<&'a ToolCallRequest> {
         if let Self::ApprovalJudged(judgment) = self {
             let request = &judgment.candidate.request;
-            if !approval_is_unresolved(frame, request)
+            if judgment.candidate.approval.identity() != request.identity()
+                || !approval_is_unresolved(frame, request)
                 || frame
                     .actionable_pending_approval_call_ids()
                     .contains(&request.call_id)
@@ -143,6 +144,7 @@ pub fn should_fold_completion(frame: &AgentFrame, call_id: &ToolCallId) -> bool 
 /// does; a retry's terminal prior attempt also consumes that retry decision.
 pub(super) fn approval_is_unresolved(frame: &AgentFrame, request: &ToolCallRequest) -> bool {
     frame.tool_call_request(&request.call_id) == Some(request)
+        && !frame.approval_is_resolved(&request.identity())
         && !frame.has_tool_call_finished(&request.call_id)
         && !frame.has_tool_call_started(&request.call_id)
 }

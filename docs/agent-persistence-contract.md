@@ -3,7 +3,7 @@
 The JSONL log owns conversation history. DuckDB is a rebuildable search index.
 A successful enqueue, a successful write, and a usable search index are separate
 outcomes. This contract applies to the shared agent runtime; board behavior and
-wire/event formats are unchanged.
+persisted event formats are unchanged.
 
 ## Publication and execution
 
@@ -21,7 +21,8 @@ refuses startup if its authoritative log cannot be opened.
 The daemon's shared publication boundary commits before fan-out. This includes
 streaming conversation events, input acceptance and receipts, approval decisions,
 retries, termination and panic recording. Tool requests are committed before tool
-execution. Approved worker starts are committed before enqueueing their job;
+execution. All tool starts, automatic or approved, are committed before
+synchronous effects, grant expansion, or worker enqueue;
 results are committed before releasing the next provider round. The provider's
 network future remains asynchronous: work already in progress cannot be undone
 by a later storage failure.

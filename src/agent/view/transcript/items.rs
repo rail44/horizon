@@ -193,10 +193,10 @@ impl AgentTranscript {
                 let pending = self
                     .session
                     .read(cx)
-                    .pending_approval_call_ids()
-                    .contains(&request.call_id);
-                let call_id = request.call_id.clone();
-                let deny_id = request.call_id.clone();
+                    .pending_approval_identities()
+                    .contains(&request.identity());
+                let call_id = request.identity();
+                let deny_id = request.identity();
                 Some(
                     div()
                         .flex()
@@ -324,7 +324,7 @@ impl AgentTranscript {
             // the turn's receipt line; never reaches this per-item path in
             // practice (see `AgentTranscript::render`'s span walk), kept only as a
             // defensive no-op.
-            AgentFrameItem::TurnEnded { .. } => None,
+            AgentFrameItem::TurnEnded { .. } | AgentFrameItem::ApprovalResolved(_) => None,
         }
     }
 

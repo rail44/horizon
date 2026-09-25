@@ -445,3 +445,38 @@ folds tool progress and model metadata, and ignores child-task progress owned by
 the view. The wire conversion keeps each feedback kind in its dedicated variant;
 the unused conversation-event placeholder is never persisted or forwarded. The
 existing event envelope, JSONL format, and wire variants are unchanged.
+
+## Execution planning and exact approval (2026-09-25)
+
+`policy::plan_tool_call` returns one `ToolPlan`: automatic execution mode,
+`ApprovalRequest`, or rejection output. The coordinator uses that same decision
+to execute or pass an `ApprovalCandidate` to the judge/human gate. There is no
+second policy classification to keep synchronized with the displayed prompt.
+Trust tiers and the scope of filesystem, network, Git and host grants are unchanged.
+
+`ToolUpdate` owns the acknowledged lifecycle for automatic and approved tools.
+The request and start must be saved before a synchronous effect, worker enqueue,
+or session grant expansion. Tool handlers return output plus any domain records;
+those records and the result are saved before publication and the next provider
+round. The daemon publishes these applied events once. Commands queued by a
+synchronous tool still precede its provider result. Storage failures stop execution
+through the [persistence contract](agent-persistence-contract.md).
+
+Human approve/deny commands carry `ToolCallIdentity` (`call_id`, `occurrence_id`)
+from the displayed row or CLI argument through the control plane and agent wire.
+Only the matching, pending `ApprovalRequested` in the open turn is actionable.
+A missing prompt, superseded occurrence, saved decision, start, or finish rejects
+the command without forwarding or expanding a grant. `ApprovalResolved` now
+participates in the frame fold so duplicate decisions remain rejected after replay.
+Keyboard targeting and dismissal also distinguish occurrences.
+
+Judge completions retain the original request and approval; both identities must
+match, and an intervening human prompt or decision takes precedence. Judge audit
+payloads include the occurrence id. Filesystem and Git grants are still revalidated
+at approval and by the sandbox before process spawn.
+
+Agent wire v25 requires the exact identity. CLI syntax is `horizon approve
+<session-id> <call-id> <occurrence-id>` (and `deny`, optionally with `--reason`).
+Agent event-log v3, terminal wire and log wire are unchanged. Activating v25 requires
+a rebuilt shell and agent daemon plus a full app restart; runtime reload alone is
+insufficient. Integration neither migrates live data nor restarts the running app.

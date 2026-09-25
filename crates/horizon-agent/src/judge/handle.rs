@@ -101,7 +101,7 @@ impl JudgeHandle {
     ) -> bool {
         let request = &candidate.request;
         let input = JudgeInput {
-            call_id: request.call_id.0.clone(),
+            identity: request.identity(),
             tool_id: request.tool_id.clone(),
             args: request.input.0.clone(),
             tool_description: super::builtin_tool_description(&request.tool_id),

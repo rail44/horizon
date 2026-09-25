@@ -377,6 +377,7 @@ mod tests {
             },
             tool_state,
             requester_id,
+            &LiveState::with_disabled_persistence(),
             &ToolCallRequest {
                 call_id: ToolCallId(call_id.to_string()),
                 tool_id: tool_id.to_string(),
@@ -386,7 +387,9 @@ mod tests {
                 ),
             },
         );
-        let Execution::Auto(events) = execution else {
+        let Ok(Execution::Applied(horizon_agent::tools::ToolUpdate::Finished { events, .. })) =
+            execution
+        else {
             panic!("`{tool_id}` resolves synchronously, got {execution:?}")
         };
         events

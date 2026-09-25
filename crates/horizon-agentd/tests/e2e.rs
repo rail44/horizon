@@ -809,7 +809,7 @@ async fn approval_round_trip_request_out_approve_in_result_event_out() {
     attachment
         .commands
         .send(AgentCommand::ApproveToolCall {
-            call_id: call_id.clone(),
+            identity: requested.clone(),
         })
         .await
         .unwrap();
@@ -877,7 +877,7 @@ async fn bash_runs_agentd_side_and_reports_its_result_over_the_wire() {
     attachment
         .commands
         .send(AgentCommand::ApproveToolCall {
-            call_id: call_id.clone(),
+            identity: requested.clone(),
         })
         .await
         .unwrap();
@@ -937,7 +937,13 @@ async fn repeated_rapid_approve_of_the_same_call_starts_bash_exactly_once() {
         attachment
             .commands
             .send(AgentCommand::ApproveToolCall {
-                call_id: call_id.clone(),
+                identity: events
+                    .iter()
+                    .find_map(|event| match event {
+                        Event::ApprovalRequested(request) => Some(request.identity()),
+                        _ => None,
+                    })
+                    .unwrap(),
             })
             .await
             .unwrap();

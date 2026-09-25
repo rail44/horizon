@@ -22,8 +22,7 @@ use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
 use super::events::{
-    apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
-    send_session_event,
+    persist_and_send_session_event, report_persistence_failure, send_session_event,
 };
 use super::host_tools::AgentdHostTools;
 use super::panic::{
@@ -351,37 +350,33 @@ fn handle_provider_event(
     if !super::events::execution_available(state, live_state, session_id) {
         return;
     }
-    let saved_request = matches!(provider_event.as_event(), Some(Event::ToolCallRequested(_)));
-    if saved_request
-        && !apply_and_send_session_events(
-            state,
-            live_state,
-            session_id,
-            vec![provider_event.clone()],
-        )
-    {
-        return;
-    }
-    let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
-
-    gate_processing_approval(
+    let mut processing = match process_agent_provider_event(
+        host,
         tool_state,
         session_id,
-        &mut processing.horizon_events,
-        &mut processing.provider_commands,
-    );
-
-    if saved_request {
-        processing
-            .horizon_events
-            .retain(|event| !matches!(event.as_event(), Some(Event::ToolCallRequested(_))));
+        live_state,
+        provider_event,
+    ) {
+        Ok(processing) => processing,
+        Err(message) => {
+            report_persistence_failure(state, live_state, session_id, message);
+            let _ = commands_tx.send(Command::Shutdown);
+            return;
+        }
+    };
+    if let Some(candidate) = processing.approval.take() {
+        let (events, commands) = gate_processing_approval(tool_state, session_id, candidate);
+        if let Err(message) = live_state.extend_provider_events(events.clone()) {
+            report_persistence_failure(state, live_state, session_id, message);
+            let _ = commands_tx.send(Command::Shutdown);
+            return;
+        }
+        processing.horizon_events.extend(events);
+        processing.provider_commands.extend(commands);
     }
-    for event in &processing.horizon_events {
-        super::model_selection::record_applied(state, session_id, event);
-    }
-
-    if !apply_and_send_session_events(state, live_state, session_id, processing.horizon_events) {
-        return;
+    for event in processing.horizon_events {
+        super::model_selection::record_applied(state, session_id, &event);
+        send_session_event(state, session_id, AgentWireEvent::from(&event));
     }
     // A synchronous tool can enqueue commands to its own session (notably
     // environment activation). Forward those before its result releases the

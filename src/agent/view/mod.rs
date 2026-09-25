@@ -55,7 +55,7 @@ impl AgentView {
         cx: &mut Context<Self>,
     ) -> Self {
         let initial_mode =
-            turns::next_composer_mode(&session.read(cx).pending_approval_call_ids(), None);
+            turns::next_composer_mode(&session.read(cx).pending_approval_identities(), None);
         let transcript =
             cx.new(|cx| AgentTranscript::new(session.clone(), initial_mode.clone(), cx));
         let composer =

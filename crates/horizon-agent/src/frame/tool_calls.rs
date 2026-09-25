@@ -9,6 +9,7 @@ pub(crate) struct ToolCallOccurrence<'a> {
     pub result: Option<IndexedResult<'a>>,
     pub had_approval_request: bool,
     pub started: bool,
+    pub approval_decision: Option<&'a crate::contract::ApprovalDecisionPayload>,
 }
 
 /// A finished result and its position refer to the same source item.
@@ -28,12 +29,20 @@ pub(crate) fn tool_call_occurrences(items: &[AgentFrameItem]) -> Vec<ToolCallOcc
                 result: None,
                 had_approval_request: false,
                 started: false,
+                approval_decision: None,
             }),
             AgentFrameItem::ApprovalRequested(approval) => {
                 if let Some(index) =
                     matching_call(&calls, &approval.call_id, &approval.occurrence_id)
                 {
                     calls[index].had_approval_request = true;
+                }
+            }
+            AgentFrameItem::ApprovalResolved(resolved) => {
+                if let Some(index) =
+                    matching_call(&calls, &resolved.call_id, &resolved.occurrence_id)
+                {
+                    calls[index].approval_decision = Some(&resolved.decision);
                 }
             }
             AgentFrameItem::ToolCallStarted(identity) => {

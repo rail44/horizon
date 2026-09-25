@@ -149,8 +149,16 @@ fn curl_request(target: &str) -> ToolCallRequest {
 
 fn start_request(tool_state: &ToolSessionState, session_id: SessionId, request: &ToolCallRequest) {
     assert!(matches!(
-        execute_agent_tool(&StubHostTools, tool_state, session_id, request),
-        Execution::Started(_)
+        execute_agent_tool(
+            &StubHostTools,
+            tool_state,
+            session_id,
+            &LiveState::with_disabled_persistence(),
+            request
+        ),
+        Ok(Execution::Applied(
+            horizon_agent::tools::ToolUpdate::Started { .. }
+        ))
     ));
 }
 
@@ -263,6 +271,11 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
         } => (domains, result),
         other => panic!("expected the first curl to be domain denied, got {other:?}"),
     };
+    let mut request = request;
+    request.occurrence_id = horizon_agent::contract::OccurrenceId::new();
+    live_state_a
+        .extend_provider_events([Event::ToolCallRequested(request.clone()).into()])
+        .unwrap();
     let frame = live_state_a
         .extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
             ApprovalRequest {
@@ -272,7 +285,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
                     domains,
                     prior_result,
                 },
-                occurrence_id: horizon_agent::contract::OccurrenceId::new(),
+                occurrence_id: request.occurrence_id.clone(),
             },
         ))])
         .unwrap();
@@ -280,7 +293,7 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
         resolve_approval(
             &frame,
             session_a,
-            request.call_id.clone(),
+            request.identity(),
             ApprovalDecision::Approve,
         ),
         ApprovalOutcome::Applied(horizon_agent::tools::ToolUpdate::Started { .. })
@@ -331,8 +344,16 @@ fn proxy_unaware_direct_connect_cannot_bypass_the_fixed_endpoint() {
         occurrence_id: horizon_agent::contract::OccurrenceId::new(),
     };
     assert!(matches!(
-        execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::Started(_)
+        execute_agent_tool(
+            &StubHostTools,
+            &tool_state,
+            session_id,
+            &LiveState::with_disabled_persistence(),
+            &request
+        ),
+        Ok(Execution::Applied(
+            horizon_agent::tools::ToolUpdate::Started { .. }
+        ))
     ));
     match rx
         .recv_timeout(Duration::from_secs(30))

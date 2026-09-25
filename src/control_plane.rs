@@ -185,13 +185,13 @@ fn dispatch_invoke(
         Command::Execute(id) => shell.execute_control_plane(id, window, cx),
         Command::Approve {
             session_id,
-            call_id,
-        } => shell.control_plane_approve(session_id, call_id, cx)?,
+            identity,
+        } => shell.control_plane_approve(session_id, identity, cx)?,
         Command::Deny {
             session_id,
-            call_id,
+            identity,
             reason,
-        } => shell.control_plane_deny(session_id, call_id, reason, cx)?,
+        } => shell.control_plane_deny(session_id, identity, reason, cx)?,
         Command::CancelTurn(session_id) => shell.control_plane_cancel(session_id, cx)?,
         Command::ContinueTurn(session_id) => shell.control_plane_continue_turn(session_id, cx)?,
         Command::Send { session_id, text } => shell.control_plane_send(session_id, text, cx)?,

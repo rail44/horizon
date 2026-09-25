@@ -41,7 +41,8 @@ pub(super) fn write_verdict(
     latency_ms: u64,
 ) {
     let payload = serde_json::json!({
-        "call_id": input.call_id,
+        "call_id": input.identity.call_id.0,
+        "occurrence_id": input.identity.occurrence_id.0,
         "tool_id": input.tool_id,
         "judge_model": model,
         "mode": "enforcing",
@@ -68,7 +69,8 @@ pub(super) fn write_skipped(
     reason: &str,
 ) {
     let payload = serde_json::json!({
-        "call_id": input.call_id,
+        "call_id": input.identity.call_id.0,
+        "occurrence_id": input.identity.occurrence_id.0,
         "tool_id": input.tool_id,
         "judge_model": model,
         "mode": "enforcing",
@@ -151,7 +153,10 @@ mod tests {
 
     fn judge_input(call_id: &str) -> JudgeInput {
         JudgeInput {
-            call_id: call_id.to_string(),
+            identity: crate::contract::ToolCallIdentity {
+                call_id: crate::contract::ToolCallId(call_id.into()),
+                occurrence_id: crate::contract::OccurrenceId("judge-occ".into()),
+            },
             tool_id: "mock.boundary_crossing".to_string(),
             args: serde_json::json!({}),
             tool_description: None,
@@ -192,6 +197,7 @@ mod tests {
         assert_eq!(record.event, Event::ProviderRequestFinished);
         let payload = record.provider_payload.as_ref().expect("payload present");
         assert_eq!(payload["call_id"], "call-1");
+        assert_eq!(payload["occurrence_id"], "judge-occ");
         assert_eq!(payload["judge_decision"], "escalate");
         assert_eq!(payload["judge_stage"], 2);
         assert_eq!(payload["judge_confidence"], serde_json::Value::Null);

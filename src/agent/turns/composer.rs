@@ -7,7 +7,7 @@
 //! wording -- and is re-exported from `super` under its original name
 //! (see `turns/mod.rs`'s doc comment).
 
-use horizon_agent::contract::ToolCallId;
+use horizon_agent::contract::ToolCallIdentity;
 use horizon_agent::wire::ModelSelection;
 
 /// The approval keyboard-capture state (`docs/agent-output-ui-
@@ -18,63 +18,66 @@ use horizon_agent::wire::ModelSelection;
 /// now a compact "⏎ approve · esc deny" annotation on that call's own
 /// row (`view::render_tool_call_row`, gated by
 /// [`is_keyboard_approval_target`]). The keyboard semantics themselves
-/// are unchanged: while this holds `Approval { call_id }` and the
+/// are unchanged: while this holds `Approval { identity }` and the
 /// composer is empty/not typing, Enter approves and Esc denies that
 /// exact call; typing past it reverts to `Normal` (`next_composer_mode`'s
 /// no-flap rule, below). Kept as an explicit enum -- rather than folding
 /// "is approval showing" into a bool alongside a separately tracked
-/// call_id -- so the amendment's own recorded future direction
+/// identity -- so the amendment's own recorded future direction
 /// (prompt-intent auto-approval, "auto mode") has a clean third arm to
 /// add later: skip or auto-resolve this state without touching the row's
 /// other paths.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ComposerMode {
     Normal,
-    Approval { call_id: ToolCallId },
+    Approval { identity: ToolCallIdentity },
 }
 
 /// Recomputes [`ComposerMode`] from the session's actionable pending
 /// queue (oldest-first -- the same ordering
-/// `horizon_agent::frame::actionable_pending_approval_call_ids_in`
+/// `horizon_agent::frame::actionable_pending_approval_identities_in`
 /// returns, ghost-excluded per the round-4 post-review fix) and
-/// `dismissed`: the call_id, if any, the composer most recently reverted
+/// `dismissed`: the identity, if any, the composer most recently reverted
 /// to `Normal` for because the user started typing instead of deciding.
 ///
 /// No-flap rule (stage E): typing past a shown approval dismisses
-/// *that exact call_id*, not "approval mode" in general. The composer
+/// *that exact identity*, not "approval mode" in general. The composer
 /// only shows `Approval` again once the queue's head actually changes --
 /// either this call resolves via any of the other three paths (row
 /// button, palette, CLI) and a different one takes its place, or the
 /// queue was empty and gains its first entry. A queue whose head is
-/// still the dismissed call_id keeps returning `Normal` here on every
+/// still the dismissed identity keeps returning `Normal` here on every
 /// call, however many times it's asked (e.g. once per keystroke) --
 /// nothing about typing further, or deleting back to an empty composer,
 /// flips it back. An empty queue always clears any dismissal along with
 /// it, since there's nothing left to have dismissed.
 pub(crate) fn next_composer_mode(
-    actionable_queue: &[ToolCallId],
-    dismissed: Option<&ToolCallId>,
+    actionable_queue: &[ToolCallIdentity],
+    dismissed: Option<&ToolCallIdentity>,
 ) -> ComposerMode {
     match actionable_queue.first() {
         None => ComposerMode::Normal,
-        Some(call_id) if Some(call_id) == dismissed => ComposerMode::Normal,
-        Some(call_id) => ComposerMode::Approval {
-            call_id: call_id.clone(),
+        Some(identity) if Some(identity) == dismissed => ComposerMode::Normal,
+        Some(identity) => ComposerMode::Approval {
+            identity: identity.clone(),
         },
     }
 }
 
-/// Whether `call_id` is the exact call [`ComposerMode`] currently targets
+/// Whether `identity` is the exact call [`ComposerMode`] currently targets
 /// for the keyboard path (row-centric v2):
 /// decides which single `Waiting` row, if any, shows the "⏎ approve · esc
 /// deny" annotation next to its Approve/Deny buttons. Derived purely from
 /// the mode -- never from queue position -- so the hint can never lie:
 /// once typing dismisses the mode back to `Normal`
 /// (`next_composer_mode`'s no-flap rule), this returns `false` for every
-/// call_id, including the one just shown, so the annotation disappears
+/// identity, including the one just shown, so the annotation disappears
 /// exactly when the keys it describes stop doing anything.
-pub(crate) fn is_keyboard_approval_target(mode: &ComposerMode, call_id: &ToolCallId) -> bool {
-    matches!(mode, ComposerMode::Approval { call_id: target } if target == call_id)
+pub(crate) fn is_keyboard_approval_target(
+    mode: &ComposerMode,
+    identity: &ToolCallIdentity,
+) -> bool {
+    matches!(mode, ComposerMode::Approval { identity: target } if target == identity)
 }
 
 /// The composer's placeholder text (decision 6): sending from the composer
@@ -152,6 +155,12 @@ pub(crate) fn composer_model_label(
 mod tests {
     use super::super::test_support::*;
     use super::*;
+    fn approval_identity(id: &str) -> ToolCallIdentity {
+        ToolCallIdentity {
+            call_id: horizon_agent::contract::ToolCallId(id.into()),
+            occurrence_id: horizon_agent::contract::OccurrenceId(id.into()),
+        }
+    }
 
     #[test]
     fn composer_placeholder_names_next_turn_delivery_while_a_turn_is_in_flight() {
@@ -240,11 +249,11 @@ mod tests {
 
     #[test]
     fn next_composer_mode_shows_the_oldest_actionable_call() {
-        let queue = vec![ToolCallId("a".to_string()), ToolCallId("b".to_string())];
+        let queue = vec![approval_identity("a"), approval_identity("b")];
         assert_eq!(
             next_composer_mode(&queue, None),
             ComposerMode::Approval {
-                call_id: ToolCallId("a".to_string())
+                identity: approval_identity("a")
             }
         );
     }
@@ -252,13 +261,13 @@ mod tests {
     #[test]
     fn next_composer_mode_stays_normal_while_the_dismissed_call_is_still_the_head() {
         // The no-flap rule: typing past the shown approval dismisses that
-        // exact call_id, and it keeps reporting `Normal` for that same
+        // exact identity, and it keeps reporting `Normal` for that same
         // head on every subsequent call (e.g. once per keystroke) --
         // never re-showing the approval state underneath what the user is
         // typing.
-        let queue = vec![ToolCallId("a".to_string())];
+        let queue = vec![approval_identity("a")];
         assert_eq!(
-            next_composer_mode(&queue, Some(&ToolCallId("a".to_string()))),
+            next_composer_mode(&queue, Some(&approval_identity("a"))),
             ComposerMode::Normal
         );
     }
@@ -270,11 +279,11 @@ mod tests {
         // becomes the head, approval mode reappears for the new one --
         // the dismissal doesn't carry over to a call it was never shown
         // for.
-        let queue = vec![ToolCallId("b".to_string())];
+        let queue = vec![approval_identity("b")];
         assert_eq!(
-            next_composer_mode(&queue, Some(&ToolCallId("a".to_string()))),
+            next_composer_mode(&queue, Some(&approval_identity("a"))),
             ComposerMode::Approval {
-                call_id: ToolCallId("b".to_string())
+                identity: approval_identity("b")
             }
         );
     }
@@ -285,7 +294,7 @@ mod tests {
         // entirely (every pending approval resolved) doesn't matter --
         // an empty queue is always `Normal`.
         assert_eq!(
-            next_composer_mode(&[], Some(&ToolCallId("a".to_string()))),
+            next_composer_mode(&[], Some(&approval_identity("a"))),
             ComposerMode::Normal
         );
     }
@@ -293,18 +302,18 @@ mod tests {
     #[test]
     fn approving_a_bash_call_advances_composer_mode_the_instant_started_folds() {
         // End-to-end through the real seam `AgentView::sync_composer_mode`
-        // uses (`horizon_agent::frame::actionable_pending_approval_call_ids_in`
+        // uses (`horizon_agent::frame::actionable_pending_approval_identities_in`
         // feeding `next_composer_mode`): approving targets the oldest
         // actionable call; the daemon's synchronous ack for that click
         // folds `ToolCallStarted` immediately, well before `bash`'s
         // eventual `ToolCallFinished` -- the composer must advance to the
         // next actionable call right there, not wait for the result.
         let before = vec![approval_requested("a"), approval_requested("b")];
-        let queue_before = horizon_agent::frame::actionable_pending_approval_call_ids_in(&before);
+        let queue_before = horizon_agent::frame::actionable_pending_approval_identities_in(&before);
         assert_eq!(
             next_composer_mode(&queue_before, None),
             ComposerMode::Approval {
-                call_id: ToolCallId("a".to_string())
+                identity: approval_identity("a")
             }
         );
 
@@ -313,11 +322,11 @@ mod tests {
             approval_requested("b"),
             tool_started("a"),
         ];
-        let queue_after = horizon_agent::frame::actionable_pending_approval_call_ids_in(&after);
+        let queue_after = horizon_agent::frame::actionable_pending_approval_identities_in(&after);
         assert_eq!(
             next_composer_mode(&queue_after, None),
             ComposerMode::Approval {
-                call_id: ToolCallId("b".to_string())
+                identity: approval_identity("b")
             }
         );
     }
@@ -325,15 +334,17 @@ mod tests {
     #[test]
     fn approving_the_only_pending_call_clears_composer_mode_once_started_folds() {
         let items = vec![approval_requested("a"), tool_started("a")];
-        let queue = horizon_agent::frame::actionable_pending_approval_call_ids_in(&items);
+        let queue = horizon_agent::frame::actionable_pending_approval_identities_in(&items);
         assert_eq!(next_composer_mode(&queue, None), ComposerMode::Normal);
     }
 
     #[test]
     fn is_keyboard_approval_target_true_only_for_the_modes_own_call() {
-        let a = ToolCallId("a".to_string());
-        let b = ToolCallId("b".to_string());
-        let mode = ComposerMode::Approval { call_id: a.clone() };
+        let a = approval_identity("a");
+        let b = approval_identity("b");
+        let mode = ComposerMode::Approval {
+            identity: a.clone(),
+        };
         assert!(is_keyboard_approval_target(&mode, &a));
         assert!(!is_keyboard_approval_target(&mode, &b));
     }
@@ -343,7 +354,23 @@ mod tests {
         // Dismissed-by-typing (or never-pending) both collapse to
         // `Normal`, which targets no call at all -- the annotation must
         // vanish from whatever row last showed it.
-        let a = ToolCallId("a".to_string());
+        let a = approval_identity("a");
         assert!(!is_keyboard_approval_target(&ComposerMode::Normal, &a));
+    }
+
+    #[test]
+    fn dismissing_an_old_occurrence_does_not_hide_a_retry_with_the_same_call_id() {
+        let first = approval_identity("reused");
+        let mut retry = first.clone();
+        retry.occurrence_id = horizon_agent::contract::OccurrenceId("retry".into());
+        let mode = next_composer_mode(std::slice::from_ref(&retry), Some(&first));
+        assert_eq!(
+            mode,
+            ComposerMode::Approval {
+                identity: retry.clone()
+            }
+        );
+        assert!(!is_keyboard_approval_target(&mode, &first));
+        assert!(is_keyboard_approval_target(&mode, &retry));
     }
 }

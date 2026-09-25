@@ -1,7 +1,7 @@
 use crate::contract::SessionId;
 use crate::prompt::{system_prompt, SessionEnvironment};
 use crate::registry;
-use crate::{contract as agent, frame::*, policy::horizon_events_for_provider_event};
+use crate::{contract as agent, frame::*, tools::test_support::policy_events};
 
 fn recv_event(rx: &crossbeam_channel::Receiver<agent::ProviderEvent>) -> agent::Event {
     rx.recv_timeout(std::time::Duration::from_secs(1))
@@ -865,7 +865,7 @@ fn agent_frame_lists_multiple_pending_approvals_oldest_first() {
 fn horizon_policy_adds_approval_for_requested_tool() {
     let call_id = agent::ToolCallId("call-1".to_string());
     let tool_state = crate::tools::ToolSessionState::new(std::env::temp_dir());
-    let events = horizon_events_for_provider_event(
+    let events = policy_events(
         &agent::Event::ToolCallRequested(agent::ToolCallRequest {
             call_id: call_id.clone(),
             tool_id: "mock.approval_required".to_string(),
@@ -1531,7 +1531,7 @@ fn operator_intervention_events_round_trip_through_serde_json() {
 /// the transcript-count invariant honest: every persisted event must
 /// either produce a frame item or be a documented audit record.
 #[test]
-fn operator_intervention_events_fold_into_no_frame_item() {
+fn approval_decisions_are_retained_while_continue_remains_audit_only() {
     let mut frame = AgentFrame::empty();
     let mut turn = TurnClock::new();
 
@@ -1555,8 +1555,11 @@ fn operator_intervention_events_fold_into_no_frame_item() {
     );
 
     assert!(
-        frame.items.is_empty(),
-        "audit-only events must not grow frame.items; got {:?}",
+        matches!(
+            frame.items.as_slice(),
+            [AgentFrameItem::ApprovalResolved(_)]
+        ),
+        "approval decisions must survive replay; got {:?}",
         frame.items
     );
 }

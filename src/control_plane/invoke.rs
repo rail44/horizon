@@ -1,6 +1,6 @@
 //! Validate external command arguments before any shell operation runs.
 
-use horizon_agent::contract::ToolCallId;
+use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallIdentity};
 use horizon_agent::roles::RoleId;
 use horizon_control::contract::Invoke;
 use horizon_workspace::commands::CommandId;
@@ -33,11 +33,11 @@ pub(super) enum Command {
     Execute(CommandId),
     Approve {
         session_id: SessionId,
-        call_id: ToolCallId,
+        identity: ToolCallIdentity,
     },
     Deny {
         session_id: SessionId,
-        call_id: ToolCallId,
+        identity: ToolCallIdentity,
         reason: Option<String>,
     },
     CancelTurn(SessionId),
@@ -76,11 +76,11 @@ pub(super) fn parse(invoke: &Invoke) -> Result<Command, String> {
         }
         "approve" => Command::Approve {
             session_id: session_id_arg(args, "session_id")?,
-            call_id: call_id_arg(args, "call_id")?,
+            identity: approval_identity_arg(args)?,
         },
         "deny" => Command::Deny {
             session_id: session_id_arg(args, "session_id")?,
-            call_id: call_id_arg(args, "call_id")?,
+            identity: approval_identity_arg(args)?,
             reason: optional_string_arg(args, "reason")?,
         },
         "cancel-turn" => Command::CancelTurn(session_id_arg(args, "session_id")?),
@@ -216,15 +216,20 @@ fn isolate_arg(args: &serde_json::Value) -> Result<Option<bool>, String> {
     }
 }
 
-fn call_id_arg(
-    args: &serde_json::Value,
-    key: &str,
-) -> Result<horizon_agent::contract::ToolCallId, String> {
-    required_string_arg(args, key).map(ToolCallId)
+fn approval_identity_arg(args: &serde_json::Value) -> Result<ToolCallIdentity, String> {
+    let call_id = required_string_arg(args, "call_id")?;
+    let occurrence_id = required_string_arg(args, "occurrence_id")?;
+    if call_id.is_empty() || occurrence_id.is_empty() {
+        return Err("approval requires non-empty call_id and occurrence_id".into());
+    }
+    Ok(ToolCallIdentity {
+        call_id: ToolCallId(call_id),
+        occurrence_id: OccurrenceId(occurrence_id),
+    })
 }
 
 /// Parses a required plain-string argument -- the `send` command's `text`
-/// payload. Mirrors [`call_id_arg`]'s shape but returns a bare `String`
+/// payload. Mirrors [`approval_identity_arg`]'s shape but returns a bare `String`
 /// rather than a typed wrapper. The `send` arm enforces non-emptiness
 /// separately (empty input is rejected at the CLI layer already; this is
 /// defensive).
@@ -408,6 +413,27 @@ mod tests {
         assert_eq!(
             optional_string_arg(&args, "reason").unwrap_err(),
             "`reason` must be a string".to_string()
+        );
+    }
+
+    #[test]
+    fn approval_identity_requires_both_ids_and_preserves_the_supplied_occurrence() {
+        use super::approval_identity_arg;
+        use horizon_agent::contract::{OccurrenceId, ToolCallId, ToolCallIdentity};
+        for args in [
+            serde_json::json!({"call_id":"same"}),
+            serde_json::json!({"call_id":"same", "occurrence_id":""}),
+            serde_json::json!({"call_id":"same", "occurrence_id":42}),
+        ] {
+            assert!(approval_identity_arg(&args).is_err());
+        }
+        assert_eq!(
+            approval_identity_arg(&serde_json::json!({"call_id":"same", "occurrence_id":"old"}))
+                .unwrap(),
+            ToolCallIdentity {
+                call_id: ToolCallId("same".into()),
+                occurrence_id: OccurrenceId("old".into())
+            }
         );
     }
 }

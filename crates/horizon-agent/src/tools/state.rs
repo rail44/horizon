@@ -152,7 +152,7 @@ struct Inner {
     /// either this session isn't eligible for tier-1 sandboxed `bash` at
     /// all (not isolated, or no engaged sandbox), the proxy failed to bind,
     /// or this `ToolSessionState` is one of this crate's own test
-    /// constructions -- either way, `tools::execution::execute_tier1_bash`
+    /// constructions -- either way, `tools::execution::execute_automatic`
     /// falls back to `NetworkPolicy::Disabled`, exactly the pre-leg-4a
     /// behavior. `Arc` (not a bare value) so the handle is cheap to clone
     /// across this `Rc`-based struct's threading boundary onto the bash
@@ -336,7 +336,7 @@ impl ToolSessionState {
 
     /// This session's own network-proxy pair, if one is running -- see
     /// [`Inner::network`]'s doc comment. What `tools::execution::
-    /// execute_tier1_bash` passes into `bash::spawn_sandboxed`, and what
+    /// execute_automatic` passes into `bash::spawn_sandboxed`, and what
     /// `tools::approval`'s domain-denial-retry path mutates
     /// (`SessionNetworkProxy::allow_domain`) on approve.
     pub(crate) fn network_proxy(&self) -> Option<Arc<SessionNetworkProxy>> {
@@ -345,7 +345,7 @@ impl ToolSessionState {
 
     /// The loopback endpoints this session's sandbox may connect to directly
     /// -- see [`Inner::loopback_connect`]'s doc comment. What
-    /// `tools::execution::execute_tier1_bash` passes into
+    /// `tools::execution::execute_automatic` passes into
     /// `bash::spawn_sandboxed`.
     pub(crate) fn loopback_connect(&self) -> Vec<SocketAddr> {
         self.inner.loopback_connect.clone()

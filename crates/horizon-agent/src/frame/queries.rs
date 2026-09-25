@@ -49,9 +49,8 @@ impl AgentFrame {
         actionable_pending_approval_call_ids_in(&self.items)
     }
 
-    /// The most recent `ToolCallRequested` item for `call_id`, if any. Used
-    /// to recover a pending tool call's `tool_id`/`input` at approval time,
-    /// since the approve/deny UI only carries the `call_id` forward.
+    /// The latest request with this provider call id. Execution decisions
+    /// must also validate its occurrence through `actionable_approval`.
     pub fn tool_call_request(&self, call_id: &ToolCallId) -> Option<&ToolCallRequest> {
         self.items.iter().rev().find_map(|item| match item {
             AgentFrameItem::ToolCallRequested(request) if &request.call_id == call_id => {
@@ -61,19 +60,25 @@ impl AgentFrame {
         })
     }
 
-    /// The most recent `ApprovalRequested` item's [`ApprovalKind`] for
-    /// `call_id`, if any -- what `tools::approval::resolve_bash` needs to
-    /// tell a domain-denial retry apart from an ordinary approval or a
-    /// sandbox-denial retry (`docs/agent-approval-design.md` leg 4b), the
-    /// same way [`Self::tool_call_request`] recovers a pending call's
-    /// `tool_id`/`input`.
-    pub(crate) fn approval_kind(&self, call_id: &ToolCallId) -> Option<ApprovalKind> {
+    /// An exact human approval still awaiting a decision in the open turn.
+    pub fn actionable_approval(&self, identity: &ToolCallIdentity) -> Option<&ApprovalRequest> {
+        if self.tool_call_request(&identity.call_id)?.identity() != *identity
+            || !actionable_pending_approval_identities_in(&self.items).contains(identity)
+        {
+            return None;
+        }
         self.items.iter().rev().find_map(|item| match item {
-            AgentFrameItem::ApprovalRequested(request) if &request.call_id == call_id => {
-                Some(request.kind.clone())
+            AgentFrameItem::ApprovalRequested(request) if request.identity() == *identity => {
+                Some(request)
             }
             _ => None,
         })
+    }
+
+    pub(crate) fn approval_is_resolved(&self, identity: &ToolCallIdentity) -> bool {
+        self.items.iter().any(|item| matches!(item,
+            AgentFrameItem::ApprovalResolved(resolved)
+                if resolved.call_id == identity.call_id && resolved.occurrence_id == identity.occurrence_id))
     }
 
     /// The most recently recorded turn result, including historical results
@@ -203,53 +208,47 @@ impl AgentFrame {
 /// slice, not the whole session frame, when it asks whether a call is
 /// still pending.
 ///
-/// Ack semantics (root-caused 2026-07-13 -- the daemon's approve/deny round
-/// trip does not wait for the tool to finish): `crate::tools::approval::
-/// resolve_approval` folds a decision's *first* synchronous ack one IPC hop
-/// after the click -- `ToolCallStarted` for an approve (execution has begun;
-/// for `bash` that's the *only* immediate ack, since the result arrives
-/// later and asynchronously -- see `AgentFrame::has_tool_call_started`'s doc
-/// comment), or `ToolCallFinished` directly for a deny (short-circuited,
-/// nothing ever starts) or for a synchronous tool whose approve folds
-/// `ToolCallStarted` and `ToolCallFinished` together in the same round trip.
-/// Either ack resolves the pending entry here: the user's decision has
-/// already been acted on, so there is nothing left pending a UI reaction to
-/// -- only the tool's eventual *result* (irrelevant to this queue) is still
-/// outstanding for `bash`.
+/// A saved decision, start, or finish consumes the matching occurrence.
+/// A new request with the same provider id supersedes its earlier offer.
 pub(crate) fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
-    let mut pending = Vec::<&crate::contract::ApprovalRequest>::new();
+    pending_approval_identities_in(items)
+        .into_iter()
+        .map(|identity| identity.call_id)
+        .collect()
+}
+
+fn pending_approval_identities_in(items: &[AgentFrameItem]) -> Vec<ToolCallIdentity> {
+    let mut pending = Vec::new();
     for item in items {
         match item {
+            AgentFrameItem::ToolCallRequested(request) => {
+                pending.retain(|identity: &ToolCallIdentity| identity.call_id != request.call_id);
+            }
             AgentFrameItem::ApprovalRequested(request) => {
-                if !pending
-                    .iter()
-                    .any(|prior| prior.occurrence_id == request.occurrence_id)
-                {
-                    pending.push(request);
+                let identity = request.identity();
+                if !pending.contains(&identity) {
+                    pending.push(identity);
                 }
             }
-            AgentFrameItem::ToolCallStarted(identity) => {
-                pending.retain(|request| {
-                    request.call_id != identity.call_id
-                        || request.occurrence_id != identity.occurrence_id
+            AgentFrameItem::ApprovalResolved(resolved) => {
+                pending.retain(|identity| {
+                    identity.call_id != resolved.call_id
+                        || identity.occurrence_id != resolved.occurrence_id
                 });
             }
+            AgentFrameItem::ToolCallStarted(started) => {
+                pending.retain(|identity| identity != started)
+            }
             AgentFrameItem::ToolCallFinished(result) => {
-                pending.retain(|request| {
-                    request.call_id != result.call_id
-                        || request.occurrence_id != result.occurrence_id
+                pending.retain(|identity| {
+                    identity.call_id != result.call_id
+                        || identity.occurrence_id != result.occurrence_id
                 });
             }
             _ => {}
         }
     }
-    let mut call_ids = Vec::new();
-    for request in pending {
-        if !call_ids.contains(&request.call_id) {
-            call_ids.push(request.call_id.clone());
-        }
-    }
-    call_ids
+    pending
 }
 
 /// [`pending_approval_call_ids_in`], with one more rule: a `TurnEnded`
@@ -279,11 +278,20 @@ pub(crate) fn pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<Tool
 /// a call that can no longer resolve (the "one approval worked, then
 /// everything looked permanently stuck" report).
 pub fn actionable_pending_approval_call_ids_in(items: &[AgentFrameItem]) -> Vec<ToolCallId> {
+    actionable_pending_approval_identities_in(items)
+        .into_iter()
+        .map(|identity| identity.call_id)
+        .collect()
+}
+
+pub fn actionable_pending_approval_identities_in(
+    items: &[AgentFrameItem],
+) -> Vec<ToolCallIdentity> {
     let start = items
         .iter()
         .rposition(|item| matches!(item, AgentFrameItem::TurnEnded { .. }))
         .map_or(0, |index| index + 1);
-    pending_approval_call_ids_in(&items[start..])
+    pending_approval_identities_in(&items[start..])
 }
 
 /// Whether the frame's last item is a guard-halted `TurnEnded` -- i.e. the

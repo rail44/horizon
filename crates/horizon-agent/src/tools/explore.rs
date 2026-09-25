@@ -78,13 +78,13 @@ use std::panic::AssertUnwindSafe;
 use crossbeam_channel::Receiver;
 use serde_json::{json, Value};
 
+use super::execution::ToolOutput;
 use crate::contract::{
     Event, MessageRole, SessionId, SessionState, TaskProgress, TaskProgressState, ToolCallRequest,
-    ToolCallResult, TurnEndReason,
+    TurnEndReason,
 };
 use crate::roles::RoleId;
 use crate::tools::state::ToolSessionState;
-use crate::tools::Execution;
 
 pub(crate) use notify::{register_wake, unregister_wake};
 
@@ -205,7 +205,7 @@ pub trait ExplorationHost: Send + Sync {
 
 /// Launches a `task` child and returns immediately. Unlike every other
 /// asynchronous tool in this crate (`bash`, `web`), the *tool call* itself
-/// finishes here and now -- an [`Execution::Auto`] carrying the
+/// finishes here and now -- an [`ToolOutput`] carrying the
 /// `{session_id, description, status: "started"}` receipt -- because the
 /// work it started is no longer part of this call. The child's eventual
 /// report arrives on its own schedule as a notification (see the module
@@ -214,7 +214,7 @@ pub(crate) fn start(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     request: &ToolCallRequest,
-) -> Execution {
+) -> ToolOutput {
     let input = match Input::parse(&request.input) {
         Ok(input) => input,
         Err(message) => return synchronous(request, error_output(message)),
@@ -328,7 +328,7 @@ pub(crate) fn register_finished_child_for_test(
 /// session (decision 3). Ownership is checked, and an id belonging to
 /// another session reports exactly like an unknown one -- a session must
 /// not be able to probe another's task ids.
-pub(crate) fn output(session_id: SessionId, request: &ToolCallRequest) -> Execution {
+pub(crate) fn output(session_id: SessionId, request: &ToolCallRequest) -> ToolOutput {
     let target = match request
         .input
         .get("session_id")
@@ -475,16 +475,8 @@ impl Input {
 /// A tool call that resolves right now -- which, since the 2026-07-28
 /// asynchronous cutover, is *every* `task`/`task_output` call: launching is
 /// no longer something the call waits on.
-fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
-    Execution::Auto(vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-        Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            output,
-        )),
-    ])
+fn synchronous(_request: &ToolCallRequest, output: Value) -> ToolOutput {
+    output.into()
 }
 
 use super::error_output;

@@ -8,15 +8,15 @@
         "name": "apply_agent_event_to_frame",
         "partition": "production"
       },
-      "sha256": "049f83f1ceb7f7dd95df7ad5b30540cd69984e7de331ca4ace604c42bb119217",
+      "sha256": "39f72cb42ece4f843f28fd110dc197b7bd0fff1dfe2534e84819c1e34e843af8",
       "related": {
-        "crates/horizon-agent/src/contract/provider_event.rs": "6467df7b659f18a38762b26f18ea4a0aab786f7f4a7ce7cf80c4573a7a6e32e3",
-        "crates/horizon-agent/src/live.rs": "7ab5dcc645aa8b5f7ffa08d42da0c93055b108c186ffe063cfd1b5e71c7ba131",
-        "crates/horizon-agent/src/persistence/event_log/appender.rs": "85aa3486d692715762c1053d098751796c130e5baa25ad3b556764566af2cbc2"
+        "crates/horizon-agent/src/frame/queries.rs": "357da1a33da3eb33a17cf15b6c4364f65e3e4469d612a9d9fb64c39a99ece1e7",
+        "crates/horizon-agent/src/frame/tool_calls.rs": "cef5f9dc9acb07b54d1d7cc57cdfea0ca9d7fe5d349f54c168f848eaa5ef45c2",
+        "crates/horizon-agent/src/transcript/tool_call/approval.rs": "7202be0a11efb17ed04123eaaea52e677b1b87d6caf25d2b920674a4510d88e5"
       },
       "decision": "preserve",
-      "reason": "The conversation reducer still owns frame history. ProviderEvent now separates persisted events from notifications; LiveState, Appender and wire forwarding each match those variants explicitly. No dummy event reaches this reducer.",
-      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
+      "reason": "Keep event folding as the history owner. ApprovalResolved now consumes its exact human decision in replay and informs row projection; ContinueTurnRequested remains audit-only. Pending approvals compare both execution ids.",
+      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
     },
     {
       "target": {
@@ -35,6 +35,25 @@
       "decision": "preserve",
       "reason": "Keep current, incremental and full rebuild paths distinct. Freshness now verifies the full ordered event identity prefix plus the format stamp. Any skipped projection disables search; live append failure revokes all shared readers while JSONL continues. Fault and restart regressions cover holes and replacement logs.",
       "commit": "b00cb83bec1f3e861e20260010b4efe0d24f370c"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agent/src/policy.rs",
+        "owner": "<free>",
+        "name": "plan_tool_call",
+        "partition": "production"
+      },
+      "sha256": "d40a40c636db751bb9410485d94d3c4d92e0ff51d26a22fb23821d33ddecb493",
+      "related": {
+        "crates/horizon-agent/src/tools/approval.rs": "65e807c61ec168e9188cf974bac88b7e97c746bac967582d54950b93158503bc",
+        "crates/horizon-agent/src/tools/execution.rs": "b8d43cd1656cf92b7e613ae9a8649f779e15edb3fcb5de2acd4df716376d8431",
+        "crates/horizon-agent/src/tools/processing.rs": "351587acd3439be10984a5cbb0796a14a387dc4f828267d33b97459fed19a45f",
+        "crates/horizon-agent/src/tools/transition.rs": "e2995b43fc9de9287095d96b74a4d893316a514ef8dcd511cc29c953bf988898",
+        "crates/horizon-agentd/src/session/run.rs": "9c9a84794e9548893ce01f0b17ec585218dd00d1aaad14fa1affe6a91eee26d5"
+      },
+      "decision": "preserve",
+      "reason": "One typed decision owns automatic mode, approval candidate or rejection. Display and dispatch consume that decision; trust tiers and narrow grant validation remain separate contracts. Do not replace the explicit policy table with generic tool traits.",
+      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
     },
     {
       "target": {
@@ -111,14 +130,15 @@
         "name": "live_request",
         "partition": "production"
       },
-      "sha256": "ccdd9b3e5da77c2d6efa5cc40faf5cba9167928a79141826919adb24633fe629",
+      "sha256": "a1dc152c350da83f56f3d8fd1248199b84a19194a42054c685afed05c319443d",
       "related": {
-        "crates/horizon-agent/src/tools/approval.rs": "46faed83ea7690bbdb7a9740960e68664f421fbc120a252932f052d07a60829c",
-        "crates/horizon-agentd/src/session/completion/retry.rs": "fcd0b3d87afe06d15f9df888bcae1d53d8525ad4c93565c776bf9afe42435001"
+        "crates/horizon-agent/src/frame/queries.rs": "357da1a33da3eb33a17cf15b6c4364f65e3e4469d612a9d9fb64c39a99ece1e7",
+        "crates/horizon-agent/src/tools/approval.rs": "65e807c61ec168e9188cf974bac88b7e97c746bac967582d54950b93158503bc",
+        "crates/horizon-agentd/src/session/completion.rs": "aefe534bbb56cb2aa11a313062b44a9cb45fccf5a364fae3e7d7a4b81ca8f5d3"
       },
       "decision": "preserve",
-      "reason": "Accept exact execution identity and unresolved approval at the coordinator boundary. Carry the validated request into retries; keep provider call ID batching because declining retries returns the prior attempt.",
-      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
+      "reason": "Accept only the exact live execution. Judge request and approval identities must agree, and a saved human decision or pending human prompt takes precedence. Keep cancellation and result acceptance at the session coordinator.",
+      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
     },
     {
       "target": {

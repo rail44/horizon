@@ -13,11 +13,12 @@ use crate::contract::{
 };
 use crate::frame::{AgentFrame, AgentFrameItem};
 use crate::live::LiveState;
-use crate::tools::execution::{execute_agent_tool, Execution, HostTools};
+use crate::tools::execution::{Execution, HostTools};
 use crate::tools::state::{
     register_session_runtime, session_runtime, unregister_session_runtime, ToolSessionState,
 };
 use crate::tools::synchronous as sync_tools;
+use crate::tools::test_support::{execute_agent_tool, process_agent_provider_event};
 
 /// A `HostTools` stub for tests that need *some* auto-allow host tool to
 /// exercise dispatch/processing plumbing, but don't care about real
@@ -122,7 +123,7 @@ fn bump_mtime(path: &Path) {
 }
 
 fn tool_output(execution: Execution) -> serde_json::Value {
-    let Execution::Auto(events) = execution else {
+    let Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) = execution else {
         panic!("expected an auto-executed tool result");
     };
     events
@@ -310,7 +311,7 @@ fn fs_read_out_of_root_routes_to_approval() {
         },
     );
 
-    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(matches!(execution, Execution::AwaitApproval(_)));
 }
 
 /// An in-root `fs.read` still auto-executes (the routing is only for
@@ -334,7 +335,10 @@ fn fs_read_in_root_auto_executes() {
         },
     );
 
-    assert!(matches!(execution, Execution::Auto(_)));
+    assert!(matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
+    ));
 }
 
 /// `execute_approved` with `allow_out_of_root = true` (the post-approval
@@ -380,7 +384,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             occurrence_id: crate::contract::OccurrenceId("call-grep".to_string()),
         },
     );
-    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(matches!(execution, Execution::AwaitApproval(_)));
 
     let execution = execute_agent_tool(
         &StubHostTools,
@@ -393,7 +397,7 @@ fn fs_grep_and_glob_out_of_root_route_to_approval() {
             occurrence_id: crate::contract::OccurrenceId("call-glob".to_string()),
         },
     );
-    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(matches!(execution, Execution::AwaitApproval(_)));
 }
 
 // --- Git metadata reads and the unattended refusal ----------------------
@@ -502,7 +506,10 @@ fn reads_reach_a_linked_worktrees_own_git_metadata() {
             &read_request("call-meta-scan", tool_id, input),
         );
         assert!(
-            matches!(execution, Execution::Auto(_)),
+            matches!(
+                execution,
+                Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
+            ),
             "{tool_id} over this session's Git metadata must not need approval: {execution:?}"
         );
     }
@@ -561,15 +568,15 @@ fn an_attended_session_still_asks_for_an_out_of_root_read() {
         json!({ "path": outside_file.display().to_string() }),
     );
 
-    assert_eq!(
+    assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request),
-        Execution::RequiresApproval
-    );
+        Execution::AwaitApproval(_)
+    ));
     assert!(
         crate::tools::unattended_refusal_result(&tool_state, &request).is_none(),
         "an attended session has someone to ask"
     );
-    let events = crate::policy::horizon_events_for_provider_event(
+    let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(request),
         &tool_state,
         SessionId::new(),
@@ -688,7 +695,10 @@ fn fs_read_missing_path_arg_does_not_route_to_approval() {
         },
     );
 
-    assert!(matches!(execution, Execution::Auto(_)));
+    assert!(matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
+    ));
 }
 
 #[test]
@@ -886,7 +896,7 @@ fn execute_agent_tool_reports_an_unknown_tool_as_an_error_tool_result() {
         occurrence_id: crate::contract::OccurrenceId("call-1".to_string()),
     };
 
-    let Execution::Unknown(events) =
+    let Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) =
         execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request)
     else {
         panic!("expected Execution::Unknown for an unrecognized tool id");
@@ -1782,6 +1792,16 @@ fn fs_grep_stops_at_byte_cap_and_notes_truncation() {
 
 // --- approval wiring -----------------------------------------------------
 
+fn show_approval(live: &LiveState, frame: &AgentFrame, call_id: &ToolCallId) -> AgentFrame {
+    let request = frame.tool_call_request(call_id).unwrap();
+    live.extend_events([Event::ApprovalRequested(ApprovalRequest {
+        call_id: request.call_id.clone(),
+        occurrence_id: request.occurrence_id.clone(),
+        kind: ApprovalKind::Standard,
+        reason: "test".into(),
+    })])
+}
+
 fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value) -> AgentFrame {
     let mut frame = AgentFrame::empty();
     frame
@@ -1791,6 +1811,14 @@ fn requested_frame(call_id: &ToolCallId, tool_id: &str, input: serde_json::Value
             tool_id: tool_id.to_string(),
             input: input.into(),
             occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+        }));
+    frame
+        .items
+        .push(AgentFrameItem::ApprovalRequested(ApprovalRequest {
+            call_id: call_id.clone(),
+            occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
+            kind: ApprovalKind::Standard,
+            reason: "test".into(),
         }));
     frame
 }
@@ -1804,20 +1832,23 @@ fn resolve_approval_forwards_non_horizon_executed_tools() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
 
     assert!(matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::ApproveToolCall { call_id: id }) if id == call_id
+        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id
     ));
 }
 
 #[test]
 fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
     let call_id = ToolCallId("call-auto".to_string());
-    let frame = requested_frame(&call_id, "mock.approval_required", json!({}));
+    let mut frame = requested_frame(&call_id, "mock.approval_required", json!({}));
+    frame
+        .items
+        .retain(|item| !matches!(item, AgentFrameItem::ApprovalRequested(_)));
     let request = frame.tool_call_request(&call_id).expect("request").clone();
     let candidate = ApprovalCandidate {
         request,
@@ -1832,7 +1863,7 @@ fn resolve_auto_approval_forwards_standard_candidate_without_a_prompt() {
     let outcome = resolve_auto_approval(&frame, SessionId::new(), &candidate);
     assert!(matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::ApproveToolCall { call_id: id }) if id == call_id
+        ApprovalOutcome::Forward(Command::ApproveToolCall { identity: id }) if id.call_id == call_id
     ));
     assert!(!frame
         .items
@@ -1854,13 +1885,13 @@ fn resolve_approval_forwards_when_no_runtime_registered() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
 
     assert!(matches!(
         outcome,
-        ApprovalOutcome::Forward(Command::DenyToolCall { call_id: id, .. }) if id == call_id
+        ApprovalOutcome::Forward(Command::DenyToolCall { identity: id, .. }) if id.call_id == call_id
     ));
 }
 
@@ -1889,7 +1920,7 @@ fn resolve_approval_executes_fs_write_on_approve() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
 
@@ -1932,10 +1963,10 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
             kind: ApprovalKind::Standard,
             occurrence_id: request.occurrence_id.clone(),
         };
-        let frame = live.extend_events([
-            Event::ToolCallRequested(request.clone()),
-            Event::ApprovalRequested(approval.clone()),
-        ]);
+        let frame = live.extend_events(
+            std::iter::once(Event::ToolCallRequested(request.clone()))
+                .chain((!automatic).then(|| Event::ApprovalRequested(approval.clone()))),
+        );
         let candidate = ApprovalCandidate {
             request: request.clone(),
             approval,
@@ -1947,6 +1978,12 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
                 resolve_auto_approval(&frame, session_id, &stale),
                 ApprovalOutcome::AlreadyResolved
             ));
+            let mut mismatched = candidate.clone();
+            mismatched.approval.occurrence_id = crate::contract::OccurrenceId::new();
+            assert!(matches!(
+                resolve_auto_approval(&frame, session_id, &mismatched),
+                ApprovalOutcome::AlreadyResolved
+            ));
             assert!(!target.exists());
         }
         let outcome = if automatic {
@@ -1955,7 +1992,10 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
             resolve_approval(
                 &frame,
                 session_id,
-                request.call_id.clone(),
+                frame
+                    .tool_call_request(&request.call_id.clone())
+                    .unwrap()
+                    .identity(),
                 ApprovalDecision::Approve,
             )
         };
@@ -1983,7 +2023,10 @@ fn human_and_judge_approvals_share_execution_but_reject_stale_candidates() {
             resolve_approval(
                 &frame,
                 session_id,
-                request.call_id,
+                frame
+                    .tool_call_request(&request.call_id)
+                    .unwrap()
+                    .identity(),
                 ApprovalDecision::Approve,
             )
         };
@@ -2015,7 +2058,7 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
 
@@ -2059,7 +2102,7 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
 
@@ -2100,10 +2143,11 @@ fn resolve_approval_second_approve_is_noop() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
+    let frame = show_approval(&live_state, &frame, &call_id);
     let first = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
     let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = first else {
@@ -2119,7 +2163,10 @@ fn resolve_approval_second_approve_is_noop() {
     let second = resolve_approval(
         &updated_frame,
         session_id,
-        call_id,
+        updated_frame
+            .tool_call_request(&call_id)
+            .unwrap()
+            .identity(),
         ApprovalDecision::Approve,
     );
     assert!(matches!(second, ApprovalOutcome::AlreadyResolved));
@@ -2149,10 +2196,11 @@ fn resolve_approval_deny_then_approve_is_noop() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
+    let frame = show_approval(&live_state, &frame, &call_id);
     let denied = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
     let ApprovalOutcome::Applied(ToolUpdate::Finished { .. }) = denied else {
@@ -2164,7 +2212,10 @@ fn resolve_approval_deny_then_approve_is_noop() {
     let approved_late = resolve_approval(
         &updated_frame,
         session_id,
-        call_id,
+        updated_frame
+            .tool_call_request(&call_id)
+            .unwrap()
+            .identity(),
         ApprovalDecision::Approve,
     );
     assert!(matches!(approved_late, ApprovalOutcome::AlreadyResolved));
@@ -2208,10 +2259,11 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
         input: json!({ "path": target_a.display().to_string(), "content": "first" }).into(),
         occurrence_id: crate::contract::OccurrenceId::new(),
     })]);
+    let frame = show_approval(&live_state, &frame, &call_id);
     let first = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
     assert!(
@@ -2230,10 +2282,14 @@ fn resolve_approval_executes_a_new_occurrence_of_a_reused_call_id() {
             occurrence_id: crate::contract::OccurrenceId::new(),
         })]);
 
+    let after_second_request = show_approval(&live_state, &after_second_request, &call_id);
     let second = resolve_approval(
         &after_second_request,
         session_id,
-        call_id,
+        after_second_request
+            .tool_call_request(&call_id)
+            .unwrap()
+            .identity(),
         ApprovalDecision::Approve,
     );
     assert!(
@@ -2265,8 +2321,8 @@ fn fs_write_auto_executes_in_an_isolated_session_with_the_audit_marker() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    let Execution::Auto(events) = execution else {
-        panic!("expected Execution::Auto for a contained fs.write");
+    let Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) = execution else {
+        panic!("expected a synchronous applied update for a contained fs.write");
     };
     assert!(events
         .iter()
@@ -2309,8 +2365,11 @@ fn fs_edit_auto_executes_in_an_isolated_session() {
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
     assert!(
-        matches!(execution, Execution::Auto(_)),
-        "expected Execution::Auto for a contained fs.edit, got {execution:?}"
+        matches!(
+            execution,
+            Execution::Applied(crate::tools::ToolUpdate::Finished { .. })
+        ),
+        "expected a synchronous applied update for a contained fs.edit, got {execution:?}"
     );
     assert_eq!(fs::read_to_string(&target).unwrap(), "after");
 }
@@ -2328,16 +2387,16 @@ fn fs_write_still_requires_approval_when_the_session_is_not_isolated() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(matches!(execution, Execution::AwaitApproval(_)));
     assert!(!target.exists(), "must not have run yet");
 }
 
 #[test]
-fn horizon_events_for_provider_event_omits_the_approval_prompt_for_a_contained_fs_write() {
+fn policy_plan_omits_the_approval_prompt_for_a_contained_fs_write() {
     let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
         .with_isolated_worktree(true)
         .build();
-    let events = crate::policy::horizon_events_for_provider_event(
+    let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(ToolCallRequest {
             call_id: ToolCallId("call-1".to_string()),
             tool_id: "fs.write".to_string(),
@@ -2365,7 +2424,7 @@ fn invalid_web_fetch_finishes_as_an_auto_boundary_error_without_network() {
 
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::Started(_)
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
     ));
     let result = expect_finished(
         results_rx
@@ -2404,8 +2463,8 @@ fn bash_auto_executes_sandboxed_in_an_isolated_session_with_an_engaged_sandbox()
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    let Execution::Started(events) = execution else {
-        panic!("expected Execution::Started for a contained bash call");
+    let Execution::Applied(crate::tools::ToolUpdate::Started { events }) = execution else {
+        panic!("expected an applied start for a contained bash call");
     };
     assert!(events
         .iter()
@@ -2451,7 +2510,10 @@ fn bash_auto_executes_sandboxed_and_is_killed_on_timeout() {
 
     let started = std::time::Instant::now();
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(execution, Execution::Started(_)));
+    assert!(matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+    ));
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2525,7 +2587,10 @@ fn tier1_sandboxed_bash_write_to_tmp_never_leaks_to_the_hosts_real_tmp() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, session_id, &request);
-    assert!(matches!(execution, Execution::Started(_)));
+    assert!(matches!(
+        execution,
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
+    ));
 
     let completion = bash_results_rx
         .recv_timeout(std::time::Duration::from_secs(10))
@@ -2630,7 +2695,7 @@ fn bash_requires_approval_when_the_session_is_not_isolated() {
     };
 
     let execution = execute_agent_tool(&StubHostTools, &tool_state, SessionId::new(), &request);
-    assert_eq!(execution, Execution::RequiresApproval);
+    assert!(matches!(execution, Execution::AwaitApproval(_)));
 }
 
 #[cfg(target_os = "linux")]
@@ -2663,7 +2728,7 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &status_request),
-        Execution::Started(_)
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
     ));
     let status_result = expect_finished(
         bash_results_rx
@@ -2689,11 +2754,11 @@ fn approved_git_commit_writes_linked_metadata_once_and_stays_sandboxed() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     };
 
-    assert_eq!(
+    assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::RequiresApproval
-    );
-    let events = crate::policy::horizon_events_for_provider_event(
+        Execution::AwaitApproval(_)
+    ));
+    let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(request.clone()),
         &tool_state,
         session_id,
@@ -2805,11 +2870,11 @@ fn approved_git_commit_writes_linked_metadata_denies_hooks_and_config_writes() {
     // The compound command includes `git commit` → requires_metadata_write
     // is true → GitOperation candidate. The prefilter (now always
     // PassToJudge) lets it reach the approval path.
-    assert_eq!(
+    assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::RequiresApproval
-    );
-    let events = crate::policy::horizon_events_for_provider_event(
+        Execution::AwaitApproval(_)
+    ));
+    let events = crate::tools::test_support::policy_events(
         &Event::ToolCallRequested(request.clone()),
         &tool_state,
         session_id,
@@ -3008,7 +3073,7 @@ fn judge_approved_filesystem_retry_reruns_sandboxed_with_the_approved_grant() {
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &later_request),
-        Execution::Started(_)
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
     ));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -3068,7 +3133,7 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &request),
-        Execution::Started(_)
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
     ));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -3098,7 +3163,7 @@ fn a_configured_grant_makes_an_out_of_workspace_write_a_non_crossing() {
     };
     assert!(matches!(
         execute_agent_tool(&StubHostTools, &tool_state, session_id, &other_request),
-        Execution::Started(_)
+        Execution::Applied(crate::tools::ToolUpdate::Started { .. })
     ));
     let completion = bash_results_rx
         .recv_timeout(Duration::from_secs(10))
@@ -3148,7 +3213,12 @@ fn an_approval_carrying_no_grant_refuses_to_run_the_call() {
         }),
     ]);
 
-    let outcome = resolve_approval(&frame, session_id, call_id, ApprovalDecision::Approve);
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
+        ApprovalDecision::Approve,
+    );
     let ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) = outcome else {
         panic!("an approval with no grant must fail closed: {outcome:?}");
     };
@@ -3205,7 +3275,7 @@ fn denied_filesystem_retry_forwards_the_prior_result_without_running() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
@@ -3312,7 +3382,7 @@ fn an_approved_filesystem_retry_closes_the_abandoned_attempt_as_superseded() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
     let ApprovalOutcome::Applied(ToolUpdate::Started { events, .. }) = outcome else {
@@ -3481,7 +3551,7 @@ fn resolve_approval_web_fetch_deny_does_not_mutate_the_domain_policy() {
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
 
@@ -3559,7 +3629,7 @@ fn resolve_approval_domain_denial_retry_deny_forwards_the_prior_result_unchanged
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
     match outcome {
@@ -3592,22 +3662,12 @@ fn resolve_approval_domain_denial_retry_approve_without_a_network_proxy_falls_ba
     let call_id = ToolCallId("bash-domain-retry-approve-no-proxy".to_string());
     let (frame, prior_result) =
         domain_denial_retry_frame(&live_state, &call_id, vec!["example.com".to_string()]);
-    let request = frame
-        .tool_call_request(&call_id)
-        .expect("reissued request")
-        .clone();
-    let approval = frame
-        .items
-        .iter()
-        .find_map(|item| match item {
-            AgentFrameItem::ApprovalRequested(approval) if approval.call_id == call_id => {
-                Some(approval.clone())
-            }
-            _ => None,
-        })
-        .expect("domain retry approval");
-    let outcome =
-        resolve_auto_approval(&frame, session_id, &ApprovalCandidate { request, approval });
+    let outcome = resolve_approval(
+        &frame,
+        session_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
+        ApprovalDecision::Approve,
+    );
     match outcome {
         ApprovalOutcome::Applied(ToolUpdate::Finished { result, .. }) => {
             assert_eq!(result, prior_result);
@@ -3642,10 +3702,11 @@ fn resolve_approval_starts_bash_on_approve_and_delivers_its_result() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
+    let frame = show_approval(&live_state, &frame, &call_id);
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
 
@@ -3690,10 +3751,11 @@ fn resolve_approval_denies_bash_without_running_it() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
+    let frame = show_approval(&live_state, &frame, &call_id);
     let outcome = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Deny { reason: None },
     );
 
@@ -3740,10 +3802,11 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
         occurrence_id: crate::contract::OccurrenceId(call_id.0.clone()),
     })]);
 
+    let frame = show_approval(&live_state, &frame, &call_id);
     let first = resolve_approval(
         &frame,
         session_id,
-        call_id.clone(),
+        frame.tool_call_request(&call_id).unwrap().identity(),
         ApprovalDecision::Approve,
     );
     let ApprovalOutcome::Applied(ToolUpdate::Started { .. }) = first else {
@@ -3761,7 +3824,10 @@ fn resolve_approval_second_approve_of_a_still_running_bash_call_is_noop() {
     let second = resolve_approval(
         &running_frame,
         session_id,
-        call_id.clone(),
+        running_frame
+            .tool_call_request(&call_id)
+            .unwrap()
+            .identity(),
         ApprovalDecision::Approve,
     );
     assert!(

@@ -91,7 +91,7 @@ so a subcommand run from inside a pane targets the enclosing instance and
 `new-agent [--prompt <text>]`, `new-agent --role config [--prompt <text>]`,
 `attach <session-id>`,
 `terminate-session <session-id>`, `terminate-all-detached`,
-`approve`/`deny <session-id> <call-id>`, `cancel-turn <session-id>`,
+`approve`/`deny <session-id> <call-id> <occurrence-id>`, `cancel-turn <session-id>`,
 `continue-turn <session-id>`,
 `reload-agent-runtime`, `reload-terminal-runtime`, `reload-config`,
 `preview <path-to-wasm> [--name <preview>]` (shows a view under development

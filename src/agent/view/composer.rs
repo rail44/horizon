@@ -5,7 +5,7 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::input::{Escape, InputEvent, Textarea, TextareaState};
-use horizon_agent::contract::ToolCallId;
+use horizon_agent::contract::ToolCallIdentity;
 use horizon_agent::frame::state_indicates_turn_in_flight;
 
 use super::super::{session::AgentSession, turns};
@@ -30,7 +30,7 @@ pub(super) struct AgentComposer {
     model: Option<String>,
     turn_in_flight: bool,
     mode: turns::ComposerMode,
-    dismissed_approval: Option<ToolCallId>,
+    dismissed_approval: Option<ToolCallIdentity>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -64,16 +64,16 @@ impl AgentComposer {
             window,
             |composer: &mut Self, input, event: &InputEvent, window, cx| match event {
                 InputEvent::PressEnter { shift: false, .. } => {
-                    if let turns::ComposerMode::Approval { call_id } = composer.mode.clone() {
-                        composer.session.read(cx).approve(call_id);
+                    if let turns::ComposerMode::Approval { identity } = composer.mode.clone() {
+                        composer.session.read(cx).approve(identity);
                         return;
                     }
                     composer.send_message(window, cx);
                 }
                 InputEvent::Change => {
-                    if let turns::ComposerMode::Approval { call_id } = composer.mode.clone() {
+                    if let turns::ComposerMode::Approval { identity } = composer.mode.clone() {
                         if !input.read(cx).value().is_empty() {
-                            composer.dismissed_approval = Some(call_id);
+                            composer.dismissed_approval = Some(identity);
                             composer.sync_mode(cx);
                         }
                     }
@@ -99,7 +99,7 @@ impl AgentComposer {
 
     fn project_session(
         session: &Entity<AgentSession>,
-        dismissed: Option<&ToolCallId>,
+        dismissed: Option<&ToolCallIdentity>,
         cx: &App,
     ) -> (bool, Option<String>, turns::ComposerMode) {
         let session = session.read(cx);
@@ -109,7 +109,7 @@ impl AgentComposer {
             session.model.as_deref(),
             turns::latest_turn_model(&session.frame.items),
         );
-        let mode = turns::next_composer_mode(&session.pending_approval_call_ids(), dismissed);
+        let mode = turns::next_composer_mode(&session.pending_approval_identities(), dismissed);
         (turn_in_flight, model, mode)
     }
 
@@ -132,7 +132,7 @@ impl AgentComposer {
     }
 
     fn sync_mode(&mut self, cx: &mut Context<Self>) {
-        let queue = self.session.read(cx).pending_approval_call_ids();
+        let queue = self.session.read(cx).pending_approval_identities();
         self.set_mode(
             turns::next_composer_mode(&queue, self.dismissed_approval.as_ref()),
             cx,
@@ -149,8 +149,8 @@ impl AgentComposer {
     /// `Input` propagates an otherwise-unhandled Escape to this container.
     /// Approval mode consumes it as Deny; normal mode keeps propagating.
     fn on_escape(&mut self, _: &Escape, _window: &mut Window, cx: &mut Context<Self>) {
-        if let turns::ComposerMode::Approval { call_id } = self.mode.clone() {
-            self.session.read(cx).deny(call_id, None);
+        if let turns::ComposerMode::Approval { identity } = self.mode.clone() {
+            self.session.read(cx).deny(identity, None);
         } else {
             cx.propagate();
         }

@@ -3,7 +3,9 @@ use super::transition::ToolUpdate;
 use serde_json::Value;
 
 use crate::contract::SessionId;
-use crate::contract::{ApprovalKind, Command, ToolCallId, ToolCallRequest, ToolCallResult};
+use crate::contract::{
+    ApprovalKind, Command, ToolCallId, ToolCallIdentity, ToolCallRequest, ToolCallResult,
+};
 use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
@@ -24,22 +26,9 @@ pub enum ApprovalDecision {
 pub enum ApprovalOutcome {
     Applied(ToolUpdate),
     PersistenceFailed(String),
-    /// Not a tool Horizon executes on approval (or no runtime is registered
-    /// for the session) — forward the original `ApproveToolCall`/
-    /// `DenyToolCall` command to the provider, exactly as before this
-    /// feature existed. This is `mock.approval_required`'s path today.
+    /// A validated approval for a provider-owned tool.
     Forward(Command),
-    /// A Horizon-executed tool call that has already been resolved (a
-    /// `ToolCallFinished` in the frame) or is already running (a
-    /// `ToolCallStarted` with no `ToolCallFinished` yet — see
-    /// `AgentFrame::has_tool_call_started`'s doc comment for why `bash`
-    /// needs this half too): a double-click, a click racing the first
-    /// result's round trip, or a duplicate Approve/Deny for a call that's
-    /// still executing. Do nothing: re-running the tool would repeat its
-    /// side effects (or, for `bash`, spawn a second concurrent process for
-    /// the same call), and forwarding would emit a second `ToolCallResult`.
-    /// Every caller that reaches this logs the drop rather than silently
-    /// swallowing it — see `horizon-agentd`'s `session::resolve_and_forward`.
+    /// Missing, stale, already accepted, running, or completed approval.
     AlreadyResolved,
 }
 
@@ -74,27 +63,37 @@ fn is_horizon_executed_tool(tool_id: &str) -> bool {
     )
 }
 
-/// Resolves a user's approve/deny decision for the tool call pending in
-/// `frame` under `call_id`.
+/// Resolve only the displayed, still-pending execution occurrence.
 pub fn resolve_approval(
     frame: &AgentFrame,
     session_id: SessionId,
-    call_id: ToolCallId,
+    identity: ToolCallIdentity,
     decision: ApprovalDecision,
 ) -> ApprovalOutcome {
-    if let Some(outcome) = try_execute(
-        frame,
-        session_id,
-        &call_id,
-        &decision,
-        ApprovalSource::Human,
-    ) {
-        return outcome;
+    let Some(approval) = frame.actionable_approval(&identity) else {
+        return ApprovalOutcome::AlreadyResolved;
+    };
+    let request = frame
+        .tool_call_request(&identity.call_id)
+        .expect("validated approval request");
+    if !approval_is_unresolved(frame, request) {
+        return ApprovalOutcome::AlreadyResolved;
     }
-
+    if is_horizon_executed_tool(&request.tool_id) {
+        if let Some(runtime) = session_runtime(session_id) {
+            return dispatch_approval(
+                session_id,
+                &runtime,
+                request,
+                &decision,
+                approval.kind.clone(),
+                ApprovalSource::Human,
+            );
+        }
+    }
     ApprovalOutcome::Forward(match decision {
-        ApprovalDecision::Approve => Command::ApproveToolCall { call_id },
-        ApprovalDecision::Deny { reason } => Command::DenyToolCall { call_id, reason },
+        ApprovalDecision::Approve => Command::ApproveToolCall { identity },
+        ApprovalDecision::Deny { reason } => Command::DenyToolCall { identity, reason },
     })
 }
 
@@ -111,17 +110,22 @@ pub fn resolve_auto_approval(
     let Some(request) = frame.tool_call_request(call_id) else {
         return ApprovalOutcome::AlreadyResolved;
     };
-    if !approval_is_unresolved(frame, &candidate.request) {
+    if candidate.approval.identity() != candidate.request.identity()
+        || frame
+            .actionable_approval(&candidate.request.identity())
+            .is_some()
+        || !approval_is_unresolved(frame, &candidate.request)
+    {
         return ApprovalOutcome::AlreadyResolved;
     }
     if !is_horizon_executed_tool(&request.tool_id) {
         return ApprovalOutcome::Forward(Command::ApproveToolCall {
-            call_id: call_id.clone(),
+            identity: request.identity(),
         });
     }
     let Some(runtime) = session_runtime(session_id) else {
         return ApprovalOutcome::Forward(Command::ApproveToolCall {
-            call_id: call_id.clone(),
+            identity: request.identity(),
         });
     };
 
@@ -192,42 +196,6 @@ fn unattended_refusal_message(
     )
 }
 
-fn try_execute(
-    frame: &AgentFrame,
-    session_id: SessionId,
-    call_id: &ToolCallId,
-    decision: &ApprovalDecision,
-    approval_source: ApprovalSource,
-) -> Option<ApprovalOutcome> {
-    let request = frame.tool_call_request(call_id)?;
-    if !is_horizon_executed_tool(&request.tool_id) {
-        return None;
-    }
-    // The pending -> resolved transition's atomic guard: once a call has
-    // *started* (bash) or *finished* (any of the three), every later
-    // Approve/Deny for the same call_id must be a no-op. Checked against
-    // `frame` at the top of this call, before anything else runs, so there
-    // is exactly one moment this can flip from "not yet decided" to
-    // "decided" per call_id -- see `AgentFrame::has_tool_call_started`'s
-    // doc comment for why `has_tool_call_finished` alone isn't enough for
-    // `bash`.
-    if !approval_is_unresolved(frame, request) {
-        return Some(ApprovalOutcome::AlreadyResolved);
-    }
-    let runtime = session_runtime(session_id)?;
-
-    // Human approvals read the displayed kind; automatic approvals carry
-    // the judge's candidate after checking the exact current request.
-    Some(dispatch_approval(
-        session_id,
-        &runtime,
-        request,
-        decision,
-        frame.approval_kind(call_id).unwrap_or_default(),
-        approval_source,
-    ))
-}
-
 fn dispatch_approval(
     session_id: SessionId,
     runtime: &SessionRuntime,
@@ -282,16 +250,16 @@ fn resolve_web_fetch(
             error_output("web_fetch domain grant failed revalidation"),
         );
     };
+    let outcome = begin_execution(runtime, request, None);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
     for domain in &validated {
         runtime.tool_state.allow_domain(domain.clone());
     }
     let approved_domains =
         crate::tools::web::record_approved_domains(session_id, &request.call_id, &validated);
 
-    let outcome = begin_execution(runtime, request, None);
-    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-        return outcome;
-    }
     crate::tools::web::spawn(
         session_id,
         request,
@@ -531,7 +499,10 @@ fn resolve_filesystem_denial_retry(
     }
     // Re-resolved here, at approval application, and again by the sandbox
     // itself immediately before the queued process spawns.
-    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
+    if let Err(error) = grants
+        .iter()
+        .try_for_each(horizon_sandbox::revalidate_grant)
+    {
         return unstarted_error(
             runtime,
             &request.call_id,
@@ -541,16 +512,31 @@ fn resolve_filesystem_denial_retry(
     let Some(workspace_root) = runtime.tool_state.workspace_root() else {
         return forward_prior_result(runtime, prior_result);
     };
-    // The audit answer to "what filesystem authority did this session run
-    // with": every grant it holds now, config-injected and approved alike.
+    // The saved start describes the intended authority. Installing it in
+    // the live session still waits for that record's acknowledgement.
+    let mut planned_grants = runtime.tool_state.filesystem_grants_snapshot();
+    for grant in &grants {
+        if !planned_grants.contains(grant) {
+            planned_grants.push(grant.clone());
+        }
+    }
+    runtime.live_state.record_filesystem_grants(&planned_grants);
+    let started = match ToolUpdate::start(&runtime.live_state, request, Some(&prior_result)) {
+        Ok(started) => started,
+        Err(message) => return ApprovalOutcome::PersistenceFailed(message),
+    };
+    if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
+        return ApprovalOutcome::from(started.complete(
+            &runtime.live_state,
+            request.identity().result(error_output(format!(
+                "Approved filesystem grants could not be revalidated: {error}"
+            ))),
+            Vec::new(),
+        ));
+    }
     runtime
         .live_state
         .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
-
-    let outcome = begin_execution(runtime, request, Some(&prior_result));
-    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
-        return outcome;
-    }
     bash::spawn_sandboxed(
         bash::BashJob::new(
             session_id,
@@ -572,7 +558,7 @@ fn resolve_filesystem_denial_retry(
             None,
         ),
     );
-    outcome
+    ApprovalOutcome::Applied(started)
 }
 
 /// Fold the start before enqueueing a job. A retry closes its abandoned
@@ -635,13 +621,13 @@ fn resolve_domain_denial_retry(
             ) else {
                 return forward_prior_result(runtime, prior_result);
             };
-            for domain in &domains {
-                network.allow_domain(domain.clone());
-            }
-
             let outcome = begin_execution(runtime, request, Some(&prior_result));
             if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
                 return outcome;
+            }
+
+            for domain in &domains {
+                network.allow_domain(domain.clone());
             }
 
             bash::spawn_sandboxed(
@@ -693,12 +679,12 @@ fn resolve_mach_service_grant(
             let Some(workspace_root) = runtime.tool_state.workspace_root() else {
                 return forward_prior_result(runtime, prior_result);
             };
-            runtime.tool_state.approve_mach_services(&services);
-
             let outcome = begin_execution(runtime, request, Some(&prior_result));
             if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
                 return outcome;
             }
+
+            runtime.tool_state.approve_mach_services(&services);
 
             bash::spawn_sandboxed(
                 bash::BashJob::new(
@@ -768,4 +754,97 @@ fn declined_result(
     };
     let result = ToolCallResult::denied(call_id.clone(), identity.occurrence_id, output);
     ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{ApprovalRequest, Event, OccurrenceId};
+    use crate::live::LiveState;
+    use crate::persistence::event_log::{WriterHandle, WriterInit};
+    use crate::tools::{register_session_runtime, unregister_session_runtime};
+
+    #[test]
+    fn failed_approved_starts_do_not_enlarge_session_grants() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path().join("workspace");
+        let outside = dir.path().join("outside");
+        std::fs::create_dir_all(&workspace).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let prior = crate::contract::ToolCallIdentity {
+            call_id: ToolCallId("call".into()),
+            occurrence_id: OccurrenceId::new(),
+        }
+        .result(serde_json::json!({"is_error":true}));
+        let grant = horizon_sandbox::FilesystemGrant {
+            path: outside.canonicalize().unwrap(),
+            access: horizon_sandbox::FilesystemGrantAccess::ReadWrite,
+            scope: horizon_sandbox::FilesystemGrantScope::DirectoryTree,
+            excluded_subpaths: Vec::new(),
+        };
+        for (tool_id, kind) in [
+            (
+                "web_fetch",
+                ApprovalKind::DomainGrant {
+                    domains: vec!["example.com".into()],
+                },
+            ),
+            (
+                "bash",
+                ApprovalKind::FilesystemDenialRetry {
+                    denials: Vec::new(),
+                    grants: vec![grant],
+                    prior_result: prior.clone(),
+                },
+            ),
+            (
+                "bash",
+                ApprovalKind::MachServiceGrant {
+                    services: vec!["com.apple.securityd".into()],
+                    prior_result: prior.clone(),
+                },
+            ),
+        ] {
+            let session = SessionId::new();
+            let state = ToolSessionState::new(workspace.clone());
+            let request = ToolCallRequest {
+                call_id: prior.call_id.clone(),
+                occurrence_id: OccurrenceId::new(),
+                tool_id: tool_id.into(),
+                input: serde_json::json!({"command":"true", "url":"https://example.com"}).into(),
+            };
+            let history = vec![
+                Event::ToolCallRequested(request.clone()),
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: request.call_id.clone(),
+                    occurrence_id: request.occurrence_id.clone(),
+                    reason: "grant".into(),
+                    kind,
+                }),
+            ];
+            let (writer, ready) = WriterHandle::open(dir.path());
+            assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
+            let live =
+                LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
+            let grants = state.filesystem_grants_snapshot();
+            let services = state.mach_services();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            register_session_runtime(session, state.clone(), live.clone(), tx);
+            assert!(matches!(
+                resolve_approval(
+                    &live.frame(),
+                    session,
+                    request.identity(),
+                    ApprovalDecision::Approve
+                ),
+                ApprovalOutcome::PersistenceFailed(_)
+            ));
+            assert_eq!(live.events(), history);
+            assert_eq!(state.filesystem_grants_snapshot(), grants);
+            assert_eq!(state.mach_services(), services);
+            assert!(!state.is_domain_allowed("example.com"));
+            assert!(rx.try_recv().is_err());
+            unregister_session_runtime(session);
+        }
+    }
 }

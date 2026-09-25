@@ -6,7 +6,7 @@ use crate::live::LiveState;
 
 /// An update applied to LiveState, consumed by the daemon to publish events before handing
 /// the terminal result to the provider. Starting a worker has no result yet.
-#[derive(Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ToolUpdate {
     Started {
         events: Vec<Event>,
@@ -41,11 +41,28 @@ impl ToolUpdate {
         request: &ToolCallRequest,
         operation: impl FnOnce() -> serde_json::Value,
     ) -> Result<Self, String> {
-        let mut events = start_events(request.identity());
-        apply(live, &events)?;
+        let started = Self::start(live, request, None)?;
         let result = request.identity().result(operation());
-        let finished = finish_events(live, &result, vec![Event::ToolCallFinished(result.clone())]);
-        apply(live, &finished)?;
+        started.complete(live, result, Vec::new())
+    }
+
+    /// Preserve tool-produced records (such as an outbox) before its result.
+    pub(crate) fn complete(
+        self,
+        live: &LiveState,
+        result: ToolCallResult,
+        records: Vec<Event>,
+    ) -> Result<Self, String> {
+        let Self::Started { mut events } = self else {
+            unreachable!("only a started tool completes")
+        };
+        let Self::Finished {
+            events: finished,
+            result,
+        } = Self::finish_with_events(live, result, records)?
+        else {
+            unreachable!()
+        };
         events.extend(finished);
         Ok(Self::Finished { events, result })
     }

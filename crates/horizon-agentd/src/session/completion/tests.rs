@@ -600,7 +600,7 @@ fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
 
     assert!(matches!(
         commands_rx.try_recv(),
-        Ok(Command::ApproveToolCall { call_id }) if call_id == candidate.request.call_id
+        Ok(Command::ApproveToolCall { identity }) if identity == candidate.request.identity()
     ));
     assert!(drain_events(&mut outgoing_rx).is_empty());
     assert!(live_state
@@ -960,7 +960,7 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
     let outcome = horizon_agent::tools::resolve_approval(
         &frame,
         session_id,
-        call_id,
+        frame.tool_call_request(&call_id).unwrap().identity(),
         horizon_agent::tools::ApprovalDecision::Deny { reason: None },
     );
     assert!(matches!(
@@ -1035,7 +1035,10 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
             let outcome = horizon_agent::tools::resolve_approval(
                 &live.frame(),
                 session,
-                primary.request.call_id.clone(),
+                live.frame()
+                    .tool_call_request(&primary.request.call_id.clone())
+                    .unwrap()
+                    .identity(),
                 ApprovalDecision::Approve,
             );
             forward_approval_outcome(
@@ -1079,7 +1082,10 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
         let duplicate = horizon_agent::tools::resolve_approval(
             &live.frame(),
             session,
-            primary.request.call_id.clone(),
+            live.frame()
+                .tool_call_request(&primary.request.call_id.clone())
+                .unwrap()
+                .identity(),
             ApprovalDecision::Approve,
         );
         forward_approval_outcome(

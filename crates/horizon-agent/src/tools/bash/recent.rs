@@ -5,7 +5,7 @@
 //! "検証重複 20〜31 往復": one session re-ran `cargo nextest` 10 times, varying
 //! only the trailing `| tail`/`| grep` filter, burning ~1.2M input tokens).
 //!
-//! The mechanism is a short-circuit in `tools::execution::execute_tier1_bash`:
+//! The mechanism is a short-circuit in `tools::execution::execute_automatic`:
 //! before spawning a sandboxed bash call, the live frame is scanned for a
 //! prior `bash` result whose *base command* (the part before the first pipe)
 //! matches the incoming command's base, whose `output_file` spill still

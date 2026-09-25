@@ -668,16 +668,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
             occurrence_id: crate::contract::OccurrenceId((call_id("fetch-1")).0.clone()),
         },
     );
-    let crate::tools::Execution::Auto(events) = fetch else {
-        panic!("task_output resolves synchronously");
-    };
-    let output = events
-        .iter()
-        .find_map(|event| match event {
-            Event::ToolCallFinished(result) => Some(result.output.0.clone()),
-            _ => None,
-        })
-        .expect("task_output finishes with a result");
+    let output = fetch.output;
     assert_eq!(output["status"], "finished");
     assert_eq!(output["report"], serde_json::Value::String(report));
 }

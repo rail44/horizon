@@ -1498,13 +1498,15 @@ fn streamed_tool_call(arguments: serde_json::Value) -> ToolCall {
 fn dispatch_repaired_tool_call(root: &std::path::Path, mut call: ToolCall) -> serde_json::Value {
     super::completion::repair_double_encoded_tool_arguments(&mut call.function.arguments);
     let request = rig_tool_call_request(call);
-    let execution = crate::tools::execute_agent_tool(
+    let execution = crate::tools::test_support::execute_agent_tool(
         &NoHostTools,
         &crate::tools::ToolSessionState::new(root.to_path_buf()),
         SessionId::new(),
         &request,
     );
-    let crate::tools::Execution::Auto(events) = execution else {
+    let crate::tools::Execution::Applied(crate::tools::ToolUpdate::Finished { events, .. }) =
+        execution
+    else {
         panic!("fs.read must execute synchronously");
     };
     events

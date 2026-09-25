@@ -44,7 +44,7 @@ pub(crate) use recent::{find_reusable_output, guidance_output};
 /// `exec::run_sandboxed` itself before this ever applies.
 #[derive(Clone, Debug)]
 pub(crate) enum SandboxedApprovalOrigin {
-    /// `tools::execution::execute_tier1_bash`'s auto-approval path.
+    /// `tools::execution::execute_automatic`'s auto-approval path.
     Tier1Auto,
     /// `tools::approval`'s domain-denial-retry approve path -- a human
     /// decision, carrying the domain(s) they just approved for this

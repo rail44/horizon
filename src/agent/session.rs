@@ -11,7 +11,9 @@ use std::time::Instant;
 
 use futures::StreamExt;
 use gpui::*;
-use horizon_agent::contract::{Command, MessageRole, TaskProgress, TaskProgressState, ToolCallId};
+use horizon_agent::contract::{
+    Command, MessageRole, TaskProgress, TaskProgressState, ToolCallIdentity,
+};
 use horizon_agent::frame::{AgentFrame, AgentFrameItem};
 use horizon_agent::live::LiveState;
 use horizon_workspace::SessionId;
@@ -269,8 +271,8 @@ impl AgentSession {
     /// The frame's actionable pending-approval queue -- call ids still
     /// waiting on an approve/deny decision. Derived from `self.frame.items`
     /// on every call (no caching), mirroring the call sites this replaces.
-    pub(crate) fn pending_approval_call_ids(&self) -> Vec<ToolCallId> {
-        horizon_agent::frame::actionable_pending_approval_call_ids_in(&self.frame.items)
+    pub(crate) fn pending_approval_identities(&self) -> Vec<ToolCallIdentity> {
+        horizon_agent::frame::actionable_pending_approval_identities_in(&self.frame.items)
     }
 
     /// Applies one live task-progress event to the running-task row list —
@@ -309,13 +311,13 @@ impl AgentSession {
         self.link.dispatch(Command::UserMessage { text });
     }
 
-    pub(crate) fn approve(&self, call_id: ToolCallId) {
-        self.link.dispatch(Command::ApproveToolCall { call_id });
+    pub(crate) fn approve(&self, identity: ToolCallIdentity) {
+        self.link.dispatch(Command::ApproveToolCall { identity });
     }
 
-    pub(crate) fn deny(&self, call_id: ToolCallId, reason: Option<String>) {
+    pub(crate) fn deny(&self, identity: ToolCallIdentity, reason: Option<String>) {
         self.link
-            .dispatch(Command::DenyToolCall { call_id, reason });
+            .dispatch(Command::DenyToolCall { identity, reason });
     }
 
     pub(crate) fn cancel(&self) {

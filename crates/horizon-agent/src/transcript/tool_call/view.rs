@@ -1,4 +1,4 @@
-use crate::contract::{ToolCallId, ToolOutcome};
+use crate::contract::{OccurrenceId, ToolCallId, ToolCallIdentity, ToolOutcome};
 use crate::frame::{pending_approval_call_ids_in, tool_call_occurrences, AgentFrameItem};
 
 use super::approval::derive_approval_state;
@@ -45,6 +45,7 @@ pub struct FileEffect {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ToolCallView {
     pub call_id: ToolCallId,
+    pub occurrence_id: OccurrenceId,
     /// Source positions in the same item slice passed to `build_tool_call_views`.
     /// Expanded bodies use these bindings instead of matching reused call ids again.
     pub request_index: usize,
@@ -71,6 +72,13 @@ pub struct ToolCallView {
 }
 
 impl ToolCallView {
+    pub fn identity(&self) -> ToolCallIdentity {
+        ToolCallIdentity {
+            call_id: self.call_id.clone(),
+            occurrence_id: self.occurrence_id.clone(),
+        }
+    }
+
     pub fn finished(&self) -> bool {
         self.outcome.is_some()
     }
@@ -136,6 +144,7 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 affected_files(&entry.request.tool_id, &entry.request.input, output);
             ToolCallView {
                 call_id: entry.request.call_id.clone(),
+                occurrence_id: entry.request.occurrence_id.clone(),
                 request_index: entry.request_index,
                 result_index: entry.result.map(|result| result.index),
                 tool_id: entry.request.tool_id.clone(),
@@ -153,7 +162,12 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 kind,
                 affected_files,
                 outcome: result.map(|result| result.outcome.clone()),
-                approval: derive_approval_state(entry.had_approval_request, entry.started, result),
+                approval: derive_approval_state(
+                    entry.had_approval_request,
+                    entry.started,
+                    entry.approval_decision,
+                    result,
+                ),
             }
         })
         .collect()

@@ -58,8 +58,8 @@ markers). Schema subtleties and data-quality caveats (top-level
 `is_error` unreliability, `call_id` reuse, `turn_id` nulling) live in
 the `agent-inspect` skill — read it before aggregate analysis.
 
-**Act.** `horizon approve <session_id> <call_id>` / `deny <session_id>
-<call_id>` resolve a pending approval; `horizon continue-turn
+**Act.** `horizon approve <session_id> <call_id> <occurrence_id>` / `deny <session_id>
+<call_id> <occurrence_id>` resolve a pending approval; `horizon continue-turn
 <session_id>` resumes a guard-paused turn; `cancel-turn <session_id>`
 aborts. **Read the pending call's
 `input` before approving — an approval runs a real command on this

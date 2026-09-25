@@ -1,103 +1,56 @@
+//! Coordinate one provider event with its tool plan and acknowledged lifecycle.
+use super::{execute_agent_tool, Execution, HostTools, ToolSessionState, ToolUpdate};
 use crate::contract::{Command, Event, ProviderEvent, SessionId};
-use crate::policy::horizon_events_for_provider_event;
-use crate::tools::state::ToolSessionState;
-use crate::tools::{execution::execute_agent_tool, Execution, HostTools};
+use crate::judge::ApprovalCandidate;
+use crate::live::LiveState;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct Processing {
+    /// Already persisted and applied. Publish without appending a second time.
     pub horizon_events: Vec<ProviderEvent>,
     pub provider_commands: Vec<Command>,
+    pub approval: Option<ApprovalCandidate>,
 }
 
 pub fn process_agent_provider_event(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
     session_id: SessionId,
+    live: &LiveState,
     provider_event: impl Into<ProviderEvent>,
-) -> Processing {
+) -> Result<Processing, String> {
     let provider_event = provider_event.into();
-
-    let ProviderEvent::Event {
-        event,
-        provider_payload,
-    } = provider_event
-    else {
-        return Processing {
-            horizon_events: vec![provider_event],
-            provider_commands: Vec::new(),
-        };
+    live.extend_provider_events([provider_event.clone()])?;
+    let mut processing = Processing {
+        horizon_events: vec![provider_event.clone()],
+        provider_commands: Vec::new(),
+        approval: None,
     };
-
-    // A provider-originated `ToolCallFinished` is the turn-cancellation (or
-    // loop-guard-halt) signal for any call still pending on the provider's
-    // side, including bash and host-side web calls (see
-    // `docs/agent-tools-design.md`, "Bash
-    // Semantics": "Cancelling a turn kills the process group of any
-    // in-flight command"). This never fires for `bash`'s own genuine
-    // completion — those arrive over `SessionRuntime::async_results`,
-    // bypassing this function. A miss or already-finished call is a harmless
-    // no-op.
-    //
-    // `task` children are deliberately absent: since the 2026-07-28
-    // asynchronous cutover they are session-scoped, not turn-scoped
-    // (`docs/agent-async-task-design.md` decision 4), so a cancelled turn
-    // must leave them running. Their one teardown path is the requesting
-    // session itself ending (`tools::explore::cancel_session`, reached from
-    // `unregister_session_runtime`).
-    if let Event::ToolCallFinished(result) = &event {
-        super::cancel_tool_execution(session_id, &result.call_id);
-    }
-
-    let mut horizon_events = horizon_events_for_provider_event(&event, tool_state, session_id)
-        .into_iter()
-        .enumerate()
-        .map(|(index, event)| {
-            if index == 0 {
-                ProviderEvent::Event {
-                    event,
-                    provider_payload: provider_payload.clone(),
+    match provider_event.as_event() {
+        Some(Event::ToolCallRequested(request)) => {
+            match execute_agent_tool(host, tool_state, session_id, live, request)? {
+                Execution::AwaitApproval(candidate) => processing.approval = Some(*candidate),
+                Execution::Applied(update) => {
+                    let events = match update {
+                        ToolUpdate::Started { events } => events,
+                        ToolUpdate::Finished { events, result } => {
+                            processing
+                                .provider_commands
+                                .push(Command::ToolCallResult(result));
+                            events
+                        }
+                    };
+                    processing
+                        .horizon_events
+                        .extend(events.into_iter().map(Into::into));
                 }
-            } else {
-                event.into()
             }
-        })
-        .collect::<Vec<_>>();
-    let mut provider_commands = Vec::new();
-
-    if let Event::ToolCallRequested(request) = &event {
-        match execute_agent_tool(host, tool_state, session_id, request) {
-            // `Denied`/`Unknown` join `Auto` here: any of the three can
-            // resolve a call synchronously with a real `ToolCallFinished`
-            // (today, only `Unknown`'s does -- an unrecognized tool id --
-            // see `execute_agent_tool`'s doc comment), and that result must
-            // reach the provider as a `Command::ToolCallResult` exactly the
-            // same way, or the model never learns the call finished and the
-            // turn stalls waiting on a result that never arrives -- this was
-            // the second half of the 2026-07-19 dogfooding bug (the first
-            // half was `policy::horizon_events_for_provider_event` routing
-            // an unknown tool id through `ApprovalRequested` at all).
-            Execution::Auto(events) | Execution::Denied(events) | Execution::Unknown(events) => {
-                for result_event in &events {
-                    if let Event::ToolCallFinished(result) = result_event {
-                        provider_commands.push(Command::ToolCallResult(result.clone()));
-                    }
-                }
-                horizon_events.extend(events.into_iter().map(ProviderEvent::from));
-            }
-            Execution::Started(events) => {
-                // A bash or host-side web call moved to background
-                // execution: no `Command::ToolCallResult` exists yet. The
-                // eventual result or structured narrow-grant request arrives
-                // over the session's async completion channel and is folded
-                // by `fold_tool_completion` in agentd.
-                horizon_events.extend(events.into_iter().map(ProviderEvent::from));
-            }
-            Execution::RequiresApproval => {}
         }
+        // Task children are session-owned and survive turn cancellation.
+        Some(Event::ToolCallFinished(result)) => {
+            super::cancel_tool_execution(session_id, &result.call_id)
+        }
+        _ => {}
     }
-
-    Processing {
-        horizon_events,
-        provider_commands,
-    }
+    Ok(processing)
 }

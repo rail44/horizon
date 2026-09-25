@@ -5,10 +5,10 @@
 
 use serde_json::{json, Value};
 
-use crate::contract::{Event, SessionId, SessionState, ToolCallRequest, ToolCallResult};
+use super::execution::ToolOutput;
+use crate::contract::{Event, SessionId, ToolCallRequest};
 use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
-use crate::tools::Execution;
 
 pub(crate) fn update_schema() -> Value {
     json!({"type":"object", "additionalProperties":false, "required":["action"],
@@ -125,7 +125,7 @@ pub(crate) fn execute_comment(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     request: &ToolCallRequest,
-) -> Execution {
+) -> ToolOutput {
     let Some(host) = tool_state.board_host() else {
         return synchronous(
             request,
@@ -160,7 +160,7 @@ pub(crate) fn execute_operation(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     request: &ToolCallRequest,
-) -> Execution {
+) -> ToolOutput {
     let result = tool_state
         .board_host()
         .ok_or_else(|| "No board host is installed".to_string())
@@ -169,22 +169,12 @@ pub(crate) fn execute_operation(
     with_events(request, output, events)
 }
 
-fn synchronous(request: &ToolCallRequest, output: Value) -> Execution {
+fn synchronous(request: &ToolCallRequest, output: Value) -> ToolOutput {
     with_events(request, output, Vec::new())
 }
 
-fn with_events(request: &ToolCallRequest, output: Value, events: Vec<Event>) -> Execution {
-    let mut batch = vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-    ];
-    batch.extend(events);
-    batch.push(Event::ToolCallFinished(ToolCallResult::new(
-        request.call_id.clone(),
-        request.occurrence_id.clone(),
-        output,
-    )));
-    Execution::Auto(batch)
+fn with_events(_request: &ToolCallRequest, output: Value, events: Vec<Event>) -> ToolOutput {
+    ToolOutput { output, events }
 }
 
 #[cfg(test)]
@@ -226,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_returns_its_outbox_before_reporting_success() {
+    fn operation_returns_its_outbox_with_the_output_for_the_coordinator() {
         let recipient = SessionId::new();
         let state = ToolSessionState::without_root()
             .with_board_host(Some(Arc::new(SendingHost(recipient))));
@@ -236,18 +226,11 @@ mod tests {
             occurrence_id: crate::contract::OccurrenceId::new(),
             input: json!({"action":"review","id":1}).into(),
         };
-        let Execution::Auto(events) = execute_operation(&state, SessionId::new(), &request) else {
-            panic!("board requests must return a persistable automatic batch");
-        };
-        let send = events.iter().position(|event| matches!(event,
-            Event::SessionInputSent { session_id, input } if *session_id == recipient && input.id == "review-request"
-        )).expect("durable outgoing request");
-        let completion = events.iter().position(|event| matches!(event,
-            Event::ToolCallFinished(result) if result.output.get("queued") == Some(&json!(true))
-        )).expect("successful tool result");
+        let result = execute_operation(&state, SessionId::new(), &request);
+        assert_eq!(result.output, json!({"queued": true}));
         assert!(
-            send < completion,
-            "a replayable request must precede provider success"
+            matches!(result.events.as_slice(), [Event::SessionInputSent { session_id, input }]
+            if *session_id == recipient && input.id == "review-request")
         );
     }
 }

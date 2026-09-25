@@ -1,19 +1,11 @@
-use crate::tools::bash;
-use serde_json::Value;
-
-use crate::contract::{
-    Error, Event, Message, MessageRole, SessionId, SessionState, ToolCallRequest, ToolCallResult,
-    ToolPermission,
-};
-use crate::policy::{
-    annotate_auto_approval, boundary_disposition, classify_call, BoundaryDisposition,
-    Classification,
-};
-use crate::tools::board;
-use crate::tools::error_output;
-use crate::tools::fs;
+use super::transition::ToolUpdate;
+use crate::contract::{Event, Message, MessageRole, SessionId, ToolCallRequest, ToolCallResult};
+use crate::judge::ApprovalCandidate;
+use crate::live::LiveState;
+use crate::policy::{annotate_auto_approval, plan_tool_call, AutomaticTool, ToolPlan};
 use crate::tools::state::{session_runtime, ToolSessionState};
-use crate::tools::{definitions, permission_for_tool};
+use crate::tools::{bash, board, error_output};
+use serde_json::Value;
 
 /// Boundary for tools needing shell-owned state, such as `workspace.snapshot`.
 /// The daemon supplies its host-channel adapter; implementations return `None`
@@ -24,317 +16,154 @@ pub trait HostTools {
     fn execute_auto(&self, tool_id: &str, input: &serde_json::Value) -> Option<serde_json::Value>;
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// A policy-approved execution or the exact candidate requiring a decision.
+#[derive(Clone, Debug, PartialEq)]
 pub enum Execution {
-    Auto(Vec<Event>),
-    /// A call that moved to background execution (`bash` via
-    /// `horizon_sandbox`, or a host-side web request) instead of finishing synchronously
-    /// like [`Execution::Auto`] -- mirrors `tools::approval::
-    /// ToolUpdate::Started`'s split for the same reason (a command can
-    /// run for up to its timeout). `events` are the `ToolRunning`/
-    /// `ToolCallStarted` pair already folded by the caller; the eventual
-    /// result arrives later on the session's `async_results` channel exactly
-    /// like a manually approved bash call's does.
-    Started(Vec<Event>),
-    RequiresApproval,
-    Denied(Vec<Event>),
-    Unknown(Vec<Event>),
+    Applied(ToolUpdate),
+    AwaitApproval(Box<ApprovalCandidate>),
+}
+
+/// Tool-specific output, with domain records that must precede its result.
+/// Lifecycle events are owned by ToolUpdate rather than individual handlers.
+pub(crate) struct ToolOutput {
+    pub output: Value,
+    pub events: Vec<Event>,
+}
+
+impl From<Value> for ToolOutput {
+    fn from(output: Value) -> Self {
+        Self {
+            output,
+            events: Vec::new(),
+        }
+    }
 }
 
 pub fn execute_agent_tool(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
     session_id: SessionId,
+    live: &LiveState,
     request: &ToolCallRequest,
-) -> Execution {
-    match permission_for_tool(&request.tool_id) {
-        // `task`/`task_output` are auto-allowed like every other read tool
-        // but need the requesting session's id, which `execute_auto_tool`'s
-        // "produce a `Value` from input alone" shape cannot supply: a launch
-        // is registered against its requester and a fetch is ownership-
-        // checked against it (`tools::explore`). Both still resolve right
-        // here -- a launch is non-blocking since the 2026-07-28
-        // asynchronous cutover (`docs/agent-async-task-design.md`), so
-        // neither takes `bash`'s `Execution::Started` path any more.
-        Some(ToolPermission::AutoAllowRead) if request.tool_id == crate::tools::TASK_TOOL_ID => {
-            crate::tools::explore::start(tool_state, session_id, request)
+) -> Result<Execution, String> {
+    match plan_tool_call(tool_state, request) {
+        ToolPlan::Approval(approval) => Ok(Execution::AwaitApproval(Box::new(ApprovalCandidate {
+            request: request.clone(),
+            approval,
+        }))),
+        ToolPlan::Reject(output) => {
+            ToolUpdate::finish(live, request.identity().result(output)).map(Execution::Applied)
         }
-        Some(ToolPermission::AutoAllowRead)
-            if request.tool_id == crate::tools::TASK_OUTPUT_TOOL_ID =>
-        {
-            crate::tools::explore::output(session_id, request)
+        ToolPlan::Automatic(mode) => {
+            execute_automatic(host, tool_state, session_id, live, request, mode)
+                .map(Execution::Applied)
         }
-        // `board.comment` needs the session id for the comment author
-        // (set to `session:<id>`, never model-controlled), so it's
-        // special-cased here rather than routed through
-        // `execute_auto_tool` (whose signature doesn't carry session_id).
-        Some(ToolPermission::AutoAllowRead)
-            if matches!(request.tool_id.as_str(), "board.update" | "board.session") =>
-        {
-            crate::tools::board::execute_operation(tool_state, session_id, request)
-        }
-        Some(ToolPermission::AutoAllowRead) if request.tool_id == "board.comment" => {
-            crate::tools::board::execute_comment(tool_state, session_id, request)
-        }
-        // An fs read whose path escapes the workspace root is a boundary
-        // crossing — route it to the approval gate (judge/human) instead
-        // of auto-executing. The judge decides whether the out-of-root read
-        // is safe; a human can approve it directly. This puts fs and bash
-        // behind the same gate: in-workspace reads auto-run, out-of-workspace
-        // reads need approval, exactly as in-workspace bash auto-runs and
-        // out-of-workspace bash needs approval.
-        Some(ToolPermission::AutoAllowRead)
-            if fs::call_escapes_root(tool_state, &request.tool_id, &request.input) =>
-        {
-            Execution::RequiresApproval
-        }
-        Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
-            Execution::Auto(execute_auto_tool(host, tool_state, request))
-        }
-        Some(ToolPermission::RequireApproval) => {
-            let classification = classify_call(
-                &request.tool_id,
-                &request.input,
-                tool_state.is_isolated_worktree(),
-                horizon_sandbox::is_available(),
-            );
-            match classification {
-                Classification::Contained => execute_tier1(tool_state, session_id, request),
-                Classification::BoundaryCrossing => {
-                    if boundary_disposition(tool_state, &request.tool_id, &request.input)
-                        == BoundaryDisposition::Auto
-                    {
-                        execute_boundary_tool(tool_state, session_id, request)
-                    } else {
-                        Execution::RequiresApproval
-                    }
-                }
-                Classification::AlwaysAsk => Execution::RequiresApproval,
-            }
-        }
-        Some(ToolPermission::Deny) => Execution::Denied(vec![Event::Error(Error {
-            message: format!("Tool `{}` is denied by Horizon policy.", request.tool_id),
-        })]),
-        // An unrecognized tool id (not in `tools::catalog::definitions`)
-        // must resolve to a `ToolCallFinished` error result, not a bare
-        // session `Event::Error` -- the latter is never routed back to the
-        // provider as a tool outcome (see `tools::processing::
-        // process_agent_provider_event`'s `Command::ToolCallResult`
-        // forwarding), so the model would never see why its call failed and
-        // the turn would stall waiting on a result that never arrives. The
-        // available id list is included so the model can self-correct
-        // (e.g. `write` -> `fs.write`) without another round trip to ask.
-        None => Execution::Unknown(vec![Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            unknown_tool_output(&request.tool_id),
-        ))]),
     }
 }
 
-fn execute_boundary_tool(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &ToolCallRequest,
-) -> Execution {
-    if !matches!(request.tool_id.as_str(), "web_search" | "web_fetch") {
-        return Execution::RequiresApproval;
-    }
-    let Some(runtime) = session_runtime(session_id) else {
-        return Execution::Auto(vec![Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            error_output(format!(
-                "{} has no registered session runtime",
-                request.tool_id
-            )),
-        ))]);
-    };
-    let events = vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-    ];
-    crate::tools::web::spawn(
-        session_id,
-        request,
-        tool_state.domain_allowlist(),
-        crate::tools::web::WebApprovalOrigin::Auto,
-        runtime.async_results,
-    );
-    Execution::Started(events)
-}
-
-fn unknown_tool_output(tool_id: &str) -> serde_json::Value {
-    let available = definitions()
-        .into_iter()
-        .map(|definition| definition.id)
-        .collect::<Vec<_>>()
-        .join(", ");
-    error_output(format!("Unknown tool `{tool_id}`; available: {available}."))
-}
-
-/// Auto-executes a tier-1-`Contained` `RequireApproval` call -- the
-/// approval-skipping half of `docs/agent-approval-design.md`'s tier 1.
-/// Dispatches by tool id; `classify_call` never returns `Contained` for any
-/// id not handled below, but this still falls back to the ordinary approval
-/// gate rather than panicking on a future mismatch between the two.
-fn execute_tier1(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &ToolCallRequest,
-) -> Execution {
-    match request.tool_id.as_str() {
-        "fs.write" | "fs.edit" => execute_tier1_fs(tool_state, request),
-        "bash" => execute_tier1_bash(tool_state, session_id, request),
-        _ => Execution::RequiresApproval,
-    }
-}
-
-/// `fs.write`/`fs.edit`: run to completion synchronously right now, reusing
-/// the exact same execution path a manual approval would (`tools::
-/// execute_approved`), just skipping the approval round trip. The audit
-/// marker (tier + reason) is added to the result the same way a real
-/// `ToolCallResult` gets built anywhere else in this crate.
-fn execute_tier1_fs(tool_state: &ToolSessionState, request: &ToolCallRequest) -> Execution {
-    let mut output = crate::tools::execute_approved(tool_state, &request.tool_id, &request.input);
-    annotate_auto_approval(&mut output, "contained", "isolated worktree session");
-
-    Execution::Auto(vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-        Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            output,
-        )),
-    ])
-}
-
-/// `bash`: starts a sandboxed run on the bash background thread, exactly
-/// like `tools::approval::resolve_bash`'s approve path except the sandbox
-/// engages (writable root = this session's isolated workspace root) and
-/// nothing folds `ToolRunning`/`ToolCallStarted` here -- the caller
-/// (`tools::processing::process_agent_provider_event`) folds
-/// `Execution::Started`'s events itself, the same way it already folds
-/// `Execution::Auto`'s. Falls back to the ordinary approval gate (never
-/// silently drops the call) if this session has no registered runtime or no
-/// workspace root -- both should be impossible whenever `classify_call`
-/// returned `Contained`, but this stays defensive rather than panicking.
-///
-/// Network (`docs/agent-approval-design.md` leg 4b): when this session has
-/// its own running network proxy (`tool_state.network_proxy()`), the sandbox
-/// gets `NetworkPolicy::Proxied` for that exact TCP endpoint instead of
-/// `NetworkPolicy::Disabled` -- see `bash::exec::run_sandboxed`'s doc
-/// comment for the denial attribution this enables. `None` falls back to
-/// `Disabled`.
-fn execute_tier1_bash(
-    tool_state: &ToolSessionState,
-    session_id: SessionId,
-    request: &ToolCallRequest,
-) -> Execution {
-    let Some(runtime) = session_runtime(session_id) else {
-        return Execution::RequiresApproval;
-    };
-    let Some(workspace_root) = tool_state.workspace_root() else {
-        return Execution::RequiresApproval;
-    };
-
-    let call_id = request.call_id.clone();
-
-    // Same-command re-filter short-circuit (`tools/bash/recent.rs`): if this
-    // command's base (the part before the first pipe) matches a prior bash
-    // run whose full output was spilled to a temp file that still exists,
-    // and no file-modifying tool call (`fs.write`/`fs.edit`, or a `bash`
-    // call with a *different* base) has run in between, skip execution and
-    // return a guidance result pointing at the existing spill file instead.
-    // The model can re-filter with `fs.read`/`fs.grep` without re-running the
-    // command — the "same command, different `| tail`/`| grep` filter" pattern
-    // that burned ~1.2M input tokens in a single session
-    // (`docs/research/agent-editing-phase-analysis-2026-07-28.md`).
-    //
-    // This runs after `classify_call` returned `Contained` (the sandbox
-    // verdict, line 78-83) and before `spawn_sandboxed`, so neither the
-    // sandbox nor the approval gate is affected. A stale or missing spill
-    // file falls through to a real run, and an intervening modification
-    // blocks the short-circuit so genuinely changed code always gets a
-    // fresh execution.
-    if let Some(command) = request.input.get("command").and_then(Value::as_str) {
-        let frame = runtime.live_state.frame();
-        if let Some(prior) = crate::tools::bash::find_reusable_output(&frame, command) {
-            let mut output = crate::tools::bash::guidance_output(command, &prior);
-            annotate_auto_approval(&mut output, "contained", "isolated worktree session");
-            return Execution::Auto(vec![
-                Event::StateChanged(SessionState::ToolRunning),
-                Event::ToolCallStarted(request.identity()),
-                Event::ToolCallFinished(ToolCallResult::new(
-                    call_id,
-                    request.occurrence_id.clone(),
-                    output,
-                )),
-            ]);
-        }
-    }
-
-    let events = vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-    ];
-
-    bash::spawn_sandboxed(
-        bash::BashJob::new(
-            session_id,
-            request,
-            tool_state,
-            runtime.async_results.clone(),
-        ),
-        bash::SandboxedRun::new(
-            tool_state,
-            workspace_root,
-            crate::tools::bash::SandboxedApprovalOrigin::Tier1Auto,
-            None,
-        ),
-    );
-
-    Execution::Started(events)
-}
-
-fn execute_auto_tool(
+fn execute_automatic(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
+    session_id: SessionId,
+    live: &LiveState,
     request: &ToolCallRequest,
-) -> Vec<Event> {
-    let output = host
-        .execute_auto(&request.tool_id, &request.input)
-        .or_else(|| super::synchronous::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input));
-    let output = output.unwrap_or_else(|| {
-        error_output(format!(
-            "Tool `{}` cannot be executed automatically.",
-            request.tool_id
-        ))
-    });
+    mode: AutomaticTool,
+) -> Result<ToolUpdate, String> {
+    // Every dispatch, including a synchronous effect, starts beyond this acknowledged boundary.
+    let started = ToolUpdate::start(live, request, None)?;
+    let output = match mode {
+        AutomaticTool::Synchronous => execute_synchronous(host, tool_state, session_id, request),
+        AutomaticTool::ContainedFilesystem => {
+            let mut output =
+                crate::tools::execute_approved(tool_state, &request.tool_id, &request.input);
+            annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+            output.into()
+        }
+        AutomaticTool::Web | AutomaticTool::SandboxedBash => {
+            let Some(runtime) = session_runtime(session_id) else {
+                return started.complete(
+                    live,
+                    request.identity().result(error_output(format!(
+                        "{} has no registered session runtime",
+                        request.tool_id
+                    ))),
+                    Vec::new(),
+                );
+            };
+            if mode == AutomaticTool::Web {
+                crate::tools::web::spawn(
+                    session_id,
+                    request,
+                    tool_state.domain_allowlist(),
+                    crate::tools::web::WebApprovalOrigin::Auto,
+                    runtime.async_results,
+                );
+                return Ok(started);
+            }
+            let Some(workspace_root) = tool_state.workspace_root() else {
+                return started.complete(
+                    live,
+                    request
+                        .identity()
+                        .result(error_output("sandboxed bash requires a workspace root")),
+                    Vec::new(),
+                );
+            };
+            if let Some(command) = request.input.get("command").and_then(Value::as_str) {
+                if let Some(prior) = bash::find_reusable_output(&live.frame(), command) {
+                    let mut output = bash::guidance_output(command, &prior);
+                    annotate_auto_approval(&mut output, "contained", "isolated worktree session");
+                    return started.complete(live, request.identity().result(output), Vec::new());
+                }
+            }
+            bash::spawn_sandboxed(
+                bash::BashJob::new(session_id, request, tool_state, runtime.async_results),
+                bash::SandboxedRun::new(
+                    tool_state,
+                    workspace_root,
+                    bash::SandboxedApprovalOrigin::Tier1Auto,
+                    None,
+                ),
+            );
+            return Ok(started);
+        }
+    };
+    started.complete(
+        live,
+        request.identity().result(output.output),
+        output.events,
+    )
+}
 
-    vec![
-        Event::StateChanged(SessionState::ToolRunning),
-        Event::ToolCallStarted(request.identity()),
-        Event::ToolCallFinished(ToolCallResult::new(
-            request.call_id.clone(),
-            request.occurrence_id.clone(),
-            output,
-        )),
-        // No `StateChanged(WaitingForUser)` here: this call is only one
-        // member of whatever batch the originating completion requested (a
-        // single completion can request several parallel tool calls — see
-        // `providers::rig::session::fold_batched_tool_result`), and this
-        // executor has no visibility into whether sibling calls are still
-        // outstanding or a turn is still in flight. The session loop owns
-        // turn-level state and already emits its own accurate
-        // `WaitingForUser` once the whole batch has resolved and no
-        // follow-up turn is running; emitting it here too, per call, raced
-        // ahead of that (see the production incident this fix responds to)
-        // and could flip `AgentFrame::is_turn_in_flight` to `false` —
-        // disabling Cancel — while more results are still outstanding.
-    ]
+fn execute_synchronous(
+    host: &dyn HostTools,
+    tool_state: &ToolSessionState,
+    session_id: SessionId,
+    request: &ToolCallRequest,
+) -> ToolOutput {
+    match request.tool_id.as_str() {
+        crate::tools::TASK_TOOL_ID => {
+            return crate::tools::explore::start(tool_state, session_id, request)
+        }
+        crate::tools::TASK_OUTPUT_TOOL_ID => {
+            return crate::tools::explore::output(session_id, request)
+        }
+        "board.update" | "board.session" => {
+            return board::execute_operation(tool_state, session_id, request)
+        }
+        "board.comment" => return board::execute_comment(tool_state, session_id, request),
+        _ => {}
+    }
+    host.execute_auto(&request.tool_id, &request.input)
+        .or_else(|| super::synchronous::execute_auto(tool_state, &request.tool_id, &request.input))
+        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input))
+        .unwrap_or_else(|| {
+            error_output(format!(
+                "Tool `{}` cannot be executed automatically.",
+                request.tool_id
+            ))
+        })
+        .into()
 }
 
 pub(crate) fn tool_result_message(result: &ToolCallResult) -> Event {
@@ -354,4 +183,72 @@ pub fn cancelled_tool_call_result(identity: crate::contract::ToolCallIdentity) -
 pub fn cancel_tool_execution(session_id: SessionId, call_id: &crate::contract::ToolCallId) {
     crate::tools::bash::cancel_call(session_id, call_id);
     crate::tools::web::cancel_if_running(session_id, call_id);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::contract::{OccurrenceId, ToolCallId};
+    use crate::persistence::event_log::{WriterHandle, WriterInit};
+    use crate::tools::{register_session_runtime, unregister_session_runtime};
+
+    struct MustNotRun;
+    impl HostTools for MustNotRun {
+        fn execute_auto(&self, _: &str, _: &Value) -> Option<Value> {
+            panic!("host effect before a persisted start");
+        }
+    }
+
+    #[test]
+    fn every_automatic_dispatch_stops_before_effects_when_its_start_cannot_be_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("must-not-exist");
+        let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf())
+            .with_isolated_worktree(true)
+            .build();
+        for (mode, tool_id, input) in [
+            (
+                AutomaticTool::Synchronous,
+                "workspace.snapshot",
+                serde_json::json!({}),
+            ),
+            (
+                AutomaticTool::ContainedFilesystem,
+                "fs.write",
+                serde_json::json!({"path": marker, "content":"unsafe"}),
+            ),
+            (
+                AutomaticTool::SandboxedBash,
+                "bash",
+                serde_json::json!({"command": format!("touch {}", marker.display())}),
+            ),
+            (
+                AutomaticTool::Web,
+                "web_search",
+                serde_json::json!({"query":"must not be sent"}),
+            ),
+        ] {
+            let session = SessionId::new();
+            let request = ToolCallRequest {
+                call_id: ToolCallId(tool_id.into()),
+                occurrence_id: OccurrenceId::new(),
+                tool_id: tool_id.into(),
+                input: input.into(),
+            };
+            let history = vec![Event::ToolCallRequested(request.clone())];
+            let (writer, ready) = WriterHandle::open(dir.path());
+            assert!(matches!(ready.recv().unwrap(), WriterInit::Failed(_)));
+            let live =
+                LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
+            let (tx, rx) = crossbeam_channel::unbounded();
+            register_session_runtime(session, state.clone(), live.clone(), tx);
+            assert!(
+                execute_automatic(&MustNotRun, &state, session, &live, &request, mode).is_err()
+            );
+            assert_eq!(live.events(), history);
+            assert!(!marker.exists());
+            assert!(rx.try_recv().is_err());
+            unregister_session_runtime(session);
+        }
+    }
 }

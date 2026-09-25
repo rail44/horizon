@@ -296,7 +296,7 @@ impl AgentTranscript {
     /// [`render_expandable_tool_call_row`]'s expandable version.
     ///
     /// A `Waiting` approval renders inline at the row's right: small
-    /// Approve/Deny buttons wired to this exact `call_id` (owner feedback
+    /// Approve/Deny buttons wired to this exact execution identity (owner feedback
     /// 2026-07-13, round 3 -- integrating approval into the row it
     /// belongs to, replacing the standalone yellow box that gave no
     /// visible link back to its tool call), plus a subtle warning tint
@@ -398,8 +398,8 @@ impl AgentTranscript {
             );
 
         if waiting {
-            let approve_id = call.call_id.clone();
-            let deny_id = call.call_id.clone();
+            let approve_id = call.identity();
+            let deny_id = call.identity();
             let mut buttons = div()
                 .flex_none()
                 .flex()
@@ -431,7 +431,7 @@ impl AgentTranscript {
             // never from queue position, so it can't lie about which
             // row Enter/Esc actually reach right now (see
             // `turns::ComposerMode`'s doc comment).
-            if turns::is_keyboard_approval_target(&self.composer_mode, &call.call_id) {
+            if turns::is_keyboard_approval_target(&self.composer_mode, &call.identity()) {
                 buttons = buttons.child(
                     div()
                         .flex_none()
@@ -743,6 +743,7 @@ mod tests {
 
     fn finished_view(outcome: ToolOutcome) -> ToolCallView {
         ToolCallView {
+            occurrence_id: horizon_agent::contract::OccurrenceId::new(),
             call_id: ToolCallId("c".to_string()),
             request_index: 0,
             result_index: Some(1),

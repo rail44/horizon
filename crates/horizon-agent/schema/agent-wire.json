@@ -540,12 +540,12 @@
           "properties": {
             "ApproveToolCall": {
               "properties": {
-                "call_id": {
-                  "$ref": "#/$defs/ToolCallId"
+                "identity": {
+                  "$ref": "#/$defs/ToolCallIdentity"
                 }
               },
               "required": [
-                "call_id"
+                "identity"
               ],
               "type": "object"
             }
@@ -560,8 +560,8 @@
           "properties": {
             "DenyToolCall": {
               "properties": {
-                "call_id": {
-                  "$ref": "#/$defs/ToolCallId"
+                "identity": {
+                  "$ref": "#/$defs/ToolCallIdentity"
                 },
                 "reason": {
                   "default": null,
@@ -572,7 +572,7 @@
                 }
               },
               "required": [
-                "call_id"
+                "identity"
               ],
               "type": "object"
             }
@@ -976,7 +976,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "A human resolved a pending `ApprovalRequested`. Emitted at the\nagentd seam where `Command::ApproveToolCall`/`DenyToolCall` lands\nin `dispatch_inbound_command` (`crates/horizon-agentd/src/session/\napproval.rs`), *before* any `ToolCallStarted`/`ToolCallFinished` the\nresolution may then go on to produce — so the audit row exists\nregardless of which `ApprovalOutcome` variant `resolve_approval`\nreturns, including the `AlreadyResolved` duplicate-click case.\n\nThis is the **authoritative** record of who resolved a pending\napproval and how (the existing `agent_approvals.outcome` column\nstays populated by the order-derived `ToolCallStarted`/`Tool\nCallFinished` path for backward compatibility, but it is a derived\nbest-effort projection — collapsed rows and reused `call_id`s can\nmis-stamp it; this event is what analysis reads first).\n`Event::ApprovalRequested` + `Event::ApprovalResolved` pair up the\n`requested -> resolved` interval an analyst wants for wait-time\nnumbers; `ApprovalResolved::occurrence_id` carries the same\n`OccurrenceId` the matching `ApprovalRequested` was minted with.\n\nDeliberately carries only the *human* decision: judge-issued\napprovals (`tools::approval::resolve_auto_approval`, the enforcing\njudge's auto-resolve path) do not produce this event, because the\nwhole point is to surface what the operator did, not what the\nbackground model decided. Auto-approvals are still visible via\n`agent_approvals.outcome` and the `judge_*` event log records\n(`docs/agent-approval-design.md`'s \"Judge design\").\n\nAudit-only: no frame item, no projection table row. The transcript\nalready shows the resolution as the approval-row state changing\n(approve → `ToolCallStarted` / `ToolCallFinished`; deny →\n`ToolCallFinished` with `denied: true`); adding a row here would\nduplicate that signal for the user while doing nothing for SQL\nanalytics that read `agent_events` directly.",
+          "description": "A human resolved the exact pending approval occurrence. Persisted\nbefore execution or forwarding; stale and duplicate decisions produce\nno resolution. Replay retains it to prevent a second authorization\nbefore a provider-owned tool reports its start or finish.\nJudge decisions use the occurrence-tagged judge audit records instead.",
           "properties": {
             "ApprovalResolved": {
               "$ref": "#/$defs/ApprovalResolved"
@@ -2270,5 +2270,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 24
+  "x-session-protocol-version": 25
 }

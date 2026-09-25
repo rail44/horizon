@@ -307,7 +307,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
         // exercises the judge's human-gated boundary path independently of
         // the production web tools and their transport setup
         // approval gate at the
-        // `policy::horizon_events_for_provider_event` seam.
+        // `policy::plan_tool_call` seam.
         Definition {
             id: "mock.boundary_crossing".to_string(),
             title: "Mock Boundary Crossing".to_string(),

@@ -140,7 +140,8 @@ use crate::contract::{Command, SessionId};
 /// while no client is attached, not replayed on attach.
 /// v24: tool results carry a typed outcome, including cancellation and the
 /// replacement execution identity for superseded attempts.
-pub const AGENT_PROTOCOL_VERSION: u32 = 24;
+/// v25 binds approve/deny commands to a ToolCallIdentity, including occurrence_id.
+pub const AGENT_PROTOCOL_VERSION: u32 = 25;
 
 /// The oldest agent-wire version this build is still willing to negotiate
 /// down to in [`SessionHub::hello`] — the low end of the advertised
@@ -150,7 +151,7 @@ pub const AGENT_PROTOCOL_VERSION: u32 = 24;
 /// interop, they need honest restart, so a mismatched `hello` is rejected
 /// and recovered by the client's auto-drain-and-respawn (`docs/remoc-
 /// adoption-design.md` §3/§6) rather than bridged by gate constants.
-pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 24;
+pub const MIN_SUPPORTED_AGENT_PROTOCOL_VERSION: u32 = 25;
 
 /// The version range this build advertises in every `hello` to
 /// `horizon-agentd`.
@@ -332,7 +333,7 @@ mod tests {
     /// builds. The terminal protocol evolves independently.
     #[test]
     fn board_routing_requires_the_current_agent_protocol() {
-        assert_eq!(AGENT_PROTOCOL_VERSION, 24);
+        assert_eq!(AGENT_PROTOCOL_VERSION, 25);
         assert_eq!(MIN_SUPPORTED_AGENT_PROTOCOL_VERSION, AGENT_PROTOCOL_VERSION);
     }
 
