@@ -23,6 +23,7 @@ pub enum ApprovalDecision {
 #[derive(Debug)]
 pub enum ApprovalOutcome {
     Applied(ToolUpdate),
+    PersistenceFailed(String),
     /// Not a tool Horizon executes on approval (or no runtime is registered
     /// for the session) — forward the original `ApproveToolCall`/
     /// `DenyToolCall` command to the provider, exactly as before this
@@ -40,6 +41,15 @@ pub enum ApprovalOutcome {
     /// Every caller that reaches this logs the drop rather than silently
     /// swallowing it — see `horizon-agentd`'s `session::resolve_and_forward`.
     AlreadyResolved,
+}
+
+impl From<Result<ToolUpdate, String>> for ApprovalOutcome {
+    fn from(update: Result<ToolUpdate, String>) -> Self {
+        match update {
+            Ok(update) => Self::Applied(update),
+            Err(error) => Self::PersistenceFailed(error),
+        }
+    }
 }
 
 /// Tool ids Horizon executes itself once approved, rather than notifying
@@ -157,7 +167,7 @@ pub fn refuse_unattended(
 ) -> Option<ApprovalOutcome> {
     let runtime = session_runtime(session_id)?;
     let result = unattended_refusal_result(&runtime.tool_state, request)?;
-    Some(ApprovalOutcome::Applied(ToolUpdate::finish(
+    Some(ApprovalOutcome::from(ToolUpdate::finish(
         &runtime.live_state,
         result,
     )))
@@ -242,24 +252,22 @@ fn resolve_web_fetch(
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         crate::tools::web::clear_approved_domains(session_id, &request.call_id);
-        return synchronous_result(runtime, &request.call_id, denied_output(), false);
+        return declined_result(runtime, &request.call_id, denied_output());
     }
     let ApprovalKind::DomainGrant { domains } = kind else {
         crate::tools::web::clear_approved_domains(session_id, &request.call_id);
-        return synchronous_result(
+        return declined_result(
             runtime,
             &request.call_id,
             error_output("web_fetch approval did not carry a supported domain grant"),
-            false,
         );
     };
     if domains.is_empty() {
         crate::tools::web::clear_approved_domains(session_id, &request.call_id);
-        return synchronous_result(
+        return declined_result(
             runtime,
             &request.call_id,
             error_output("web_fetch domain grant was empty"),
-            false,
         );
     }
     let validated = domains
@@ -268,11 +276,10 @@ fn resolve_web_fetch(
         .collect::<Result<Vec<_>, _>>();
     let Ok(validated) = validated else {
         crate::tools::web::clear_approved_domains(session_id, &request.call_id);
-        return synchronous_result(
+        return declined_result(
             runtime,
             &request.call_id,
             error_output("web_fetch domain grant failed revalidation"),
-            false,
         );
     };
     for domain in &validated {
@@ -282,6 +289,9 @@ fn resolve_web_fetch(
         crate::tools::web::record_approved_domains(session_id, &request.call_id, &validated);
 
     let outcome = begin_execution(runtime, request, None);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
     crate::tools::web::spawn(
         session_id,
         request,
@@ -305,15 +315,16 @@ fn resolve_synchronous_tool(
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
-            let output = crate::tools::execute_approved(
-                &runtime.tool_state,
-                &request.tool_id,
-                &request.input,
-            );
-            synchronous_result(runtime, &request.call_id, output, true)
+            ApprovalOutcome::from(ToolUpdate::execute(&runtime.live_state, request, || {
+                crate::tools::execute_approved(
+                    &runtime.tool_state,
+                    &request.tool_id,
+                    &request.input,
+                )
+            }))
         }
         ApprovalDecision::Deny { .. } => {
-            synchronous_result(runtime, &request.call_id, denied_output(), false)
+            declined_result(runtime, &request.call_id, denied_output())
         }
     }
 }
@@ -372,11 +383,10 @@ fn resolve_bash(
         ApprovalKind::GitOperation { writable_roots } => {
             resolve_git_operation(session_id, runtime, request, decision, writable_roots)
         }
-        ApprovalKind::DomainGrant { .. } => synchronous_result(
+        ApprovalKind::DomainGrant { .. } => declined_result(
             runtime,
             &request.call_id,
             error_output("A host-side domain grant cannot authorize a bash command."),
-            false,
         ),
         ApprovalKind::Standard => {
             resolve_standard_bash(session_id, runtime, request, decision, approval_source)
@@ -392,7 +402,7 @@ fn resolve_git_operation(
     writable_roots: Vec<std::path::PathBuf>,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
-        return synchronous_result(runtime, &request.call_id, denied_output(), false);
+        return declined_result(runtime, &request.call_id, denied_output());
     }
     if !bash::requires_metadata_write(&request.input) {
         return unstarted_error(
@@ -427,6 +437,9 @@ fn resolve_git_operation(
     }
 
     let outcome = begin_execution(runtime, request, None);
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
     bash::spawn_sandboxed(
         bash::BashJob::new(
             session_id,
@@ -454,6 +467,9 @@ fn resolve_standard_bash(
     match decision {
         ApprovalDecision::Approve => {
             let outcome = begin_execution(runtime, request, None);
+            if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+                return outcome;
+            }
 
             bash::spawn_approved_host(
                 bash::BashJob::new(
@@ -468,7 +484,7 @@ fn resolve_standard_bash(
             outcome
         }
         ApprovalDecision::Deny { .. } => {
-            synchronous_result(runtime, &request.call_id, denied_output(), false)
+            declined_result(runtime, &request.call_id, denied_output())
         }
     }
 }
@@ -532,6 +548,9 @@ fn resolve_filesystem_denial_retry(
         .record_filesystem_grants(&runtime.tool_state.filesystem_grants_snapshot());
 
     let outcome = begin_execution(runtime, request, Some(&prior_result));
+    if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+        return outcome;
+    }
     bash::spawn_sandboxed(
         bash::BashJob::new(
             session_id,
@@ -563,7 +582,7 @@ fn begin_execution(
     request: &ToolCallRequest,
     prior_result: Option<&ToolCallResult>,
 ) -> ApprovalOutcome {
-    ApprovalOutcome::Applied(ToolUpdate::start(
+    ApprovalOutcome::from(ToolUpdate::start(
         &runtime.live_state,
         request,
         prior_result,
@@ -577,7 +596,7 @@ fn begin_execution(
 /// settled on. Unchanged by backlog 55 -- it was already the path that
 /// closed the first row.
 fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) -> ApprovalOutcome {
-    ApprovalOutcome::Applied(ToolUpdate::decline_retry(&runtime.live_state, prior_result))
+    ApprovalOutcome::from(ToolUpdate::decline_retry(&runtime.live_state, prior_result))
 }
 
 /// A tier-1 sandboxed `bash` call's network egress was refused for
@@ -621,6 +640,9 @@ fn resolve_domain_denial_retry(
             }
 
             let outcome = begin_execution(runtime, request, Some(&prior_result));
+            if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+                return outcome;
+            }
 
             bash::spawn_sandboxed(
                 bash::BashJob::new(
@@ -674,6 +696,9 @@ fn resolve_mach_service_grant(
             runtime.tool_state.approve_mach_services(&services);
 
             let outcome = begin_execution(runtime, request, Some(&prior_result));
+            if matches!(outcome, ApprovalOutcome::PersistenceFailed(_)) {
+                return outcome;
+            }
 
             bash::spawn_sandboxed(
                 bash::BashJob::new(
@@ -723,21 +748,11 @@ fn denied_output() -> Value {
     error_output("denied by user")
 }
 
-/// Folds a synchronous tool result into the session's live frame — the
-/// `ToolRunning`/`ToolCallStarted` pair too if `ran` (an approve that
-/// actually executed the tool, as opposed to a deny that short-circuited it
-/// without ever starting it) — and pairs it with the `Command::
-/// ToolCallResult` to forward to the provider. `ran` doubles as the source
-/// of `ToolCallResult::denied`'s contract marker: the only reason a
-/// Horizon-executed tool's approval resolves synchronously without ever
-/// running is a deny (both call sites above pass `ran = false` alongside
-/// `denied_output()`) — an approve always passes `ran = true`, even when
-/// the tool goes on to fail for its own reasons.
-fn synchronous_result(
+/// Settle an offer that did not execute, including denied or invalid grants.
+fn declined_result(
     runtime: &SessionRuntime,
     call_id: &ToolCallId,
     output: Value,
-    ran: bool,
 ) -> ApprovalOutcome {
     // Same `occurrence_id` fixup as `unstarted_error` -- look up the
     // request's `occurrence_id` from the live frame so the transcript and
@@ -751,15 +766,6 @@ fn synchronous_result(
     else {
         return ApprovalOutcome::AlreadyResolved;
     };
-    let result = if ran {
-        identity.result(output)
-    } else {
-        ToolCallResult::denied(call_id.clone(), identity.occurrence_id.clone(), output)
-    };
-
-    ApprovalOutcome::Applied(if ran {
-        ToolUpdate::executed(&runtime.live_state, result, identity)
-    } else {
-        ToolUpdate::finish(&runtime.live_state, result)
-    })
+    let result = ToolCallResult::denied(call_id.clone(), identity.occurrence_id, output);
+    ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
 }

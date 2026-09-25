@@ -64,10 +64,12 @@ impl Store {
     ) -> Result<ApplyRecordsReport> {
         self.clear_all_agent_state()?;
         let report = self.apply_records(records)?;
-        self.conn.execute(
-            "INSERT INTO agent_projection_format VALUES (true, ?)",
-            [crate::persistence::event_log::AGENT_EVENT_LOG_VERSION],
-        )?;
+        if report.skipped == 0 {
+            self.conn.execute(
+                "INSERT INTO agent_projection_format VALUES (true, ?)",
+                [crate::persistence::event_log::AGENT_EVENT_LOG_VERSION],
+            )?;
+        }
         Ok(report)
     }
 

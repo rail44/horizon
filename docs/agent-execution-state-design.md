@@ -48,10 +48,12 @@ owes its next round. Only the provider ends the turn. `publish_tool_update`
 forwards the applied events before sending a terminal result to the provider.
 Approval helpers no longer return a redundant whole-frame snapshot.
 
-This does not introduce a new persistence transaction: `LiveState` queues log
-writes through its existing appender. A `ToolUpdate` is an applied update, not a
-disk-flush acknowledgement. Human/judge authority and each sandbox grant's scope
-remain separate from lifecycle handling.
+`LiveState` now acknowledges persistent batches before folding them.
+`ToolUpdate` constructors return `Result`: a successful update may be published
+and its result may release the provider; a failed start must not launch a worker.
+This is a flush acknowledgement, not an atomic batch or an `fsync` guarantee.
+Human/judge authority and each sandbox grant's scope remain separate from
+lifecycle handling. See [the persistence contract](agent-persistence-contract.md).
 
 ## Recovery contract
 

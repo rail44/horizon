@@ -435,9 +435,11 @@ fn with_event_log_and_history_seeds_the_frame_and_events_up_front() {
     );
 
     // New events append on top of the seeded history, in both places.
-    let frame = store.extend_provider_events([agent::ProviderEvent::from(
-        agent::Event::StateChanged(agent::SessionState::WaitingForUser),
-    )]);
+    let frame = store
+        .extend_provider_events([agent::ProviderEvent::from(agent::Event::StateChanged(
+            agent::SessionState::WaitingForUser,
+        ))])
+        .unwrap();
     assert_eq!(frame.state, Some(agent::SessionState::WaitingForUser));
     assert_eq!(store.events().len(), 3);
     assert_eq!(store.events()[..2], history[..]);
@@ -461,19 +463,21 @@ fn runtime_state_store_enqueues_events_to_jsonl_log() {
         writer.clone(),
     );
 
-    store.extend_provider_events([
-        agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::User,
-            text: "hello".to_string(),
-        })),
-        agent::ProviderEvent::with_provider_payload(
-            agent::Event::AssistantTextDelta(agent::MessageDelta {
-                role: agent::MessageRole::Assistant,
-                text: "hi".to_string(),
-            }),
-            serde_json::json!({ "delta": true }),
-        ),
-    ]);
+    store
+        .extend_provider_events([
+            agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::User,
+                text: "hello".to_string(),
+            })),
+            agent::ProviderEvent::with_provider_payload(
+                agent::Event::AssistantTextDelta(agent::MessageDelta {
+                    role: agent::MessageRole::Assistant,
+                    text: "hi".to_string(),
+                }),
+                serde_json::json!({ "delta": true }),
+            ),
+        ])
+        .unwrap();
     writer.flush().expect("flush");
 
     let report = crate::persistence::event_log::read(&path).expect("read log");
@@ -502,17 +506,19 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
     let (writer, _init_rx) = crate::persistence::event_log::WriterHandle::open(&path);
     let store = crate::live::LiveState::with_event_log(session_id, None, None, writer.clone());
 
-    let frame = store.extend_provider_events([
-        agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
-            key: "call-1".to_string(),
-            tool_id: Some("fs.write".to_string()),
-            bytes: 128,
-        }),
-        agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
-            role: agent::MessageRole::User,
-            text: "hello".to_string(),
-        })),
-    ]);
+    let frame = store
+        .extend_provider_events([
+            agent::ProviderEvent::tool_call_progress(agent::ToolCallProgress {
+                key: "call-1".to_string(),
+                tool_id: Some("fs.write".to_string()),
+                bytes: 128,
+            }),
+            agent::ProviderEvent::from(agent::Event::MessageCommitted(agent::Message {
+                role: agent::MessageRole::User,
+                text: "hello".to_string(),
+            })),
+        ])
+        .unwrap();
     writer.flush().expect("flush");
 
     // It folds into the frame as an ephemeral `ToolCallPreparing` item...

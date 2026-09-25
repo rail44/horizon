@@ -11,6 +11,18 @@ use super::{
     AGENT_EVENT_LOG_VERSION,
 };
 
+/// Enqueued records, not yet acknowledged by the writer. Dropping this does
+/// not cancel them. A failed wait may leave a persisted prefix of the batch.
+pub struct PendingEvents {
+    writer: WriterHandle,
+}
+
+impl PendingEvents {
+    pub fn wait(self) -> Result<()> {
+        self.writer.flush()
+    }
+}
+
 pub struct Appender {
     writer: WriterHandle,
     session_id: SessionId,
@@ -96,7 +108,7 @@ impl Appender {
         }
     }
 
-    pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
+    pub fn append_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<PendingEvents> {
         // All append APIs share this boundary, including acknowledged commits.
         for envelope in events {
             let ProviderEvent::Event {
@@ -124,15 +136,20 @@ impl Appender {
             };
             self.writer.append(record)?;
         }
-        Ok(())
+        Ok(PendingEvents {
+            writer: self.writer.clone(),
+        })
+    }
+
+    pub fn failure(&self) -> Option<String> {
+        self.writer.failure()
     }
 
     /// Acknowledge every queued record before the caller publishes durable
     /// state or starts work which relies on it. This is not a batch transaction:
     /// a failed batch may have written a prefix, recoverable by log replay.
     pub fn commit_provider_events(&mut self, events: Vec<ProviderEvent>) -> Result<()> {
-        self.append_provider_events(events)?;
-        self.writer.flush()
+        self.append_provider_events(events)?.wait()
     }
 }
 
@@ -181,7 +198,7 @@ mod tests {
                     .commit_provider_events(feedback.clone())
                     .unwrap(),
                 "live" => {
-                    live.extend_provider_events(feedback.clone());
+                    live.extend_provider_events(feedback.clone()).unwrap();
                 }
                 _ => {
                     live.persist_provider_events(feedback.clone()).unwrap();

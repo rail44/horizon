@@ -33,7 +33,8 @@ fn old_async_completions_cannot_answer_a_new_occurrence_with_the_same_call_id() 
             Event::ToolCallFinished(result.clone()),
             Event::ToolCallRequested(current),
         ];
-        live.extend_provider_events(history.iter().cloned().map(Into::into));
+        live.extend_provider_events(history.iter().cloned().map(Into::into))
+            .unwrap();
         let call_id = old.request.call_id.clone();
         let completion = match kind {
             0 => ToolCompletion::Finished(result),
@@ -118,7 +119,8 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
             tool_id: if kind == 3 { "web_fetch" } else { "bash" }.into(),
             input: serde_json::json!({}).into(),
         };
-        live.extend_provider_events(std::iter::once(Event::ToolCallRequested(request).into()));
+        live.extend_provider_events(std::iter::once(Event::ToolCallRequested(request).into()))
+            .unwrap();
         fold_tool_completion(&state, &live, &commands, session, completion.clone());
         let forwarded = drain_events(&mut outgoing);
         let retry_events = if kind == 3 {
@@ -157,7 +159,8 @@ fn reissued_approvals_keep_attempt_identity_and_ignore_missing_or_finished_reque
                 serde_json::json!({"is_error": true}),
             ))
             .into(),
-        ));
+        ))
+        .unwrap();
         fold_tool_completion(&state, &live, &commands, session, completion);
         assert!(
             outgoing.try_recv().is_err(),
@@ -197,38 +200,42 @@ fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
     let call_b = ToolCallId("bash-b".to_string());
 
     for call_id in [&call_a, &call_b] {
-        live_state.extend_provider_events([Event::ToolCallRequested(
-            horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-                tool_id: "bash".into(),
-                input: serde_json::json!({"command": "pwd"}).into(),
-            },
-        )
-        .into()]);
+        live_state
+            .extend_provider_events([Event::ToolCallRequested(
+                horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                    tool_id: "bash".into(),
+                    input: serde_json::json!({"command": "pwd"}).into(),
+                },
+            )
+            .into()])
+            .unwrap();
     }
 
-    live_state.extend_provider_events(
-        vec![
-            Event::StateChanged(SessionState::WaitingForApproval),
-            Event::ApprovalRequested(ApprovalRequest {
-                call_id: call_a.clone(),
-                reason: "bash".to_string(),
-                kind: ApprovalKind::Standard,
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_a.0.clone()),
-            }),
-            Event::ApprovalRequested(ApprovalRequest {
-                call_id: call_b.clone(),
-                reason: "bash".to_string(),
-                kind: ApprovalKind::Standard,
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_b.0.clone()),
-            }),
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(tool_identity(&call_a)),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::WaitingForApproval),
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: call_a.clone(),
+                    reason: "bash".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_a.0.clone()),
+                }),
+                Event::ApprovalRequested(ApprovalRequest {
+                    call_id: call_b.clone(),
+                    reason: "bash".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_b.0.clone()),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_a)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
 
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
@@ -258,14 +265,16 @@ fn fold_bash_completion_reports_running_once_no_approval_remains_pending() {
 
     // Approving `call_b` folds its own running pair the same way
     // `call_a`'s did, then its completion arrives too.
-    live_state.extend_provider_events(
-        vec![
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(tool_identity(&call_b)),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_b)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
 
     fold_bash_completion(
         &state,
@@ -304,21 +313,23 @@ fn fold_bash_completion_reports_running_when_no_approval_is_pending() {
     let mut outgoing_rx = connection.subscribe_agent(session_id);
     let call_id = ToolCallId("bash-1".to_string());
 
-    live_state.extend_provider_events(
-        vec![
-            Event::StateChanged(SessionState::Running),
-            Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                tool_id: "bash".to_string(),
-                input: serde_json::json!({ "command": "echo hi" }).into(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-            }),
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(tool_identity(&call_id)),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::StateChanged(SessionState::Running),
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_id)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
 
     let (commands_tx, _commands_rx) = unbounded::<Command>();
     fold_bash_completion(
@@ -358,29 +369,31 @@ fn fold_finished_bash_result_keeps_an_occurrence_the_result_already_carries() {
     let first = OccurrenceId("occ-first".to_string());
     let reissued = OccurrenceId("occ-reissued".to_string());
 
-    live_state.extend_provider_events(
-        vec![
-            Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                tool_id: "bash".to_string(),
-                input: serde_json::json!({ "command": "echo hi" }).into(),
-                occurrence_id: first.clone(),
-            }),
-            Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                tool_id: "bash".to_string(),
-                input: serde_json::json!({ "command": "echo hi" }).into(),
-                occurrence_id: reissued.clone(),
-            }),
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(horizon_agent::contract::ToolCallIdentity {
-                call_id: call_id.clone(),
-                occurrence_id: reissued.clone(),
-            }),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: first.clone(),
+                }),
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: reissued.clone(),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(horizon_agent::contract::ToolCallIdentity {
+                    call_id: call_id.clone(),
+                    occurrence_id: reissued.clone(),
+                }),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
 
     let (commands_tx, _commands_rx) = unbounded::<Command>();
     fold_bash_completion(
@@ -418,20 +431,22 @@ fn approval_for_denials(
     let connection = Connection::new(state.clone());
     let mut outgoing_rx = connection.subscribe_agent(session_id);
     let call_id = ToolCallId("bash-filesystem-denied".to_string());
-    live_state.extend_provider_events(
-        vec![
-            Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                tool_id: "bash".to_string(),
-                input: serde_json::json!({ "command": "echo hi" }).into(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-            }),
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(tool_identity(&call_id)),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::ToolCallRequested(horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "bash".to_string(),
+                    input: serde_json::json!({ "command": "echo hi" }).into(),
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                }),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_id)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
     fold_bash_completion(
@@ -565,9 +580,11 @@ fn auto_approval_verdict_forwards_existing_approved_path_without_prompt() {
     let connection = Connection::new(state.clone());
     let mut outgoing_rx = connection.subscribe_agent(session_id);
     let candidate = judge_candidate("judge-auto");
-    live_state.extend_provider_events(std::iter::once(
-        Event::ToolCallRequested(candidate.request.clone()).into(),
-    ));
+    live_state
+        .extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(candidate.request.clone()).into(),
+        ))
+        .unwrap();
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
     deliver_judgment(
@@ -608,14 +625,16 @@ fn late_or_started_verdict_is_ignored() {
         let connection = Connection::new(state.clone());
         let mut outgoing_rx = connection.subscribe_agent(session_id);
         let candidate = judge_candidate("judge-stale");
-        live_state.extend_provider_events(
-            [
-                Event::ToolCallRequested(candidate.request.clone()),
-                terminal_event,
-            ]
-            .into_iter()
-            .map(Into::into),
-        );
+        live_state
+            .extend_provider_events(
+                [
+                    Event::ToolCallRequested(candidate.request.clone()),
+                    terminal_event,
+                ]
+                .into_iter()
+                .map(Into::into),
+            )
+            .unwrap();
         let (commands_tx, commands_rx) = unbounded::<Command>();
 
         deliver_judgment(
@@ -666,9 +685,11 @@ fn a_judge_escalation_in_an_unattended_session_refuses_instead_of_prompting() {
         input: serde_json::json!({ "path": "/etc/hostname" }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("unattended-escalated".to_string()),
     };
-    live_state.extend_provider_events(std::iter::once(
-        Event::ToolCallRequested(request.clone()).into(),
-    ));
+    live_state
+        .extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ))
+        .unwrap();
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
     deliver_judgment(
@@ -747,9 +768,11 @@ fn a_judge_approved_out_of_root_read_still_runs_in_an_unattended_session() {
         input: serde_json::json!({ "path": file.display().to_string() }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("unattended-allowed".to_string()),
     };
-    live_state.extend_provider_events(std::iter::once(
-        Event::ToolCallRequested(request.clone()).into(),
-    ));
+    live_state
+        .extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ))
+        .unwrap();
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
     deliver_judgment(
@@ -798,9 +821,11 @@ fn duplicate_escalation_verdict_does_not_duplicate_the_human_prompt() {
         input: serde_json::json!({}).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId("duplicate-judge".to_string()),
     };
-    live_state.extend_provider_events(std::iter::once(
-        Event::ToolCallRequested(request.clone()).into(),
-    ));
+    live_state
+        .extend_provider_events(std::iter::once(
+            Event::ToolCallRequested(request.clone()).into(),
+        ))
+        .unwrap();
     let judgment = horizon_agent::tools::ApprovalJudgment {
         candidate: ApprovalCandidate {
             approval: ApprovalRequest {
@@ -842,15 +867,17 @@ fn fold_domain_grant_required_reissues_the_fetch_without_contacting_the_provider
         input: serde_json::json!({ "url": "https://example.com/start" }).into(),
         occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
     };
-    live_state.extend_provider_events(
-        vec![
-            Event::ToolCallRequested(original_request.clone()),
-            Event::StateChanged(SessionState::ToolRunning),
-            Event::ToolCallStarted(tool_identity(&call_id)),
-        ]
-        .into_iter()
-        .map(Into::into),
-    );
+    live_state
+        .extend_provider_events(
+            vec![
+                Event::ToolCallRequested(original_request.clone()),
+                Event::StateChanged(SessionState::ToolRunning),
+                Event::ToolCallStarted(tool_identity(&call_id)),
+            ]
+            .into_iter()
+            .map(Into::into),
+        )
+        .unwrap();
     let (commands_tx, commands_rx) = unbounded::<Command>();
 
     fold_tool_completion(
@@ -1001,7 +1028,8 @@ fn synchronous_and_async_results_preserve_sibling_approval_and_publish_before_de
             ]
             .into_iter()
             .map(Into::into),
-        );
+        )
+        .unwrap();
         let prior_events = live.events().len();
         if synchronous {
             let outcome = horizon_agent::tools::resolve_approval(

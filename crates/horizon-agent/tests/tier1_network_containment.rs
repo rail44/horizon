@@ -248,9 +248,11 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
     network_b.drain_denied_hosts();
 
     let request = curl_request(&target_x);
-    live_state_a.extend_provider_events([ProviderEvent::from(Event::ToolCallRequested(
-        request.clone(),
-    ))]);
+    live_state_a
+        .extend_provider_events([ProviderEvent::from(Event::ToolCallRequested(
+            request.clone(),
+        ))])
+        .unwrap();
     start_request(&state_a, session_a, &request);
     let (domains, prior_result) = match rx_a
         .recv_timeout(Duration::from_secs(30))
@@ -261,17 +263,19 @@ fn domain_approval_is_session_scoped_and_host_narrow() {
         } => (domains, result),
         other => panic!("expected the first curl to be domain denied, got {other:?}"),
     };
-    let frame = live_state_a.extend_provider_events([ProviderEvent::from(
-        Event::ApprovalRequested(ApprovalRequest {
-            call_id: request.call_id.clone(),
-            reason: "allow exactly the denied host for this session and retry".to_string(),
-            kind: ApprovalKind::DomainDenialRetry {
-                domains,
-                prior_result,
+    let frame = live_state_a
+        .extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
+            ApprovalRequest {
+                call_id: request.call_id.clone(),
+                reason: "allow exactly the denied host for this session and retry".to_string(),
+                kind: ApprovalKind::DomainDenialRetry {
+                    domains,
+                    prior_result,
+                },
+                occurrence_id: horizon_agent::contract::OccurrenceId::new(),
             },
-            occurrence_id: horizon_agent::contract::OccurrenceId::new(),
-        }),
-    )]);
+        ))])
+        .unwrap();
     assert!(matches!(
         resolve_approval(
             &frame,

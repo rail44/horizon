@@ -112,6 +112,7 @@ impl Default for State {
 pub struct LiveState {
     inner: Rc<RefCell<State>>,
     persistence: Option<Rc<Persistence>>,
+    runtime_failure: Rc<RefCell<Option<String>>>,
 }
 
 impl LiveState {
@@ -123,18 +124,60 @@ impl LiveState {
     #[cfg(test)]
     pub(crate) fn extend_events(&self, events: impl IntoIterator<Item = Event>) -> AgentFrame {
         self.extend_provider_events(events.into_iter().map(ProviderEvent::from))
+            .unwrap()
     }
 
+    /// Commit persistent events before applying them. In-memory views and
+    /// explicitly disabled test stores fold directly; daemon sessions use the log.
     pub fn extend_provider_events(
         &self,
         events: impl IntoIterator<Item = ProviderEvent>,
-    ) -> AgentFrame {
-        let events = events.into_iter().collect::<Vec<_>>();
-        if let Some(persistence) = &self.persistence {
-            // Appender owns ephemeral exclusion for every persistence entry.
-            let _ = persistence.append_events(events.clone());
+    ) -> Result<AgentFrame, String> {
+        if let Some(message) = self.persistence_failure() {
+            return Err(message);
         }
-        self.inner.borrow_mut().extend_provider_events(events)
+        let events = events.into_iter().collect::<Vec<_>>();
+        if let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() {
+            appender
+                .borrow_mut()
+                .commit_provider_events(events.clone())
+                .map_err(|error| format!("{error:#}"))?;
+        }
+        Ok(self.inner.borrow_mut().extend_provider_events(events))
+    }
+
+    pub fn persistence_failure(&self) -> Option<String> {
+        if let Some(message) = self.runtime_failure.borrow().as_ref() {
+            return Some(message.clone());
+        }
+        match self.persistence.as_deref() {
+            Some(Persistence::EventLog(appender)) => appender.borrow().failure(),
+            _ => None,
+        }
+    }
+
+    /// Runtime diagnostics are replayable to clients but never masquerade as
+    /// persisted history. A failed log cannot save its own failure event.
+    pub fn mark_persistence_failed(&self, message: String) -> bool {
+        let mut failure = self.runtime_failure.borrow_mut();
+        if failure.is_some() {
+            return false;
+        }
+        *failure = Some(message);
+        true
+    }
+
+    pub fn runtime_failure_events(&self) -> Vec<Event> {
+        self.runtime_failure.borrow().as_ref().map_or_else(Vec::new, |message| vec![
+            Event::Error(crate::contract::Error { message: format!("Event log persistence failed; execution stopped. Restart after fixing storage: {message}") }),
+            Event::StateChanged(crate::contract::SessionState::Terminated),
+        ])
+    }
+
+    pub fn replay_events(&self) -> Vec<Event> {
+        let mut events = self.events();
+        events.extend(self.runtime_failure_events());
+        events
     }
 
     /// Commit transport/lifecycle records before folding them into live history.
@@ -143,15 +186,10 @@ impl LiveState {
         &self,
         events: impl IntoIterator<Item = ProviderEvent>,
     ) -> Result<AgentFrame, String> {
-        let events: Vec<_> = events.into_iter().collect();
-        let Some(Persistence::EventLog(appender)) = self.persistence.as_deref() else {
+        if !matches!(self.persistence.as_deref(), Some(Persistence::EventLog(_))) {
             return Err("Session persistence is unavailable".into());
-        };
-        appender
-            .borrow_mut()
-            .commit_provider_events(events.clone())
-            .map_err(|error| error.to_string())?;
-        Ok(self.inner.borrow_mut().extend_provider_events(events))
+        }
+        self.extend_provider_events(events)
     }
 
     /// Test-only: production always seeds `history` explicitly (even if
@@ -210,6 +248,7 @@ impl LiveState {
         }
         Self {
             inner: Rc::new(RefCell::new(State::from_history(history))),
+            runtime_failure: Rc::default(),
             persistence: Some(Rc::new(Persistence::EventLog(RefCell::new(appender)))),
         }
     }
@@ -217,6 +256,7 @@ impl LiveState {
     pub fn with_disabled_persistence() -> Self {
         Self {
             inner: Rc::new(RefCell::new(State::new())),
+            runtime_failure: Rc::default(),
             persistence: Some(Rc::new(Persistence::Disabled)),
         }
     }
@@ -260,7 +300,11 @@ impl LiveState {
     /// result — the async-execution analogue of `agent::tools::approval`'s
     /// `ApprovalOutcome::AlreadyResolved` guard.
     pub fn frame(&self) -> AgentFrame {
-        self.inner.borrow().frame().clone()
+        let mut frame = self.inner.borrow().frame().clone();
+        for event in self.runtime_failure_events() {
+            apply_agent_event_to_frame(&mut frame, &event, &mut TurnClock::default());
+        }
+        frame
     }
 
     /// The session's resolved model id, if a
@@ -294,15 +338,6 @@ impl LiveState {
 enum Persistence {
     EventLog(RefCell<event_log::Appender>),
     Disabled,
-}
-
-impl Persistence {
-    fn append_events(&self, events: Vec<ProviderEvent>) -> anyhow::Result<()> {
-        match self {
-            Self::EventLog(appender) => appender.borrow_mut().append_provider_events(events),
-            Self::Disabled => Ok(()),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -360,7 +395,8 @@ mod tests {
 
         live.extend_provider_events(std::iter::once(ProviderEvent::session_model(
             "gpt-5".to_string(),
-        )));
+        )))
+        .unwrap();
 
         assert_eq!(live.session_model(), Some("gpt-5".to_string()));
         assert!(

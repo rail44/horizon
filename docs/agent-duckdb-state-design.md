@@ -412,6 +412,7 @@ a valid JSON object without its final newline is still an uncommitted tail.
 Durable input/outbox events enter `LiveState` only after it succeeds; callers
 can then publish them without a separate writer lookup. Startup interruption
 fixups use the same boundary before provider creation, and skip that session's
-resume if the commit fails. Ordinary streaming events retain asynchronous
-appends. A batch is not transactional: a successfully written prefix can be
+resume if the commit fails. As of 2026-09-25, all persistent live events use this
+acknowledged boundary before publication; see
+[the persistence contract](agent-persistence-contract.md). A batch is not transactional: a successfully written prefix can be
 recovered on restart even if a later record in that batch failed.

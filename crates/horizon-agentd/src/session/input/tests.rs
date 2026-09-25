@@ -132,7 +132,17 @@ fn unavailable_persistence_never_forwards_or_publishes_an_input() {
             Command::SessionInput(input("rejected")),
         );
         assert!(live.events().is_empty());
-        assert!(commands.try_recv().is_err());
-        assert!(drain_events(&mut events).is_empty());
+        assert!(commands
+            .try_iter()
+            .all(|command| matches!(command, Command::Shutdown)));
+        let published = drain_events(&mut events);
+        assert!(matches!(
+            published.as_slice(),
+            [
+                Event::Error(_),
+                Event::StateChanged(horizon_agent::contract::SessionState::Terminated)
+            ]
+        ));
+        assert_eq!(live.replay_events(), published);
     }
 }

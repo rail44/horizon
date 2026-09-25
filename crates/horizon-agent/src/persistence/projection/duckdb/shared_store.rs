@@ -40,12 +40,14 @@ use super::DuckdbStoreHandle;
 /// process a live view of the projection.
 #[derive(Clone)]
 pub struct SharedDuckdbStore {
-    // The outer `Option` is "has `set` run yet"; the inner `Option` is the
-    // decided value itself (`None` if there's nothing to share). Deliberately
-    // structured this way rather than factored further -- it's a private
-    // field with exactly one reader/writer pair (`wait`/`set` below).
-    #[allow(clippy::type_complexity)]
-    inner: Arc<(Mutex<Option<Option<DuckdbStoreHandle>>>, Condvar)>,
+    inner: Arc<(Mutex<Initialization>, Condvar)>,
+}
+
+#[derive(Clone)]
+enum Initialization {
+    Pending,
+    Ready(DuckdbStoreHandle),
+    Unavailable,
 }
 
 impl Default for SharedDuckdbStore {
@@ -61,7 +63,7 @@ impl SharedDuckdbStore {
     /// writer thread's own rebuild-or-open decision lands.
     pub fn new() -> Self {
         Self {
-            inner: Arc::new((Mutex::new(None), Condvar::new())),
+            inner: Arc::new((Mutex::new(Initialization::Pending), Condvar::new())),
         }
     }
 
@@ -84,7 +86,7 @@ impl SharedDuckdbStore {
     pub fn set(&self, store: Option<DuckdbStoreHandle>) {
         let (lock, condvar) = &*self.inner;
         let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        *guard = Some(store);
+        *guard = store.map_or(Initialization::Unavailable, Initialization::Ready);
         condvar.notify_all();
     }
 
@@ -94,11 +96,15 @@ impl SharedDuckdbStore {
     pub fn wait(&self) -> Option<DuckdbStoreHandle> {
         let (lock, condvar) = &*self.inner;
         let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        while guard.is_none() {
+        while matches!(*guard, Initialization::Pending) {
             guard = condvar
                 .wait(guard)
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
         }
-        guard.clone().flatten()
+        match &*guard {
+            Initialization::Ready(store) => Some(store.clone()),
+            Initialization::Unavailable => None,
+            Initialization::Pending => unreachable!("waited for initialization"),
+        }
     }
 }

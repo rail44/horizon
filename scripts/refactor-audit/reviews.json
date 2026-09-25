@@ -25,16 +25,16 @@
         "name": "rebuild_and_open_duckdb_projection",
         "partition": "production"
       },
-      "sha256": "6a53502e60293338994f61206c9f628597d0df6589d3737c4330e343cdc6b424",
+      "sha256": "a3fce522863f259e8a21f0270110f2081aab09c79192aeacd645b55dacc3e987",
       "related": {
-        "crates/horizon-agent/src/persistence/event_log/mod.rs": "5ce6ec917368f75135884be6696a869dcbf94b0f1931bb952c4e59f88a4db22b",
-        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "5b69fd8f6380c949a39a713ea81c33bc3538938952b460004880f59b6add2a0f",
-        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "b1d5aad1642a34a3da387ab77715db49e53cda9b2778cf7ad07eaf26b054ed68",
-        "crates/horizon-agent/src/persistence/projection/duckdb/schema.rs": "783f4c51f519e50ca48c300d67c7d1a8932abb8e46b76e5f4311e27b6a11188e"
+        "crates/horizon-agent/src/persistence/event_log/health.rs": "7d78a8c3a79fd45a18ab785eda2a59c2e2503e2b38a3c1e853203ba4bf9f1560",
+        "crates/horizon-agent/src/persistence/projection/duckdb/import.rs": "eac49e35cc39a617ae16e42f23613a7ee877c672b5be93471e166dc5480060c0",
+        "crates/horizon-agent/src/persistence/projection/duckdb/query.rs": "bdda443d229d8f900c4f70b0448a4202e8ae14dec1df11aa6cf8c1c6aa551192",
+        "crates/horizon-agent/src/persistence/projection/duckdb/mod.rs": "8fb97c7a3c3d4b8d2f6c09b836d79301ceb951a7e1109a5e67eb9d89dabebb1a"
       },
       "decision": "preserve",
-      "reason": "Keep current, incremental and full-rebuild paths distinct. Currency now requires the current event-format stamp as well as the sequence mark, so converted v3 history cannot silently reuse an old projection. JSONL remains authoritative; conversion and strict preflight are offline.",
-      "commit": "5ce74c000ce2a4c46d569144d1a204938e5f1d41"
+      "reason": "Keep current, incremental and full rebuild paths distinct. Freshness now verifies the full ordered event identity prefix plus the format stamp. Any skipped projection disables search; live append failure revokes all shared readers while JSONL continues. Fault and restart regressions cover holes and replacement logs.",
+      "commit": "b00cb83bec1f3e861e20260010b4efe0d24f370c"
     },
     {
       "target": {
@@ -161,19 +161,17 @@
         "name": "run_session",
         "partition": "production"
       },
-      "sha256": "4a695b463ececdbf825280b34fa53c631614b77f85c893aeceb282da81ed37d6",
+      "sha256": "5d8bd6997d194a4f675e127b14dea972ceef2f7558de81ed6d1d073042063d9b",
       "related": {
-        "crates/horizon-agent/src/tools/explore.rs": "ae4e37947f24707fa1b6c5ff234e2ea345afbf966a8341da3e6f9ed5fd3bf010",
-        "crates/horizon-agent/src/tools/moa.rs": "4dfb77ad4f96d0a55d1440d8e8e114dceb8ff161d1b8e7cb7eab0968215e3f6f",
-        "crates/horizon-agentd/src/session/environment.rs": "71745c4e475eda5f5b87aabb50cdcdf3b85f0413e2e578ea6957816ee5b8b60a",
-        "crates/horizon-agentd/src/session/events.rs": "5a09e28684fdba6c792b54c264e0860108117c1701b56fad4c54f8ae71ff01ae",
-        "crates/horizon-agentd/src/session/input.rs": "efef7c9490b1deae188725af204960bcdc8d6de6a4fd682e890146406343fa53",
-        "crates/horizon-agentd/src/session/resume.rs": "b8d4461c7e2d39d7c5372782fc1b468e9c7918d99f7d52fc139cd3fbc36f885f",
-        "crates/horizon-agentd/src/session/spawn.rs": "d51a8d94e3ed3a4dac3203e32d933769c9af0d77cb8ca61c46344710959a765c"
+        "crates/horizon-agent/src/live.rs": "a50078d305266efca8367313a682f632fbbab15ba207b22079e4485fcd90406f",
+        "crates/horizon-agentd/src/session/events.rs": "ebcc9685dda530768379de329048d4a158849689c9f9a870fc59f6e9907fae6c",
+        "crates/horizon-agentd/src/session/approval.rs": "100dd503a3f151c29169e5dd5f49b7865722c2e004188b902c439a6a828421a5",
+        "crates/horizon-agentd/src/session/completion.rs": "aefe534bbb56cb2aa11a313062b44a9cb45fccf5a364fae3e7d7a4b81ca8f5d3",
+        "crates/horizon-agent/src/tools/transition.rs": "a2f595bc0508084f5e718c5b1ee8f201dabbcfb697a53e63645b1a479fd66f46"
       },
       "decision": "preserve",
-      "reason": "Keep the session loop as owner of command priority, environment readiness and provider/completion ordering. Appender now acknowledges durable input/outbox and recovery records before live folding, publication or resume. Async completions are admitted by dispatch occurrence. Task children and MoA watchers retain their distinct lifetimes. Initial capabilities are now installed through ToolSessionBuilder before sharing; shared wire conversion preserves ephemeral feedback without changing those ordering and lifetime rules. In-memory daemon fixtures now resolve no host settings; production session order and configuration loading are unchanged.",
-      "commit": "0fe5d2beb38a3ddb35798ffced4b1e6157b45c2b"
+      "reason": "Keep the provider/command/completion/replay select loop as one coordinator. Persistent batches now acknowledge before publication or provider continuation. Writer failure broadcasts stop execution even while idle; the stopped loop retains transient fault replay without fabricating durable history. Shared publication and execution guards own the failure behavior.",
+      "commit": "b00cb83bec1f3e861e20260010b4efe0d24f370c"
     },
     {
       "target": {

@@ -147,6 +147,15 @@ pub(super) fn spawn_session_thread_with_context(
     history: Vec<Event>,
     retained_context: Option<horizon_agent::persistence::event_log::PersistedSessionContext>,
 ) {
+    if let Some(message) = state.writer().and_then(|writer| writer.failure()) {
+        super::events::report_persistence_failure(
+            &state,
+            &horizon_agent::live::LiveState::with_disabled_persistence(),
+            session_id,
+            message,
+        );
+        return;
+    }
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
     let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
     let (model, selection) =

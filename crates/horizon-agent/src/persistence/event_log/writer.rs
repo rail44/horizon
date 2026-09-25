@@ -10,7 +10,7 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 
 use crate::persistence::projection::duckdb::{ApplyRecordsReport, DuckdbStoreHandle, Store};
 
-use super::{read, ReadReport, Record};
+use super::{health::WriterHealth, read, ReadReport, Record};
 
 /// A single append-only JSONL event log file must have **at most one**
 /// `WriterHandle` alive per process. Each handle owns its own background
@@ -38,6 +38,7 @@ use super::{read, ReadReport, Record};
 #[derive(Clone)]
 pub struct WriterHandle {
     tx: Sender<AgentEventLogWriterCommand>,
+    health: WriterHealth,
 }
 
 /// The outcome of a [`WriterHandle`]'s one-time startup read, delivered
@@ -187,44 +188,61 @@ impl WriterHandle {
         let (init_tx, init_rx) = unbounded();
         let (duckdb_tx, duckdb_rx) = unbounded();
 
-        thread::spawn(move || match start_up(&path, reader, log_skipped_summary) {
-            Ok((file, report, next_sequence)) => {
-                // Seed the rebuild from this read's records *before* handing
-                // `report` to `WriterInit::Ready` below (which moves it) --
-                // readiness (this send) must not wait on the rebuild, so it
-                // fires first; the rebuild itself runs right after, still on
-                // this same background thread, before `run_writer` starts
-                // draining the channel (see this fn's doc comment and
-                // `run_writer`'s doc comment for why appends sent in that
-                // window queue harmlessly rather than racing anything).
-                let duckdb_seed_records = duckdb_path.is_some().then(|| report.records.clone());
-                let _ = init_tx.send(WriterInit::Ready(report));
-                let duckdb_store = match (duckdb_path.as_deref(), duckdb_seed_records) {
-                    (Some(duckdb_path), Some(records)) => {
-                        rebuild_and_open_duckdb_projection(duckdb_path, &records)
-                    }
-                    _ => None,
-                };
-                let _ = duckdb_tx.send(duckdb_store.clone());
-                run_writer(file, &path, rx, next_sequence, duckdb_store);
-            }
-            Err(error) => {
-                let _ = init_tx.send(WriterInit::Failed(error));
-                // No writer loop: dropping `rx` here (it's only captured by
-                // this closure) makes every `append`/`flush` sent from now
-                // on fail fast with a disconnected-channel error instead of
-                // queuing forever with nothing to drain it. `duckdb_tx` is
-                // dropped too without ever sending -- callers of the
-                // returned `duckdb_rx` observe a disconnected channel
-                // (`recv()` returns `Err`), which they treat the same as an
-                // explicit `None` (nothing to share).
+        let health = WriterHealth::default();
+        let worker_health = health.clone();
+        thread::spawn(move || {
+            let _exit = super::health::WriterExit(worker_health.clone());
+            match start_up(&path, reader, log_skipped_summary) {
+                Ok((file, report, next_sequence)) => {
+                    // Seed the rebuild from this read's records *before* handing
+                    // `report` to `WriterInit::Ready` below (which moves it) --
+                    // readiness (this send) must not wait on the rebuild, so it
+                    // fires first; the rebuild itself runs right after, still on
+                    // this same background thread, before `run_writer` starts
+                    // draining the channel (see this fn's doc comment and
+                    // `run_writer`'s doc comment for why appends sent in that
+                    // window queue harmlessly rather than racing anything).
+                    let duckdb_seed_records = duckdb_path.is_some().then(|| report.records.clone());
+                    let _ = init_tx.send(WriterInit::Ready(report));
+                    let duckdb_store = match (duckdb_path.as_deref(), duckdb_seed_records) {
+                        (Some(duckdb_path), Some(records)) => {
+                            rebuild_and_open_duckdb_projection(duckdb_path, &records)
+                        }
+                        _ => None,
+                    };
+                    let _ = duckdb_tx.send(duckdb_store.clone());
+                    run_writer(file, &path, rx, next_sequence, duckdb_store, worker_health);
+                }
+                Err(error) => {
+                    worker_health.fail(format!("{error:#}"));
+                    let _ = init_tx.send(WriterInit::Failed(error));
+                    // No writer loop: dropping `rx` here (it's only captured by
+                    // this closure) makes every `append`/`flush` sent from now
+                    // on fail fast with a disconnected-channel error instead of
+                    // queuing forever with nothing to drain it. `duckdb_tx` is
+                    // dropped too without ever sending -- callers of the
+                    // returned `duckdb_rx` observe a disconnected channel
+                    // (`recv()` returns `Err`), which they treat the same as an
+                    // explicit `None` (nothing to share).
+                }
             }
         });
 
-        (Self { tx }, init_rx, duckdb_rx)
+        (Self { tx, health }, init_rx, duckdb_rx)
+    }
+
+    pub fn failure(&self) -> Option<String> {
+        self.health.failure()
+    }
+
+    pub fn subscribe_failure(&self) -> super::FailureSubscription {
+        self.health.subscribe()
     }
 
     pub fn append(&self, record: Record) -> Result<()> {
+        if let Some(message) = self.failure() {
+            anyhow::bail!("{message}");
+        }
         self.tx
             .send(AgentEventLogWriterCommand::Append(Box::new(record)))
             .context("enqueue agent event log record")
@@ -426,6 +444,9 @@ fn rebuild_and_open_duckdb_projection(
             match store.catch_up_from_event_log_records(tail) {
                 Ok(report) => {
                     log_skipped_record_summary(&report);
+                    if report.skipped != 0 {
+                        return None;
+                    }
                     eprintln!(
                         "horizon-agentd: DuckDB projection caught up incrementally \
                              ({} record(s))",
@@ -448,6 +469,9 @@ fn rebuild_and_open_duckdb_projection(
     match store.replace_from_event_log_records(records.iter().cloned()) {
         Ok(report) => {
             log_skipped_record_summary(&report);
+            if report.skipped != 0 {
+                return None;
+            }
             eprintln!(
                 "horizon-agentd: DuckDB projection rebuilt ({} record(s))",
                 report.applied
@@ -469,9 +493,8 @@ fn rebuild_and_open_duckdb_projection(
 /// dropped
 /// (`import::Store::apply_chunk`). Naming the first failure's message is
 /// what distinguishes "one odd record in a long log" from a store-level
-/// problem that skipped everything; either way the rest of the projection
-/// is built and stays live, rather than the whole run losing its projection
-/// to a single record.
+/// problem that skipped everything. Either outcome keeps the projection
+/// unavailable; a partial rebuild must never answer history queries.
 fn log_skipped_record_summary(report: &ApplyRecordsReport) {
     if report.skipped == 0 {
         return;
@@ -517,6 +540,12 @@ fn duckdb_projection_currency(store: &Store, records: &[Record]) -> Result<Proje
     }
     let log_final_sequence = records.last().map(|record| record.sequence as i64);
     let mark = store.max_last_sequence()?;
+    let prefix_len = mark.map_or(0, |mark| {
+        records.partition_point(|record| record.sequence <= mark as u64)
+    });
+    if !store.matches_log_prefix(&records[..prefix_len])? {
+        return Ok(ProjectionCurrency::RebuildNeeded);
+    }
     Ok(match (mark, log_final_sequence) {
         (None, None) => ProjectionCurrency::Current,
         (Some(mark), Some(tail)) if mark == tail => ProjectionCurrency::Current,
@@ -571,23 +600,19 @@ fn retain_write_failure(result: &Result<()>, failure: &mut Option<String>) {
 /// each record's own JSONL line is durably written, keeping the projection
 /// live. The lock is only ever briefly held (one row's worth of inserts);
 /// write volume is low enough (roughly 1-2 events/s) that contention with
-/// another locker of the *same* `Arc` (a recall tool's query, the rig
-/// provider's history replay -- see `persistence::projection::duckdb::
-/// SharedDuckdbStore`) is a non-issue. A projection failure only ever warns
-/// once (a simple "warned already" latch, not per-event) to avoid log spam
-/// -- the JSONL write it followed already succeeded regardless, and the
-/// next restart's rebuild reconciles any projection rows this run couldn't
-/// keep live.
+/// another locker of the same handle is normally brief. The first projection
+/// failure disables writes and queries on every clone until restart; JSONL
+/// appends continue independently.
 fn run_writer(
     file: impl Write,
     path: &Path,
     rx: Receiver<AgentEventLogWriterCommand>,
     mut next_sequence: u64,
     duckdb_store: Option<DuckdbStoreHandle>,
+    health: WriterHealth,
 ) {
     let mut writer = BufWriter::new(file);
     let mut failure = None;
-    let mut warned_duckdb_append_failure = false;
 
     while let Ok(command) = rx.recv() {
         match command {
@@ -602,24 +627,14 @@ fn run_writer(
                 let result = append_jsonl_record(&mut writer, &record)
                     .with_context(|| format!("append agent event log {}", path.display()));
                 retain_write_failure(&result, &mut failure);
+                if let Some(message) = &failure {
+                    health.fail(message.clone());
+                }
                 if result.is_err() {
                     continue;
                 }
                 if let Some(store) = &duckdb_store {
-                    let store = store
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if let Err(error) = store.append_record(&record) {
-                        if !warned_duckdb_append_failure {
-                            eprintln!(
-                                "horizon-agentd: DuckDB projection append failed \
-                                 ({error}); further append failures in this run won't \
-                                 be logged individually -- the next restart's rebuild \
-                                 reconciles"
-                            );
-                            warned_duckdb_append_failure = true;
-                        }
-                    }
+                    store.project(&record);
                 }
             }
             AgentEventLogWriterCommand::Flush(reply) => {
@@ -630,6 +645,9 @@ fn run_writer(
                         .with_context(|| format!("flush agent event log {}", path.display())),
                 };
                 retain_write_failure(&result, &mut failure);
+                if let Some(message) = &failure {
+                    health.fail(message.clone());
+                }
                 let _ = reply.send(result);
             }
         }
@@ -638,6 +656,9 @@ fn run_writer(
     if failure.is_none() {
         let result = writer.flush().context("flush closing agent event log");
         retain_write_failure(&result, &mut failure);
+        if let Some(message) = &failure {
+            health.fail(message.clone());
+        }
     }
     // Do not let BufWriter::drop silently retry bytes after an uncertain write.
     let _ = writer.into_parts();
@@ -653,7 +674,7 @@ mod tests {
     use crate::contract::SessionId;
     use crate::contract::{Event, SessionState};
 
-    fn record_at(session_id: SessionId, sequence: u64) -> Record {
+    pub(super) fn record_at(session_id: SessionId, sequence: u64) -> Record {
         Record {
             schema: super::super::AGENT_EVENT_LOG_SCHEMA.to_string(),
             version: super::super::AGENT_EVENT_LOG_VERSION,
@@ -679,7 +700,7 @@ mod tests {
     /// number would visibly overwrite the original row, while an
     /// incremental catch-up only touches records past the existing mark and
     /// must leave earlier rows exactly as they were.
-    fn message_record(session_id: SessionId, sequence: u64, text: &str) -> Record {
+    pub(super) fn message_record(session_id: SessionId, sequence: u64, text: &str) -> Record {
         Record {
             event_kind: "message_committed".to_string(),
             event: Event::MessageCommitted(crate::contract::Message {
@@ -890,7 +911,9 @@ mod tests {
         let store = DuckdbStoreHandle::new(Store::open_in_memory().unwrap());
         let projected = store.clone();
         let (tx, rx) = unbounded();
-        let writer = WriterHandle { tx };
+        let health = WriterHealth::default();
+        let worker_health = health.clone();
+        let writer = WriterHandle { tx, health };
         let worker = thread::spawn(move || {
             run_writer(
                 FailOnce {
@@ -901,12 +924,13 @@ mod tests {
                 rx,
                 0,
                 Some(projected),
+                worker_health,
             );
         });
         let session = SessionId::new();
         writer.append(record_at(session, 0)).unwrap();
         let first = writer.flush();
-        writer.append(record_at(session, 1)).unwrap();
+        assert!(writer.append(record_at(session, 1)).is_err());
         let second = writer.flush();
         drop(writer);
         worker.join().unwrap();
@@ -942,6 +966,8 @@ mod tests {
 
         for on_flush in [false, true] {
             let (tx, rx) = unbounded();
+            let health = WriterHealth::default();
+            let worker_health = health.clone();
             let worker = thread::spawn(move || {
                 run_writer(
                     FailOnce {
@@ -952,9 +978,10 @@ mod tests {
                     rx,
                     0,
                     None,
+                    worker_health,
                 );
             });
-            let writer = WriterHandle { tx };
+            let writer = WriterHandle { tx, health };
             let history = vec![Event::StateChanged(SessionState::WaitingForUser)];
             let live = LiveState::with_event_log_and_history(
                 SessionId::new(),
@@ -1100,12 +1127,8 @@ mod tests {
         let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
     }
 
-    /// Work item 2: when the mark is behind the log's tail, only the tail
-    /// is projected -- proven by mutating the payload of an *earlier*
-    /// sequence between the two boots. A full rebuild clears and reinserts
-    /// everything it's given, so it would pick up the mutation; an
-    /// incremental catch-up never re-touches a sequence at or before the
-    /// existing mark, so the original payload must survive.
+    /// A verified prefix permits incremental catch-up without rewriting
+    /// earlier rows. Existing event identities stay stable across both boots.
     #[test]
     fn behind_mark_triggers_incremental_catch_up_that_preserves_earlier_rows() {
         let duckdb_path = temp_duckdb_path("incremental");
@@ -1116,14 +1139,8 @@ mod tests {
             .expect("first boot store");
         drop(first_boot);
 
-        // The log grew by one record; sequence 0's payload is deliberately
-        // different from what boot 1 saw.
         let second_boot_records = vec![
-            message_record(
-                session_id,
-                0,
-                "MUTATED -- must not appear if this was incremental",
-            ),
+            first_boot_records[0].clone(),
             message_record(session_id, 1, "second"),
         ];
         let second_boot = rebuild_and_open_duckdb_projection(&duckdb_path, &second_boot_records)
@@ -1211,3 +1228,7 @@ mod tests {
         let _ = std::fs::remove_file(duckdb_path.with_extension("duckdb.wal"));
     }
 }
+
+#[cfg(test)]
+#[path = "writer_contract_tests.rs"]
+mod contract_tests;

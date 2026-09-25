@@ -35,6 +35,29 @@ const RESULT_CALL_JOIN: &str = "LEFT JOIN agent_tool_calls tc
     AND tc.occurrence_id = r.occurrence_id AND tc.sequence < r.sequence";
 
 impl Store {
+    /// A matching tail alone cannot prove completeness. Compare every event's
+    /// identity against the authoritative prefix, including holes and extras.
+    pub(crate) fn matches_log_prefix(
+        &self,
+        records: &[crate::persistence::event_log::Record],
+    ) -> Result<bool> {
+        let mut statement = self
+            .conn
+            .prepare("SELECT sequence, event_id FROM agent_events ORDER BY sequence")?;
+        let mut rows = statement.query([])?;
+        for record in records {
+            let Some(row) = rows.next()? else {
+                return Ok(false);
+            };
+            if row.get::<_, u64>(0)? != record.sequence
+                || row.get::<_, String>(1)? != record.event_id
+            {
+                return Ok(false);
+            }
+        }
+        Ok(rows.next()?.is_none())
+    }
+
     pub(crate) fn has_current_event_format(&self) -> Result<bool> {
         let version: Option<u32> = self.conn.query_row(
             "SELECT MAX(event_log_version) FROM agent_projection_format",

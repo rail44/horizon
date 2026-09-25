@@ -33,6 +33,9 @@ pub(super) fn fold_tool_completion(
     session_id: SessionId,
     completion: ToolCompletion,
 ) {
+    if !super::events::execution_available(state, live_state, session_id) {
+        return;
+    }
     let frame = live_state.frame();
     let Some(request) = completion.live_request(&frame).cloned() else {
         return;
@@ -125,8 +128,12 @@ pub(super) fn publish_tool_update(
     state: &Arc<AgentdState>,
     commands_tx: &Sender<Command>,
     session_id: SessionId,
-    update: ToolUpdate,
+    update: Result<ToolUpdate, String>,
 ) {
+    let Ok(update) = update else {
+        let _ = commands_tx.send(Command::Shutdown);
+        return;
+    };
     let (events, result) = match update {
         ToolUpdate::Started { events } => (events, None),
         ToolUpdate::Finished { events, result } => (events, Some(result)),

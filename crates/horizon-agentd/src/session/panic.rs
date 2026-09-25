@@ -15,7 +15,7 @@ use horizon_agent::roles::RoleId;
 use horizon_agent::runtime_panic::{catch_runtime_panic, PanicLocation, PanicReport};
 use horizon_agent::wire::AgentWireEvent;
 
-use super::events::send_session_event;
+use super::events::{apply_and_send_session_events, send_session_event};
 use super::resume::session_is_dead;
 use super::state::AgentdState;
 
@@ -111,10 +111,12 @@ pub(super) fn record_session_loop_panic(
     failure: &SessionPanic,
 ) {
     let events = failure.terminal_events(live_state.frame().is_turn_in_flight());
-    let _ = live_state.extend_provider_events(events.iter().cloned().map(ProviderEvent::from));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+    apply_and_send_session_events(
+        state,
+        live_state,
+        session_id,
+        events.into_iter().map(ProviderEvent::from).collect(),
+    );
 }
 
 /// Converts an event-channel disconnect into an explicit terminal outcome.
@@ -136,10 +138,12 @@ pub(super) fn record_unexpected_provider_exit(
     session_id: SessionId,
 ) {
     let events = unexpected_provider_exit_events(&live_state.frame());
-    let _ = live_state.extend_provider_events(events.iter().cloned().map(ProviderEvent::from));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+    apply_and_send_session_events(
+        state,
+        live_state,
+        session_id,
+        events.into_iter().map(ProviderEvent::from).collect(),
+    );
 }
 
 fn unexpected_provider_exit_events(frame: &AgentFrame) -> Vec<Event> {
@@ -179,8 +183,25 @@ pub(super) fn record_uncaught_session_panic(
             Some(provider_id.clone()),
             role_id.cloned(),
         );
-        let _ = appender
-            .append_provider_events(events.iter().cloned().map(ProviderEvent::from).collect());
+        if let Err(error) = appender
+            .commit_provider_events(events.iter().cloned().map(ProviderEvent::from).collect())
+        {
+            // No LiveState exists here. Report only an explicitly transient
+            // storage fault instead of publishing an unsaved terminal outcome.
+            send_session_event(
+                state,
+                session_id,
+                AgentWireEvent::Event(Event::Error(AgentError {
+                    message: format!("Session panicked and its event log failed: {error:#}"),
+                })),
+            );
+            send_session_event(
+                state,
+                session_id,
+                AgentWireEvent::Event(Event::StateChanged(SessionState::Terminated)),
+            );
+            return;
+        }
     }
     for event in events {
         send_session_event(state, session_id, AgentWireEvent::Event(event));
@@ -261,17 +282,19 @@ mod tests {
             writer.clone(),
             Vec::new(),
         );
-        live_state.extend_provider_events(
-            vec![
-                Event::MessageCommitted(horizon_agent::contract::Message {
-                    role: horizon_agent::contract::MessageRole::User,
-                    text: "trigger a turn".to_string(),
-                }),
-                Event::StateChanged(SessionState::Running),
-            ]
-            .into_iter()
-            .map(ProviderEvent::from),
-        );
+        live_state
+            .extend_provider_events(
+                vec![
+                    Event::MessageCommitted(horizon_agent::contract::Message {
+                        role: horizon_agent::contract::MessageRole::User,
+                        text: "trigger a turn".to_string(),
+                    }),
+                    Event::StateChanged(SessionState::Running),
+                ]
+                .into_iter()
+                .map(ProviderEvent::from),
+            )
+            .unwrap();
         let failure = SessionPanic {
             phase: SessionLoopPhase::ProviderEvent("provider_request_finished"),
             payload: "test panic".to_string(),

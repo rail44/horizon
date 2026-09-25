@@ -94,7 +94,7 @@ pub(super) fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
         return error_output(
-            "recall is unavailable: no persisted history database is configured for this session",
+            "recall is unavailable: history database is not configured or could not be rebuilt completely",
         );
     };
 
@@ -124,12 +124,7 @@ pub(super) fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         }
     };
 
-    let report = {
-        let store = store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        store.search_history(scope, query, limit, turn_outcome)
-    };
+    let report = store.query(|store| store.search_history(scope, query, limit, turn_outcome));
     let report = match report {
         Ok(report) => report,
         Err(error) => return error_output(format!("recall.search failed: {error}")),
@@ -173,7 +168,7 @@ pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
         return error_output(
-            "recall is unavailable: no persisted history database is configured for this session",
+            "recall is unavailable: history database is not configured or could not be rebuilt completely",
         );
     };
 
@@ -201,12 +196,7 @@ pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
         DEFAULT_READ_LIMIT,
     );
 
-    let entries = {
-        let store = store
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        store.read_history_window(session_id, from_sequence, limit)
-    };
+    let entries = store.query(|store| store.read_history_window(session_id, from_sequence, limit));
     let entries = match entries {
         Ok(entries) => entries,
         Err(error) => return error_output(format!("recall.read failed: {error}")),

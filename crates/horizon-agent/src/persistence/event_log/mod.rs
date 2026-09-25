@@ -11,13 +11,15 @@ use crate::contract::{Event, ProviderId, SessionId};
 use crate::roles::RoleId;
 
 mod appender;
+mod health;
 mod turn;
 mod writer;
 
 #[cfg(test)]
 mod migration_tests;
 
-pub use appender::Appender;
+pub use appender::{Appender, PendingEvents};
+pub use health::FailureSubscription;
 use turn::TurnTracker;
 pub use writer::{WriterHandle, WriterInit};
 

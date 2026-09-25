@@ -112,7 +112,9 @@ impl AgentSession {
                     if let horizon_agent::contract::ProviderEvent::TaskProgress(progress) = event {
                         session.apply_task_progress(progress);
                     } else {
-                        session.frame = live.extend_provider_events(std::iter::once(event));
+                        session.frame = live
+                            .extend_provider_events(std::iter::once(event))
+                            .expect("view persistence is disabled");
                         session.model = live.session_model();
                         session.selection = live.session_selection();
                     }

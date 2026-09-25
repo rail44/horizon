@@ -51,6 +51,32 @@ impl DuckdbStoreHandle {
         Self(Arc::new(Mutex::new(store)))
     }
 
+    /// Read only a complete projection. The health check and query share the
+    /// writer's lock, so an already-issued handle cannot expose a partial DB.
+    pub(crate) fn query<T>(&self, query: impl FnOnce(&Store) -> Result<T>) -> Result<T> {
+        let store = self
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(reason) = &store.failure {
+            anyhow::bail!("history search is unavailable until rebuild: {reason}");
+        }
+        query(&store)
+    }
+
+    pub(crate) fn project(&self, record: &crate::persistence::event_log::Record) {
+        let mut store = self
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if store.failure.is_some() {
+            return;
+        }
+        if let Err(error) = store.append_record(record) {
+            let reason = format!("{error:#}");
+            eprintln!("horizon-agent: history search disabled until rebuild: {reason}");
+            store.failure = Some(reason);
+        }
+    }
+
     /// Forwards to `Mutex::lock` verbatim (same `LockResult` return shape)
     /// so every existing `store.lock().unwrap_or_else(|poisoned| ...)`
     /// call site keeps working unchanged.
@@ -61,6 +87,7 @@ impl DuckdbStoreHandle {
 
 pub(crate) struct Store {
     conn: Connection,
+    failure: Option<String>,
 }
 
 impl Store {
@@ -76,7 +103,10 @@ impl Store {
 
     fn from_connection(conn: Connection) -> Result<Self> {
         conn.execute_batch(INITIALIZE_SCHEMA_SQL)?;
-        Ok(Self { conn })
+        Ok(Self {
+            conn,
+            failure: None,
+        })
     }
 }
 

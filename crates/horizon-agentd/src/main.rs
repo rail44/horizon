@@ -187,7 +187,7 @@ fn spawn_resume_task(
             Ok(persistence) => persistence,
             Err(error) => {
                 // No sessions have passed the readiness gate yet. Refuse
-                // this format rather than presenting an empty history.
+                // a missing or incompatible log rather than run without history.
                 eprintln!("horizon-agentd: startup refused: {error}");
                 std::process::exit(1);
             }
@@ -272,32 +272,10 @@ fn open_persistence(agent_config: &AgentConfig) -> anyhow::Result<PersistenceSta
                 duckdb_ready_rx: duckdb_rx,
             })
         }
-        Ok(WriterInit::Failed(error)) => {
-            if error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>() {
-                return Err(error);
-            }
-            eprintln!(
-                "horizon-agentd: event log unavailable ({error}); persistence disabled for this run"
-            );
-            Ok(PersistenceStartup {
-                writer: None,
-                records: Vec::new(),
-                skipped_lines_summary: None,
-                duckdb_ready_rx: duckdb_rx,
-            })
-        }
-        Err(_) => {
-            eprintln!(
-                "horizon-agentd: event log writer thread exited before reporting startup status; \
-                 persistence disabled for this run"
-            );
-            Ok(PersistenceStartup {
-                writer: None,
-                records: Vec::new(),
-                skipped_lines_summary: None,
-                duckdb_ready_rx: duckdb_rx,
-            })
-        }
+        Ok(WriterInit::Failed(error)) => Err(error),
+        Err(error) => Err(anyhow::anyhow!(
+            "Event log writer exited before startup: {error}"
+        )),
     }
 }
 
@@ -374,6 +352,14 @@ mod tests {
         };
         assert!(error.is::<horizon_agent::persistence::event_log::UnsupportedEventLogFormat>());
         assert_eq!(std::fs::read_to_string(path).unwrap(), original);
+    }
+
+    #[test]
+    fn failed_log_open_refuses_startup_instead_of_running_without_persistence() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = session::test_support::test_config();
+        config.persistence.event_log_path = dir.path().to_path_buf();
+        assert!(open_persistence(&config).is_err());
     }
 
     fn state_record(session_id: horizon_agent::contract::SessionId, sequence: u64) -> Record {

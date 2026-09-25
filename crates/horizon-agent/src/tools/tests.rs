@@ -1883,7 +1883,8 @@ fn resolve_approval_executes_fs_write_on_approve() {
     live.extend_provider_events([Event::ToolCallRequested(
         frame.tool_call_request(&call_id).unwrap().clone(),
     )
-    .into()]);
+    .into()])
+        .unwrap();
 
     let outcome = resolve_approval(
         &frame,
@@ -2008,7 +2009,8 @@ fn resolve_approval_denies_fs_edit_without_running_it() {
     live.extend_provider_events([Event::ToolCallRequested(
         frame.tool_call_request(&call_id).unwrap().clone(),
     )
-    .into()]);
+    .into()])
+        .unwrap();
 
     let outcome = resolve_approval(
         &frame,
@@ -2051,7 +2053,8 @@ fn resolve_approval_approve_that_fails_on_its_own_does_not_set_the_denied_marker
     live.extend_provider_events([Event::ToolCallRequested(
         frame.tool_call_request(&call_id).unwrap().clone(),
     )
-    .into()]);
+    .into()])
+        .unwrap();
 
     let outcome = resolve_approval(
         &frame,

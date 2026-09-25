@@ -31,6 +31,56 @@ pub(super) fn send_session_event(
     }
 }
 
+/// The sole publication boundary for newly produced conversation batches.
+/// Disabled in-memory stores support coordinator tests; production always logs.
+pub(super) fn apply_and_send_session_events(
+    state: &AgentdState,
+    live: &LiveState,
+    session_id: SessionId,
+    events: Vec<horizon_agent::contract::ProviderEvent>,
+) -> bool {
+    match live.extend_provider_events(events.clone()) {
+        Ok(_) => {
+            for event in events {
+                send_session_event(state, session_id, AgentWireEvent::from(&event));
+            }
+            true
+        }
+        Err(message) => {
+            report_persistence_failure(state, live, session_id, message);
+            false
+        }
+    }
+}
+
+pub(super) fn execution_available(
+    state: &AgentdState,
+    live: &LiveState,
+    session_id: SessionId,
+) -> bool {
+    if let Some(message) = live.persistence_failure() {
+        report_persistence_failure(state, live, session_id, message);
+        return false;
+    }
+    true
+}
+
+pub(super) fn report_persistence_failure(
+    state: &AgentdState,
+    live: &LiveState,
+    session_id: SessionId,
+    message: String,
+) {
+    if live.mark_persistence_failed(message) {
+        for request in live.frame().unfinished_tool_calls() {
+            horizon_agent::tools::cancel_tool_execution(session_id, &request.call_id);
+        }
+        for event in live.runtime_failure_events() {
+            send_session_event(state, session_id, AgentWireEvent::Event(event));
+        }
+    }
+}
+
 /// Publishes a durable event only after the writer has flushed its queued record.
 pub(super) fn persist_and_send_session_event(
     state: &AgentdState,
@@ -38,10 +88,8 @@ pub(super) fn persist_and_send_session_event(
     session_id: SessionId,
     event: Event,
 ) -> bool {
-    if live_state
-        .persist_provider_events([event.clone().into()])
-        .is_err()
-    {
+    if let Err(message) = live_state.persist_provider_events([event.clone().into()]) {
+        report_persistence_failure(state, live_state, session_id, message);
         return false;
     }
     send_session_event(state, session_id, AgentWireEvent::Event(event));

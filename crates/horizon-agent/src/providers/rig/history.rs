@@ -89,9 +89,7 @@ pub(super) fn load_rig_session_history(
     };
 
     store
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .events_for_session(session_id)
+        .query(|store| store.events_for_session(session_id))
         .map(|records| {
             let events = records
                 .into_iter()

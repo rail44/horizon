@@ -91,6 +91,10 @@ The follow-up also corrects cancellation accounting, declined-retry closure,
 failed memory checkpoints and stale projection reuse; see
 [changes and validation](research/refactoring-event-lifetimes-2026-09-25.md)
 and the [current history conversion procedure](agent-history-format.md).
+Agent publication and tool continuation now wait for JSONL write acknowledgement.
+A log failure stops execution; a search-index failure disables recall while log
+writes continue. Restart verifies the complete event-identity prefix before
+incremental catch-up; see [the persistence contract](agent-persistence-contract.md).
 
 
 Ordering is being shaped with the owner (2026-07-18): a **refactoring

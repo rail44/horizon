@@ -169,7 +169,8 @@ impl Requester {
             )
             .expect("every task/task_output call resolves synchronously");
         self.live_state
-            .extend_provider_events(processing.horizon_events);
+            .extend_provider_events(processing.horizon_events)
+            .unwrap();
         output
     }
 
@@ -192,7 +193,8 @@ impl Requester {
             ProviderEvent::from(event),
         );
         self.live_state
-            .extend_provider_events(processing.horizon_events);
+            .extend_provider_events(processing.horizon_events)
+            .unwrap();
     }
 
     /// Blocks until this session has a notification queued, or `WAIT`

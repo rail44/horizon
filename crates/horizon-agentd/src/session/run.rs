@@ -21,7 +21,10 @@ use horizon_agent::wire::AgentWireEvent;
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
-use super::events::{persist_and_send_session_event, send_session_event};
+use super::events::{
+    apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
+    send_session_event,
+};
 use super::host_tools::AgentdHostTools;
 use super::panic::{
     catch_session_panic, record_session_loop_panic, record_unexpected_provider_exit,
@@ -173,7 +176,7 @@ pub(super) fn run_session(
             if let Err(error) = live_state
                 .activate_context(persisted_context, Event::EnvironmentActivated(identity))
             {
-                eprintln!("horizon-agentd: could not retain session worktree identity: {error}");
+                report_persistence_failure(state, &live_state, session_id, error);
             }
         }
     }
@@ -200,11 +203,29 @@ pub(super) fn run_session(
         role_id: role_id.clone(),
     }));
 
-    let provider_events = handle.events();
+    let mut provider_events = handle.events();
+    let failure_subscription = state.writer().map(|writer| writer.subscribe_failure());
+    let mut failure_rx = failure_subscription
+        .as_ref()
+        .map(|subscription| subscription.receiver().clone())
+        .unwrap_or_else(crossbeam_channel::never);
+    let mut stopped = false;
 
     let loop_outcome = catch_session_panic(phase, || loop {
+        if !stopped {
+            if let Some(message) = live_state.persistence_failure() {
+                report_persistence_failure(state, &live_state, session_id, message);
+                let _ = commands_tx.send(Command::Shutdown);
+                provider_events = crossbeam_channel::never();
+                failure_rx = crossbeam_channel::never();
+                stopped = true;
+            }
+        }
         phase.set(SessionLoopPhase::WaitingForInput);
         crossbeam_channel::select! {
+            recv(failure_rx) -> message => {
+                if let Ok(message) = message { report_persistence_failure(state, &live_state, session_id, message); }
+            },
             recv(provider_events) -> message => match message {
                 Ok(provider_event) => {
                     phase.set(SessionLoopPhase::ProviderEvent(provider_event.kind()));
@@ -230,6 +251,7 @@ pub(super) fn run_session(
             },
             recv(async_results_rx) -> message => {
                 if let Ok(completion) = message {
+                    if stopped { continue; }
                     phase.set(SessionLoopPhase::ToolCompletion);
                     // Inputs already waiting at this tool boundary must reach
                     // the provider before its result starts the next round.
@@ -247,6 +269,10 @@ pub(super) fn run_session(
             },
             recv(inbound_rx) -> message => match message {
                 Ok(command) => {
+                    if stopped {
+                        if matches!(command, Command::Shutdown) { break; }
+                        continue;
+                    }
                     phase.set(SessionLoopPhase::InboundCommand);
                     dispatch_inbound_command(
                         state,
@@ -261,7 +287,7 @@ pub(super) fn run_session(
             recv(replay_rx) -> message => {
                 if let Ok(reply_tx) = message {
                     phase.set(SessionLoopPhase::Replay);
-                    let _ = reply_tx.send(live_state.events());
+                    let _ = reply_tx.send(live_state.replay_events());
                 }
             },
         }
@@ -322,7 +348,22 @@ fn handle_provider_event(
             return;
         }
     }
+    if !super::events::execution_available(state, live_state, session_id) {
+        return;
+    }
+    let saved_request = matches!(provider_event.as_event(), Some(Event::ToolCallRequested(_)));
+    if saved_request
+        && !apply_and_send_session_events(
+            state,
+            live_state,
+            session_id,
+            vec![provider_event.clone()],
+        )
+    {
+        return;
+    }
     let mut processing = process_agent_provider_event(host, tool_state, session_id, provider_event);
+
     gate_processing_approval(
         tool_state,
         session_id,
@@ -330,33 +371,17 @@ fn handle_provider_event(
         &mut processing.provider_commands,
     );
 
+    if saved_request {
+        processing
+            .horizon_events
+            .retain(|event| !matches!(event.as_event(), Some(Event::ToolCallRequested(_))));
+    }
     for event in &processing.horizon_events {
         super::model_selection::record_applied(state, session_id, event);
     }
 
-    let to_forward: Vec<AgentWireEvent> = processing
-        .horizon_events
-        .iter()
-        .map(AgentWireEvent::from)
-        .collect();
-    let durable_result = processing.horizon_events.iter().any(|event| {
-        matches!(
-            event.as_event(),
-            Some(Event::InputOutcome(_) | Event::SessionInputSent { .. })
-        )
-    });
-    if durable_result {
-        if live_state
-            .persist_provider_events(processing.horizon_events)
-            .is_err()
-        {
-            return;
-        }
-    } else {
-        let _ = live_state.extend_provider_events(processing.horizon_events);
-    }
-    for event in to_forward {
-        send_session_event(state, session_id, event);
+    if !apply_and_send_session_events(state, live_state, session_id, processing.horizon_events) {
+        return;
     }
     // A synchronous tool can enqueue commands to its own session (notably
     // environment activation). Forward those before its result releases the
@@ -367,6 +392,9 @@ fn handle_provider_event(
     }
     // A synchronous tool result must not release the next provider decision
     // before its source-send outbox records are acknowledged above.
+    if !super::events::execution_available(state, live_state, session_id) {
+        return;
+    }
     for command in processing.provider_commands {
         let _ = commands_tx.send(command);
     }
@@ -375,6 +403,61 @@ fn handle_provider_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_request_persistence_prevents_tool_execution_and_provider_release() {
+        struct MustNotRun;
+        impl HostTools for MustNotRun {
+            fn execute_auto(&self, _: &str, _: &serde_json::Value) -> Option<serde_json::Value> {
+                panic!("tool ran after its request failed to persist");
+            }
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let state = super::super::test_support::test_state();
+        let session_id = SessionId::new();
+        let (writer, ready) = horizon_agent::persistence::event_log::WriterHandle::open(dir.path());
+        assert!(matches!(
+            ready.recv().unwrap(),
+            horizon_agent::persistence::event_log::WriterInit::Failed(_)
+        ));
+        let live =
+            LiveState::with_event_log_and_history(session_id, None, None, writer, Vec::new());
+        let mut published =
+            super::super::Connection::new(state.clone()).subscribe_agent(session_id);
+        let (_input, inbound) = unbounded();
+        let (commands, output) = unbounded();
+        handle_provider_event(
+            &MustNotRun,
+            &state,
+            &ToolSessionState::for_root(
+                dir.path().to_path_buf(),
+                Default::default(),
+                Default::default(),
+            ),
+            &live,
+            &commands,
+            &inbound,
+            session_id,
+            Event::ToolCallRequested(contract::ToolCallRequest {
+                call_id: contract::ToolCallId("blocked".into()),
+                occurrence_id: contract::OccurrenceId::new(),
+                tool_id: "workspace.snapshot".into(),
+                input: serde_json::json!({}).into(),
+            })
+            .into(),
+        );
+        assert!(live.events().is_empty());
+        assert!(output.try_recv().is_err());
+        let events = super::super::test_support::drain_events(&mut published);
+        assert!(matches!(
+            events.as_slice(),
+            [
+                Event::Error(_),
+                Event::StateChanged(contract::SessionState::Terminated)
+            ]
+        ));
+        assert_eq!(live.replay_events(), events);
+    }
 
     #[test]
     fn a_tool_queued_activation_reaches_the_provider_before_its_result() {

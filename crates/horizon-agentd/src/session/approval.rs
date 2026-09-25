@@ -17,7 +17,7 @@ use horizon_agent::tools::{
 };
 use horizon_agent::wire::AgentWireEvent;
 
-use super::events::send_session_event;
+use super::events::{apply_and_send_session_events, send_session_event};
 use super::state::AgentdState;
 
 /// Intercepts the policy-generated human prompt after its kind/reason are
@@ -107,10 +107,12 @@ pub(super) fn emit_human_approval(
         Event::ApprovalRequested(approval),
         Event::StateChanged(SessionState::WaitingForApproval),
     ];
-    let _ = live_state.extend_provider_events(events.clone().into_iter().map(Into::into));
-    for event in events {
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
-    }
+    apply_and_send_session_events(
+        state,
+        live_state,
+        session_id,
+        events.into_iter().map(Into::into).collect(),
+    );
 }
 
 pub(super) fn begin_reissued_approval(
@@ -135,8 +137,9 @@ pub(super) fn begin_reissued_approval(
                 .result(serde_json::json!({}))
                 .superseded_by_retry(&request.occurrence_id),
         );
-        live_state.extend_provider_events([event.clone().into()]);
-        send_session_event(state, session_id, AgentWireEvent::Event(event));
+        if !apply_and_send_session_events(state, live_state, session_id, vec![event.into()]) {
+            return;
+        }
     }
     let approval = ApprovalRequest {
         call_id: request.call_id.clone(),
@@ -144,10 +147,11 @@ pub(super) fn begin_reissued_approval(
         kind,
         reason,
     };
-    let _ = commands_tx.send(Command::ToolCallReissued(request.identity()));
     let request_event = Event::ToolCallRequested(request.clone());
-    let _ = live_state.extend_provider_events(std::iter::once(request_event.clone().into()));
-    send_session_event(state, session_id, AgentWireEvent::Event(request_event));
+    if !apply_and_send_session_events(state, live_state, session_id, vec![request_event.into()]) {
+        return;
+    }
+    let _ = commands_tx.send(Command::ToolCallReissued(request.identity()));
     let candidate = ApprovalCandidate { request, approval };
     if let ApprovalGate::Human(candidate) = start_approval_gate(session_id, candidate) {
         emit_human_approval(state, live_state, session_id, candidate.approval);
@@ -171,6 +175,10 @@ pub(super) fn dispatch_inbound_command(
     session_id: SessionId,
     command: Command,
 ) {
+    if !super::events::execution_available(state, live_state, session_id) {
+        let _ = commands_tx.send(Command::Shutdown);
+        return;
+    }
     match command {
         command @ (Command::Cancel { .. } | Command::Shutdown) => {
             // Close the accepted executions before forwarding the stop. A
@@ -181,8 +189,10 @@ pub(super) fn dispatch_inbound_command(
                 let event = Event::ToolCallFinished(
                     horizon_agent::tools::cancelled_tool_call_result(request.identity()),
                 );
-                let _ = live_state.extend_provider_events(std::iter::once(event.clone().into()));
-                send_session_event(state, session_id, AgentWireEvent::Event(event));
+                if !apply_and_send_session_events(state, live_state, session_id, vec![event.into()])
+                {
+                    return;
+                }
             }
             let _ = commands_tx.send(command);
         }
@@ -243,8 +253,9 @@ pub(super) fn dispatch_inbound_command(
             // UI races.
             let resumed_from = live_state.frame().last_turn_end_reason();
             let event = Event::ContinueTurnRequested(ContinueTurnRequested { resumed_from });
-            let _ = live_state.extend_provider_events(std::iter::once(event.clone().into()));
-            send_session_event(state, session_id, AgentWireEvent::Event(event));
+            if !apply_and_send_session_events(state, live_state, session_id, vec![event.into()]) {
+                return;
+            }
             let _ = commands_tx.send(Command::ContinueTurn);
         }
         other => {
@@ -285,8 +296,9 @@ fn resolve_and_forward(
         occurrence_id,
         decision: approval_decision_payload(&decision),
     });
-    let _ = live_state.extend_provider_events(std::iter::once(resolved_event.clone().into()));
-    send_session_event(state, session_id, AgentWireEvent::Event(resolved_event));
+    if !apply_and_send_session_events(state, live_state, session_id, vec![resolved_event.into()]) {
+        return;
+    }
 
     let outcome = resolve_approval(&frame, session_id, call_id, decision);
     forward_approval_outcome(state, commands_tx, session_id, logged_call_id, outcome);
@@ -316,7 +328,10 @@ pub(super) fn forward_approval_outcome(
 ) {
     match outcome {
         ApprovalOutcome::Applied(update) => {
-            super::completion::publish_tool_update(state, commands_tx, session_id, update);
+            super::completion::publish_tool_update(state, commands_tx, session_id, Ok(update));
+        }
+        ApprovalOutcome::PersistenceFailed(_) => {
+            let _ = commands_tx.send(Command::Shutdown);
         }
         ApprovalOutcome::Forward(command) => {
             let _ = commands_tx.send(command);
@@ -370,7 +385,8 @@ mod tests {
                 kind: ApprovalKind::Standard,
             })
             .into(),
-        ]);
+        ])
+        .unwrap();
         dispatch_inbound_command(
             &state,
             &live,
@@ -561,9 +577,11 @@ mod tests {
         // halt reasons, so the emit site must actually walk the frame to
         // recover it (the `.rev()` pattern `last_turn_end_reason` shares with
         // `tool_call_request`/`approval_kind`) rather than hard-coding anything.
-        live_state.extend_provider_events([ProviderEvent::from(Event::TurnEnded(
-            TurnEndReason::HaltedByIterationCap,
-        ))]);
+        live_state
+            .extend_provider_events([ProviderEvent::from(Event::TurnEnded(
+                TurnEndReason::HaltedByIterationCap,
+            ))])
+            .unwrap();
 
         dispatch_inbound_command(
             &state,
@@ -638,10 +656,12 @@ mod tests {
         let live_state = LiveState::with_disabled_persistence();
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
 
-        live_state.extend_provider_events([
-            ProviderEvent::from(Event::TurnEnded(TurnEndReason::HaltedByDoomLoop)),
-            ProviderEvent::from(Event::TurnEnded(TurnEndReason::Completed)),
-        ]);
+        live_state
+            .extend_provider_events([
+                ProviderEvent::from(Event::TurnEnded(TurnEndReason::HaltedByDoomLoop)),
+                ProviderEvent::from(Event::TurnEnded(TurnEndReason::Completed)),
+            ])
+            .unwrap();
 
         dispatch_inbound_command(
             &state,
@@ -679,20 +699,22 @@ mod tests {
 
         let call_id = ToolCallId("approval-fwd".to_string());
         let occurrence_id = OccurrenceId("occ-fwd".to_string());
-        live_state.extend_provider_events([
-            ProviderEvent::from(Event::ToolCallRequested(ToolCallRequest {
-                call_id: call_id.clone(),
-                tool_id: "mock.approval_required".to_string(),
-                input: serde_json::json!({}).into(),
-                occurrence_id: occurrence_id.clone(),
-            })),
-            ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
-                call_id: call_id.clone(),
-                reason: "test".to_string(),
-                kind: ApprovalKind::Standard,
-                occurrence_id: occurrence_id.clone(),
-            })),
-        ]);
+        live_state
+            .extend_provider_events([
+                ProviderEvent::from(Event::ToolCallRequested(ToolCallRequest {
+                    call_id: call_id.clone(),
+                    tool_id: "mock.approval_required".to_string(),
+                    input: serde_json::json!({}).into(),
+                    occurrence_id: occurrence_id.clone(),
+                })),
+                ProviderEvent::from(Event::ApprovalRequested(ApprovalRequest {
+                    call_id: call_id.clone(),
+                    reason: "test".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: occurrence_id.clone(),
+                })),
+            ])
+            .unwrap();
 
         dispatch_inbound_command(
             &state,
@@ -744,23 +766,27 @@ mod tests {
         let (commands_tx, _) = crossbeam_channel::unbounded::<Command>();
 
         let call_id = ToolCallId("approval-deny".to_string());
-        live_state.extend_provider_events([Event::ToolCallRequested(
-            horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-                tool_id: "mock.approval_required".into(),
-                input: serde_json::json!({}).into(),
-            },
-        )
-        .into()]);
-        live_state.extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
-            ApprovalRequest {
-                call_id: call_id.clone(),
-                reason: "test".to_string(),
-                kind: ApprovalKind::Standard,
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-            },
-        ))]);
+        live_state
+            .extend_provider_events([Event::ToolCallRequested(
+                horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                    tool_id: "mock.approval_required".into(),
+                    input: serde_json::json!({}).into(),
+                },
+            )
+            .into()])
+            .unwrap();
+        live_state
+            .extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
+                ApprovalRequest {
+                    call_id: call_id.clone(),
+                    reason: "test".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                },
+            ))])
+            .unwrap();
 
         dispatch_inbound_command(
             &state,
@@ -802,23 +828,27 @@ mod tests {
             crate::session::Connection::new(state.clone()).subscribe_agent(session_id);
 
         let call_id = ToolCallId("approval-fanout".to_string());
-        live_state.extend_provider_events([Event::ToolCallRequested(
-            horizon_agent::contract::ToolCallRequest {
-                call_id: call_id.clone(),
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-                tool_id: "mock.approval_required".into(),
-                input: serde_json::json!({}).into(),
-            },
-        )
-        .into()]);
-        live_state.extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
-            ApprovalRequest {
-                call_id: call_id.clone(),
-                reason: "test".to_string(),
-                kind: ApprovalKind::Standard,
-                occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
-            },
-        ))]);
+        live_state
+            .extend_provider_events([Event::ToolCallRequested(
+                horizon_agent::contract::ToolCallRequest {
+                    call_id: call_id.clone(),
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                    tool_id: "mock.approval_required".into(),
+                    input: serde_json::json!({}).into(),
+                },
+            )
+            .into()])
+            .unwrap();
+        live_state
+            .extend_provider_events([ProviderEvent::from(Event::ApprovalRequested(
+                ApprovalRequest {
+                    call_id: call_id.clone(),
+                    reason: "test".to_string(),
+                    kind: ApprovalKind::Standard,
+                    occurrence_id: horizon_agent::contract::OccurrenceId(call_id.0.clone()),
+                },
+            ))])
+            .unwrap();
 
         dispatch_inbound_command(
             &state,
