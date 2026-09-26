@@ -14,17 +14,14 @@
 //! Finished children are kept, not dropped: `task_output` must be able to
 //! re-read a full report for as long as the requester session lives
 //! (`docs/agent-async-task-design.md` decision 3). They are released
-//! wholesale by [`take_all_for_requester`] when that session ends.
+//! wholesale by [`remove_requester`] when that session ends.
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
-use crossbeam_channel::Sender;
 use serde_json::Value;
 
 use crate::contract::SessionId;
-
-use super::ExplorationHost;
 
 /// A child that has finished and whose result has not yet been delivered to
 /// its requester.
@@ -56,13 +53,6 @@ pub(super) enum Lookup {
 struct Child {
     requester: SessionId,
     description: String,
-    /// Taken exactly once, by whichever of the waiter thread's own fold or
-    /// [`take_all_for_requester`] gets there first -- that take-once
-    /// semantics is the whole "terminate exactly once" gate.
-    host: Option<Arc<dyn ExplorationHost>>,
-    /// Stops the waiter thread's fold. Only used on requester teardown;
-    /// children deliberately survive `cancel-turn` (decision 4).
-    cancel: Sender<()>,
     /// `None` while the child is still running.
     outcome: Option<Value>,
 }
@@ -84,20 +74,12 @@ fn lock() -> std::sync::MutexGuard<'static, Registry> {
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-pub(in crate::tools) fn register(
-    requester: SessionId,
-    child: SessionId,
-    description: String,
-    host: Arc<dyn ExplorationHost>,
-    cancel: Sender<()>,
-) {
+pub(in crate::tools) fn register(requester: SessionId, child: SessionId, description: String) {
     lock().children.insert(
         child,
         Child {
             requester,
             description,
-            host: Some(host),
-            cancel,
             outcome: None,
         },
     );
@@ -108,25 +90,14 @@ pub(in crate::tools) fn register(
 /// half of the seam without standing up a scripted `ExplorationHost`.
 #[cfg(test)]
 pub(super) fn register_hostless(requester: SessionId, child: SessionId, description: &str) {
-    let (cancel, _rx) = crossbeam_channel::bounded(1);
     lock().children.insert(
         child,
         Child {
             requester,
             description: description.to_string(),
-            host: None,
-            cancel,
             outcome: None,
         },
     );
-}
-
-/// Releases `child`'s host handle for termination, at most once.
-pub(in crate::tools) fn take_host(child: SessionId) -> Option<Arc<dyn ExplorationHost>> {
-    lock()
-        .children
-        .get_mut(&child)
-        .and_then(|child| child.host.take())
 }
 
 /// Records `child`'s final result and queues its notification for delivery.
@@ -206,38 +177,20 @@ pub(super) fn lookup(requester: SessionId, child: SessionId) -> Lookup {
     }
 }
 
-/// One child released by [`take_all_for_requester`], with everything its
-/// caller needs to shut it down outside this module's lock.
-pub(super) struct ReleasedChild {
-    pub(super) session_id: SessionId,
-    /// `None` when something else already claimed the termination (the
-    /// child's own waiter finished first).
-    pub(super) host: Option<Arc<dyn ExplorationHost>>,
-    /// Stops the waiter thread's fold.
-    pub(super) cancel: Sender<()>,
-}
-
-/// Removes every trace of `requester` -- children (running or finished) and
-/// its undelivered queue -- and hands back what the caller must act on.
-/// Termination is deliberately left to the caller so no `ExplorationHost`
-/// call ever runs while this module's lock is held.
-pub(super) fn take_all_for_requester(requester: SessionId) -> Vec<ReleasedChild> {
+/// Forget reports and notifications after the session's work has been stopped.
+pub(super) fn remove_requester(requester: SessionId) {
     let mut registry = lock();
     registry.pending.remove(&requester);
-    let ids = registry
+    registry
         .children
-        .iter()
-        .filter(|(_, child)| child.requester == requester)
-        .map(|(id, _)| *id)
-        .collect::<Vec<_>>();
-    ids.into_iter()
-        .filter_map(|id| {
-            let mut child = registry.children.remove(&id)?;
-            Some(ReleasedChild {
-                session_id: id,
-                host: child.host.take(),
-                cancel: child.cancel.clone(),
-            })
-        })
-        .collect()
+        .retain(|_, child| child.requester != requester);
+}
+
+pub(super) fn remove_child(child: SessionId) {
+    let mut registry = lock();
+    if let Some(entry) = registry.children.remove(&child) {
+        if let Some(pending) = registry.pending.get_mut(&entry.requester) {
+            pending.retain(|completion| completion.session_id != child);
+        }
+    }
 }

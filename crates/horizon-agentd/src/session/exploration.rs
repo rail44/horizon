@@ -104,6 +104,21 @@ impl horizon_agent::tools::ExplorationHost for AgentdExplorationHost {
         self.state.send_command(session_id, Command::Shutdown);
     }
 
+    fn wait_stopped(&self, session_id: SessionId, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if !lock_unpoisoned(&self.state.sessions).contains_key(&session_id)
+                && horizon_agent::tools::drain_session_work(session_id, std::time::Duration::ZERO)
+            {
+                return true;
+            }
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
     fn forward_progress(&self, _child: SessionId, progress: TaskProgress) {
         // Ephemeral by design: silently dropped when no client is attached
         // right now, and never persisted (see `AgentWireEvent::TaskProgress`).

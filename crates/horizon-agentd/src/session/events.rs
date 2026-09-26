@@ -73,7 +73,7 @@ pub(super) fn report_persistence_failure(
 ) {
     if live.mark_persistence_failed(message) {
         for request in live.frame().unfinished_tool_calls() {
-            horizon_agent::tools::cancel_tool_execution(session_id, &request.call_id);
+            horizon_agent::tools::cancel_tool_execution(session_id, &request.identity());
         }
         for event in live.runtime_failure_events() {
             send_session_event(state, session_id, AgentWireEvent::Event(event));

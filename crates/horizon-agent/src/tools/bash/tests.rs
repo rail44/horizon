@@ -457,10 +457,14 @@ fn kill_registry_kills_a_running_child_and_removes_its_entry() {
     );
     assert!(!super::registry::is_running(session_id, &call_id));
 
-    let completion = rx
-        .recv_timeout(Duration::from_secs(5))
-        .expect("a killed bash call should still report a result promptly");
-    assert_eq!(expect_finished(completion).output["is_error"], true);
+    assert!(crate::tools::drain_session_work(
+        session_id,
+        Duration::from_secs(5)
+    ));
+    assert!(
+        rx.try_recv().is_err(),
+        "cancelled calls must not publish a late result"
+    );
 }
 
 // --- bash containment: per-session FIFO + niceness ------------------------
@@ -833,6 +837,7 @@ fn run_job_body_sends_a_completion_when_work_succeeds() {
                 json!({ "ok": true }),
             ))
         },
+        || true,
     );
 
     let completion = rx
@@ -863,6 +868,7 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
         },
         &tx,
         || panic!("injected panic, not exec::run's own"),
+        || true,
     );
 
     let completion = rx

@@ -5,6 +5,7 @@ mod catalog;
 mod completion;
 mod transition;
 pub use transition::ToolUpdate;
+pub(crate) mod background;
 mod config;
 mod execution;
 pub(crate) mod explore;
@@ -17,8 +18,7 @@ mod processing;
 mod recall;
 mod state;
 mod synchronous;
-mod work_boundary;
-pub use work_boundary::session_tool_work_settled;
+pub use background::{drain_session_work, session_tool_work_settled};
 pub(crate) mod web;
 
 pub use approval::{

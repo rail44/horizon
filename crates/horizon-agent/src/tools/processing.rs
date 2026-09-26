@@ -47,9 +47,13 @@ pub fn process_agent_provider_event(
             }
         }
         // Task children are session-owned and survive turn cancellation.
-        Some(Event::ToolCallFinished(result)) => {
-            super::cancel_tool_execution(session_id, &result.call_id)
-        }
+        Some(Event::ToolCallFinished(result)) => super::cancel_tool_execution(
+            session_id,
+            &crate::contract::ToolCallIdentity {
+                call_id: result.call_id.clone(),
+                occurrence_id: result.occurrence_id.clone(),
+            },
+        ),
         _ => {}
     }
     Ok(processing)

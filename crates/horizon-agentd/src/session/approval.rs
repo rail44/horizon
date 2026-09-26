@@ -161,7 +161,7 @@ pub(super) fn dispatch_inbound_command(
             // worker/judge racing this command can no longer reissue them.
             let frame = live_state.frame();
             for request in frame.unfinished_tool_calls() {
-                horizon_agent::tools::cancel_tool_execution(session_id, &request.call_id);
+                horizon_agent::tools::cancel_tool_execution(session_id, &request.identity());
                 let event = Event::ToolCallFinished(
                     horizon_agent::tools::cancelled_tool_call_result(request.identity()),
                 );

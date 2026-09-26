@@ -5,6 +5,7 @@
 //! `tools::SessionNetworkProxy` is constructed there) and threaded onto
 //! `ToolSessionState` via `with_judge`, exactly like the network proxy.
 
+use futures_util::FutureExt;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -122,16 +123,32 @@ impl JudgeHandle {
             return false;
         }
 
+        let registration = crate::tools::background::Registration::new(
+            session_id,
+            crate::tools::background::Lifetime::Call(request.identity()),
+            crate::tools::background::WorkKind::Judgment,
+        );
+        let token = registration.token();
         let handle = Arc::clone(self);
         super::runtime::runtime().spawn(async move {
             let started_at = Instant::now();
-            let verdict = match tokio::time::timeout(
+            let result = tokio::select! {
+                biased;
+                _ = token.cancelled() => return,
+                result = tokio::time::timeout(
                 handle.timeout,
-                run_judge(&handle.model, handle.client.as_ref(), &input),
+                std::panic::AssertUnwindSafe(run_judge(&handle.model, handle.client.as_ref(), &input)).catch_unwind(),
             )
-            .await
-            {
-                Ok(verdict) => verdict,
+                => result,
+            };
+            let verdict = match result {
+                Ok(Ok(verdict)) => verdict,
+                Ok(Err(_)) => super::JudgeVerdict {
+                    decision: JudgeDecision::Escalate,
+                    stage: 0,
+                    confidence: None,
+                    fallback_reason: Some(JudgeFallbackReason::ClientError),
+                },
                 Err(_) => super::JudgeVerdict {
                     decision: JudgeDecision::Escalate,
                     stage: 0,
@@ -139,6 +156,9 @@ impl JudgeHandle {
                     fallback_reason: Some(JudgeFallbackReason::Timeout),
                 },
             };
+            if !registration.finish() {
+                return;
+            }
             let latency_ms = u64::try_from(started_at.elapsed().as_millis()).unwrap_or(u64::MAX);
             record::write_verdict(
                 &handle.writer,

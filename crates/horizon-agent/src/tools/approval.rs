@@ -79,6 +79,7 @@ pub fn resolve_approval(
     if !approval_is_unresolved(frame, request) {
         return ApprovalOutcome::AlreadyResolved;
     }
+    super::background::cancel_judgment(session_id, &request.identity());
     if is_horizon_executed_tool(&request.tool_id) {
         if let Some(runtime) = session_runtime(session_id) {
             return dispatch_approval(
@@ -219,11 +220,11 @@ fn resolve_web_fetch(
     kind: ApprovalKind,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
-        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        crate::tools::web::clear_approved_domains(session_id, &request.identity());
         return declined_result(runtime, &request.call_id, denied_output());
     }
     let ApprovalKind::DomainGrant { domains } = kind else {
-        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        crate::tools::web::clear_approved_domains(session_id, &request.identity());
         return declined_result(
             runtime,
             &request.call_id,
@@ -231,7 +232,7 @@ fn resolve_web_fetch(
         );
     };
     if domains.is_empty() {
-        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        crate::tools::web::clear_approved_domains(session_id, &request.identity());
         return declined_result(
             runtime,
             &request.call_id,
@@ -243,7 +244,7 @@ fn resolve_web_fetch(
         .map(|domain| crate::tools::web::validate_domain_grant(domain))
         .collect::<Result<Vec<_>, _>>();
     let Ok(validated) = validated else {
-        crate::tools::web::clear_approved_domains(session_id, &request.call_id);
+        crate::tools::web::clear_approved_domains(session_id, &request.identity());
         return declined_result(
             runtime,
             &request.call_id,
@@ -258,7 +259,7 @@ fn resolve_web_fetch(
         runtime.tool_state.allow_domain(domain.clone());
     }
     let approved_domains =
-        crate::tools::web::record_approved_domains(session_id, &request.call_id, &validated);
+        crate::tools::web::record_approved_domains(session_id, &request.identity(), &validated);
 
     crate::tools::web::spawn(
         session_id,

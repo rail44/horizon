@@ -72,6 +72,7 @@
 
 pub(super) mod children;
 mod notify;
+pub(crate) mod worker;
 
 use std::panic::AssertUnwindSafe;
 
@@ -181,6 +182,12 @@ impl ExplorationRequest {
 /// parent/child vocabulary this module uses for *lifetime* ("children are
 /// session-scoped") is deliberately not a claim about code genealogy.
 pub trait ExplorationHost: Send + Sync {
+    /// Confirms termination after `terminate`. Hosts with asynchronous session
+    /// teardown override this; the default covers synchronous in-process hosts.
+    fn wait_stopped(&self, _session_id: SessionId, _timeout: std::time::Duration) -> bool {
+        true
+    }
+
     /// Spawns a read-only task session and sends the request's prompt as its
     /// first user message -- the session's entire history; there is no other
     /// seeding. `Err` carries a message suitable for the model to read as
@@ -226,6 +233,14 @@ pub(crate) fn start(
         );
     };
 
+    let work = super::background::Registration::new(
+        session_id,
+        super::background::Lifetime::Session,
+        super::background::WorkKind::Child,
+    );
+    if work.is_cancelled() {
+        return synchronous(request, error_output("session is stopping"));
+    }
     let started = match host.start(ExplorationRequest::for_prompt(input.prompt)) {
         Ok(started) => started,
         Err(message) => {
@@ -239,14 +254,8 @@ pub(crate) fn start(
     let child_id = started.session_id;
     let description = input.description;
     let started_at_epoch_ms = unix_epoch_ms();
-    let (cancel_tx, cancel_rx) = crossbeam_channel::bounded::<()>(1);
-    children::register(
-        session_id,
-        child_id,
-        description.clone(),
-        host.clone(),
-        cancel_tx,
-    );
+    children::register(session_id, child_id, description.clone());
+    let child_work = worker::ChildWork::attach(work, host.clone(), child_id);
 
     let events = started.events;
     let waiter_description = description.clone();
@@ -271,23 +280,17 @@ pub(crate) fn start(
                 );
             }
         };
-        let outcome = watch_until_terminal(&events, &cancel_rx, &mut |activity| {
-            emit(TaskProgressState::Running, activity)
-        });
-        // The child reached *some* terminal state (or the watcher gave up):
-        // retire the requester's live progress row. The durable completion
-        // record is the notification queued below, not this ephemeral event.
-        emit(TaskProgressState::Finished, None);
-        // `Cancelled` means the requesting session went away and
-        // `cancel_session` already terminated this child directly; anything
-        // else means the child reached a terminal state of its own and this
-        // is the one place that releases it. `take_host`'s take-once
-        // semantics is what makes "terminate exactly once" hold either way.
-        if outcome.terminal != Terminal::Cancelled {
-            if let Some(host) = children::take_host(child_id) {
-                host.terminate(child_id);
+        let outcome = watch_until_terminal(&events, child_work.cancelled(), &mut |activity| {
+            if !child_work.is_cancelled() {
+                emit(TaskProgressState::Running, activity)
             }
+        });
+        if !child_work.finish() {
+            return;
         }
+        // A view-side callback must not prevent the durable completion.
+        let _ =
+            std::panic::catch_unwind(AssertUnwindSafe(|| emit(TaskProgressState::Finished, None)));
         let output = outcome.into_output(child_id, &waiter_description);
         if let Some(requester) = children::complete(child_id, output) {
             notify::wake(requester);
@@ -377,12 +380,8 @@ pub(crate) fn output(session_id: SessionId, request: &ToolCallRequest) -> ToolOu
 /// requesting session itself goes away. This is the *only* thing that kills
 /// a child: a cancelled turn deliberately leaves them running (decision 4).
 pub(crate) fn cancel_session(session_id: SessionId) {
-    for child in children::take_all_for_requester(session_id) {
-        let _ = child.cancel.try_send(());
-        if let Some(host) = child.host {
-            host.terminate(child.session_id);
-        }
-    }
+    super::background::close_session(session_id);
+    children::remove_requester(session_id);
     notify::unregister_wake(session_id);
 }
 
@@ -680,7 +679,7 @@ fn fold_until_terminal(
     let mut emitted: Option<Option<String>> = None;
 
     let terminal = loop {
-        crossbeam_channel::select! {
+        crossbeam_channel::select_biased! {
             recv(cancel) -> _ => break Terminal::Cancelled,
             recv(events) -> received => {
                 let Ok(event) = received else {

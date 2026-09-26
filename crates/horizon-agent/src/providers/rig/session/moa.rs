@@ -894,4 +894,77 @@ mod tests {
         assert!(prompt.contains("Assistant:\nearlier answer"), "{prompt}");
         assert!(prompt.ends_with("the new question"), "{prompt}");
     }
+    #[test]
+    fn dropping_a_pass_stops_all_proposers_without_an_explicit_abort() {
+        let host = Arc::new(ScriptedHost::default());
+        let session = SessionId::new();
+        let pass = crate::tools::moa::launch(
+            session,
+            crate::tools::moa::PreparedPass::new(session, host.clone()),
+            &members(),
+            "question",
+        );
+        assert_eq!(pass.launched.len(), 2);
+        drop(pass);
+        assert!(crate::tools::drain_session_work(
+            session,
+            std::time::Duration::from_secs(2)
+        ));
+        assert_eq!(host.terminated.lock().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn unwinding_a_pass_stops_already_launched_proposers() {
+        let host = Arc::new(ScriptedHost::default());
+        let session = SessionId::new();
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _pass = crate::tools::moa::launch(
+                session,
+                crate::tools::moa::PreparedPass::new(session, host.clone()),
+                &members(),
+                "question",
+            );
+            panic!("aggregator failed");
+        }));
+        assert!(result.is_err());
+        assert!(crate::tools::drain_session_work(
+            session,
+            std::time::Duration::from_secs(2)
+        ));
+        assert_eq!(host.terminated.lock().unwrap().len(), 2);
+    }
+    #[test]
+    fn teardown_between_acquiring_the_host_and_launch_does_not_start_children() {
+        let host = Arc::new(ScriptedHost::default());
+        let session = SessionId::new();
+        crate::tools::register_exploration_host(session, Some(host.clone()));
+        let prepared = crate::tools::moa::exploration_host(session).unwrap();
+        crate::tools::unregister_session_runtime(session);
+        let pass = crate::tools::moa::launch(session, prepared, &members(), "question");
+        assert!(pass.launched.is_empty());
+        assert!(host.started_members().is_empty());
+        drop(pass);
+        assert!(crate::tools::drain_session_work(
+            session,
+            std::time::Duration::ZERO
+        ));
+    }
+    #[tokio::test]
+    async fn dropping_the_waiting_pass_future_stops_its_proposers() {
+        let host = Arc::new(ScriptedHost::default());
+        let (mut state, _commands, _events) = moa_state(host.clone());
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(10),
+            state.run_moa_pass("question")
+        )
+        .await
+        .is_err());
+        assert!(crate::tools::drain_session_work(
+            state.session_id,
+            std::time::Duration::from_secs(2)
+        ));
+        assert_eq!(host.started_members().len(), 2);
+        assert_eq!(host.terminated.lock().unwrap().len(), 2);
+        crate::tools::unregister_exploration_host(state.session_id);
+    }
 }

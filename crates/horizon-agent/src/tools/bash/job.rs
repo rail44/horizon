@@ -55,12 +55,10 @@ impl BashJob {
             + 'static,
     ) {
         let registration =
-            registry::Registration::new(self.session_id, self.identity.call_id.clone());
-        let work_guard = crate::tools::work_boundary::begin(self.session_id);
+            registry::Registration::for_execution(self.session_id, self.identity.clone());
         registry::enqueue(
             self.session_id,
             Box::new(move || {
-                let _work_guard = work_guard;
                 if registration.is_cancelled() {
                     return;
                 }
@@ -68,11 +66,8 @@ impl BashJob {
                     self.session_id,
                     self.identity.clone(),
                     &self.result_tx,
-                    || {
-                        let completion = work(&self, &registration);
-                        drop(registration);
-                        completion
-                    },
+                    std::panic::AssertUnwindSafe(|| work(&self, &registration)),
+                    || registration.finish(),
                 );
             }),
         );
@@ -283,6 +278,7 @@ pub(super) fn run_job_body(
     identity: ToolCallIdentity,
     result_tx: &Sender<BashCompletion>,
     work: impl FnOnce() -> BashCompletion + std::panic::UnwindSafe,
+    accept: impl FnOnce() -> bool,
 ) {
     let completion = match std::panic::catch_unwind(work) {
         Ok(completion) => completion,
@@ -303,7 +299,9 @@ pub(super) fn run_job_body(
             ))))
         }
     };
-    let _ = result_tx.send(completion);
+    if accept() {
+        let _ = result_tx.send(completion);
+    }
 }
 
 /// Extracts a human-readable message from a caught panic's payload. Panic

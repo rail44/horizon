@@ -1034,4 +1034,167 @@ mod tests {
             ApprovalGate::Human(Box::new(candidate))
         );
     }
+    struct PendingClient {
+        started: crossbeam_channel::Sender<()>,
+        dropped: crossbeam_channel::Sender<()>,
+    }
+    #[async_trait]
+    impl ModelClient for PendingClient {
+        async fn complete(
+            &self,
+            _model: &str,
+            _request: RawCompletionRequest,
+        ) -> anyhow::Result<RawCompletionResponse> {
+            struct OnDrop(crossbeam_channel::Sender<()>);
+            impl Drop for OnDrop {
+                fn drop(&mut self) {
+                    let _ = self.0.send(());
+                }
+            }
+            let _guard = OnDrop(self.dropped.clone());
+            let _ = self.started.send(());
+            std::future::pending().await
+        }
+    }
+
+    #[test]
+    fn cancelled_judgments_drop_the_request_without_a_verdict_or_completion() {
+        use crate::tools::background::{self, SessionOwner};
+        use std::time::Duration;
+        for session_shutdown in [false, true] {
+            let path = temp_event_log("cancel-judge");
+            let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+            let (started_tx, started) = crossbeam_channel::unbounded();
+            let (dropped_tx, dropped) = crossbeam_channel::unbounded();
+            let judge = JudgeHandle::for_test(
+                "test",
+                Arc::new(PendingClient {
+                    started: started_tx,
+                    dropped: dropped_tx,
+                }),
+                writer.clone(),
+            );
+            let tools = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+                .with_judge(Some(judge))
+                .build();
+            let session = SessionId::new();
+            let owner = SessionOwner::new(session);
+            let candidate = candidate(ApprovalKind::Standard);
+            let call = candidate.request.identity();
+            let (tx, rx) = crossbeam_channel::unbounded();
+            assert_eq!(
+                start_approval_gate(&tools, session, candidate, tx),
+                ApprovalGate::Pending
+            );
+            started.recv_timeout(Duration::from_secs(2)).unwrap();
+            if session_shutdown {
+                background::close_session(session);
+            } else {
+                crate::tools::cancel_tool_execution(session, &call);
+            }
+            dropped
+                .recv_timeout(Duration::from_secs(2))
+                .expect("in-flight request must be dropped");
+            assert!(background::drain_session_work(
+                session,
+                Duration::from_secs(2)
+            ));
+            assert!(rx.try_recv().is_err());
+            writer.flush().unwrap();
+            assert!(crate::persistence::event_log::read(&path)
+                .unwrap()
+                .records
+                .is_empty());
+            drop(owner);
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[test]
+    fn a_replaced_judgment_is_cancelled_without_stopping_its_replacement() {
+        use std::time::Duration;
+        let path = temp_event_log("replace-judge");
+        let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+        let (started_tx, started) = crossbeam_channel::unbounded();
+        let (dropped_tx, dropped) = crossbeam_channel::unbounded();
+        let judge = JudgeHandle::for_test(
+            "test",
+            Arc::new(PendingClient {
+                started: started_tx,
+                dropped: dropped_tx,
+            }),
+            writer.clone(),
+        );
+        let tools = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
+        let session = SessionId::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let first = candidate(ApprovalKind::Standard);
+        let mut second = first.clone();
+        second.request.occurrence_id = crate::contract::OccurrenceId::new();
+        second.approval.occurrence_id = second.request.occurrence_id.clone();
+        assert_eq!(
+            start_approval_gate(&tools, session, first, tx.clone()),
+            ApprovalGate::Pending
+        );
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(
+            start_approval_gate(&tools, session, second.clone(), tx),
+            ApprovalGate::Pending
+        );
+        dropped.recv_timeout(Duration::from_secs(2)).unwrap();
+        started.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(
+            dropped.try_recv().is_err(),
+            "replacement still owns its request"
+        );
+        crate::tools::cancel_tool_execution(session, &second.request.identity());
+        dropped.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert!(crate::tools::drain_session_work(
+            session,
+            Duration::from_secs(2)
+        ));
+        assert!(rx.try_recv().is_err());
+        let _ = std::fs::remove_file(path);
+    }
+    struct PanickingClient;
+    #[async_trait]
+    impl ModelClient for PanickingClient {
+        async fn complete(
+            &self,
+            _: &str,
+            _: RawCompletionRequest,
+        ) -> anyhow::Result<RawCompletionResponse> {
+            panic!("judge transport panicked");
+        }
+    }
+    #[test]
+    fn a_panicking_judge_retires_its_work_and_escalates_to_the_human() {
+        let path = temp_event_log("panic-judge");
+        let (writer, _) = crate::persistence::event_log::WriterHandle::open(&path);
+        let judge = JudgeHandle::for_test("test", Arc::new(PanickingClient), writer);
+        let tools = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
+            .with_judge(Some(judge))
+            .build();
+        let session = SessionId::new();
+        let (tx, rx) = crossbeam_channel::unbounded();
+        assert_eq!(
+            start_approval_gate(&tools, session, candidate(ApprovalKind::Standard), tx),
+            ApprovalGate::Pending
+        );
+        let result = rx.recv_timeout(std::time::Duration::from_secs(2)).unwrap();
+        assert!(matches!(
+            result,
+            crate::tools::ToolCompletion::ApprovalJudged(ApprovalJudgment {
+                decision: JudgeDecision::Escalate,
+                ..
+            })
+        ));
+        assert!(crate::tools::drain_session_work(
+            session,
+            std::time::Duration::from_secs(2)
+        ));
+        let _ = std::fs::remove_file(path);
+    }
 }

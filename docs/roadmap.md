@@ -88,6 +88,10 @@ Tool policy now produces one execution/approval plan. Automatic and approved sta
 share persistence acknowledgement, and human approvals name an exact occurrence
 through UI, CLI and daemon (agent wire v25). Stale and duplicate decisions cannot
 authorize a retry; see [the execution contract](agent-tools-design.md#execution-planning-and-exact-approval-2026-09-25).
+Background work now shares registration, exact-occurrence cancellation and
+retirement accounting. Call, MoA-pass and session-child lifetimes are explicit;
+isolated worktrees are retained if workers have not stopped within the cleanup
+wait. See [ownership and shutdown](agent-background-work.md).
 Conversation events and ephemeral notifications now use distinct variants.
 Tool outcomes are explicit throughout execution, replay, projection, and display;
 modal owners release their targets, subscriptions and pending replies together.

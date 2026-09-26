@@ -247,12 +247,14 @@ pub(super) fn spawn_session_thread_with_context(
         // daemon-side "terminate" signal), never on a mere close/detach
         // (those leave the thread, and this session, running -- see the
         // module doc's "sessions are scoped to the process" note).
+        let work_settled =
+            horizon_agent::tools::drain_session_work(session_id, std::time::Duration::from_secs(5));
         let _lifecycle = lock_unpoisoned(&thread_state.lifecycle);
         let entry = lock_unpoisoned(&thread_state.sessions).remove(&session_id);
         if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
-            if !worktree::remove_worktree_if_clean(&worktree) {
+            if !work_settled || !worktree::remove_worktree_if_clean(&worktree) {
                 eprintln!(
-                    "horizon-agentd: kept worktree {} for {session_id:?} (not clean)",
+                    "horizon-agentd: kept worktree {} for {session_id:?} (not clean or background work still stopping)",
                     worktree.path.display()
                 );
             }

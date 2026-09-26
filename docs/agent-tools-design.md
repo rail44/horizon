@@ -480,3 +480,12 @@ Agent wire v25 requires the exact identity. CLI syntax is `horizon approve
 Agent event-log v3, terminal wire and log wire are unchanged. Activating v25 requires
 a rebuilt shell and agent daemon plus a full app restart; runtime reload alone is
 insufficient. Integration neither migrates live data nor restarts the running app.
+
+## Background work lifetime (2026-09-26)
+
+Bash, Web, approval judgments and child watchers share registration and actual
+retirement accounting. Cancellation identifies the exact occurrence, and child
+lifetimes distinguish a single MoA pass from the parent session. Session teardown
+waits for retirement before deleting a worktree; see
+[background work ownership](agent-background-work.md) for the stop/finish contract
+and the requirements for adding a worker.

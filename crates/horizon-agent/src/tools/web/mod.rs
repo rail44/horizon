@@ -4,7 +4,6 @@ mod ssrf;
 
 use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use crossbeam_channel::Sender;
@@ -12,9 +11,8 @@ use futures_util::FutureExt;
 use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
 use serde_json::Value;
-use tokio_util::sync::CancellationToken;
 
-use crate::contract::{SessionId, ToolCallId, ToolCallRequest};
+use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity, ToolCallRequest};
 use crate::policy::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
@@ -74,28 +72,16 @@ pub(crate) fn spawn(
     origin: WebApprovalOrigin,
     result_tx: Sender<ToolCompletion>,
 ) {
-    let call_id = request.call_id.clone();
     let identity = request.identity();
     let input = request.input.0.clone();
-    let token = CancellationToken::new();
-    let generation = next_generation();
-    if let Some(replaced) = registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .insert(
-            (session_id, call_id.clone()),
-            RegisteredTask {
-                generation,
-                token: token.clone(),
-            },
-        )
-    {
-        replaced.token.cancel();
-    }
+    let registration = super::background::Registration::new(
+        session_id,
+        super::background::Lifetime::Call(identity.clone()),
+        super::background::WorkKind::Tool,
+    );
+    let token = registration.token();
     let tool_id = request.tool_id.clone();
-    let work_guard = super::work_boundary::begin(session_id);
     web_runtime().spawn(async move {
-        let _work_guard = work_guard;
         let work = AssertUnwindSafe(run(
             identity.clone(),
             &tool_id,
@@ -105,6 +91,7 @@ pub(crate) fn spawn(
         ))
         .catch_unwind();
         let completion = tokio::select! {
+            biased;
             _ = token.cancelled() => None,
             result = work => Some(match result {
                 Ok(completion) => completion,
@@ -113,11 +100,11 @@ pub(crate) fn spawn(
                 )),
             }),
         };
-        let was_current = finish_registration(session_id, &call_id, generation);
+        let was_current = registration.finish();
         if was_current {
             if let Some(completion) = completion {
                 if matches!(completion, ToolCompletion::Finished(_)) {
-                    clear_approved_domains(session_id, &call_id);
+                    clear_approved_domains(session_id, &identity);
                 }
                 let _ = result_tx.send(completion);
             }
@@ -184,46 +171,28 @@ fn with_identity(
     }
 }
 
-pub(crate) fn cancel_if_running(session_id: SessionId, call_id: &ToolCallId) {
-    if let Some(task) = registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&(session_id, call_id.clone()))
-    {
-        task.token.cancel();
-    }
-    clear_approved_domains(session_id, call_id);
-}
-
-pub(crate) fn cancel_session(session_id: SessionId) {
-    let mut tasks = registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let keys = tasks
-        .keys()
-        .filter(|(registered_session, _)| *registered_session == session_id)
-        .cloned()
-        .collect::<Vec<_>>();
-    for key in keys {
-        if let Some(task) = tasks.remove(&key) {
-            task.token.cancel();
-        }
-    }
+pub(crate) fn clear_session_approvals(session_id: SessionId) {
     approved_domains()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .retain(|(registered_session, _), _| *registered_session != session_id);
+        .retain(|(registered_session, _, _), _| *registered_session != session_id);
 }
 
 pub(crate) fn record_approved_domains(
     session_id: SessionId,
-    call_id: &ToolCallId,
+    identity: &ToolCallIdentity,
     newly_approved: &[String],
 ) -> Vec<String> {
     let mut approvals = approved_domains()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let accumulated = approvals.entry((session_id, call_id.clone())).or_default();
+    let accumulated = approvals
+        .entry((
+            session_id,
+            identity.call_id.clone(),
+            identity.occurrence_id.clone(),
+        ))
+        .or_default();
     for domain in newly_approved {
         if !accumulated.contains(domain) {
             accumulated.push(domain.clone());
@@ -232,50 +201,23 @@ pub(crate) fn record_approved_domains(
     accumulated.clone()
 }
 
-pub(crate) fn clear_approved_domains(session_id: SessionId, call_id: &ToolCallId) {
+pub(crate) fn clear_approved_domains(session_id: SessionId, identity: &ToolCallIdentity) {
     approved_domains()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .remove(&(session_id, call_id.clone()));
+        .remove(&(
+            session_id,
+            identity.call_id.clone(),
+            identity.occurrence_id.clone(),
+        ));
 }
 
-type TaskKey = (SessionId, ToolCallId);
+type TaskKey = (SessionId, ToolCallId, OccurrenceId);
 type ApprovedDomainMap = HashMap<TaskKey, Vec<String>>;
 
 fn approved_domains() -> &'static Mutex<ApprovedDomainMap> {
     static APPROVED_DOMAINS: OnceLock<Mutex<ApprovedDomainMap>> = OnceLock::new();
     APPROVED_DOMAINS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-struct RegisteredTask {
-    generation: u64,
-    token: CancellationToken,
-}
-
-fn registry() -> &'static Mutex<HashMap<TaskKey, RegisteredTask>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<TaskKey, RegisteredTask>>> = OnceLock::new();
-    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn next_generation() -> u64 {
-    static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
-    NEXT_GENERATION.fetch_add(1, Ordering::Relaxed)
-}
-
-fn finish_registration(session_id: SessionId, call_id: &ToolCallId, generation: u64) -> bool {
-    let key = (session_id, call_id.clone());
-    let mut tasks = registry()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    if tasks
-        .get(&key)
-        .is_some_and(|registered| registered.generation == generation)
-    {
-        tasks.remove(&key);
-        true
-    } else {
-        false
-    }
 }
 
 fn web_runtime() -> &'static tokio::runtime::Runtime {
@@ -357,92 +299,44 @@ mod tests {
     }
 
     #[test]
-    fn cancellation_is_session_scoped_and_old_tasks_cannot_remove_replacements() {
-        let session_a = SessionId::new();
-        let session_b = SessionId::new();
-        let call_id = ToolCallId("same-provider-call-id".to_string());
-        let token_a = CancellationToken::new();
-        let token_b = CancellationToken::new();
-        let generation_a = next_generation();
-        let generation_b = next_generation();
-        {
-            let mut tasks = registry().lock().unwrap();
-            tasks.insert(
-                (session_a, call_id.clone()),
-                RegisteredTask {
-                    generation: generation_a,
-                    token: token_a.clone(),
-                },
-            );
-            tasks.insert(
-                (session_b, call_id.clone()),
-                RegisteredTask {
-                    generation: generation_b,
-                    token: token_b.clone(),
-                },
-            );
-        }
-
-        cancel_if_running(session_a, &call_id);
-        assert!(token_a.is_cancelled());
-        assert!(!token_b.is_cancelled());
-
-        let replacement = CancellationToken::new();
-        let replacement_generation = next_generation();
-        registry().lock().unwrap().insert(
-            (session_b, call_id.clone()),
-            RegisteredTask {
-                generation: replacement_generation,
-                token: replacement.clone(),
-            },
-        );
-        assert!(!finish_registration(session_b, &call_id, generation_b));
-        assert!(registry()
-            .lock()
-            .unwrap()
-            .contains_key(&(session_b, call_id.clone())));
-
-        assert!(finish_registration(
-            session_b,
-            &call_id,
-            replacement_generation
-        ));
-        registry().lock().unwrap().insert(
-            (session_b, call_id.clone()),
-            RegisteredTask {
-                generation: next_generation(),
-                token: replacement.clone(),
-            },
-        );
-        cancel_session(session_b);
-        assert!(replacement.is_cancelled());
-        assert!(!registry()
-            .lock()
-            .unwrap()
-            .contains_key(&(session_b, call_id)));
-    }
-
-    #[test]
     fn human_domain_grants_accumulate_for_one_call_and_clear_on_cancel() {
         let session_id = SessionId::new();
         let call_id = ToolCallId("redirecting-fetch".to_string());
+        let identity = crate::test_support::tool_identity(&call_id);
         assert_eq!(
-            record_approved_domains(session_id, &call_id, &["first.example".to_string()]),
+            record_approved_domains(session_id, &identity, &["first.example".to_string()]),
             vec!["first.example"]
         );
         assert_eq!(
             record_approved_domains(
                 session_id,
-                &call_id,
+                &identity,
                 &["first.example".to_string(), "second.example".to_string()]
             ),
             vec!["first.example", "second.example"]
         );
-        cancel_if_running(session_id, &call_id);
+        super::super::cancel_tool_execution(session_id, &identity);
         assert_eq!(
-            record_approved_domains(session_id, &call_id, &["third.example".to_string()]),
+            record_approved_domains(session_id, &identity, &["third.example".to_string()]),
             vec!["third.example"]
         );
-        clear_approved_domains(session_id, &call_id);
+        clear_approved_domains(session_id, &identity);
+    }
+    #[test]
+    fn cancelling_an_old_occurrence_keeps_the_new_occurrences_domain_annotations() {
+        let session = SessionId::new();
+        let old = crate::test_support::tool_identity(&ToolCallId("reused".into()));
+        let new = ToolCallIdentity {
+            occurrence_id: OccurrenceId::new(),
+            ..old.clone()
+        };
+        record_approved_domains(session, &old, &["old.example".into()]);
+        record_approved_domains(session, &new, &["new.example".into()]);
+        super::super::cancel_tool_execution(session, &old);
+        assert_eq!(
+            record_approved_domains(session, &new, &[]),
+            vec!["new.example"]
+        );
+        clear_session_approvals(session);
     }
 }

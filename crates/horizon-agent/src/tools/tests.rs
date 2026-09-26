@@ -3601,7 +3601,7 @@ fn resolve_approval_web_fetch_approve_adds_only_the_exact_session_grant() {
     assert!(approved_state.is_domain_allowed("example.com"));
     assert!(!approved_state.is_domain_allowed("www.example.com"));
     assert!(!other_state.is_domain_allowed("example.com"));
-    crate::tools::web::cancel_if_running(session_id, &call_id);
+    crate::tools::cancel_tool_execution(session_id, &crate::test_support::tool_identity(&call_id));
     unregister_session_runtime(session_id);
 }
 

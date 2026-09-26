@@ -24,7 +24,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-use crossbeam_channel::Sender;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use crate::config::MoaMember;
@@ -64,8 +63,36 @@ pub fn unregister_exploration_host(session_id: SessionId) {
     lock_hosts().remove(&session_id);
 }
 
-pub(crate) fn exploration_host(session_id: SessionId) -> Option<Arc<dyn ExplorationHost>> {
-    lock_hosts().get(&session_id).cloned()
+pub(crate) fn exploration_host(session_id: SessionId) -> Option<PreparedPass> {
+    let hosts = lock_hosts();
+    hosts
+        .get(&session_id)
+        .cloned()
+        .map(|host| PreparedPass::new(session_id, host))
+}
+
+/// Acquire the session lifetime while holding the published-host lock. Even
+/// if teardown runs before launch, this pass keeps the closed group alive.
+pub(crate) struct PreparedPass {
+    host: Arc<dyn ExplorationHost>,
+    lifetime: PassLifetime,
+}
+impl PreparedPass {
+    pub(crate) fn new(session: SessionId, host: Arc<dyn ExplorationHost>) -> Self {
+        let id = uuid::Uuid::new_v4();
+        Self {
+            host,
+            lifetime: PassLifetime {
+                session,
+                id,
+                work: super::background::Registration::new(
+                    session,
+                    super::background::Lifetime::Pass(id),
+                    super::background::WorkKind::Child,
+                ),
+            },
+        }
+    }
 }
 
 /// One launched proposer. `session_id` is what the durable record, the
@@ -95,8 +122,7 @@ pub(crate) struct MoaLaunch {
     pub(crate) launched: Vec<LaunchedProposer>,
     pub(crate) unavailable: Vec<Proposal>,
     pub(crate) results: UnboundedReceiver<Proposal>,
-    /// Releases each watcher's fold without waiting for its session.
-    cancels: Vec<Sender<()>>,
+    lifetime: PassLifetime,
 }
 
 impl MoaLaunch {
@@ -104,14 +130,23 @@ impl MoaLaunch {
     /// Unlike a `task` child, a proposer does not outlive the turn that
     /// launched it.
     pub(crate) fn abort(&self) {
-        for cancel in &self.cancels {
-            let _ = cancel.try_send(());
-        }
-        for proposer in &self.launched {
-            if let Some(host) = children::take_host(proposer.session_id) {
-                host.terminate(proposer.session_id);
-            }
-        }
+        self.lifetime.cancel();
+    }
+}
+
+struct PassLifetime {
+    session: SessionId,
+    id: uuid::Uuid,
+    work: super::background::Registration,
+}
+impl PassLifetime {
+    fn cancel(&self) {
+        super::background::cancel_pass(self.session, self.id);
+    }
+}
+impl Drop for PassLifetime {
+    fn drop(&mut self) {
+        self.cancel();
     }
 }
 
@@ -121,16 +156,19 @@ impl MoaLaunch {
 /// proposal rather than an error for the pass.
 pub(crate) fn launch(
     aggregator: SessionId,
-    host: Arc<dyn ExplorationHost>,
+    prepared: PreparedPass,
     members: &[MoaMember],
     prompt: &str,
 ) -> MoaLaunch {
     let (results_tx, results) = unbounded_channel();
     let mut launched = Vec::new();
     let mut unavailable = Vec::new();
-    let mut cancels = Vec::new();
+    let PreparedPass { host, lifetime } = prepared;
 
     for (position, member) in members.iter().enumerate() {
+        if lifetime.work.is_cancelled() {
+            break;
+        }
         // A session on a key-less entry answers from the deterministic
         // fallback responder, which the event fold cannot tell apart from a
         // model's answer. Never launched, so that text can never become a
@@ -152,6 +190,14 @@ pub(crate) fn launch(
             member.provider.clone(),
             member.model.clone(),
         );
+        let work = super::background::Registration::new(
+            aggregator,
+            super::background::Lifetime::Pass(lifetime.id),
+            super::background::WorkKind::Child,
+        );
+        if work.is_cancelled() {
+            break;
+        }
         let started = match host.start(request) {
             Ok(started) => started,
             Err(message) => {
@@ -175,25 +221,18 @@ pub(crate) fn launch(
         // The label a `task_output` re-read shows, numbered as the injected
         // proposal block numbers them.
         let description = format!("MoA proposer {}", position + 1);
-        let (cancel_tx, cancel_rx) = crossbeam_channel::bounded::<()>(1);
-        children::register(
-            aggregator,
-            proposer.session_id,
-            description.clone(),
-            host.clone(),
-            cancel_tx.clone(),
-        );
-        cancels.push(cancel_tx);
+        children::register(aggregator, proposer.session_id, description.clone());
+        let child_work =
+            super::explore::worker::ChildWork::attach(work, host.clone(), proposer.session_id);
         launched.push(proposer.clone());
 
         let events = started.events;
         let results_tx = results_tx.clone();
         std::thread::spawn(move || {
-            let outcome = super::explore::watch_until_terminal(&events, &cancel_rx, &mut |_| {});
-            // `take_host`'s take-once semantics is what keeps this and
-            // `MoaLaunch::abort` from terminating the same session twice.
-            if let Some(host) = children::take_host(proposer.session_id) {
-                host.terminate(proposer.session_id);
+            let outcome =
+                super::explore::watch_until_terminal(&events, child_work.cancelled(), &mut |_| {});
+            if !child_work.finish() {
+                return;
             }
             let usable = outcome.has_usable_report();
             let text = usable.then(|| outcome.report.clone().unwrap_or_default());
@@ -218,6 +257,6 @@ pub(crate) fn launch(
         launched,
         unavailable,
         results,
-        cancels,
+        lifetime,
     }
 }

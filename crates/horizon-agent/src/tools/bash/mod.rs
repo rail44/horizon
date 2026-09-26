@@ -27,7 +27,8 @@ pub(super) use super::completion::BashCompletion;
 #[cfg(test)]
 use job::{run_job_body, spawn};
 pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun};
-pub(crate) use registry::{cancel_call, cancel_session};
+#[cfg(test)]
+pub(crate) use registry::cancel_call;
 
 pub(crate) use git::{
     approved_metadata_roots, git_prefilter, metadata_writable_roots, requires_metadata_write,

@@ -180,9 +180,9 @@ pub fn cancelled_tool_call_result(identity: crate::contract::ToolCallIdentity) -
 
 /// Stop turn-owned asynchronous work before recording its cancellation. Task
 /// children are session-owned and deliberately remain running.
-pub fn cancel_tool_execution(session_id: SessionId, call_id: &crate::contract::ToolCallId) {
-    crate::tools::bash::cancel_call(session_id, call_id);
-    crate::tools::web::cancel_if_running(session_id, call_id);
+pub fn cancel_tool_execution(session_id: SessionId, identity: &crate::contract::ToolCallIdentity) {
+    super::background::cancel_call(session_id, identity);
+    super::web::clear_approved_domains(session_id, identity);
 }
 
 #[cfg(test)]

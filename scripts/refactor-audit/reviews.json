@@ -45,15 +45,15 @@
       },
       "sha256": "d40a40c636db751bb9410485d94d3c4d92e0ff51d26a22fb23821d33ddecb493",
       "related": {
-        "crates/horizon-agent/src/tools/approval.rs": "65e807c61ec168e9188cf974bac88b7e97c746bac967582d54950b93158503bc",
-        "crates/horizon-agent/src/tools/execution.rs": "b8d43cd1656cf92b7e613ae9a8649f779e15edb3fcb5de2acd4df716376d8431",
-        "crates/horizon-agent/src/tools/processing.rs": "351587acd3439be10984a5cbb0796a14a387dc4f828267d33b97459fed19a45f",
+        "crates/horizon-agent/src/tools/approval.rs": "062bac01d71ffb913611155d33bffd1df46277713439f579a746ff3c287cfb0f",
+        "crates/horizon-agent/src/tools/execution.rs": "a997969c0d34bfdc9d915ed763dfc9e22062f559543d24a858a2794fed3bde6c",
+        "crates/horizon-agent/src/tools/processing.rs": "a2ee87f9b8393b90eedb552fe5011b41da7e1831aefa2f8b06adedb74c021788",
         "crates/horizon-agent/src/tools/transition.rs": "e2995b43fc9de9287095d96b74a4d893316a514ef8dcd511cc29c953bf988898",
         "crates/horizon-agentd/src/session/run.rs": "9c9a84794e9548893ce01f0b17ec585218dd00d1aaad14fa1affe6a91eee26d5"
       },
       "decision": "preserve",
-      "reason": "One typed decision owns automatic mode, approval candidate or rejection. Display and dispatch consume that decision; trust tiers and narrow grant validation remain separate contracts. Do not replace the explicit policy table with generic tool traits.",
-      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
+      "reason": "One typed decision owns automatic mode, approval candidate or rejection. Permission classification and grant validation remain explicit; shared background registration owns exact-occurrence cancellation without changing these policies.",
+      "commit": "901edb40f671b54ab4136c9c85db74bfbdc60d90"
     },
     {
       "target": {
@@ -114,14 +114,14 @@
       },
       "sha256": "002f6a416110f571730eefdce6cfa8b5a1f834bcca7af17799c0a2646bd914ee",
       "related": {
-        "crates/horizon-agent/src/contract/tool_result.rs": "d8c8cd081279d31f06add2d0f88898c56b408f07160f3578e992f7f6e35c290f",
-        "crates/horizon-agent/src/tools/approval.rs": "f1fdb1b84eb4a2c54c9c87a85924d796ea0bc73d0d08d2769b69f46bad07ac46",
+        "crates/horizon-agent/src/contract/tool_result.rs": "25d98881b41fce2a22b67bd2bf026fcf2929143f05ebb299570c6601e8f7cbbb",
+        "crates/horizon-agent/src/tools/approval.rs": "062bac01d71ffb913611155d33bffd1df46277713439f579a746ff3c287cfb0f",
         "crates/horizon-agent/src/tools/bash/cargo.rs": "4d706012ed89824775aa7ecbec55d45e1e6c032c398dad097d1d6056a5d6749a",
         "crates/horizon-agent/src/tools/bash/git.rs": "42965d5cfb655d783c9d70e68ff5e380f7d7cac0b3c9af588f6556f059ec8bdb"
       },
       "decision": "preserve",
-      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Filesystem authority, metadata revalidation and approval stay outside it. Passing dispatch occurrence through the web adapter changes neither permission policy nor lexer behavior. Retry bookkeeping now comes from contract rather than transcript; shell tokenization and approval capability decisions remain unchanged. Human and judge approvals now share only execution dispatch after their original validation. Shell classification and grant revalidation remain unchanged.",
-      "commit": "398b746a1293fcbe1a30327f86ff4a4a98a4c0c6"
+      "reason": "Keep the cohesive lexer for Git and Cargo command classification. Resource lifetime, process termination, filesystem authority and grant revalidation belong to their own owners; shared background cancellation changes none of this syntax or policy.",
+      "commit": "901edb40f671b54ab4136c9c85db74bfbdc60d90"
     },
     {
       "target": {
@@ -133,12 +133,12 @@
       "sha256": "a1dc152c350da83f56f3d8fd1248199b84a19194a42054c685afed05c319443d",
       "related": {
         "crates/horizon-agent/src/frame/queries.rs": "357da1a33da3eb33a17cf15b6c4364f65e3e4469d612a9d9fb64c39a99ece1e7",
-        "crates/horizon-agent/src/tools/approval.rs": "65e807c61ec168e9188cf974bac88b7e97c746bac967582d54950b93158503bc",
+        "crates/horizon-agent/src/tools/approval.rs": "062bac01d71ffb913611155d33bffd1df46277713439f579a746ff3c287cfb0f",
         "crates/horizon-agentd/src/session/completion.rs": "aefe534bbb56cb2aa11a313062b44a9cb45fccf5a364fae3e7d7a4b81ca8f5d3"
       },
       "decision": "preserve",
-      "reason": "Accept only the exact live execution. Judge request and approval identities must agree, and a saved human decision or pending human prompt takes precedence. Keep cancellation and result acceptance at the session coordinator.",
-      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
+      "reason": "Accept only the exact live execution. Judge request and approval identities must agree; human decisions take precedence. Workers now cancel by occurrence and suppress results when cancellation wins, but these admission checks remain necessary for completions that won before cancellation.",
+      "commit": "901edb40f671b54ab4136c9c85db74bfbdc60d90"
     },
     {
       "target": {
@@ -184,14 +184,14 @@
       "sha256": "5d8bd6997d194a4f675e127b14dea972ceef2f7558de81ed6d1d073042063d9b",
       "related": {
         "crates/horizon-agent/src/live.rs": "a50078d305266efca8367313a682f632fbbab15ba207b22079e4485fcd90406f",
-        "crates/horizon-agentd/src/session/events.rs": "ebcc9685dda530768379de329048d4a158849689c9f9a870fc59f6e9907fae6c",
-        "crates/horizon-agentd/src/session/approval.rs": "100dd503a3f151c29169e5dd5f49b7865722c2e004188b902c439a6a828421a5",
+        "crates/horizon-agent/src/tools/transition.rs": "e2995b43fc9de9287095d96b74a4d893316a514ef8dcd511cc29c953bf988898",
+        "crates/horizon-agentd/src/session/approval.rs": "f7a27ab420640b3ec4ac454a2659b055ac7870342278defd881ac1887ac1388c",
         "crates/horizon-agentd/src/session/completion.rs": "aefe534bbb56cb2aa11a313062b44a9cb45fccf5a364fae3e7d7a4b81ca8f5d3",
-        "crates/horizon-agent/src/tools/transition.rs": "a2f595bc0508084f5e718c5b1ee8f201dabbcfb697a53e63645b1a479fd66f46"
+        "crates/horizon-agentd/src/session/events.rs": "ef5d50b01956671e20753f107d2adbcb87f6c90b9eeffb03466e6bd802a81c0a"
       },
       "decision": "preserve",
-      "reason": "Keep the provider/command/completion/replay select loop as one coordinator. Persistent batches now acknowledge before publication or provider continuation. Writer failure broadcasts stop execution even while idle; the stopped loop retains transient fault replay without fabricating durable history. Shared publication and execution guards own the failure behavior.",
-      "commit": "b00cb83bec1f3e861e20260010b4efe0d24f370c"
+      "reason": "Keep provider, command, completion and replay selection in one coordinator, including persistence acknowledgement and writer failure. Background registrations own resource cancellation and actual retirement; the outer session teardown drains them before worktree removal.",
+      "commit": "901edb40f671b54ab4136c9c85db74bfbdc60d90"
     },
     {
       "target": {

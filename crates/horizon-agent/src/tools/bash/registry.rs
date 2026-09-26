@@ -3,52 +3,51 @@ use std::collections::{hash_map::Entry, HashMap, VecDeque};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use super::process::KillHandle;
-use crate::contract::{SessionId, ToolCallId};
-
-type Key = (SessionId, ToolCallId);
-type Table = Mutex<HashMap<Key, Arc<Mutex<ExecutionState>>>>;
+use crate::contract::SessionId;
+#[cfg(test)]
+use crate::contract::ToolCallId;
 
 #[derive(Default)]
 struct ExecutionState {
     cancelled: bool,
     process: Option<KillHandle>,
 }
-
-fn table() -> &'static Table {
-    static TABLE: OnceLock<Table> = OnceLock::new();
-    TABLE.get_or_init(Mutex::default)
-}
-
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The registration's identity outlives its table entry when cancellation
-/// removes it. A queued job and a late process attachment still see the stop.
 pub(super) struct Registration {
-    key: Key,
+    work: super::super::background::Registration,
     state: Arc<Mutex<ExecutionState>>,
 }
-
 impl Registration {
+    #[cfg(test)]
     pub(super) fn new(session_id: SessionId, call_id: ToolCallId) -> Self {
-        let key = (session_id, call_id);
+        Self::for_execution(session_id, crate::test_support::tool_identity(&call_id))
+    }
+    pub(super) fn for_execution(
+        session_id: SessionId,
+        identity: crate::contract::ToolCallIdentity,
+    ) -> Self {
+        #[cfg(test)]
+        let call_id = identity.call_id.clone();
+        use super::super::background::{Lifetime, Registration as Work, WorkKind};
+        let work = Work::new(session_id, Lifetime::Call(identity), WorkKind::Tool);
         let state = Arc::new(Mutex::new(ExecutionState::default()));
-        let previous = lock(table()).insert(key.clone(), state.clone());
-        if let Some(previous) = previous {
-            cancel(&previous);
-        }
-        Self { key, state }
+        let cancellation = state.clone();
+        work.on_stop(move || cancel(&cancellation));
+        #[cfg(test)]
+        lock(process_observations()).insert((session_id, call_id.clone()), Arc::downgrade(&state));
+        Self { work, state }
     }
-
     pub(super) fn is_cancelled(&self) -> bool {
-        lock(&self.state).cancelled
+        self.work.is_cancelled()
     }
-
-    /// A cancellation between the worker's initial check and process creation
-    /// kills the newly created process as soon as it becomes available.
+    pub(super) fn finish(&self) -> bool {
+        self.work.finish()
+    }
     pub(super) fn attach_process(&self, pid: u32) -> ProcessGuard<'_> {
         let process = KillHandle::new(pid);
         let mut state = lock(&self.state);
@@ -61,30 +60,14 @@ impl Registration {
     }
 }
 
-impl Drop for Registration {
-    fn drop(&mut self) {
-        let mut entries = lock(table());
-        if entries
-            .get(&self.key)
-            .is_some_and(|current| Arc::ptr_eq(current, &self.state))
-        {
-            entries.remove(&self.key);
-        }
-    }
-}
-
-/// Only the process lifetime ends after output drain. The enclosing job's
-/// registration remains responsible for queue cancellation and replacement.
 pub(super) struct ProcessGuard<'a> {
     state: &'a Mutex<ExecutionState>,
 }
-
 impl ProcessGuard<'_> {
     pub(super) fn kill(&self) {
         cancel(self.state);
     }
 }
-
 impl Drop for ProcessGuard<'_> {
     fn drop(&mut self) {
         if std::thread::panicking() {
@@ -93,58 +76,47 @@ impl Drop for ProcessGuard<'_> {
         lock(self.state).process = None;
     }
 }
-
 fn cancel(state: &Mutex<ExecutionState>) {
     let mut state = lock(state);
     state.cancelled = true;
-    // Serialize killing with process retirement, so an old cancellation
-    // cannot obtain a handle and use it after the worker drops its guard.
     if let Some(process) = state.process.take() {
         process.kill();
     }
 }
 
-/// Cancels this session's queued or running call. The provider owns the terminal result.
-pub(crate) fn cancel_call(session_id: SessionId, call_id: &ToolCallId) -> bool {
-    let state = lock(table()).remove(&(session_id, call_id.clone()));
-    if let Some(state) = state {
-        cancel(&state);
-        true
-    } else {
-        false
+#[cfg(test)]
+pub(crate) fn cancel_call(session: SessionId, call: &ToolCallId) -> bool {
+    super::super::background::cancel_call(session, &crate::test_support::tool_identity(call))
+}
+#[cfg(test)]
+fn cancel_session(session: SessionId) {
+    super::super::background::close_session(session);
+}
+
+// Observation only: production cancellation and ownership live in background.
+#[cfg(test)]
+type Observations = Mutex<HashMap<(SessionId, ToolCallId), std::sync::Weak<Mutex<ExecutionState>>>>;
+#[cfg(test)]
+fn process_observations() -> &'static Observations {
+    static STATES: OnceLock<Observations> = OnceLock::new();
+    STATES.get_or_init(Mutex::default)
+}
+#[cfg(test)]
+impl Drop for Registration {
+    fn drop(&mut self) {
+        lock(process_observations()).retain(|_, state| !state.ptr_eq(&Arc::downgrade(&self.state)));
     }
 }
-
-pub(crate) fn cancel_session(session_id: SessionId) {
-    let mut entries = lock(table());
-    let keys: Vec<_> = entries
-        .keys()
-        .filter(|(id, _)| *id == session_id)
-        .cloned()
-        .collect();
-    let states: Vec<_> = keys
-        .into_iter()
-        .filter_map(|key| entries.remove(&key))
-        .collect();
-    drop(entries);
-    for state in states {
-        cancel(&state);
-    }
-}
-
 #[cfg(test)]
-pub(super) fn is_running(session_id: SessionId, call_id: &ToolCallId) -> bool {
-    lock(table())
-        .get(&(session_id, call_id.clone()))
-        .is_some_and(|state| lock(state).process.is_some())
+pub(super) fn is_running(session: SessionId, call: &ToolCallId) -> bool {
+    lock(process_observations())
+        .get(&(session, call.clone()))
+        .and_then(std::sync::Weak::upgrade)
+        .is_some_and(|state| lock(&state).process.is_some())
 }
-
 #[cfg(test)]
-pub(super) fn is_session_queued(session_id: SessionId) -> bool {
-    session_queues()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .contains_key(&session_id)
+pub(super) fn is_session_queued(session: SessionId) -> bool {
+    lock(session_queues()).contains_key(&session)
 }
 
 // --- per-session bash FIFO ---------------------------------------------
@@ -267,9 +239,10 @@ mod tests {
     #[test]
     fn cancelling_one_session_preserves_another_with_the_same_call_id() {
         let call_id = ToolCallId("shared".into());
-        let first = Registration::new(SessionId::new(), call_id.clone());
+        let first_session = SessionId::new();
+        let first = Registration::new(first_session, call_id.clone());
         let second = Registration::new(SessionId::new(), call_id.clone());
-        assert!(cancel_call(first.key.0, &call_id));
+        assert!(cancel_call(first_session, &call_id));
         assert!(first.is_cancelled());
         assert!(!second.is_cancelled());
     }

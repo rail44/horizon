@@ -492,6 +492,7 @@ impl ToolSessionState {
 /// delivered back to the UI thread on (see `tools::bash::BashCompletion`).
 #[derive(Clone)]
 pub(crate) struct SessionRuntime {
+    _work: std::rc::Rc<super::background::SessionOwner>,
     pub tool_state: ToolSessionState,
     pub live_state: LiveState,
     pub async_results: crossbeam_channel::Sender<ToolCompletion>,
@@ -515,9 +516,16 @@ pub fn register_session_runtime(
     async_results: crossbeam_channel::Sender<ToolCompletion>,
 ) {
     SESSION_RUNTIMES.with(|runtimes| {
-        runtimes.borrow_mut().insert(
+        let mut runtimes = runtimes.borrow_mut();
+        // Environment activation replaces tool state within the same session.
+        let owner = runtimes
+            .get(&session_id)
+            .map(|runtime| runtime._work.clone())
+            .unwrap_or_else(|| std::rc::Rc::new(super::background::SessionOwner::new(session_id)));
+        runtimes.insert(
             session_id,
             SessionRuntime {
+                _work: owner,
                 tool_state,
                 live_state,
                 async_results,
@@ -545,10 +553,12 @@ pub(crate) fn live_frame_for_session(session_id: SessionId) -> Option<AgentFrame
 /// find anything to execute against. Safe no-op for unknown ids (e.g.
 /// terminal sessions, which never register).
 pub fn unregister_session_runtime(session_id: SessionId) {
-    crate::tools::bash::cancel_session(session_id);
-    crate::tools::web::cancel_session(session_id);
-    crate::tools::explore::cancel_session(session_id);
+    // Withdraw launch capability before closing its work group. A pass that
+    // already acquired the capability holds a registration through setup.
     crate::tools::moa::unregister_exploration_host(session_id);
+    super::background::close_session(session_id);
+    super::web::clear_session_approvals(session_id);
+    crate::tools::explore::cancel_session(session_id);
     SESSION_RUNTIMES.with(|runtimes| {
         runtimes.borrow_mut().remove(&session_id);
     });
