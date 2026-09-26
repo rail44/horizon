@@ -1,7 +1,8 @@
 # ACP 化の実装計画
 
-Status: plan 2026-09-27。設計は `docs/acp-agentd-design.md`、決定は board #63
-（本文と 2026-09-27 のコメント）。実装は未着手。
+Status: plan 2026-09-27、main `c96f685a` に照らして更新。設計は
+`docs/acp-agentd-design.md`、決定は board #63（本文と 2026-09-27 のコメント）。
+段 A は着手済み。
 
 ## 前提となる調査結果
 
@@ -33,16 +34,46 @@ crate の実行モデルで守ること。
   経路で送受信できる。`_meta` は `serde_json::Map`。v2 では capability の
   `_meta` を直接書く（`MetaCapability` は v1 専用）。
 
+## 今の継ぎ目（main `c96f685a`）
+
+置き換える対象は次の三箇所に閉じている。session loop、`frame`、
+`transcript`、persistence は wire に依存していない。
+
+- **agentd**: `hub.rs`（384、`SessionHub` の remoc 実装）、`hub/attachment.rs`
+  （68、attachment の pump）、`session/connection.rs`（774、attach と
+  hub メソッドの本体）、`session/events.rs`（123、publish 境界）、
+  `session/attachment.rs`（216、`Streams` / `SessionStream` / `Bootstrap` /
+  `AttachmentLease` / `capture`）。
+- **`horizon-agent`**: `wire.rs`（333、`AgentWireEvent` 10 変種）、
+  `wire/hub.rs`（418、`SessionHub` 11 メソッド、`AGENT_PROTOCOL_VERSION` 28）。
+- **シェル**: `src/runtime/agent.rs`（672）、`runtime/attachment.rs`（161、
+  `AttachmentState` と `AgentUpdate`）、`runtime/routing.rs`（382）、
+  `runtime/mod.rs`（704、`AgentdHandle` と `AgentSessionHandle`）、
+  `src/agent/session.rs`（552）。
+
+attach の仕組みは atomic になっている。`connection.attach(id)` が
+`Bootstrap` を返し、`capture()` が session thread 上で history と
+メタデータ（model、selection、workspace_root、進行中の tool call preview、
+実行中 task）を一度に取り、pump が `ReplayStarted`、history、メタデータ、
+`ReplayComplete` の順で流してから live に切り替える。購読は一セッションに
+一つで、新しい attach は前の lease を `Replaced` で終え、client の command は
+現行 lease からしか通らない。live が詰まれば `Lagged` で購読が落ちる。
+
+承認は `ToolCallIdentity { call_id, occurrence_id }` で鍵付けされる。再試行は
+同じ call_id の下に新しい occurrence を作り、古い試行は
+`ToolOutcome::Superseded { retry_occurrence_id }` で閉じる。
+
 ## 構成
 
 ### 新 crate `crates/horizon-acp`
 
-シェルと agentd の両方が依存する拡張語彙。
+シェルと agentd の両方が依存する拡張語彙。`horizon-agent` には依存せず、
+`contract` の型を写した plain な serde 構造体を持つ（変換は agentd 側）。
 
 - `_horizon/*` の要求と通知の型（下表）。
-- `_meta.horizon` に載せる構造体（`SessionNewMeta`、`SessionInfoMeta`、
-  `ToolCallMeta`、`ApprovalMeta`、`PermissionResponseMeta`、`MessageMeta`）と、
-  それを `Meta` に出し入れするヘルパ。
+- `_meta.horizon` に載せる構造体（`InitializeMeta`、`SessionNewMeta`、
+  `SessionInfoMeta`、`ToolCallMeta`、`ApprovalMeta`、`PermissionResponseMeta`、
+  `MessageMeta`）と、それを `Meta` に出し入れするヘルパ。
 - `HORIZON_ACP_EXT_VERSION`。`initialize` の `_meta.horizon.ext_version` で
   両端が突き合わせる lockstep。今の `AGENT_PROTOCOL_VERSION` の後継。
 - スキーマ artifact `crates/horizon-acp/schema/acp-ext-wire.json`。schemars で
@@ -62,10 +93,13 @@ crate の実行モデルで守ること。
 | client→agent 要求 | `_horizon/drain` | `drain` |
 | agent→client 要求 | `_horizon/host_tool` | `HostToolRequest` / `HostToolResponse` |
 | agent→client 通知 | `_horizon/task_progress` | `AgentWireEvent::TaskProgress` |
-| agent→client 通知 | `_horizon/tool_call_progress` | `AgentWireEvent::ToolCallProgress` |
+| agent→client 通知 | `_horizon/tool_call_progress` | `ToolCallProgress` と `ToolCallProgressClosed` |
 | agent→client 通知 | `_horizon/memory` | `MemoryDigest` / `MemoryCheckpointMissed` |
-| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`skipped_lines` |
+| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`skipped_lines`、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
 | agent→client 通知 | `_horizon/provider_request` | `ProviderRequestSent` / `FirstToken` / `Finished`（turn receipt 用） |
+
+`ReplayStarted` / `ReplayComplete` は `session/resume` の要求と応答に対応する
+ので拡張は要らない。
 
 `_meta.horizon` に載せるもの。
 
@@ -74,15 +108,16 @@ crate の実行モデルで守ること。
 | `initialize` 両方向 | `ext_version`、`binary_id` |
 | `session/new` 要求 | `session_id`（シェル発行）、`provider_id`、`role_id`、`isolate`、`spawn_source_session_id` |
 | `session/new` 応答、`SessionInfo` | `workspace_root`、`parent_session_id`、`role_id`、`provider_id` |
-| `tool_call_update` | `occurrence_id`、`denied`、`auto_approved`、`policy_tier`、`tool_id` |
-| `request_permission` 要求 | `call_id`、`occurrence_id`、`ApprovalKind` の構造化 payload |
+| `tool_call_update` | `call_id`（toolCallId は occurrence_id）、`tool_id`、`outcome`（Succeeded / Failed / Denied / Cancelled / Superseded{retry_occurrence_id}）、`auto_approved`、`policy_tier` |
+| `request_permission` 要求 | `identity`（call_id、occurrence_id）、`ApprovalKind` の構造化 payload |
 | `request_permission` 応答 | deny の `reason` |
 | `user_message` / `agent_message` | 役割 `TaskNotification` / `AutoContinue` |
 | `state_update` idle | `stop_reason` の独自値 `_horizon/failed`、`_horizon/doom_loop` |
 
 線を越えないもの（agentd 内に留まる）: Input routing 系 6 種、Environment 系
 3 種、`MoaPassStarted`、`MemorySeeded`、`ApprovalResolved`、
-`ContinueTurnRequested`、`ProviderRequestUsage` は `usage_update` で代替。
+`ContinueTurnRequested`、`ConversationRecorded`。`ProviderRequestUsage` は
+`usage_update` で代替。
 
 ### agentd 側
 
@@ -95,37 +130,46 @@ crate の実行モデルで守ること。
   - `initialize`: `_meta.horizon.ext_version` を照合し、不一致は JSON-RPC
     error で拒否（今の `HandshakeRejected` 相当）。応答に
     `capabilities.session = {}` と `_meta.horizon`。
-  - `session/new`: `_meta.horizon.session_id` を採用し `spawn_session_thread`。
+  - `session/new`: `_meta.horizon.session_id` を採用し `handle_session_new`。
     応答の `config_options` に category `model` の select（現在の
     provider・model）。
-  - `session/list`、`session/resume`（`replay_from: Start` なら
-    `live_state.events()` を下の写像で流してから応答）、`session/close`
-    （`Command::Shutdown`）、`session/prompt`（`Command::UserMessage`、
-    応答は messageId。キューは今のまま agentd 側）、`session/cancel`、
-    `session/set_config_option`（`Command::SetSessionModel`）。
+  - `session/resume`: `connection.attach(id)` で `Bootstrap` を得て、
+    `capture()` の history とメタデータを下の写像で流してから
+    `ResumeSessionResponse` を返す。メタデータのうち model/selection は
+    `config_option_update`、workspace_root は `_meta`、preview と task は
+    `_horizon/tool_call_progress` と `_horizon/task_progress`。
+  - `session/list`、`session/close`（`Command::Shutdown`）、`session/prompt`
+    （`Command::UserMessage`、応答は messageId。キューは今のまま agentd
+    側）、`session/cancel`、`session/set_config_option`
+    （`set_session_model` の本体）。
   - `_horizon/*` の要求は今の hub メソッドの本体をそのまま呼ぶ。
-- **イベントの sink の差し替え。** `session/events.rs::send_session_event`
-  と `agent_subscribers` の型を `AgentWireEvent` から「接続への送信ハンドル」
-  に変え、`contract::Event` から v2 `SessionUpdate` と `_horizon/*` 通知への
-  写像を接続側に置く。写像はセッション単位の状態を持つ:
+- **pump の差し替え。** `hub/attachment.rs::start(Bootstrap)` が remoc の
+  `AgentAttachment` チャネルに流している部分を、接続へ `session/update` と
+  `_horizon/*` 通知を送る形に変える。`Streams` / `SessionStream` /
+  `AttachmentLease` の意味（一購読、`Replaced`、`Lagged`、command は現行
+  lease のみ）はそのまま使い、`AttachmentEnd` は `_horizon/session_event` で
+  通知する。`Lagged` を受けたシェルは `session/resume` を出し直す。
+- **`contract::Event` から v2 更新への写像**は接続側に置き、セッション単位の
+  状態を持つ:
   - messageId は再生でも同じ値になるよう `turn_id` と turn 内の序数から
     決める。
   - `StateChanged` と `TurnEnded` から `state_update`（running / idle+
     stop_reason / requires_action）を作る。
-  - `ToolCallRequested` / `Started` / `Finished` は一つの `tool_call_update`
-    系列（初出で作成）。kind はカタログから（`fs.read`→read、`fs.edit`→edit、
+  - `ToolCallRequested` / `Started` / `Finished` は toolCallId =
+    occurrence_id の `tool_call_update` 系列（初出で作成）。`ToolOutcome` は
+    status（completed / failed / cancelled）と `_meta.horizon.outcome` に
+    分ける。kind はカタログから（`fs.read`→read、`fs.edit`→edit、
     `bash`→execute、`web_fetch`→fetch、`fs.grep`/`fs.glob`→search）。
     `fs.edit` の diff content は `transcript/diff.rs` の再構成を agentd 側で
     行う。
 - **承認の往復。** `ApprovalRequested` はイベントではなく agentd 発の
   `session/request_permission` 要求になる。承認待ちごとに spawn したタスクが
-  要求を送って応答を待ち、`Approve` / `Deny{reason}` を session loop に渡す。
+  要求を送って応答を待ち、`ApproveToolCall{identity}` /
+  `DenyToolCall{identity, reason}` を `dispatch_inbound_command` に渡す。
   選択肢は `ApprovalKind` から組む（Standard は allow_once / reject_once、
   DomainGrant は「ドメインを許可して再実行」の allow_once など）。
-  **再接続時は、まだ保留中の承認を `session/resume` 後に再度要求する**
+  **再接続時は、まだ保留中の承認を `session/resume` の応答後に再度要求する**
   （前の接続とともに要求が死ぬため）。今の無人時拒否はそのまま。
-- `agent_subscribers` の「一セッションに一購読、新しい attach が置き換える」
-  意味は保つ。
 
 ### シェル側
 
@@ -135,6 +179,11 @@ crate の実行モデルで守ること。
   session_id でセッションへ配り、`RequestPermissionRequest` は `Responder`
   をセッションに預ける（ユーザーの操作か CLI の approve/deny で応答、
   cancel 時は `Cancelled`）。`_horizon/host_tool` は今の host tool 経路へ。
+- `runtime/attachment.rs` の `AttachmentState`（Connecting / Restoring /
+  Ready / Failed / Disconnected）と `AgentUpdate` は残す。Restoring は
+  `session/resume` 送信から応答まで、Ready は応答受領、Failed は再生途中の
+  切断か `Lagged`、Disconnected は live 中の切断に対応させる。command を
+  Ready まで待たせる今の挙動も保つ。
 - `common.rs` の remoc 形の部分（`connect_hub`、`classify_connect_error`、
   `StreamEnd`）は terminald 用に残し、agent 側は ACP 用の接続と失敗分類を
   `agent.rs` に持つ。version 不一致の判定は `initialize` の error で行い、
@@ -146,11 +195,13 @@ crate の実行モデルで守ること。
   `src/agent/turns` の変更を最小にする。`crates/horizon-agent/src/frame` と
   `live.rs` は agentd 側（再生・永続化）で使われ続ける。シェルの
   `horizon-agent` 依存は `transcript` の描画ヘルパのために当面残す。
-- `AgentSession` が送るものは `Prompt`、`Cancel`、`Approve{call_id}`、
-  `Deny{call_id, reason}`、`ContinueTurn`、`Close`、`SetModel` の七つ。
+- `AgentSession` が送るものは `Prompt`、`Cancel`、`Approve{identity}`、
+  `Deny{identity, reason}`、`ContinueTurn`、`Close`、`SetModel` の七つ。
   `control_plane.rs` の語彙はこの七つに写す。
 - `session_lifecycle.rs` / `commands.rs` / `restore.rs` / `modals.rs` の
   `AgentdHandle` 呼び出しは名前を保ち、中身だけ ACP 要求に変える。
+- `src/agent/auxiliary.rs`（タイトル要約の補助 AI）は provider へ直接 HTTP
+  を打つだけで wire を使わない。対象外。
 
 ### 外部エージェント（後段）
 
@@ -167,10 +218,12 @@ crate の実行モデルで守ること。
 
 | 今 | 後 |
 |---|---|
-| `crates/horizon-agentd/tests/e2e.rs`（23 件） | crate の `Client.v2()` で socket に繋ぐ形に書き換え。項目は保つ |
+| `crates/horizon-agentd/tests/e2e.rs`（28 件） | crate の `Client.v2()` で socket に繋ぐ形に書き換え。項目は保つ |
+| `crates/horizon-agentd/src/session/attachment/tests.rs`（9 件） | agentd 内部。そのまま |
 | `crates/horizon-daemon-testkit/src/hub.rs` | ACP の接続・drain ヘルパに置き換え |
 | `crates/horizon-terminald/tests/e2e.rs` の agentd drain | `_horizon/drain` |
-| `src/runtime/tests.rs` の `FakeSessionHub`（27 件） | crate の `Channel::duplex()` 上で偽の v2 agent を動かす |
+| `src/runtime/tests.rs` の `FakeSessionHub`（31 件） | crate の `Channel::duplex()` 上で偽の v2 agent を動かす |
+| `src/runtime/routing/tests.rs`（7 件）、`runtime/attachment.rs` の 2 件 | 型を差し替えて保つ |
 | `crates/horizon-agent/tests/wire_schema.rs` | `crates/horizon-acp/tests/wire_schema.rs` |
 | `crates/horizon-agent/tests/skew.rs`（Postbag） | 削除 |
 | `scripts/check-wire-schema.sh` | `agent-wire.json` の削除を RESHAPE にしない移行の腕を足す（`session-wire.json` の腕と同じ形） |
@@ -184,15 +237,16 @@ crate の実行モデルで守ること。
 
 | 段 | 内容 | 主な対象 |
 |---|---|---|
-| A | `horizon-acp` crate、拡張型、`_meta` 構造体、版定数、schema artifact、checker の移行の腕 | 新 crate、`scripts/check-wire-schema.sh` |
-| B | agentd を v2 agent に。sink の差し替え、写像、承認の往復、resume の再生、`_horizon/*` | `crates/horizon-agentd/src/{hub,main}.rs`、`session/{connection,events,approval}.rs`、`horizon-wire/src/daemon.rs` |
-| C | シェルを v2 client に。`src/agent/model/` の fold、runtime、control plane の写し | `src/runtime/{agent,routing,mod}.rs`、`src/agent/{session,model}`、`src/workspace/*` |
-| D | 試験と script の書き換え、`horizon-agent`/agentd/root からの remoc 除去、`wire.rs`/`wire/hub.rs`/`agent-wire.json` の削除、AGENTS.md の protocol bump の記述更新 | 上の試験面の表 |
+| A | `horizon-acp` crate、拡張型、`_meta` 構造体、版定数、schema artifact | 新 crate |
+| B | agentd を v2 agent に。pump の差し替え、写像、承認の往復、resume の再生、`_horizon/*` | `crates/horizon-agentd/src/{hub,main}.rs`、`hub/attachment.rs`、`session/{connection,events,approval}.rs`、`horizon-wire/src/daemon.rs` |
+| C | シェルを v2 client に。`src/agent/model/` の fold、runtime、control plane の写し | `src/runtime/{agent,attachment,routing,mod}.rs`、`src/agent/{session,model}`、`src/workspace/*` |
+| D | 試験と script の書き換え、`horizon-agent`/agentd/root からの remoc 除去、`wire.rs`/`wire/hub.rs`/`agent-wire.json` の削除、checker の移行の腕、AGENTS.md の protocol bump の記述更新、古いコメント（`hub.rs` の「TaskProgress は再生しない」等）の整理 | 上の試験面の表 |
 | E | 外部エージェント（v1 client、spawn、正規化、ペイン配線）。config の相談を先に | `src/runtime/external_acp.rs` |
 
-規模の目安（行数は 2026-09-27 の `wc -l`）: シェル runtime 側で書き換え
-約 1,700 行と試験 1,700 行、agentd 側で hub 450 と connection 889 と
-events 78、e2e 2,191 行。
+規模の目安（行数は main `c96f685a` の `wc -l`）: シェル runtime 側で
+`agent.rs` 672、`attachment.rs` 161、`routing.rs` 382、`mod.rs` の agent 部分、
+試験 `tests.rs` 31 件。agentd 側で `hub.rs` 384、`hub/attachment.rs` 68、
+`connection.rs` 774、`events.rs` 123、e2e 28 件。
 
 ## 実装中に決めてよいこと
 
