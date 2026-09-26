@@ -1,5 +1,5 @@
-//! What a board row reports about the session bound to it: the states, how
-//! each one reads, and the indicator element.
+//! What a board row reports about the session bound to it: the states and
+//! how each one reads.
 //!
 //! No agent-runtime types appear here, so the rows draw the same way in a
 //! preview as in the shell; [`super::sessions`] is the native half that
@@ -7,9 +7,7 @@
 
 use std::collections::HashMap;
 
-use gpui::*;
-use gpui_component::tooltip::Tooltip;
-use gpui_component::{Icon, IconName, Sizable as _};
+use gpui::Hsla;
 use horizon_board::Item;
 use horizon_workspace::SessionId;
 
@@ -37,27 +35,6 @@ pub(crate) enum BoardSessionActivity {
 }
 
 impl BoardSessionActivity {
-    pub(crate) fn is_running(self) -> bool {
-        matches!(self, Self::Running | Self::ToolRunning)
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Loading => "Loading",
-            Self::Unavailable => "Unavailable",
-            Self::Starting => "Starting",
-            Self::Running => "Running",
-            Self::ToolRunning => "Tool running",
-            Self::WaitingForInput => "Waiting for input",
-            Self::WaitingForApproval => "Waiting for approval",
-            Self::Cancelled => "Cancelled",
-            Self::Completed => "Completed",
-            Self::Failed => "Error",
-            Self::Paused => "Paused",
-            Self::Terminated => "Terminated",
-        }
-    }
-
     /// Which of an item's two bound sessions the row shows when both are
     /// bound: the higher number wins.
     fn priority(self) -> u8 {
@@ -81,65 +58,11 @@ impl BoardSessionActivity {
             _ => theme::text_muted(),
         }
     }
-
-    /// The shipped board pane's row indicator. A running session draws a
-    /// spinner here; a guest paces no frames of its own, so the views in
-    /// this module use a still chip instead
-    /// (`docs/preview-pane-design.md`, "Frame pacing").
-    pub(crate) fn indicator(self, item: u64, selected: bool) -> impl IntoElement {
-        let color = if selected {
-            theme::readable_on(self.color(), theme::surface_selected())
-        } else {
-            self.color()
-        };
-        let symbol = if self.is_running() {
-            gpui_component::spinner::Spinner::new()
-                .with_size(px(12.0))
-                .color(color)
-                .into_any_element()
-        } else {
-            match self {
-                Self::Failed => Icon::new(IconName::TriangleAlert)
-                    .with_size(px(12.0))
-                    .text_color(color)
-                    .into_any_element(),
-                Self::WaitingForApproval | Self::Paused => Icon::new(IconName::Pause)
-                    .with_size(px(12.0))
-                    .text_color(color)
-                    .into_any_element(),
-                Self::Unavailable | Self::Cancelled | Self::Terminated => {
-                    Icon::new(IconName::CircleX)
-                        .with_size(px(12.0))
-                        .text_color(color)
-                        .into_any_element()
-                }
-                Self::Completed => Icon::new(IconName::CircleCheck)
-                    .with_size(px(12.0))
-                    .text_color(color)
-                    .into_any_element(),
-                _ => div()
-                    .size(px(7.0))
-                    .rounded_full()
-                    .border_1()
-                    .border_color(color)
-                    .into_any_element(),
-            }
-        };
-        div()
-            .id(("board-session-activity", item))
-            .flex_none()
-            .size(px(12.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(symbol)
-            .tooltip(move |window, cx| Tooltip::new(self.label()).build(window, cx))
-    }
 }
 
 /// The activity recorded for one bound session id. An id nothing has
 /// reported on yet is still being resolved.
-pub(crate) fn session_activity(
+fn session_activity(
     id: &str,
     states: &HashMap<SessionId, BoardSessionActivity>,
 ) -> BoardSessionActivity {

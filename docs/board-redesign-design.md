@@ -14,9 +14,11 @@ cutover details are recorded in the implementation plan below.
 Current implementation entry points are `crates/horizon-board` and
 `horizon-logd` for data, `horizon-agent/src/providers/rig/session/` and
 `horizon-agentd/src/session/` for runtime boundaries,
-`horizon-agentd/src/board_flow/` for delivery/roles, and `src/board_pane/` for the
-view. See the [implementation map](board-redesign-implementation-plan.md) for
-package status and verification obligations.
+`horizon-agentd/src/board_flow/` for delivery/roles, and `src/board/` for the
+views. See the [implementation map](board-redesign-implementation-plan.md) for
+package status and verification obligations. The single list/detail pane
+this section describes was replaced 2026-09-27 by two panes, a task list
+and one task's thread, side by side in a split.
 
 Current choices: closure is a separate `is_closed` flag alongside free-form
 `status`; finished and withdrawn tasks are both closed. Skills control this flag

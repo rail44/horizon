@@ -22,7 +22,7 @@ use horizon_workspace::commands::CommandId;
 use horizon_workspace::{PaneId, SessionId, Workspace, WORKSPACE_STATE_VERSION};
 
 use crate::agent::{AgentSession, AgentView};
-use crate::board_pane::BoardPaneView;
+use crate::board::{BoardListView, BoardThreadView};
 use crate::model_picker::ModelPickerDelegate;
 use crate::palette::PaletteDelegate;
 use crate::preview::{PreviewPane, PreviewTarget};
@@ -206,7 +206,8 @@ enum PaneView {
 enum CachedPaneLeaf {
     Terminal(Entity<TerminalView>),
     ThemeSettings(Entity<ThemeSettingsView>),
-    Board(Entity<BoardPaneView>),
+    BoardList(Entity<BoardListView>),
+    BoardThread(Entity<BoardThreadView>),
     Preview(Entity<PreviewPane>),
 }
 
@@ -223,7 +224,8 @@ impl CachedPaneLeaf {
         match self {
             Self::Terminal(view) => view.focus_handle(cx),
             Self::ThemeSettings(view) => view.focus_handle(cx),
-            Self::Board(view) => view.focus_handle(cx),
+            Self::BoardList(view) => view.focus_handle(cx),
+            Self::BoardThread(view) => view.focus_handle(cx),
             Self::Preview(view) => view.focus_handle(cx),
         }
     }
@@ -233,7 +235,8 @@ impl CachedPaneLeaf {
         match self {
             Self::Terminal(view) => view.clone().cached(style()).into_any_element(),
             Self::ThemeSettings(view) => view.clone().cached(style()).into_any_element(),
-            Self::Board(view) => view.clone().cached(style()).into_any_element(),
+            Self::BoardList(view) => view.clone().cached(style()).into_any_element(),
+            Self::BoardThread(view) => view.clone().cached(style()).into_any_element(),
             Self::Preview(view) => view.clone().cached(style()).into_any_element(),
         }
     }
@@ -266,8 +269,12 @@ impl PaneView {
         Self::Cached(CachedPaneLeaf::ThemeSettings(view))
     }
 
-    fn board(view: Entity<BoardPaneView>) -> Self {
-        Self::Cached(CachedPaneLeaf::Board(view))
+    fn board_list(view: Entity<BoardListView>) -> Self {
+        Self::Cached(CachedPaneLeaf::BoardList(view))
+    }
+
+    fn board_thread(view: Entity<BoardThreadView>) -> Self {
+        Self::Cached(CachedPaneLeaf::BoardThread(view))
     }
 
     fn preview(view: Entity<PreviewPane>) -> Self {
@@ -345,6 +352,12 @@ pub(crate) struct WorkspaceShell {
     // persisted schema stays a bare tag, so a restored preview pane comes
     // back empty (see `ViewKindState::Preview`).
     preview_targets: HashMap<PaneId, PreviewTarget>,
+    // What the shell listens to on each board pane: the view's request to
+    // open a thread or a task session, and its report of the session ids
+    // the board binds. Held here rather than on the view because a board
+    // view is also built inside a preview plugin, where no shell exists to
+    // subscribe; pruned with `panes`.
+    board_subscriptions: HashMap<PaneId, Vec<Subscription>>,
     // This window — needed by `Reload Agent Runtime`'s post-resume step,
     // which rebuilds pane views from a background thread's async
     // continuation (no `&mut Window` of its own to reuse).
@@ -420,6 +433,7 @@ impl WorkspaceShell {
             reload_in_progress: false,
             panes: HashMap::new(),
             preview_targets: HashMap::new(),
+            board_subscriptions: HashMap::new(),
             window: window.window_handle(),
             focus_handle: cx.focus_handle(),
             palette: None,

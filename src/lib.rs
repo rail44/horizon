@@ -12,7 +12,7 @@
 //! inside each file. `scripts/check-preview-wasm.sh` is what holds the
 //! split.
 //!
-//! A module that carries previews of its own view ([`board_pane`]) is not
+//! A module that carries previews of its own view ([`board`]) is not
 //! gated here; its native-only halves are gated inside it instead.
 
 #![recursion_limit = "256"]
@@ -23,12 +23,7 @@ mod agent;
 // session observation, the events the workspace subscribes to — have no
 // caller in a plugin build, which has no shell above a view.
 #[cfg_attr(target_family = "wasm", allow(dead_code))]
-mod board_next;
-// The shell drives a good part of this module: the subscriptions it installs
-// on the pane, the commands it executes, the accessors it reads. A plugin
-// build has no shell above the pane, so those have no caller there.
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
-mod board_pane;
+mod board;
 #[cfg(not(target_family = "wasm"))]
 mod control_plane;
 #[cfg(not(target_family = "wasm"))]

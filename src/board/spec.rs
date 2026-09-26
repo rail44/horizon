@@ -189,7 +189,7 @@ pub(crate) const ACTION_PAD: Pixels = px(24.0);
 #[cfg(test)]
 mod tests {
     use super::MEASURE_CELLS;
-    use crate::board_next::model::display_width;
+    use crate::board::model::display_width;
 
     #[test]
     fn the_fold_estimate_counts_thirty_six_full_width_glyphs_per_line() {

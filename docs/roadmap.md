@@ -673,9 +673,10 @@ renderer through a fork of Zed's experimental embedded_gpui, reloaded when
 the artifact changes, opened with `horizon preview`. The root package is a
 library plus a thin binary so the plugin can link the theme and the named
 previews. `docs/preview-pane-design.md` describes the design, the measured
-costs, and what does not reach a guest. The board pane is the first real
-view carried this way (`board-list`, `board-list-empty`, `board-detail`,
-over a read-only in-memory store); every other view still needs its
+costs, and what does not reach a guest. The board is the first real
+view carried this way (`board-list`, `board-list-empty`, `board-thread`,
+`board-thread-long`, over a read-only in-memory store); every other view
+still needs its
 outside-world access made replaceable and its module built for wasm. Open
 ends: IME, clipboard, and modifier keys are not forwarded by the fork; a
 failed plugin load leaks one thread in the fork.
@@ -724,8 +725,8 @@ external notification path.
   See [runtime recovery](agent-runtime-split-design.md).
 - **Board closure (#50, 2026-09-18):** `ddc5a15` is integrated and active.
   Independent `is_closed` covers finished and withdrawn work; skills govern
-  closure and status. Closed tasks are hidden by default with Show closed /
-  Hide closed. Existing archived tasks were migrated with history and
+  closure and status. Finished work folds into the list's finished band.
+  Existing archived tasks were migrated with history and
   relationships preserved. See [closure policy](board-redesign-design.md).
 - **Board redesign (2026-09-16):** implemented at `8e057dd`; approved live cutover at `eb6c99c` preserved 47 tasks, 185 messages, ordinary session IDs, layout, and the running terminal daemon. Full host gate (1,952 tests), native GUI, isolated flow, migration rehearsal and independent live recovery verification passed. See [design](board-redesign-design.md) and [implementation and validation](board-redesign-implementation-plan.md).
   `Open Board Organizer` now creates or resumes the project's organizer from
@@ -735,9 +736,11 @@ external notification path.
   delivered to the task session also route its subsequent final report back
   to the board (2026-09-17; see the design's review continuation routing).
   The list distinguishes errors, approval waits, running sessions, and input
-  waits; the detail displays task and reviewer states individually in English.
+  waits; the thread's header band shows the open task's session state.
   The shared session-status query retains a failed turn through idle/replay
   until execution resumes, without changing input acceptance or board data.
+  The single list/detail pane this shipped was replaced 2026-09-27 by two
+  panes — `ViewKind::BoardList` and `ViewKind::BoardThread` in `src/board/`.
 
 - 2026-08-06 Board keeper agent: first board "package" (feature + agent
   definition + skill), external role/skill registration seams,

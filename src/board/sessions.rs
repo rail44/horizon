@@ -76,6 +76,30 @@ pub(crate) trait SessionActivityHost: Sized + 'static {
     fn inventory_pending(&self, id: SessionId) -> bool;
 }
 
+/// What the shell drives on either board view, so the workspace's board
+/// wiring is written once rather than per view: the project directory it
+/// watches, the notice line it reports a failure on, and the two halves of
+/// the session inventory hand-off.
+pub(crate) trait BoardShellView: SessionActivityHost {
+    /// The project directory the shell watches for this view. Only a
+    /// store resolved from a directory has one.
+    fn root(&self) -> Option<std::path::PathBuf>;
+
+    fn set_notice(&mut self, notice: String, cx: &mut Context<Self>);
+
+    /// The shell answered the inventory refresh for these ids, so a
+    /// session it does not hold is now unreachable rather than pending.
+    fn finish_inventory_refresh(&mut self, sessions: &[SessionId]);
+
+    fn observe_sessions(
+        &mut self,
+        available: &HashMap<SessionId, Entity<AgentSession>>,
+        cx: &mut Context<Self>,
+    ) {
+        observe_sessions(self, available, cx);
+    }
+}
+
 /// Observes the shell's existing session entities without extending their
 /// lifetime or starting anything. Called after every board load and after
 /// the shell adopts a session.

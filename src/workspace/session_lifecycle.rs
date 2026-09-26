@@ -1,6 +1,7 @@
 //! Adopt daemon sessions and reconcile session entities and pane views with the model.
 
 use gpui::*;
+use horizon_workspace::commands::CommandId;
 use horizon_workspace::types::SessionKind;
 use horizon_workspace::{PaneKind, SessionId, ViewKind, Workspace};
 use uuid::Uuid;
@@ -8,7 +9,9 @@ use uuid::Uuid;
 use super::session_creation::PendingTerminalSpawn;
 use super::{CachedPaneLeaf, PaneView, WorkspaceShell};
 use crate::agent::{AgentSession, AgentView};
-use crate::board_pane::BoardPaneView;
+use crate::board::events::{BoardSessionsRefreshed, OpenTaskSession, OpenTaskThread};
+use crate::board::sessions::BoardShellView;
+use crate::board::{BoardListView, BoardThreadView};
 use crate::preview::PreviewPane;
 use crate::runtime::{AgentSessionHandle, AgentdHandle, TerminalSessionHandle, TerminaldHandle};
 use crate::terminal::{TerminalSession, TerminalView};
@@ -290,6 +293,8 @@ impl WorkspaceShell {
         let pane_ids = self.workspace.all_pane_ids();
         self.panes.retain(|id, _| pane_ids.contains(id));
         self.preview_targets.retain(|id, _| pane_ids.contains(id));
+        self.board_subscriptions
+            .retain(|id, _| pane_ids.contains(id));
         for pane_id in pane_ids {
             if self.panes.contains_key(&pane_id) {
                 continue;
@@ -325,35 +330,50 @@ impl WorkspaceShell {
                 );
             } else if matches!(
                 self.workspace.pane_kind(pane_id),
-                Some(PaneKind::View(ViewKind::Board))
+                Some(PaneKind::View(ViewKind::BoardList))
             ) {
-                let session_root = self.workspace.active_session_id().and_then(|id| {
-                    self.workspace
-                        .session_workspace_root(id)
-                        .map(|p| p.to_path_buf())
-                });
-                let cwd = std::env::current_dir().ok();
-                let view = cx.new(|cx| BoardPaneView::new(session_root, cwd, window, cx));
-                let subscription = cx.subscribe_in(
+                let source = self.board_store_source();
+                let view = cx.new(|cx| BoardListView::new(source, Default::default(), window, cx));
+                let open = cx.subscribe_in(
                     &view,
                     window,
-                    move |shell, _, event: &crate::board_pane::BoardCommand, window, cx| {
+                    move |shell, _, _: &OpenTaskThread, window, cx| {
+                        // The event names the list's selected task, which
+                        // is where the command reads its target from too.
                         shell.workspace.activate_pane(pane_id);
-                        shell.execute(event.0, window, cx);
+                        shell.execute(CommandId::OpenBoardRelatedItem, window, cx);
                     },
                 );
-                view.update(cx, |view, _| view.command_subscription = Some(subscription));
-                let inventory_subscription = cx.subscribe(
-                    &view,
-                    |shell, view, event: &crate::board_pane::BoardSessionsRefreshed, cx| {
+                let inventory =
+                    cx.subscribe(&view, |shell, view, event: &BoardSessionsRefreshed, cx| {
                         shell.refresh_board_sessions(view, event.0.clone(), cx);
+                    });
+                self.board_subscriptions
+                    .insert(pane_id, vec![open, inventory]);
+                self.watch_board_pane(&view, cx);
+                self.panes.insert(pane_id, PaneView::board_list(view));
+            } else if let Some(PaneKind::View(ViewKind::BoardThread { task })) =
+                self.workspace.pane_kind(pane_id)
+            {
+                let source = self.board_store_source();
+                let view =
+                    cx.new(|cx| BoardThreadView::new(source, Default::default(), task, window, cx));
+                let open = cx.subscribe_in(
+                    &view,
+                    window,
+                    move |shell, _, _: &OpenTaskSession, window, cx| {
+                        shell.workspace.activate_pane(pane_id);
+                        shell.execute(CommandId::OpenBoardTaskSession, window, cx);
                     },
                 );
-                view.update(cx, |view, _| {
-                    view.inventory_subscription = Some(inventory_subscription)
-                });
-                self.watch_board_pane(view.clone(), cx);
-                self.panes.insert(pane_id, PaneView::board(view));
+                let inventory =
+                    cx.subscribe(&view, |shell, view, event: &BoardSessionsRefreshed, cx| {
+                        shell.refresh_board_sessions(view, event.0.clone(), cx);
+                    });
+                self.board_subscriptions
+                    .insert(pane_id, vec![open, inventory]);
+                self.watch_board_pane(&view, cx);
+                self.panes.insert(pane_id, PaneView::board_thread(view));
             } else if matches!(
                 self.workspace.pane_kind(pane_id),
                 Some(PaneKind::View(ViewKind::Preview))
@@ -378,14 +398,32 @@ impl WorkspaceShell {
         cx.notify();
     }
 
-    fn watch_board_pane(&self, view: Entity<BoardPaneView>, cx: &mut Context<Self>) {
+    /// The store every board pane this shell opens reads through: the
+    /// active session's `workspace_root`, else the shell process's cwd
+    /// (`board::execute::shell_store_source`).
+    fn board_store_source(&self) -> crate::board::execute::BoardStoreSource {
+        let session_root = self.workspace.active_session_id().and_then(|id| {
+            self.workspace
+                .session_workspace_root(id)
+                .map(|path| path.to_path_buf())
+        });
+        crate::board::execute::shell_store_source(session_root, std::env::current_dir().ok())
+    }
+
+    /// Registers this view's project directory with `horizon-agentd`, so
+    /// a board write from a session reaches the log this view reads.
+    pub(super) fn watch_board_pane<V: BoardShellView>(
+        &self,
+        view: &Entity<V>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(handle) = self.agentd.clone() else {
             return;
         };
         let Some(root) = view.read(cx).root() else {
             return;
         };
-        let epoch = view.read(cx).navigation_epoch();
+        let view = view.clone();
         cx.spawn(async move |this, cx| {
             let request = handle.clone();
             let result = cx
@@ -397,12 +435,11 @@ impl WorkspaceShell {
                     .agentd
                     .as_ref()
                     .is_none_or(|current| !current.same_runtime(&handle))
-                    || view.read(cx).navigation_epoch() != epoch
                 {
                     return;
                 }
                 if let Err(error) = result {
-                    view.update(cx, |view, cx| view.set_error(error, cx));
+                    view.update(cx, |view, cx| view.set_notice(error, cx));
                 }
             });
         })
@@ -425,8 +462,14 @@ impl WorkspaceShell {
     /// and the reload's actual pane-rebuild step.
     pub(super) fn spawn_agent_resume(&self, handle: AgentdHandle, cx: &mut Context<Self>) {
         for pane in self.panes.values() {
-            if let PaneView::Cached(CachedPaneLeaf::Board(view)) = pane {
-                self.watch_board_pane(view.clone(), cx);
+            match pane {
+                PaneView::Cached(CachedPaneLeaf::BoardList(view)) => {
+                    self.watch_board_pane(&view.clone(), cx)
+                }
+                PaneView::Cached(CachedPaneLeaf::BoardThread(view)) => {
+                    self.watch_board_pane(&view.clone(), cx)
+                }
+                _ => {}
             }
         }
         let window_handle = self.window;

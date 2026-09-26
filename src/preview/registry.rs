@@ -10,8 +10,7 @@ use gpui::{
     div, rgb, AnyView, App, Context, IntoElement, ParentElement as _, Render, Styled as _, Window,
 };
 
-use crate::board_next::previews as board_next;
-use crate::board_pane::previews as board;
+use crate::board::previews as board;
 use crate::preview::sample;
 
 /// One entry: the name the shell selects by, and the constructor that builds
@@ -36,24 +35,12 @@ const PREVIEWS: &[Preview] = &[
         build: board::build_list_empty,
     },
     Preview {
-        name: board::DETAIL,
-        build: board::build_detail,
+        name: board::THREAD,
+        build: board::build_thread,
     },
     Preview {
-        name: board_next::THREAD,
-        build: board_next::build_thread,
-    },
-    Preview {
-        name: board_next::THREAD_LONG,
-        build: board_next::build_thread_long,
-    },
-    Preview {
-        name: board_next::LIST,
-        build: board_next::build_list,
-    },
-    Preview {
-        name: board_next::LIST_EMPTY,
-        build: board_next::build_list_empty,
+        name: board::THREAD_LONG,
+        build: board::build_thread_long,
     },
 ];
 

@@ -170,8 +170,8 @@ pub(super) fn markdown_body(
 #[cfg(test)]
 mod tests {
     use super::{author_label, post_cells, write_refusal};
-    use crate::board_next::model::Voice;
-    use crate::board_next::spec::{MEASURE_CELLS, OWNER_MEASURE_CELLS};
+    use crate::board::model::Voice;
+    use crate::board::spec::{MEASURE_CELLS, OWNER_MEASURE_CELLS};
     use horizon_board::StoreError;
 
     #[test]

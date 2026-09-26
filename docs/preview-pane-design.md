@@ -41,8 +41,8 @@ for `wasm32-wasip2`:
   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` in the root
   `Cargo.toml`.
 - Modules that need them carry `#[cfg(not(target_family = "wasm"))]` at
-  their declaration in `src/lib.rs`. `theme`, `preview`, `board_pane` and
-  `board_next` build for both targets; every other module is native-only.
+  their declaration in `src/lib.rs`. `theme`, `preview` and `board` build
+  for both targets; every other module is native-only.
   A module that
   carries previews of its own view is gated inside itself instead, so the
   view and the native-only halves it uses can live in one directory.
@@ -87,13 +87,12 @@ The previews in this build:
 | Name | Shows |
 | --- | --- |
 | `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
-| `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
-| `board-next-thread`, `board-next-thread-long` | One task's thread, over the same kind of in-memory store (`src/board_next/`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
-| `board-next-list`, `board-next-list-empty` | The same board's task list as a view of its own: one row per task in rank order as a tree, children indented under their parent and foldable per parent, finished top-level work behind one 「完了」 row at the bottom, and the add-task input pinned under everything. |
+| `board-thread`, `board-thread-long` | One task's thread, over an in-memory store (`src/board/previews.rs`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
+| `board-list`, `board-list-empty` | The same board's task list as a view of its own: one row per task in rank order as a tree, children indented under their parent and foldable per parent, finished top-level work behind one 「完了」 row at the bottom, and the add-task input pinned under everything. |
 
-`src/board_next/` is two views, not one — a thread and a list, each
+`src/board/` is two views, not one — a thread and a list, each
 taking a pane's whole width, with a pane split putting them side by side.
-Both read and write a board through the shipped pane's
+Both read and write a board through the module's own
 `BoardStoreSource`/`run_store_job` pair, so a preview's in-memory store and
 a log-backed one look the same from inside a view; on the former every
 write answers `StoreError::ReadOnly` and lands on the notice line. What
@@ -137,7 +136,7 @@ matter here because Horizon's colors never come from the OS appearance.
 
 ## The pane
 
-`ViewKind::Preview` is a session-less view kind like Board. The workspace
+`ViewKind::Preview` is a session-less view kind like the board's. The workspace
 model carries only the kind; the artifact path and preview name live in
 the shell (`WorkspaceShell::preview_targets`, keyed by pane id), so
 nothing path-shaped enters the persisted schema. After a UI restart a
@@ -198,18 +197,15 @@ primary entry point and the view chooser does not list the preview kind.
   wasmtime. The sample's: it paints its label, a host theme change changes
   what is painted, a reload from the same path re-attaches to the same
   surface with exactly one live instance, and a broken artifact fails the
-  load without disturbing the pane. The board's: `board-list` paints row
-  titles from its sample store and the rows' activity icons reach the host
-  as images, `board-list-empty` paints its chrome and no row, and
-  `board-detail` paints the item's body and its comment thread. The
-  thread view's: `board-next-thread` paints its task's title exactly once —
+  load without disturbing the pane. The
+  thread view's: `board-thread` paints its task's title exactly once —
   the header band, with no list row beside it — and the first post's probe
-  under it, and `board-next-thread-long` shows the long post's first line
+  under it, and `board-thread-long` shows the long post's first line
   and not its deep probe until `j`, `j`, `e` put the post cursor on it and
-  unfold it. The list view's: `board-next-list` paints two row titles and
+  unfold it. The list view's: `board-list` paints two row titles and
   none of the folded first row's children until `l` opens it (and `h`
   folds them away again), and `j` then Enter adds the open notice naming
-  the row the cursor landed on; `board-next-list-empty` paints chrome, no
+  the row the cursor landed on; `board-list-empty` paints chrome, no
   row, and the add-task input. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
@@ -274,9 +270,9 @@ what was measured is that the requests are unpaced, that the executor call
 driving the guest never returns, and that removing the animation returns
 both to idle.
 
-`src/preview/e2e.rs` drives a keystroke into the `board-next` previews partly
-for this: the run to quiescence after it does not return when the view
-paints a repeating animation. The board pane's own `board-list` preview is
-in that state — the row indicator for a running session is a spinner — and
-is therefore driven with no input; an arrow key into it does not return, and
-on a real display the pane burns whole cores from the first click onwards.
+`src/preview/e2e.rs` drives a keystroke into the board previews partly for
+this: the run to quiescence after it does not return when the view paints
+a repeating animation, so a preview that survives a keystroke is a
+preview that has none. A previewable view therefore says its running
+states in still marks — the board's rows carry a text chip for a running
+session, not a spinner.

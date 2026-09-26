@@ -17,13 +17,13 @@ use horizon_workspace::SessionId;
 
 use super::activity::{task_session_state, BoardSessionActivity};
 use super::events::{BoardSessionsRefreshed, OpenTaskSession};
+use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, ThreadCommand};
 use super::parts::{
     activity_label, author_label, chip, fade, key_chip, markdown_body, post_cells, status_tone,
     write_refusal, VIEW_MIN_WIDTH,
 };
 use super::spec::*;
-use crate::board_pane::execute::{run_store_job, BoardStoreSource, StoreJob};
 use crate::theme;
 
 /// One task's thread.
@@ -429,15 +429,33 @@ impl BoardThreadView {
 // ---------------------------------------------------------------------------
 
 /// The half a preview has no caller for: the commands the workspace
-/// executes on the focused pane, the session inventory hand-off, and the
-/// pump's teardown. Nothing calls it in this build - the workspace does
-/// not hold these two views yet.
+/// executes on the focused pane, the session inventory hand-off, and
+/// aiming this pane at another task.
 #[cfg(not(target_family = "wasm"))]
-#[allow(dead_code)]
 impl BoardThreadView {
-    /// The project directory the shell watches for this view.
-    pub(crate) fn root(&self) -> Option<std::path::PathBuf> {
-        self.store.root().map(std::path::Path::to_path_buf)
+    /// The task this pane is showing. The shell keeps the same id in the
+    /// pane's `ViewKind`, and reads it back to tell a result that belongs
+    /// to this task from one left over from the previous one.
+    pub(crate) fn task_id(&self) -> u64 {
+        self.task_id
+    }
+
+    /// Aims this pane at another task. The tab keeps one thread pane, so
+    /// opening a second task reuses this view rather than splitting again:
+    /// everything derived from the old task — the loaded item, the post
+    /// cursor, which posts are unfolded, the notice — is dropped, and the
+    /// new task is read in.
+    pub(crate) fn show_task(&mut self, task: u64, cx: &mut Context<Self>) {
+        if self.task_id == task {
+            return;
+        }
+        self.task_id = task;
+        self.item = None;
+        self.cursor = None;
+        self.expanded_posts.clear();
+        self.notice = None;
+        self.load(cx);
+        cx.notify();
     }
 
     /// The agent session bound to the open task, which is what
@@ -446,21 +464,11 @@ impl BoardThreadView {
         self.item.as_ref().and_then(model::task_session_id)
     }
 
-    pub(crate) fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
-        for id in sessions {
-            self.inventory_pending.remove(id);
-        }
-    }
-
-    pub(crate) fn observe_sessions(
-        &mut self,
-        available: &HashMap<SessionId, Entity<crate::agent::AgentSession>>,
-        cx: &mut Context<Self>,
-    ) {
-        super::sessions::observe_sessions(self, available, cx);
-    }
-
     /// The workspace's command model, mapped onto this view's own.
+    /// `OpenBoardTaskSession` is absent on purpose: attaching a session is
+    /// the shell's, and routing it back into
+    /// `ThreadCommand::OpenTaskSession` would re-emit the event that ran
+    /// it.
     pub(crate) fn board_command(
         &mut self,
         command: horizon_workspace::commands::CommandId,
@@ -472,10 +480,26 @@ impl BoardThreadView {
             CommandId::PostBoardMessage => ThreadCommand::PostMessage,
             CommandId::ToggleBoardClosed => ThreadCommand::ToggleClosed,
             CommandId::SaveBoardState => ThreadCommand::SaveStatus,
-            CommandId::OpenBoardTaskSession => ThreadCommand::OpenTaskSession,
             _ => return,
         };
         self.execute(command, window, cx);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl super::sessions::BoardShellView for BoardThreadView {
+    fn root(&self) -> Option<std::path::PathBuf> {
+        self.store.root().map(std::path::Path::to_path_buf)
+    }
+
+    fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
+        BoardThreadView::set_notice(self, notice, cx);
+    }
+
+    fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
+        for id in sessions {
+            self.inventory_pending.remove(id);
+        }
     }
 }
 

@@ -18,10 +18,10 @@ use horizon_workspace::SessionId;
 
 use super::activity::{task_session_state, BoardSessionActivity};
 use super::events::{BoardSessionsRefreshed, OpenTaskThread};
+use super::execute::{run_store_job, BoardStoreSource, StoreJob};
 use super::model::{self, BoardDragValue, DropHalf, ListCommand, Row};
 use super::parts::{activity_label, chip, status_tone, write_refusal};
 use super::spec::*;
-use crate::board_pane::execute::{run_store_job, BoardStoreSource, StoreJob};
 use crate::theme;
 
 /// The board's task list.
@@ -451,39 +451,21 @@ impl BoardListView {
 
 /// The half a preview has no caller for: the commands the workspace
 /// executes on the focused pane, the session inventory hand-off, and the
-/// pump's teardown. Nothing calls it in this build - the workspace does
-/// not hold these two views yet.
+/// selection the shell opens a thread on.
 #[cfg(not(target_family = "wasm"))]
-#[allow(dead_code)]
 impl BoardListView {
-    /// The project directory the shell watches for this view. Only a store
-    /// resolved from a directory has one.
-    pub(crate) fn root(&self) -> Option<std::path::PathBuf> {
-        self.store.root().map(std::path::Path::to_path_buf)
-    }
-
-    pub(crate) fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
-        self.notice = Some(notice);
-        cx.notify();
-    }
-
-    /// The shell answered the inventory refresh for these ids, so a
-    /// session it does not hold is now unreachable rather than pending.
-    pub(crate) fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
-        for id in sessions {
-            self.inventory_pending.remove(id);
-        }
-    }
-
-    pub(crate) fn observe_sessions(
-        &mut self,
-        available: &HashMap<SessionId, Entity<crate::agent::AgentSession>>,
-        cx: &mut Context<Self>,
-    ) {
-        super::sessions::observe_sessions(self, available, cx);
+    /// The task the shell opens a thread for. The same id
+    /// [`OpenTaskThread`] carries: the event announces the request and
+    /// `CommandId::OpenBoardRelatedItem` reads the target back from here,
+    /// so a palette invocation opens the selected row too.
+    pub(crate) fn selected_task(&self) -> Option<u64> {
+        self.selected
     }
 
     /// The workspace's command model, mapped onto this view's own.
+    /// `OpenBoardRelatedItem` is absent on purpose: opening a thread is a
+    /// pane operation the shell carries out, and routing it back into
+    /// `ListCommand::OpenThread` would re-emit the event that ran it.
     pub(crate) fn board_command(
         &mut self,
         command: horizon_workspace::commands::CommandId,
@@ -496,8 +478,7 @@ impl BoardListView {
             CommandId::MoveBoardTaskUp => ListCommand::MoveUp,
             CommandId::MoveBoardTaskDown => ListCommand::MoveDown,
             CommandId::ReorderBoardTask => ListCommand::Reorder,
-            CommandId::OpenBoardRelatedItem => ListCommand::OpenThread,
-            CommandId::ToggleBoardClosedVisibility => ListCommand::ToggleFinished,
+            CommandId::ToggleBoardFinishedBand => ListCommand::ToggleFinished,
             CommandId::ToggleBoardExpansion => match self.selected {
                 Some(id) => ListCommand::ToggleExpansion(id),
                 None => return,
@@ -505,6 +486,24 @@ impl BoardListView {
             _ => return,
         };
         self.execute(command, window, cx);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl super::sessions::BoardShellView for BoardListView {
+    fn root(&self) -> Option<std::path::PathBuf> {
+        self.store.root().map(std::path::Path::to_path_buf)
+    }
+
+    fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
+        self.notice = Some(notice);
+        cx.notify();
+    }
+
+    fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
+        for id in sessions {
+            self.inventory_pending.remove(id);
+        }
     }
 }
 

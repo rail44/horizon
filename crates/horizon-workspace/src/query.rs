@@ -57,6 +57,30 @@ impl Workspace {
         })
     }
 
+    /// Every pane of the tab that holds `pane_id`, in layout order, with
+    /// its kind. What a pane-local decision reads when it has to look at
+    /// its tab rather than at itself -- the board's list finding the
+    /// thread pane beside it, a thread finding its list. Empty when no tab
+    /// holds `pane_id`.
+    pub fn tab_pane_kinds(&self, pane_id: PaneId) -> Vec<(PaneId, PaneKind)> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.root.pane_ids().contains(&pane_id))
+            .map(|tab| {
+                tab.root
+                    .pane_ids()
+                    .into_iter()
+                    .filter_map(|id| {
+                        self.panes
+                            .iter()
+                            .find(|pane| pane.id == id)
+                            .map(|pane| (id, pane.kind))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     pub fn terminal_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
         self.panes
             .iter()

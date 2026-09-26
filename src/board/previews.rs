@@ -14,17 +14,16 @@
 use std::collections::HashMap;
 
 use gpui::{AnyView, App, AppContext as _, Window};
-use horizon_board::{sample_envelopes, BoardEvent, Envelope, Item, Store};
+use horizon_board::{sample_envelopes, BoardEvent, Comment, Envelope, Item, Store};
 use horizon_workspace::SessionId;
 
 use super::activity::BoardSessionActivity;
 use super::{model, BoardListView, BoardThreadView};
-use crate::board_pane::previews::{item, message, read, session, session_id, stored};
 
-pub(crate) const THREAD: &str = "board-next-thread";
-pub(crate) const THREAD_LONG: &str = "board-next-thread-long";
-pub(crate) const LIST: &str = "board-next-list";
-pub(crate) const LIST_EMPTY: &str = "board-next-list-empty";
+pub(crate) const THREAD: &str = "board-thread";
+pub(crate) const THREAD_LONG: &str = "board-thread-long";
+pub(crate) const LIST: &str = "board-list";
+pub(crate) const LIST_EMPTY: &str = "board-list-empty";
 
 /// The task the thread preview opens on: the first row of the list, which
 /// is the thread the list opens into. It is also the parent the list
@@ -126,6 +125,50 @@ fn sample_activity() -> HashMap<SessionId, BoardSessionActivity> {
     .into_iter()
     .map(|(n, activity)| (session_id(n), activity))
     .collect()
+}
+
+/// Session ids are fixed rather than generated so a preview shows the same
+/// activity on the same rows every time it is opened.
+fn session(n: u128) -> String {
+    uuid::Uuid::from_u128(n).to_string()
+}
+
+fn session_id(n: u128) -> SessionId {
+    SessionId::from_uuid(uuid::Uuid::from_u128(n))
+}
+
+fn item(id: u64, rank: &str, title: &str) -> Item {
+    Item {
+        id,
+        rank: rank.to_string(),
+        title: title.to_string(),
+        ..Item::default()
+    }
+}
+
+fn stored(item: Item) -> BoardEvent {
+    BoardEvent::ItemStored { id: item.id, item }
+}
+
+fn message(id: u64, comment_id: &str, author: &str, text: &str, at: u64) -> BoardEvent {
+    BoardEvent::MessageAdded {
+        id,
+        message: Comment {
+            id: comment_id.to_string(),
+            author: author.to_string(),
+            text: text.to_string(),
+            at: Some(at),
+            source: None,
+        },
+    }
+}
+
+fn read(id: u64, comment_id: &str) -> BoardEvent {
+    BoardEvent::ReadAdvanced {
+        id,
+        reader: "owner".to_string(),
+        message_id: comment_id.to_string(),
+    }
 }
 
 const MINUTE_MS: u64 = 60_000;
@@ -790,8 +833,8 @@ mod tests {
     /// How many posts into the long thread the long report sits. Two `j`s
     /// reach it from a thread's opening cursor.
     const LONG_REPORT_POST: usize = 2;
-    use crate::board_next::model;
-    use crate::board_next::spec::MEASURE_CELLS;
+    use crate::board::model;
+    use crate::board::spec::MEASURE_CELLS;
     use horizon_board::{BoardEvent, Item, Store};
     use std::collections::{HashMap, HashSet};
 

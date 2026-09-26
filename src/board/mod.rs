@@ -1,4 +1,4 @@
-//! A from-scratch board: the task list and one task's thread, as two views.
+//! The board: the task list and one task's thread, as two views.
 //!
 //! [`BoardListView`] is the board's task list and [`BoardThreadView`] is
 //! one task's thread. Neither contains the other: each takes a pane's
@@ -10,12 +10,11 @@
 //! (the chips, tones, and running text they draw with), [`activity`] (what
 //! a bound session reports), and the store hand-off: both read a
 //! [`Store`](horizon_board::Store) through the same
-//! [`BoardStoreSource`](crate::board_pane::execute::BoardStoreSource) /
-//! [`run_store_job`](crate::board_pane::execute::run_store_job) pair the
-//! shipped board pane uses, so a preview's in-memory store and a
-//! log-backed one look the same from here; on the former every write
-//! answers `StoreError::ReadOnly`, which both views report on their notice
-//! line.
+//! [`BoardStoreSource`](execute::BoardStoreSource) /
+//! [`run_store_job`](execute::run_store_job) pair, so a preview's
+//! in-memory store and a log-backed one look the same from here; on the
+//! former every write answers `StoreError::ReadOnly`, which both views
+//! report on their notice line.
 //!
 //! # Native-only halves
 //!
@@ -23,9 +22,10 @@
 //! and [`sessions`] (observing the shell's `AgentSession` entities) reach
 //! the host, so they are gated at their declaration below, as is each
 //! view's shell-facing block: `root`, `board_command`, `observe_sessions`,
-//! `finish_inventory_refresh`, and the thread's `task_session`. A store
-//! handed in whole — a preview's — has no project directory, so it gets no
-//! pump and no session observation.
+//! `finish_inventory_refresh`, the list's `selected_task`, and the
+//! thread's `task_session`/`show_task`. A store handed in whole — a
+//! preview's — has no project directory, so it gets no pump and no session
+//! observation.
 //!
 //! # What the views report upwards
 //!
@@ -34,8 +34,8 @@
 //!
 //! | Event | Emitted by | What the shell does with it |
 //! | --- | --- | --- |
-//! | [`events::OpenTaskThread`] | the list, on `Enter` | opens that task's thread in a pane |
-//! | [`events::OpenTaskSession`] | the thread, on 「セッション」 | resolves and attaches the bound agent session |
+//! | [`events::OpenTaskThread`] | the list, on `Enter` | runs `CommandId::OpenBoardRelatedItem`, which opens that task's thread in a pane |
+//! | [`events::OpenTaskSession`] | the thread, on 「セッション」 | runs `CommandId::OpenBoardTaskSession`, which resolves and attaches the bound agent session |
 //! | [`events::BoardSessionsRefreshed`] | both, after a load found new bindings | resolves the ids in its inventory, then calls `finish_inventory_refresh` and `observe_sessions` |
 //!
 //! # The list's keys
@@ -49,6 +49,7 @@
 
 pub(crate) mod activity;
 pub(crate) mod events;
+pub(crate) mod execute;
 mod list;
 pub(crate) mod model;
 mod parts;

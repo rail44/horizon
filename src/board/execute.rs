@@ -1,18 +1,25 @@
-//! Where the pane's store comes from, and where its work runs.
+//! Where a board view's store comes from, and where its work runs.
 //!
-//! Both are the same question asked twice: the shell hands the pane a
+//! Both are the same question asked twice: the shell hands a view a
 //! project directory and gets a log-backed store with a daemon behind it;
 //! a preview hands it a store that is already built and holds its events in
-//! memory. Everything else in the pane works on whatever [`run_store_job`]
+//! memory. Everything else in the views works on whatever [`run_store_job`]
 //! hands back, so no call site opens a store or picks an executor itself.
 
-use super::*;
+use std::future::Future;
+use std::pin::Pin;
+
+use gpui::AsyncApp;
+use horizon_board::{Store, StoreError};
+
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
 
 /// One unit of store work, boxed so the execution split below does not have
 /// to be generic over the future's type.
 pub(crate) type StoreJob<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
-/// Where the pane's store comes from.
+/// Where a view's store comes from.
 #[derive(Clone)]
 pub(crate) enum BoardStoreSource {
     /// A directory inside the project. `Store::from_dir` collapses a linked
@@ -41,6 +48,24 @@ impl BoardStoreSource {
             Self::Root(root) => Some(root),
             Self::Ready(_) => None,
         }
+    }
+}
+
+/// The source a board pane the shell opens reads through: the active
+/// session's `workspace_root` wins, and when that is absent (no active
+/// session, or a session with no recorded root) the shell process's own cwd
+/// stands in. Both are *starting* directories -- `Store::from_dir` does the
+/// worktree -> main-root collapse. With neither, the view gets an empty
+/// in-memory store: an empty board that answers every write with
+/// [`StoreError::ReadOnly`].
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn shell_store_source(
+    session_root: Option<PathBuf>,
+    cwd: Option<PathBuf>,
+) -> BoardStoreSource {
+    match session_root.or(cwd) {
+        Some(root) => BoardStoreSource::Root(root),
+        None => BoardStoreSource::Ready(Store::in_memory(Vec::new())),
     }
 }
 
@@ -127,7 +152,7 @@ mod tests {
         assert!(refused_as_read_only, "a ready source must refuse writes");
     }
 
-    /// The shell asks the pane for its project directory (to watch the
+    /// The shell asks a view for its project directory (to watch the
     /// board); only a root-resolved source has one.
     #[test]
     fn a_root_source_reports_its_directory() {
@@ -136,5 +161,31 @@ mod tests {
         assert!(BoardStoreSource::Ready(Store::in_memory(Vec::new()))
             .root()
             .is_none());
+    }
+
+    /// The session's root wins over the cwd, the cwd stands in when there
+    /// is none, and with neither the view reads an empty board rather than
+    /// a directory nobody named.
+    #[test]
+    fn the_shell_source_prefers_the_session_root_then_the_cwd() {
+        let session = PathBuf::from("/tmp/horizon-board-session");
+        let cwd = PathBuf::from("/tmp/horizon-board-cwd");
+        assert_eq!(
+            super::shell_store_source(Some(session.clone()), Some(cwd.clone())).root(),
+            Some(session.as_path())
+        );
+        assert_eq!(
+            super::shell_store_source(None, Some(cwd.clone())).root(),
+            Some(cwd.as_path())
+        );
+        let none = super::shell_store_source(None, None);
+        assert!(none.root().is_none());
+        assert!(none
+            .open()
+            .expect("an empty in-memory store opens")
+            .list(None, true)
+            .expect("list")
+            .items
+            .is_empty());
     }
 }

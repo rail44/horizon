@@ -9,13 +9,78 @@ use horizon_control::contract::EnvelopeBody;
 use horizon_control::host::executor::error_body;
 use horizon_workspace::commands::{CommandId, CommandState};
 use horizon_workspace::types::SessionKind;
-use horizon_workspace::{CloseCursorOutcome, SessionId, Workspace};
+use horizon_workspace::{
+    CloseCursorOutcome, PaneId, PaneKind, SessionId, SplitAxis, ViewKind, Workspace,
+};
 
 use super::session_lifecycle::{daemon_summary_for, DaemonAgentAdoption, ExistingAgentEntity};
 use super::{CachedPaneLeaf, CompositePane, PaneView, WorkspaceShell};
 use crate::agent::AgentSession;
+use crate::board::sessions::BoardShellView;
+use crate::board::{BoardListView, BoardThreadView};
 use crate::theme;
 use crate::view_chooser::Placement;
+
+/// The board view under the workspace cursor. The two views answer
+/// different board commands and each ignores what is not its own, so the
+/// shell dispatches to whichever is focused rather than deciding here.
+#[derive(Clone)]
+enum ActiveBoardPane {
+    List(Entity<BoardListView>),
+    Thread(Entity<BoardThreadView>),
+}
+
+impl ActiveBoardPane {
+    fn root(&self, cx: &App) -> Option<std::path::PathBuf> {
+        match self {
+            Self::List(view) => view.read(cx).root(),
+            Self::Thread(view) => view.read(cx).root(),
+        }
+    }
+
+    fn set_notice(&self, notice: String, cx: &mut App) {
+        match self {
+            Self::List(view) => view.update(cx, |view, cx| view.set_notice(notice, cx)),
+            Self::Thread(view) => view.update(cx, |view, cx| view.set_notice(notice, cx)),
+        }
+    }
+
+    fn board_command(&self, id: CommandId, window: &mut Window, cx: &mut App) {
+        match self {
+            Self::List(view) => view.update(cx, |view, cx| view.board_command(id, window, cx)),
+            Self::Thread(view) => view.update(cx, |view, cx| view.board_command(id, window, cx)),
+        }
+    }
+}
+
+/// Where the thread for a newly-opened task goes.
+#[derive(Debug, Eq, PartialEq)]
+enum ThreadPlacement {
+    /// Aim the thread pane the tab already has at the new task.
+    Retarget(PaneId),
+    /// The tab has no thread pane: split the list with one.
+    SplitTheList,
+}
+
+/// The pane a task's thread opens in, decided from the tab's own panes:
+/// the first thread pane in the tab, if it has one. Pure so the
+/// retarget-vs-split rule is checkable without a window.
+fn thread_placement(panes: &[(PaneId, PaneKind)]) -> ThreadPlacement {
+    panes
+        .iter()
+        .find(|(_, kind)| matches!(kind, PaneKind::View(ViewKind::BoardThread { .. })))
+        .map(|(id, _)| ThreadPlacement::Retarget(*id))
+        .unwrap_or(ThreadPlacement::SplitTheList)
+}
+
+/// The list pane `BackBoardList` returns to: the first one in the tab, or
+/// `None` when the tab holds none.
+fn list_pane_in_tab(panes: &[(PaneId, PaneKind)]) -> Option<PaneId> {
+    panes
+        .iter()
+        .find(|(_, kind)| matches!(kind, PaneKind::View(ViewKind::BoardList)))
+        .map(|(id, _)| *id)
+}
 
 /// Removes every terminal session from the model ahead of restarting
 /// `horizon-terminald` — the daemon that owns their PTYs is about to be
@@ -91,18 +156,23 @@ impl WorkspaceShell {
     }
 
     pub(super) fn sync_board_session_states(&self, cx: &mut Context<Self>) {
-        for pane in self.panes.values() {
-            if let PaneView::Cached(CachedPaneLeaf::Board(view)) = pane {
-                view.update(cx, |view, cx| {
+        for pane in self.panes.values().cloned().collect::<Vec<_>>() {
+            match pane {
+                PaneView::Cached(CachedPaneLeaf::BoardList(view)) => view.update(cx, |view, cx| {
                     view.observe_sessions(&self.agent_sessions, cx)
-                });
+                }),
+                PaneView::Cached(CachedPaneLeaf::BoardThread(view)) => view
+                    .update(cx, |view, cx| {
+                        view.observe_sessions(&self.agent_sessions, cx)
+                    }),
+                _ => {}
             }
         }
     }
 
-    pub(super) fn refresh_board_sessions(
+    pub(super) fn refresh_board_sessions<V: BoardShellView>(
         &self,
-        view: Entity<crate::board_pane::BoardPaneView>,
+        view: Entity<V>,
         sessions: Vec<SessionId>,
         cx: &mut Context<Self>,
     ) {
@@ -133,7 +203,6 @@ impl WorkspaceShell {
             .filter(|id| self.workspace.session_pane_kind(*id).is_some())
             .collect::<std::collections::HashSet<_>>();
         let handle = self.agentd.clone().expect("checked above");
-        let epoch = view.read(cx).navigation_epoch();
         cx.spawn(async move |this, cx| {
             let request = handle.clone();
             let requested = needed.clone();
@@ -167,9 +236,7 @@ impl WorkspaceShell {
                 });
                 shell.sync_board_session_states(cx);
                 if let Err(error) = result {
-                    if view.read(cx).navigation_epoch() == epoch {
-                        view.update(cx, |view, cx| view.set_error(error, cx));
-                    }
+                    view.update(cx, |view, cx| view.set_notice(error, cx));
                 }
                 shell.persist_workspace();
                 cx.notify();
@@ -182,7 +249,7 @@ impl WorkspaceShell {
         let Some(view) = self.active_board_pane() else {
             return;
         };
-        let Some(root) = view.read(cx).root() else {
+        let Some(root) = view.root(cx) else {
             return;
         };
         let Some(handle) = self.agentd.clone() else {
@@ -246,7 +313,7 @@ impl WorkspaceShell {
                         }
                     });
                     if let Err(error) = result {
-                        view.update(cx, |view, cx| view.set_error(error, cx));
+                        view.set_notice(error, cx);
                     }
                 });
             });
@@ -254,8 +321,13 @@ impl WorkspaceShell {
         .detach();
     }
 
+    /// Attaches the agent session the open thread's task is bound to. The
+    /// thread's own 「セッション」 action and the palette command both land
+    /// here; the task is captured so a result arriving after the pane was
+    /// retargeted is dropped rather than attached against another task's
+    /// thread.
     fn open_board_task_session(&self, cx: &mut Context<Self>) {
-        let Some(view) = self.active_board_pane() else {
+        let Some(view) = self.active_board_thread() else {
             return;
         };
         let Some(session_id) = view.read(cx).task_session() else {
@@ -264,7 +336,7 @@ impl WorkspaceShell {
         let Some(handle) = self.agentd.clone() else {
             return;
         };
-        let navigation_epoch = view.read(cx).navigation_epoch();
+        let task = view.read(cx).task_id();
         let window_handle = self.window;
         cx.spawn(async move |this, cx| {
             let list_handle = handle.clone();
@@ -274,7 +346,7 @@ impl WorkspaceShell {
                 .await;
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = this.update(cx, |shell, cx| {
-                    if view.read(cx).navigation_epoch() != navigation_epoch
+                    if view.read(cx).task_id() != task
                         || shell.workspace_phase.blocks_mutation()
                         || shell
                             .agentd
@@ -290,7 +362,7 @@ impl WorkspaceShell {
                     });
                     let Some(summary) = summary else {
                         view.update(cx, |view, cx| {
-                            view.set_error(
+                            view.set_notice(
                                 "The session is not available in the current agent runtime".into(),
                                 cx,
                             )
@@ -298,16 +370,80 @@ impl WorkspaceShell {
                         return;
                     };
                     if let Err(error) = shell.adopt_board_session(&handle, summary, cx) {
-                        view.update(cx, |view, cx| view.set_error(error, cx));
+                        view.update(cx, |view, cx| view.set_notice(error, cx));
                         return;
                     }
                     if let Err(error) = shell.attach_known_session(session_id, true, window, cx) {
-                        view.update(cx, |view, cx| view.set_error(error, cx));
+                        view.update(cx, |view, cx| view.set_notice(error, cx));
                     }
                 });
             });
         })
         .detach();
+    }
+
+    /// `CommandId::OpenBoardRelatedItem`: opens the task the list has
+    /// selected. A tab holds at most one thread pane -- a second task
+    /// replaces what the first one showed rather than stacking another
+    /// pane -- so an existing thread pane is retargeted, and only a tab
+    /// without one is split. Focus follows the thread either way.
+    fn open_board_task_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.workspace.cursor_pane_id() else {
+            return;
+        };
+        let Some(list) = self.active_board_list() else {
+            return;
+        };
+        let Some(task) = list.read(cx).selected_task() else {
+            return;
+        };
+        let placement = thread_placement(&self.workspace.tab_pane_kinds(pane_id));
+        self.workspace.exit_workspace_mode();
+        // A split goes in at the tab's focused pane, so the list has to be
+        // it -- under the workspace-mode cursor it need not have been.
+        self.workspace.activate_pane(pane_id);
+        match placement {
+            ThreadPlacement::Retarget(target) => {
+                self.workspace
+                    .retarget_view_pane(target, ViewKind::BoardThread { task });
+                if let Some(PaneView::Cached(CachedPaneLeaf::BoardThread(thread))) =
+                    self.panes.get(&target).cloned()
+                {
+                    thread.update(cx, |thread, cx| thread.show_task(task, cx));
+                }
+                self.workspace.activate_pane(target);
+            }
+            ThreadPlacement::SplitTheList => {
+                self.workspace.split_active_tab_with_view(
+                    ViewKind::BoardThread { task },
+                    SplitAxis::Horizontal,
+                );
+            }
+        }
+        self.reconcile(window, cx);
+        self.focus_active(window, cx);
+    }
+
+    /// `CommandId::BackBoardList`: from a thread pane, moves focus to the
+    /// list pane beside it. A tab with no list pane has nowhere to go back
+    /// to, so nothing happens.
+    fn back_to_board_list(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pane_id) = self.workspace.cursor_pane_id() else {
+            return;
+        };
+        if !matches!(
+            self.workspace.pane_kind(pane_id),
+            Some(PaneKind::View(ViewKind::BoardThread { .. }))
+        ) {
+            return;
+        }
+        let Some(list) = list_pane_in_tab(&self.workspace.tab_pane_kinds(pane_id)) else {
+            return;
+        };
+        self.workspace.exit_workspace_mode();
+        self.workspace.activate_pane(list);
+        self.focus_active(window, cx);
+        cx.notify();
     }
 
     /// The active pane's agent session, when it is an agent pane.
@@ -317,14 +453,33 @@ impl WorkspaceShell {
         self.agent_sessions.get(&session_id).cloned()
     }
 
-    /// The active board pane, when the active pane is a board pane. Board
+    /// The active board pane, whichever of the two views it holds. Board
     /// panes are session-less, so this is a direct `panes` lookup (no
     /// session-id indirection, unlike `active_agent_session`).
-    fn active_board_pane(&self) -> Option<Entity<crate::board_pane::BoardPaneView>> {
+    fn active_board_pane(&self) -> Option<ActiveBoardPane> {
         let pane_id = self.workspace.cursor_pane_id()?;
         match self.panes.get(&pane_id)? {
-            PaneView::Cached(CachedPaneLeaf::Board(view)) => Some(view.clone()),
+            PaneView::Cached(CachedPaneLeaf::BoardList(view)) => {
+                Some(ActiveBoardPane::List(view.clone()))
+            }
+            PaneView::Cached(CachedPaneLeaf::BoardThread(view)) => {
+                Some(ActiveBoardPane::Thread(view.clone()))
+            }
             _ => None,
+        }
+    }
+
+    fn active_board_list(&self) -> Option<Entity<BoardListView>> {
+        match self.active_board_pane()? {
+            ActiveBoardPane::List(view) => Some(view),
+            ActiveBoardPane::Thread(_) => None,
+        }
+    }
+
+    fn active_board_thread(&self) -> Option<Entity<BoardThreadView>> {
+        match self.active_board_pane()? {
+            ActiveBoardPane::Thread(view) => Some(view),
+            ActiveBoardPane::List(_) => None,
         }
     }
 
@@ -391,34 +546,27 @@ impl WorkspaceShell {
                 }
             }
             CommandId::OpenBoard => self.open_board_pane(window, cx),
-            CommandId::OpenBoardRelatedItem
-            | CommandId::BackBoardList
-            | CommandId::AddBoardTask
+            // Everything the focused board view carries out on its own
+            // data. Each view maps the ids it owns and ignores the rest,
+            // so one arm covers both.
+            CommandId::AddBoardTask
             | CommandId::PostBoardMessage
             | CommandId::MoveBoardTaskUp
             | CommandId::MoveBoardTaskDown
             | CommandId::ReorderBoardTask
             | CommandId::SaveBoardState
             | CommandId::ToggleBoardClosed
-            | CommandId::AddBoardDependency
-            | CommandId::RemoveBoardDependency => {
+            | CommandId::ToggleBoardExpansion
+            | CommandId::ToggleBoardFinishedBand => {
                 if let Some(view) = self.active_board_pane() {
-                    view.update(cx, |view, cx| view.board_command(id, window, cx));
+                    view.board_command(id, window, cx);
                 }
             }
+            CommandId::OpenBoardRelatedItem => self.open_board_task_thread(window, cx),
+            CommandId::BackBoardList => self.back_to_board_list(window, cx),
             CommandId::ReloadPreview => self.reload_active_preview(cx),
             CommandId::OpenBoardOrganizer => self.open_board_organizer(cx),
             CommandId::OpenBoardTaskSession => self.open_board_task_session(cx),
-            CommandId::ToggleBoardExpansion => {
-                if let Some(view) = self.active_board_pane() {
-                    view.update(cx, |view, cx| view.toggle_expansion(cx));
-                }
-            }
-            CommandId::ToggleBoardClosedVisibility => {
-                if let Some(view) = self.active_board_pane() {
-                    view.update(cx, |view, cx| view.toggle_closed_visibility(cx));
-                }
-            }
             // The font-size commands mutate the shell crate's live font
             // store (`terminal::font_size_store`) and refresh the window:
             // the next paint recomputes cell metrics from the new size,
@@ -944,9 +1092,71 @@ impl WorkspaceShell {
 
 #[cfg(test)]
 mod tests {
-    use horizon_workspace::{PaneKind, SessionKind, Workspace};
+    use horizon_workspace::{PaneId, PaneKind, SessionKind, ViewKind, Workspace};
 
-    use super::prepare_workspace_for_terminal_runtime_reload;
+    use super::ThreadPlacement::{Retarget, SplitTheList};
+    use super::{
+        list_pane_in_tab, prepare_workspace_for_terminal_runtime_reload, thread_placement,
+    };
+
+    /// Opening a task reuses the tab's thread pane when it has one, so a
+    /// tab never collects one pane per task read.
+    #[test]
+    fn a_task_opens_in_the_tabs_existing_thread_pane() {
+        let list = PaneId::new();
+        let thread = PaneId::new();
+        let panes = vec![
+            (PaneId::new(), PaneKind::Terminal),
+            (list, PaneKind::View(ViewKind::BoardList)),
+            (thread, PaneKind::View(ViewKind::BoardThread { task: 3 })),
+        ];
+
+        assert_eq!(thread_placement(&panes), Retarget(thread));
+        // Which task that pane is on does not matter: it is the one pane
+        // the tab shows a thread in.
+        let other = vec![(thread, PaneKind::View(ViewKind::BoardThread { task: 99 }))];
+        assert_eq!(thread_placement(&other), Retarget(thread));
+    }
+
+    /// A tab whose only board pane is the list gets the thread as a split
+    /// of it; so does a tab holding nothing board-shaped at all.
+    #[test]
+    fn a_tab_without_a_thread_pane_gets_one_by_splitting() {
+        let list = PaneId::new();
+        assert_eq!(
+            thread_placement(&[(list, PaneKind::View(ViewKind::BoardList))]),
+            SplitTheList
+        );
+        assert_eq!(
+            thread_placement(&[(PaneId::new(), PaneKind::View(ViewKind::Preview))]),
+            SplitTheList
+        );
+        assert_eq!(thread_placement(&[]), SplitTheList);
+    }
+
+    /// Back-to-list resolves the tab's own list pane, and nothing when the
+    /// tab has none -- a thread opened without one has nowhere to go back
+    /// to.
+    #[test]
+    fn back_to_the_list_resolves_the_tabs_list_pane_or_nothing() {
+        let list = PaneId::new();
+        let thread = PaneId::new();
+        assert_eq!(
+            list_pane_in_tab(&[
+                (thread, PaneKind::View(ViewKind::BoardThread { task: 3 })),
+                (list, PaneKind::View(ViewKind::BoardList)),
+            ]),
+            Some(list)
+        );
+        assert_eq!(
+            list_pane_in_tab(&[
+                (thread, PaneKind::View(ViewKind::BoardThread { task: 3 })),
+                (PaneId::new(), PaneKind::Agent),
+            ]),
+            None
+        );
+    }
+
     #[test]
     fn stale_board_lookup_cannot_restore_a_just_terminated_session() {
         assert!(!super::board_session_still_requested(true, false));

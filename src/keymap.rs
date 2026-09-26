@@ -145,7 +145,7 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "open-terminal-in-session-directory" => Some(CommandId::OpenTerminalInSessionDirectory),
         "open-board" => Some(CommandId::OpenBoard),
         "toggle-board-expansion" => Some(CommandId::ToggleBoardExpansion),
-        "toggle-board-closed-visibility" => Some(CommandId::ToggleBoardClosedVisibility),
+        "toggle-board-finished-band" => Some(CommandId::ToggleBoardFinishedBand),
         "open-board-organizer" => Some(CommandId::OpenBoardOrganizer),
         "open-board-task-session" => Some(CommandId::OpenBoardTaskSession),
         "open-board-related-item" => Some(CommandId::OpenBoardRelatedItem),
@@ -157,8 +157,6 @@ pub(crate) fn command_for(id: &str) -> Option<CommandId> {
         "reorder-board-task" => Some(CommandId::ReorderBoardTask),
         "save-board-state" => Some(CommandId::SaveBoardState),
         "toggle-board-closed" => Some(CommandId::ToggleBoardClosed),
-        "add-board-dependency" => Some(CommandId::AddBoardDependency),
-        "remove-board-dependency" => Some(CommandId::RemoveBoardDependency),
         "reload-preview" => Some(CommandId::ReloadPreview),
 
         "increase-font-size" => Some(CommandId::IncreaseFontSize),
