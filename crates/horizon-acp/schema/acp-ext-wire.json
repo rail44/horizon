@@ -505,6 +505,22 @@
       ],
       "type": "string"
     },
+    "ModelOptionMeta": {
+      "description": "Carried under `_meta.horizon` on each `model` config option entry.",
+      "properties": {
+        "model": {
+          "type": "string"
+        },
+        "provider": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "type": "object"
+    },
     "PermissionResponseMeta": {
       "description": "Mirrors `contract::Command::DenyToolCall::reason` (crates/horizon-agent/src/contract.rs).",
       "properties": {
@@ -1174,6 +1190,9 @@
     }
   },
   "meta": {
+    "config_option": {
+      "$ref": "#/$defs/ModelOptionMeta"
+    },
     "initialize": {
       "$ref": "#/$defs/InitializeMeta"
     },

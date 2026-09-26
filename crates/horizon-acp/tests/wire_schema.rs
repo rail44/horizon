@@ -85,6 +85,7 @@ fn generate_wire_schema() -> Value {
         "request_permission": schema_of(sub::<ApprovalMeta>),
         "request_permission_response": schema_of(sub::<PermissionResponseMeta>),
         "message": schema_of(sub::<MessageMeta>),
+        "config_option": schema_of(sub::<ModelOptionMeta>),
     });
 
     let stop_reasons = json!([STOP_REASON_FAILED, STOP_REASON_DOOM_LOOP]);

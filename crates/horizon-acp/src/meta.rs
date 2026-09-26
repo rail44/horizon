@@ -18,6 +18,33 @@ pub const STOP_REASON_FAILED: &str = "_horizon/failed";
 /// `stopReason` value for `contract::TurnEndReason::HaltedByDoomLoop`.
 pub const STOP_REASON_DOOM_LOOP: &str = "_horizon/doom_loop";
 
+/// `configId` of the session config option that selects the provider and
+/// model (`category: model`, `select`).
+pub const MODEL_CONFIG_ID: &str = "model";
+
+/// `optionId` of the approving choice on every `session/request_permission`.
+pub const PERMISSION_OPTION_APPROVE: &str = "approve";
+/// `optionId` of the denying choice on every `session/request_permission`.
+pub const PERMISSION_OPTION_DENY: &str = "deny";
+
+/// Carried under `_meta.horizon` on each `model` config option entry.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ModelOptionMeta {
+    pub provider: String,
+    pub model: String,
+}
+
+/// The `model` option's value id: `provider/model`, split at the first `/`
+/// (provider names carry no `/`; model ids may).
+pub fn encode_model_option_id(provider: &str, model: &str) -> String {
+    format!("{provider}/{model}")
+}
+
+/// Inverse of [`encode_model_option_id`].
+pub fn decode_model_option_id(id: &str) -> Option<(&str, &str)> {
+    id.split_once('/')
+}
+
 /// Stores `value` under [`HORIZON_META_KEY`], creating the map if needed and
 /// leaving every other key untouched.
 pub fn write_horizon_meta<T: Serialize>(
@@ -160,6 +187,17 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::fmt::Debug;
+
+    #[test]
+    fn model_option_id_round_trips_and_splits_at_the_first_slash() {
+        let id = encode_model_option_id("openrouter", "anthropic/claude-x");
+        assert_eq!(id, "openrouter/anthropic/claude-x");
+        assert_eq!(
+            decode_model_option_id(&id),
+            Some(("openrouter", "anthropic/claude-x"))
+        );
+        assert_eq!(decode_model_option_id("no-slash"), None);
+    }
 
     fn round_trip<T: Serialize + DeserializeOwned + PartialEq + Debug>(value: &T) {
         let mut meta = None;
