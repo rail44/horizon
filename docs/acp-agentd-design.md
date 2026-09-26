@@ -1,6 +1,7 @@
 # ACP をシェルと agentd の間の線にする
 
-Status: design 2026-09-27。決定の記録は board #63。実装は未着手。
+Status: design 2026-09-27。決定の記録は board #63（本文と 2026-09-27 のコメント）。
+実装計画は `docs/acp-agentd-implementation-plan.md`。実装は未着手。
 
 ## 形
 
