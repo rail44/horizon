@@ -88,30 +88,14 @@ pub(crate) const GAP_COMPOSER: Pixels = px(32.0);
 /// advance of a full-width Japanese glyph, so one such glyph is two cells.
 pub(crate) const CELL_EM: f32 = 0.5;
 
-/// What the body column aims at: 72 cells, i.e. 36 full-width glyphs.
+/// The line width a post's fold decision is estimated at: 72 cells, i.e.
+/// 36 full-width glyphs. Text is drawn across the pane's width; this only
+/// feeds the rendered-line count behind the fold threshold.
 pub(crate) const MEASURE_CELLS: f32 = 72.0;
 
-/// The column shrinks with the pane below its measure, but never past this:
-/// a narrower line breaks mid-word often enough to stop reading as prose.
-pub(crate) const MEASURE_FLOOR_CELLS: f32 = 40.0;
-
-/// An owner reply is narrower than an agent report, so the two speakers
-/// differ by container rather than only by name.
+/// The estimation width for an owner reply, which is indented and so has
+/// less room than a report.
 pub(crate) const OWNER_MEASURE_CELLS: f32 = 60.0;
-
-/// A code block may run wider than prose and scroll on its own.
-pub(crate) const CODE_MEASURE_CELLS: f32 = 110.0;
-
-/// How wide `cells` cells are at `step`'s size.
-pub(crate) fn measure(cells: f32, step: Step) -> Pixels {
-    step.size * (CELL_EM * cells)
-}
-
-/// The same width for a container that adds [`PAD_X`] on both sides, so the
-/// text inside it still lands on `cells`.
-pub(crate) fn padded_measure(cells: f32, step: Step) -> Pixels {
-    measure(cells, step) + PAD_X * 2.0
-}
 
 // ---------------------------------------------------------------------------
 // Surfaces
@@ -194,26 +178,11 @@ pub(crate) const ACTION_PAD: Pixels = px(24.0);
 
 #[cfg(test)]
 mod tests {
-    use super::{measure, padded_measure, BODY, MEASURE_CELLS, MEASURE_FLOOR_CELLS, PAD_X};
+    use super::MEASURE_CELLS;
     use crate::board_next::model::display_width;
-    use gpui::px;
 
     #[test]
-    fn the_body_column_is_seventy_two_cells_of_body_type() {
-        // 14px type, half-em cells: 72 cells is 504px, and the Japanese
-        // line it holds is 36 glyphs.
-        assert_eq!(measure(MEASURE_CELLS, BODY), px(504.0));
+    fn the_fold_estimate_counts_thirty_six_full_width_glyphs_per_line() {
         assert_eq!(display_width(&"あ".repeat(36)) as f32, MEASURE_CELLS);
-        assert_eq!(
-            padded_measure(MEASURE_CELLS, BODY),
-            px(504.0) + PAD_X * 2.0,
-            "a padded container still holds the same measure"
-        );
-    }
-
-    #[test]
-    fn the_column_floor_is_narrower_than_the_measure() {
-        assert_eq!(measure(MEASURE_FLOOR_CELLS, BODY), px(280.0));
-        assert!(measure(MEASURE_FLOOR_CELLS, BODY) < measure(MEASURE_CELLS, BODY));
     }
 }

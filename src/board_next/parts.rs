@@ -1,6 +1,5 @@
 //! The vocabulary both board views draw with: chips, the tones a status and
-//! an author read in, running text at the measure, and the fade over a
-//! folded post.
+//! an author read in, running text, and the fade over a folded post.
 //!
 //! Anything that belongs to one view's structure — the task header band, a
 //! post, a list row — lives in that view's own module.
@@ -92,8 +91,9 @@ pub(super) fn author_label(author: &str) -> SharedString {
     }
 }
 
-/// The measure a post is set at: an owner reply is narrower than an agent
-/// report, so the two speakers differ by container.
+/// The line width, in cells, a post's fold decision is estimated at. A post
+/// is drawn across the pane's width; this is only the basis for counting
+/// rendered lines against the fold threshold.
 pub(super) fn post_cells(voice: model::Voice) -> f32 {
     if voice == model::Voice::Owner {
         OWNER_MEASURE_CELLS
@@ -136,11 +136,9 @@ pub(super) fn fade() -> impl IntoElement {
         }))
 }
 
-/// Running text, at the measure and with the in-post heading scale clamped
-/// below the task title.
-///
-/// The column takes the pane's width when the pane is narrower than the
-/// measure, and stops at the floor below that.
+/// Running text across the pane's width, with the in-post heading scale
+/// clamped below the task title. Code blocks scroll horizontally instead of
+/// widening the column.
 ///
 /// `TextView` renders markdown itself and exposes a heading's *size* per
 /// level; its weight and color are the renderer's own, so H3+ is not
@@ -150,9 +148,8 @@ pub(super) fn markdown_body(
     id: impl Into<ElementId>,
     source: String,
     color: Hsla,
-    cells: f32,
 ) -> impl IntoElement {
-    let mut code = StyleRefinement::default().max_w(measure(CODE_MEASURE_CELLS, BODY));
+    let mut code = StyleRefinement::default();
     code.overflow.x = Some(Overflow::Scroll);
     let style = TextViewStyle::default()
         .paragraph_gap(rems(0.5))
@@ -160,8 +157,6 @@ pub(super) fn markdown_body(
         .code_block(code);
     div()
         .w_full()
-        .min_w(measure(MEASURE_FLOOR_CELLS.min(cells), BODY))
-        .max_w(measure(cells, BODY))
         .text_size(BODY.size)
         .line_height(BODY.line_height)
         .font_weight(REGULAR)
@@ -195,7 +190,7 @@ mod tests {
     }
 
     #[test]
-    fn an_owner_reply_is_set_narrower_than_a_report() {
+    fn an_owner_reply_is_estimated_narrower_than_a_report() {
         assert_eq!(post_cells(Voice::Owner), OWNER_MEASURE_CELLS);
         assert_eq!(post_cells(Voice::Agent), MEASURE_CELLS);
         assert_eq!(post_cells(Voice::System), MEASURE_CELLS);

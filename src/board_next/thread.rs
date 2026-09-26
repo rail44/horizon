@@ -389,7 +389,6 @@ impl BoardThreadView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .max_w(measure(MEASURE_CELLS, T1))
                             .text_size(T1.size)
                             .line_height(T1.line_height)
                             .font_weight(ANCHOR)
@@ -504,7 +503,6 @@ impl BoardThreadView {
             .flex_none()
             .when(owner, |post| {
                 post.ml(OWNER_INDENT)
-                    .max_w(padded_measure(cells, BODY))
                     .bg(theme::tint_over_background(
                         theme::text_primary(),
                         BAND_TINT,
@@ -512,8 +510,7 @@ impl BoardThreadView {
                     .rounded(RADIUS)
             })
             .when(!owner, |post| {
-                post.max_w(padded_measure(cells, BODY))
-                    .border_1()
+                post.border_1()
                     .border_color(theme::border())
                     .rounded(RADIUS)
             })
@@ -538,7 +535,6 @@ impl BoardThreadView {
                         SharedString::from(format!("board-next-post-body-{}", comment.id)),
                         source,
                         body_color,
-                        cells,
                     ))
                     .when(fold.is_some(), |body| body.child(fade())),
             )
@@ -666,14 +662,12 @@ impl BoardThreadView {
             .child(
                 div()
                     .w_full()
-                    .max_w(measure(MEASURE_CELLS, BODY))
                     .text_size(BODY.size)
                     .child(Textarea::new(&self.reply).appearance(false)),
             )
             .child(
                 h_flex()
                     .w_full()
-                    .max_w(measure(MEASURE_CELLS, BODY))
                     .items_center()
                     .justify_end()
                     .gap(GAP_LABEL)
@@ -756,7 +750,6 @@ impl Render for BoardThreadView {
                                     ("board-next-task-body", item.id),
                                     item.body.clone(),
                                     theme::text_primary(),
-                                    MEASURE_CELLS,
                                 )),
                         )
                     })
