@@ -519,4 +519,71 @@ mod tests {
 
         unregister_session_runtime(requester_id);
     }
+    #[test]
+    fn child_retirement_can_reenter_the_session_table_after_its_parent_entry_is_gone() {
+        use horizon_agent::tools::{ExplorationHost, ExplorationRequest, StartedExploration};
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Mutex,
+        };
+        struct ChildHost {
+            state: Arc<AgentdState>,
+            events: Mutex<Option<crossbeam_channel::Sender<Event>>>,
+            lock_was_free: AtomicBool,
+        }
+        impl ExplorationHost for ChildHost {
+            fn start(&self, _: ExplorationRequest) -> Result<StartedExploration, String> {
+                let (tx, events) = unbounded();
+                *self.events.lock().unwrap() = Some(tx);
+                Ok(StartedExploration {
+                    session_id: SessionId::new(),
+                    events,
+                })
+            }
+            fn terminate(&self, _: SessionId) {
+                // A real daemon host reacquires this lock in send_command.
+                // Observe it without hanging the regression on the old code.
+                self.lock_was_free
+                    .store(self.state.sessions.try_lock().is_ok(), Ordering::SeqCst);
+            }
+        }
+        let state = test_state();
+        let parent = SessionId::new();
+        let child_host = Arc::new(ChildHost {
+            state: state.clone(),
+            events: Mutex::new(None),
+            lock_was_free: AtomicBool::new(false),
+        });
+        let tools = horizon_agent::tools::ToolSessionBuilder::for_current_dir(
+            AgentToolsConfig::default(),
+            RecallContext::default(),
+        )
+        .with_exploration_host(Some(child_host.clone()))
+        .build();
+        let (tx, _) = unbounded();
+        register_session_runtime(
+            parent,
+            tools.clone(),
+            LiveState::with_disabled_persistence(),
+            tx,
+        );
+        let launched = call(
+            &state,
+            &tools,
+            parent,
+            "reentrant-child",
+            "task",
+            serde_json::json!({ "description": "child", "prompt": "wait" }),
+        );
+        assert_eq!(launched["status"], "started");
+        let host = AgentdExplorationHost {
+            state: state.clone(),
+            requester_id: SessionId::new(),
+            provider_id: ProviderId("builtin.agent.mock".into()),
+            workspace_root: None,
+        };
+        assert!(host.wait_stopped(parent, Duration::from_secs(2)));
+        assert!(child_host.lock_was_free.load(Ordering::SeqCst));
+        unregister_session_runtime(parent);
+    }
 }
