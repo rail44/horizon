@@ -68,7 +68,7 @@ fn echo_round_trip_reports_output_and_exit_zero() {
 
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "echo hello" }),
+        &serde_json::from_value(json!({ "command": "echo hello" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -88,7 +88,7 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
 
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "exit 7" }),
+        &serde_json::from_value(json!({ "command": "exit 7" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -111,7 +111,8 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
     let started = Instant::now();
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }),
+        &serde_json::from_value(json!({ "command": "echo start; sleep 5", "timeout_secs": 1 }))
+            .unwrap(),
         &cwd,
         &config(),
     );
@@ -156,12 +157,12 @@ fn timeout_kill_reaches_a_setsid_grandchild() {
     // alive so the timeout fires while the grandchild is still writing.
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({
+        &serde_json::from_value(json!({
             "command": format!(
                 "setsid bash -c 'while true; do echo x >> \"{marker_str}\"; sleep 0.1; done' & sleep 10"
             ),
             "timeout_secs": 1
-        }),
+        })).unwrap(),
         &cwd,
         &config(),
     );
@@ -234,7 +235,7 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
     for _ in 0..50 {
         let output = super::exec::run(
             &super::registry::Registration::new(session_id, call_id.clone()),
-            &json!({ "command": "echo hi" }),
+            &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
             &cwd,
             &config(),
         );
@@ -275,7 +276,7 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
     let started = Instant::now();
     let output = super::exec::run_with_drain_grace(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "echo visible; sleep 30 &" }),
+        &serde_json::from_value(json!({ "command": "echo visible; sleep 30 &" })).unwrap(),
         &cwd,
         Duration::from_millis(200),
         &config(),
@@ -311,7 +312,8 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
 
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "head -c 40000 /dev/zero | tr '\\0' 'a'" }),
+        &serde_json::from_value(json!({ "command": "head -c 40000 /dev/zero | tr '\\0' 'a'" }))
+            .unwrap(),
         &cwd,
         &config(),
     );
@@ -349,7 +351,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
 
     let first = super::exec::run(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-1".to_string())),
-        &json!({ "command": "cd sub && pwd" }),
+        &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -363,7 +365,7 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
 
     let second = super::exec::run(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-2".to_string())),
-        &json!({ "command": "pwd" }),
+        &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -391,7 +393,7 @@ fn cwd_tracking_leaves_cwd_unchanged_when_the_command_never_cds() {
 
     let _ = super::exec::run(
         &super::registry::Registration::new(session_id, ToolCallId("cwd-noop".to_string())),
-        &json!({ "command": "echo hi" }),
+        &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -636,7 +638,7 @@ fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
     // macOS (no procfs).
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": "ps -o nice= -p $$" }),
+        &serde_json::from_value(json!({ "command": "ps -o nice= -p $$" })).unwrap(),
         &cwd,
         &config(),
     );
@@ -886,24 +888,6 @@ fn run_job_body_still_sends_a_completion_when_work_panics() {
 
 // --- panic safety: exec.rs panic points --------------------------------
 
-/// `Ord::clamp` panics if `min > max`; `resolve_timeout` clamps into
-/// `1..=config.timeout_max_secs`, so a misconfigured `timeout_max_secs` of
-/// 0 used to panic the bash worker thread outright. It must instead fall
-/// back to a valid (>= 1s) timeout.
-#[test]
-fn resolve_timeout_does_not_panic_when_timeout_max_secs_is_zero() {
-    let mut cfg = config();
-    cfg.timeout_max_secs = 0;
-
-    let timeout = super::exec::resolve_timeout(&json!({}), &cfg);
-    assert!(timeout >= Duration::from_secs(1));
-
-    let timeout_with_override = super::exec::resolve_timeout(&json!({ "timeout_secs": 5 }), &cfg);
-    assert!(timeout_with_override >= Duration::from_secs(1));
-}
-
-// --- lossy UTF-8 --------------------------------------------------------
-
 #[test]
 fn lossy_non_utf8_output_does_not_panic() {
     let session_id = SessionId::new();
@@ -912,7 +896,7 @@ fn lossy_non_utf8_output_does_not_panic() {
 
     let output = super::exec::run(
         &super::registry::Registration::new(session_id, call_id.clone()),
-        &json!({ "command": r"printf 'a\xffb'" }),
+        &serde_json::from_value(json!({ "command": r"printf 'a\xffb'" })).unwrap(),
         &cwd,
         &config(),
     );

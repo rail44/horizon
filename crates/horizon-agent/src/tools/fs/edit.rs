@@ -39,18 +39,10 @@ use super::safety::resolve_path;
 use super::staleness::check_staleness;
 use crate::tools::state::ToolSessionState;
 
-struct Edit<'a> {
-    path: &'a str,
-    old_string: &'a str,
-    new_string: &'a str,
-    replace_all: bool,
-}
+use crate::tools::input::{Edit, EditFiles};
 
-pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) -> Value {
-    let edits = match parse_edits(input) {
-        Ok(edits) => edits,
-        Err(error) => return error,
-    };
+pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles) -> Value {
+    let edits = &input.edits;
 
     // Every resolvable target is locked for the whole call, in the lexical
     // order `FileLocks` imposes, so an overlapping concurrent mutation
@@ -59,7 +51,7 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) ->
     // edit's own failure.
     let lock_paths = edits
         .iter()
-        .filter_map(|edit| resolve_path(tool_state, edit.path, false).ok())
+        .filter_map(|edit| resolve_path(tool_state, &edit.path, false).ok())
         .collect::<Vec<_>>();
     let locks = FileLocks::acquire(lock_paths);
     let _guards = locks.hold();
@@ -80,7 +72,7 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) ->
         }
         match apply_one(tool_state, edit, &mut written) {
             Ok(occurrences) => {
-                if !applied_paths.iter().any(|path| path == edit.path) {
+                if !applied_paths.iter().any(|path| path == &edit.path) {
                     applied_paths.push(edit.path.to_string());
                 }
                 outcomes.push(json!({
@@ -132,71 +124,12 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &Value) ->
     }
 }
 
-/// Validates the whole list before anything is written: a shape error must
-/// never leave some edits applied, so it is reported as a plain call-level
-/// error rather than through the per-edit outcome list.
-fn parse_edits(input: &Value) -> Result<Vec<Edit<'_>>, Value> {
-    let Some(entries) = input.get("edits").and_then(Value::as_array) else {
-        return Err(error_output(
-            "fs.edit requires an `edits` array argument — pass every replacement in that one \
-             list, including a single edit",
-        ));
-    };
-    if entries.is_empty() {
-        return Err(error_output("`edits` must contain at least one edit"));
-    }
-
-    let mut edits = Vec::with_capacity(entries.len());
-    for (index, entry) in entries.iter().enumerate() {
-        let Some(path) = entry.get("path").and_then(Value::as_str) else {
-            return Err(error_output(format!(
-                "edit at index {index} requires a `path` string argument — every entry in \
-                 `edits` carries its own `path`; there is no call-level path"
-            )));
-        };
-        let Some(old_string) = entry.get("old_string").and_then(Value::as_str) else {
-            return Err(error_output(format!(
-                "edit at index {index} requires an `old_string` string argument"
-            )));
-        };
-        let Some(new_string) = entry.get("new_string").and_then(Value::as_str) else {
-            return Err(error_output(format!(
-                "edit at index {index} requires a `new_string` string argument"
-            )));
-        };
-        if old_string.is_empty() {
-            return Err(error_output(format!(
-                "`old_string` of the edit at index {index} must not be empty"
-            )));
-        }
-        if old_string == new_string {
-            return Err(error_output(format!(
-                "`old_string` and `new_string` of the edit at index {index} are identical — \
-                 nothing to edit"
-            )));
-        }
-        edits.push(Edit {
-            path,
-            old_string,
-            new_string,
-            replace_all: entry
-                .get("replace_all")
-                .and_then(Value::as_bool)
-                .unwrap_or(false),
-        });
-    }
-    Ok(edits)
-}
-
-/// Applies one edit, returning its replacement count. The error is the
-/// plain message this edit's outcome entry reports — the same text the
-/// tool produced when it took a single edit per call.
 fn apply_one(
     tool_state: &ToolSessionState,
-    edit: &Edit<'_>,
+    edit: &Edit,
     written: &mut HashSet<PathBuf>,
 ) -> Result<usize, String> {
-    let path_arg = edit.path;
+    let path_arg = edit.path.as_str();
     let resolved = resolve_path(tool_state, path_arg, false).map_err(|error| message_of(&error))?;
 
     if !resolved.is_file() {
@@ -215,7 +148,7 @@ fn apply_one(
     let content = fs::read_to_string(&resolved)
         .map_err(|error| format!("cannot read `{path_arg}` as UTF-8 text: {error}"))?;
 
-    let match_count = content.matches(edit.old_string).count();
+    let match_count = content.matches(edit.old_string.as_str()).count();
     if match_count == 0 {
         return Err(format!(
             "`old_string` not found in `{path_arg}` — check the exact text (including whitespace) and try again"
@@ -228,9 +161,9 @@ fn apply_one(
     }
 
     let updated = if edit.replace_all {
-        content.replace(edit.old_string, edit.new_string)
+        content.replace(edit.old_string.as_str(), &edit.new_string)
     } else {
-        content.replacen(edit.old_string, edit.new_string, 1)
+        content.replacen(edit.old_string.as_str(), &edit.new_string, 1)
     };
     fs::write(&resolved, &updated)
         .map_err(|error| format!("failed to write `{path_arg}`: {error}"))?;

@@ -1060,12 +1060,6 @@ impl Default for BashToolConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct BashToolConfig {
-    /// Wall-clock timeout default, in seconds. Was `bash::exec`'s
-    /// `DEFAULT_TIMEOUT_SECS`.
-    pub timeout_default_secs: u64,
-    /// Hard cap on the per-call `timeout_secs` override. Was `bash::exec`'s
-    /// `MAX_TIMEOUT_SECS`.
-    pub timeout_max_secs: u64,
     /// In-context output cap, in characters. Was `bash::output`'s
     /// `IN_CONTEXT_CAP_CHARS`.
     pub output_cap_chars: usize,
@@ -1076,40 +1070,24 @@ pub struct BashToolConfig {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FsToolConfig {
-    /// Default number of lines `fs.read` returns when the caller doesn't
-    /// pass `limit`. Was `fs::read`'s `DEFAULT_LIMIT`.
-    pub read_line_cap: usize,
     /// Maximum total bytes `fs.grep` reads in one traversal. Was
     /// `fs::grep`'s `MAX_GREP_BYTES`.
     pub grep_max_bytes: u64,
     /// Maximum files a single `fs.glob`/`fs.grep` traversal visits. Was
     /// `fs::traverse`'s `MAX_VISITED_FILES`.
     pub traversal_max_files: usize,
-    /// Default number of matches `fs.grep` *returns* when a call doesn't
-    /// pass its own `limit` — distinct from `grep_max_bytes`/
-    /// `traversal_max_files` above, which cap how much of the tree a single
-    /// traversal scans. Was `fs::grep`'s `DEFAULT_LIMIT`.
-    pub grep_result_limit: usize,
-    /// Same idea as `grep_result_limit`, for `fs.glob`. Was `fs::glob`'s
-    /// `DEFAULT_LIMIT`.
-    pub glob_result_limit: usize,
 }
 
 impl Default for AgentToolsConfig {
     fn default() -> Self {
         Self {
             bash: BashToolConfig {
-                timeout_default_secs: DEFAULT_BASH_TIMEOUT_DEFAULT_SECS,
-                timeout_max_secs: DEFAULT_BASH_TIMEOUT_MAX_SECS,
                 output_cap_chars: DEFAULT_BASH_OUTPUT_CAP_CHARS,
                 drain_grace_secs: DEFAULT_BASH_DRAIN_GRACE_SECS,
             },
             fs: FsToolConfig {
-                read_line_cap: DEFAULT_FS_READ_LINE_CAP,
                 grep_max_bytes: default_fs_grep_max_bytes(),
                 traversal_max_files: default_fs_traversal_max_files(),
-                grep_result_limit: DEFAULT_FS_GREP_RESULT_LIMIT,
-                glob_result_limit: DEFAULT_FS_GLOB_RESULT_LIMIT,
             },
         }
     }
@@ -1389,16 +1367,8 @@ mod tests {
     fn agent_tools_config_default_uses_built_in_constants() {
         let config = AgentToolsConfig::default();
 
-        assert_eq!(
-            config.bash.timeout_default_secs,
-            DEFAULT_BASH_TIMEOUT_DEFAULT_SECS
-        );
-        assert_eq!(config.bash.timeout_max_secs, DEFAULT_BASH_TIMEOUT_MAX_SECS);
         assert_eq!(config.bash.output_cap_chars, DEFAULT_BASH_OUTPUT_CAP_CHARS);
         assert_eq!(config.bash.drain_grace_secs, DEFAULT_BASH_DRAIN_GRACE_SECS);
-        assert_eq!(config.fs.read_line_cap, DEFAULT_FS_READ_LINE_CAP);
-        assert_eq!(config.fs.grep_result_limit, DEFAULT_FS_GREP_RESULT_LIMIT);
-        assert_eq!(config.fs.glob_result_limit, DEFAULT_FS_GLOB_RESULT_LIMIT);
     }
 
     /// Each kind names the endpoint its rig client would actually talk to

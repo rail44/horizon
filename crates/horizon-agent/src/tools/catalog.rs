@@ -14,6 +14,15 @@ pub(crate) struct Definition {
 }
 
 pub(crate) fn definitions() -> Vec<Definition> {
+    catalog().to_vec()
+}
+
+fn catalog() -> &'static [Definition] {
+    static DEFINITIONS: std::sync::OnceLock<Vec<Definition>> = std::sync::OnceLock::new();
+    DEFINITIONS.get_or_init(build_definitions)
+}
+
+fn build_definitions() -> Vec<Definition> {
     vec![
         Definition {
             id: "workspace.snapshot".to_string(),
@@ -36,28 +45,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 characters. Read independent known files in parallel, and prefer one useful \
                 window over many tiny adjacent slices."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["path"],
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to the file to read.",
-                    },
-                    "offset": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "1-based line number to start reading from. Defaults to 1.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 2000,
-                        "description": "Maximum number of lines to return. Defaults to 500; maximum 2000.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::Glob.definition(
             "Find Files".to_string(),
@@ -65,26 +53,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 `**/*.rs`). Requires an absolute base path; results are capped, with the \
                 total match count reported."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["base_path", "pattern"],
-                "properties": {
-                    "base_path": {
-                        "type": "string",
-                        "description": "Absolute directory to search under.",
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Glob pattern to match file paths against, e.g. `**/*.rs`.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Maximum number of matches to return. Defaults to 200.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::Grep.definition(
             "Search File Contents".to_string(),
@@ -97,30 +66,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 keep only its report. Requires an absolute base \
                 path. Traversal stops at 64 MiB of scanned file bytes or 20,000 files."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["base_path", "pattern"],
-                "properties": {
-                    "base_path": {
-                        "type": "string",
-                        "description": "Absolute file to search or directory to search under.",
-                    },
-                    "pattern": {
-                        "type": "string",
-                        "description": "Regular expression to search for, per line.",
-                    },
-                    "glob": {
-                        "type": "string",
-                        "description": "Optional glob to restrict which files are searched, e.g. `**/*.rs`.",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "description": "Maximum number of match locations to return. Defaults to 100.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::WriteFile.definition(
             "Write File".to_string(),
@@ -128,21 +74,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 directories as needed. Overwriting an existing file requires it to have been \
                 read in this session with no changes on disk since."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["path", "content"],
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "Absolute path to write. Parent directories are created if missing.",
-                    },
-                    "content": {
-                        "type": "string",
-                        "description": "Full file contents to write, replacing any existing content.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::EditFile.definition(
             "Edit File".to_string(),
@@ -156,41 +88,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 edit's outcome (applied / failed / not_attempted) in order plus the failing \
                 index, so you can fix that edit and resend from it."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["edits"],
-                "properties": {
-                    "edits": {
-                        "type": "array",
-                        "minItems": 1,
-                        "description": "Replacements to apply, in order. Put every related edit in this one list rather than issuing a call per edit.",
-                        "items": {
-                            "type": "object",
-                            "additionalProperties": false,
-                            "required": ["path", "old_string", "new_string"],
-                            "properties": {
-                                "path": {
-                                    "type": "string",
-                                    "description": "Absolute path to an existing file that has been read this session.",
-                                },
-                                "old_string": {
-                                    "type": "string",
-                                    "description": "Exact text to replace. Must match exactly once in the file unless `replace_all` is true.",
-                                },
-                                "new_string": {
-                                    "type": "string",
-                                    "description": "Replacement text.",
-                                },
-                                "replace_all": {
-                                    "type": "boolean",
-                                    "description": "If true, replace every occurrence of `old_string` in the file. Defaults to false (exactly one match required).",
-                                },
-                            }
-                        },
-                    },
-                }
-            }),
+
         ),
         Definition {
             id: "bash".to_string(),
@@ -204,30 +102,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 command's output, read or grep the spilled file (`output_file`) instead of \
                 re-running the command."
                 .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["command"],
-                "properties": {
-                    "command": {
-                        "type": "string",
-                        "description": "Shell command to run via `bash -c`.",
-                    },
-                    "timeout_secs": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS,
-                        "description": format!(
-                            "Optional wall-clock timeout in seconds. Omit this normally: the \
-                             default is {} seconds and the hard cap is {}. Use a shorter value \
-                             only when deliberately bounding a known quick probe; builds, tests, \
-                             hooks, and Git operations commonly exceed 60 seconds.",
-                            crate::config::DEFAULT_BASH_TIMEOUT_DEFAULT_SECS,
-                            crate::config::DEFAULT_BASH_TIMEOUT_MAX_SECS,
-                        ),
-                    },
-                }
-            }),
+            input_schema: super::input::schema("bash").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
         Definition {
@@ -237,31 +112,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 bounded list of titles, URLs, publication metadata, and relevant excerpts. \
                 Requires EXA_API_KEY in Horizon's environment."
                 .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["query"],
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 2048,
-                        "description": "Natural-language web search query.",
-                    },
-                    "num_results": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 10,
-                        "description": "Number of results. Defaults to 5.",
-                    },
-                    "max_characters": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 4000,
-                        "description": "Maximum excerpt characters per result. Defaults to 2000.",
-                    },
-                }
-            }),
+            input_schema: super::input::schema("web_search").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
         Definition {
@@ -271,24 +122,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 redirects/body size. HTML is reduced to readable Markdown; text and JSON pass \
                 through. A session must approve each exact destination host before contact."
                 .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["url"],
-                "properties": {
-                    "url": {
-                        "type": "string",
-                        "maxLength": 8192,
-                        "description": "Public http:// or https:// URL on the standard port to fetch.",
-                    },
-                    "max_characters": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 50000,
-                        "description": "Maximum returned content characters. Defaults to 20000.",
-                    },
-                }
-            }),
+            input_schema: super::input::schema("web_fetch").expect("registered tool input"),
             permission: ToolPermission::RequireApproval,
         },
         #[cfg(any(test, feature = "test-fixtures"))]
@@ -335,11 +169,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 contents, or an explicit \"does not exist yet\" result (with the path still \
                 reported) if nothing has been written there yet. Takes no arguments."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {}
-            }),
+
         ),
         SynchronousTool::WriteConfig.definition(
             "Write Horizon Config".to_string(),
@@ -349,17 +179,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 Overwriting an existing file requires it to have been read in this session \
                 (via config.read) with no changes on disk since."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["content"],
-                "properties": {
-                    "content": {
-                        "type": "string",
-                        "description": "Full TOML file contents to write, replacing any existing content.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::SearchRecall.definition(
             "Search Persisted History".to_string(),
@@ -380,43 +200,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 digging into any one of them with recall.read. At least one of `query`/ \
                 `turn_outcome` is required."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Substring to search for, case-insensitive. May be \
-                            omitted if turn_outcome is given (listing mode).",
-                    },
-                    "scope": {
-                        "type": "string",
-                        "enum": ["session", "all"],
-                        "description": "\"session\" (default) searches only one session's \
-                            history -- this session, or the one named by session_id; \"all\" \
-                            searches every persisted session.",
-                    },
-                    "session_id": {
-                        "type": "string",
-                        "description": "Search this session id's history instead of your own \
-                            (e.g. a session you delegated work to). Cannot be combined with \
-                            scope: \"all\".",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Maximum number of hits to return. Defaults to 20.",
-                    },
-                    "turn_outcome": {
-                        "type": "string",
-                        "enum": ["completed", "cancelled", "failed", "halted"],
-                        "description": "Restrict hits to events whose turn ended this way. \
-                            \"halted\" surfaces doom-looped turns; \"failed\" surfaces turns \
-                            that errored out.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::ReadRecall.definition(
             "Read Persisted History Window".to_string(),
@@ -426,27 +210,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 session_id is omitted. Output is capped in total size; call again with a later \
                 from_sequence to continue."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["from_sequence"],
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "Session id to read from. Defaults to this session.",
-                    },
-                    "from_sequence": {
-                        "type": "integer",
-                        "description": "Sequence number to start reading from (inclusive).",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 100,
-                        "description": "Maximum number of entries to return. Defaults to 20.",
-                    },
-                }
-            }),
+
         ),
         // `task` (`tools::explore`, `docs/agent-explore-design.md`) is
         // auto-allowed like every other read tool -- the session it spawns
@@ -480,28 +244,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 response over a single broad one. Returns immediately with the task session's \
                 id, which is also how you re-read its report later with task_output."
                 .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["description", "prompt"],
-                "properties": {
-                    "description": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 200,
-                        "description": "A short (3-5 word) summary of the task, for display \
-                            while it runs.",
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "minLength": 1,
-                        "maxLength": 16384,
-                        "description": "The question and the exact deliverable you want back. \
-                            The task session sees this and nothing else from your conversation, \
-                            so restate whatever context it needs.",
-                    },
-                }
-            }),
+            input_schema: super::input::schema("task").expect("registered tool input"),
             permission: ToolPermission::AutoAllowRead,
         },
         // `task_output` (`docs/agent-async-task-design.md` decision 3) is
@@ -520,18 +263,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 still running reports as such — you do not need to poll it; you will be notified \
                 when it completes."
                 .to_string(),
-            input_schema: json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["session_id"],
-                "properties": {
-                    "session_id": {
-                        "type": "string",
-                        "description": "The task session id returned by the task call that \
-                            launched it.",
-                    },
-                }
-            }),
+            input_schema: super::input::schema("task_output").expect("registered tool input"),
             permission: ToolPermission::AutoAllowRead,
         },
         SynchronousTool::ReadSkill.definition(
@@ -539,34 +271,14 @@ pub(crate) fn definitions() -> Vec<Definition> {
             "Read one of this session's available skills by id (see the skills \
                 listed in the system prompt) and return its full instructions."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id"],
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "Skill id, as listed in the system prompt's skills section.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::ReadKnowledge.definition(
             "Read Knowledge".to_string(),
             "Read one of this project's knowledge entries by id (see the system \
                 prompt's project-knowledge section) and return its full frontmatter and body."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id"],
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "Knowledge entry id, as listed in the system prompt's project-knowledge section.",
-                    },
-                }
-            }),
+
         ),
         SynchronousTool::WriteKnowledge.definition(
             "Write Knowledge".to_string(),
@@ -574,40 +286,7 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 an existing entry's `created` date is preserved while `updated` is refreshed. \
                 No approval — the tool-event recording is the audit."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["id", "description", "body", "sources"],
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "description": "Entry id (slug: lowercase alphanumeric and hyphens). Used as the filename.",
-                    },
-                    "description": {
-                        "type": "string",
-                        "description": "One-line summary shown in the system prompt's knowledge index.",
-                    },
-                    "body": {
-                        "type": "string",
-                        "description": "Free-form Markdown body.",
-                    },
-                    "sources": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Verifiable source references, e.g. \"session:<uuid> seq:<range>\". At least one required.",
-                    },
-                    "anchors": {
-                        "type": "array",
-                        "items": { "type": "string" },
-                        "description": "Repository-relative paths or symbols this entry relates to (optional).",
-                    },
-                    "status": {
-                        "type": "string",
-                        "enum": ["active", "needs-review", "expired"],
-                        "description": "Entry status. Defaults to \"active\" for new entries; preserved on upsert if omitted.",
-                    },
-                }
-            }),
+
         ),
         Definition {
             id: "board.read".to_string(),
@@ -684,108 +363,14 @@ pub(crate) fn definitions() -> Vec<Definition> {
                 `folded_log_range` optionally records the raw event-log sequence range \
                 this update condenses, so recall.read can fetch the originals."
                 .to_string(),
-            json!({
-                "type": "object",
-                "additionalProperties": false,
-                "properties": {
-                    "goal": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string", "description": "Required for set/append; ignored for clear." }
-                        },
-                        "description": "The overarching goal this session is serving."
-                    },
-                    "decisions": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "Decisions made, with rationale."
-                    },
-                    "completed": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "Work that is done."
-                    },
-                    "in_progress": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "Work currently underway."
-                    },
-                    "stuck": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "What is blocked or unresolved, and why."
-                    },
-                    "next_step": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "The single next action to take."
-                    },
-                    "related": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["op"],
-                        "properties": {
-                            "op": { "type": "string", "enum": ["set", "append", "clear"] },
-                            "content": { "type": "string" }
-                        },
-                        "description": "Files, symbols, and paths relevant to the current work."
-                    },
-                    "folded_log_range": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["from_seq", "to_seq"],
-                        "properties": {
-                            "from_seq": { "type": "integer", "minimum": 0 },
-                            "to_seq": { "type": "integer", "minimum": 0 }
-                        },
-                        "description": "Event-log sequence range of the raw exchanges this update condenses. Optional."
-                    },
-                    "no_update": {
-                        "type": "object",
-                        "additionalProperties": false,
-                        "required": ["reason"],
-                        "properties": {
-                            "reason": { "type": "string", "minLength": 1 }
-                        },
-                        "description": "Declare that no memory update is needed this turn, with a reason. Mutually exclusive with all field operations."
-                    }
-                }
-            }),
+
         ),
     ]
 }
 
 pub(crate) fn permission_for_tool(tool_id: &str) -> Option<ToolPermission> {
-    definitions()
-        .into_iter()
+    catalog()
+        .iter()
         .find(|definition| definition.id == tool_id)
         .map(|definition| definition.permission)
 }

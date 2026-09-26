@@ -10,6 +10,7 @@ mod config;
 mod execution;
 pub(crate) mod explore;
 mod fs;
+pub(crate) mod input;
 mod knowledge;
 mod memory;
 pub(crate) mod moa;
@@ -26,7 +27,7 @@ pub use approval::{
     ApprovalDecision, ApprovalOutcome,
 };
 pub(crate) use bash::{
-    git_prefilter, metadata_writable_roots, requires_metadata_write, GitPrefilterVerdict,
+    command_requires_metadata_write, git_prefilter, metadata_writable_roots, GitPrefilterVerdict,
 };
 pub(crate) use catalog::{definitions, permission_for_tool, Definition};
 pub use completion::{should_fold_completion, BashCompletion, ToolCompletion};
@@ -116,10 +117,10 @@ pub fn start_approval_gate(
 /// `mock.approval_required`). The synchronous registry selects the owning implementation.
 pub(crate) fn execute_approved(
     tool_state: &ToolSessionState,
-    tool_id: &str,
-    input: &serde_json::Value,
+    input: &input::ToolInput,
 ) -> serde_json::Value {
-    synchronous::execute_approved(tool_state, tool_id, input)
+    synchronous::execute(tool_state, input, true)
+        .unwrap_or_else(|| error_output("tool has no synchronous Horizon-side execution"))
 }
 
 /// Constructs the wire-visible tool error-output shape

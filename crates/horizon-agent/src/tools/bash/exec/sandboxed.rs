@@ -1,11 +1,11 @@
 //! Sandboxed bash: prepare authority, capture execution, then classify the result.
-use super::{failed_output, finished, resolve_timeout, BashCompletion};
+use super::{failed_output, finished, BashCompletion};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
 use crate::tools::network::SessionNetworkProxy;
-use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 
 mod capture;
 mod prepare;
@@ -68,7 +68,7 @@ mod result;
 pub(in crate::tools::bash) fn run_sandboxed(
     registration: &Registration,
     identity: &crate::contract::ToolCallIdentity,
-    input: &Value,
+    input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     workspace_root: &Path,
     network: Option<&SessionNetworkProxy>,
@@ -76,25 +76,14 @@ pub(in crate::tools::bash) fn run_sandboxed(
     filesystem_grants: &[horizon_sandbox::FilesystemGrant],
     config: &BashToolConfig,
 ) -> BashCompletion {
-    let Some(command) = input.get("command").and_then(Value::as_str) else {
-        return finished(
-            identity,
-            failed_output("bash requires a `command` string argument", None, config),
-        );
-    };
-    if command.trim().is_empty() {
-        return finished(
-            identity,
-            failed_output("bash requires a non-empty `command` string", None, config),
-        );
-    }
+    let command = &*input.command;
     if let Some(message) =
         crate::tools::bash::cargo::shared_cache_clean_refusal(command, workspace_root)
     {
         return finished(identity, failed_output(message, None, config));
     }
 
-    let timeout = resolve_timeout(input, config);
+    let timeout = Duration::from_secs(input.timeout_secs.get());
     let cwd = cwd_handle
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

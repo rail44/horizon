@@ -28,6 +28,10 @@ checks, followed by responsibility/contract review. History and dependency
 graphs are optional supporting evidence, not automatic refactoring decisions.
 See [the tool](../scripts/refactor-audit/README.md) and
 [review guide](refactoring-review.md).
+The 18 non-board built-in tools now share typed input definitions with their
+advertised schemas, validate before approval/effects, and pass typed arguments
+to handlers and workers. Restored approvals use the same validation; see
+[the input contract](agent-tools-design.md#input-contract-2026-09-26).
 Agent input admission, retained tool work, and approval/result publication now
 have explicit owners; empty-queue stops survive replay and stale Continue cannot
 unpause them. See [execution state and recovery](agent-execution-state-design.md).

@@ -36,6 +36,35 @@ finding restated in Anthropic's agent guidance).
 
 ## Read and Search Semantics
 
+### Input contract (2026-09-26)
+
+The 18 non-board built-ins use the Rust definitions in
+`crates/horizon-agent/src/tools/input/`. Serde checks argument types and
+unknown fields; Schemars generates the model-visible schemas from those same
+definitions. Numeric bounds, text lengths, and defaults belong to the input
+types, rather than separate handler and catalog constants. Invalid values
+(including numeric strings, string booleans, out-of-range limits, unknown
+keys, and positional arrays in place of objects) produce an identified tool
+error before approval, execution start, grants, or side effects. Errors name
+the offending field or list element.
+
+Execution prepares a typed call before policy selection. Synchronous handlers
+and background jobs consume those arguments. Approval resolution reconstructs
+the typed call from the exact recorded request, so restored approvals and
+retries receive the same validation without persisting a second input format.
+The original JSON remains the audit record. Filesystem staleness, path access,
+domain grants, redirects, and other mutable conditions are still checked at
+use. Cross-field rules (for example, differing old/new edit text and a valid
+memory log range) remain semantic validation; schema generation does not
+replace them. Board and host-provided tool contracts are separate.
+
+Limits are now rejected instead of silently clamped. For example,
+`fs.read.limit=5000` must be corrected to at most 2000; `limit="10"` is a
+type error rather than the default window. Removed fields such as
+`fs.grep.context` are unknown-field errors.
+
+### Results
+
 `fs.read` is for a known file or a relevant line window, not content
 discovery. Its catalog routes specific-content questions to `fs.grep`,
 unknown paths to `fs.glob`, and independent known files to parallel reads.

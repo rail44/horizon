@@ -762,7 +762,7 @@ fn task_output_rejects_a_malformed_session_id() {
         malformed["message"]
             .as_str()
             .expect("a message")
-            .contains("not a task session id"),
+            .contains("session_id"),
         "{malformed}"
     );
 }

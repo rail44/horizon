@@ -3,9 +3,7 @@
 
 use serde_json::Value;
 
-use super::{
-    catalog::Definition, config, error_output, fs, knowledge, memory, recall, ToolSessionState,
-};
+use super::{catalog::Definition, config, fs, knowledge, memory, recall, ToolSessionState};
 use crate::contract::ToolPermission;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -26,6 +24,7 @@ pub(super) enum SynchronousTool {
 }
 
 impl SynchronousTool {
+    #[cfg(test)]
     const ALL: [Self; 13] = [
         Self::ReadFile,
         Self::Glob,
@@ -76,67 +75,65 @@ impl SynchronousTool {
         }
     }
 
-    pub(super) fn definition(
-        self,
-        title: String,
-        description: String,
-        input_schema: Value,
-    ) -> Definition {
+    pub(super) fn definition(self, title: String, description: String) -> Definition {
         Definition {
             id: self.id().into(),
             title,
             description,
-            input_schema,
+            input_schema: super::input::schema(self.id()).expect("registered tool input"),
             permission: self.permission(),
         }
     }
 
+    #[cfg(test)]
     fn find(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|tool| tool.id() == id)
     }
+}
 
-    fn execute(self, state: &ToolSessionState, input: &Value, read_scope: ReadScope) -> Value {
-        let allow_external = matches!(read_scope, ReadScope::ApprovedExternal);
-        match self {
-            Self::ReadFile => fs::read(state, input, allow_external),
-            Self::Glob => fs::glob(state, input, allow_external),
-            Self::Grep => fs::grep(state, input, allow_external),
-            Self::WriteFile => fs::write(state, input),
-            Self::EditFile => fs::edit(state, input),
-            Self::ReadConfig => config::read(state, input),
-            Self::WriteConfig => config::write(state, input),
-            Self::ReadSkill => crate::skills::execute_read(state.skill_registry(), input),
-            Self::SearchRecall => recall::search(state, input),
-            Self::ReadRecall => recall::read(state, input),
-            Self::ReadKnowledge => knowledge::read(state, input),
-            Self::WriteKnowledge => knowledge::write(state, input),
-            Self::UpdateMemory => memory::execute(input),
+pub(super) fn execute(
+    state: &ToolSessionState,
+    input: &super::input::ToolInput,
+    allow_external: bool,
+) -> Option<Value> {
+    use super::input::ToolInput;
+    Some(match input {
+        ToolInput::ReadFile(input) => fs::read(state, input, allow_external),
+        ToolInput::Glob(input) => fs::glob(state, input, allow_external),
+        ToolInput::Grep(input) => fs::grep(state, input, allow_external),
+        ToolInput::WriteFile(input) => fs::write(state, input),
+        ToolInput::EditFiles(input) => fs::edit(state, input),
+        ToolInput::ReadConfig(_) => config::read(state),
+        ToolInput::WriteConfig(input) => config::write(state, input),
+        ToolInput::ReadSkill(input) => {
+            crate::skills::execute_read(state.skill_registry(), &input.id)
         }
-    }
+        ToolInput::SearchRecall(input) => recall::search(state, input),
+        ToolInput::ReadRecall(input) => recall::read(state, input),
+        ToolInput::ReadKnowledge(input) => knowledge::read(state, input),
+        ToolInput::WriteKnowledge(input) => knowledge::write(state, input),
+        ToolInput::UpdateMemory(input) => memory::execute(input),
+        _ => return None,
+    })
 }
 
-enum ReadScope {
-    Workspace,
-    ApprovedExternal,
-}
-
-pub(super) fn execute_auto(state: &ToolSessionState, id: &str, input: &Value) -> Option<Value> {
+#[cfg(test)]
+pub(super) fn execute_auto(state: &ToolSessionState, id: &str, value: &Value) -> Option<Value> {
     let tool = SynchronousTool::find(id)?;
-    (tool.permission() == ToolPermission::AutoAllowRead)
-        .then(|| tool.execute(state, input, ReadScope::Workspace))
+    if tool.permission() != ToolPermission::AutoAllowRead {
+        return None;
+    }
+    Some(match super::input::ToolInput::parse(id, value) {
+        Ok(input) => execute(state, &input, false).expect("synchronous tool"),
+        Err(message) => super::error_output(message),
+    })
 }
 
-pub(super) fn execute_approved(state: &ToolSessionState, id: &str, input: &Value) -> Value {
-    match SynchronousTool::find(id) {
-        Some(
-            tool @ (SynchronousTool::ReadFile
-            | SynchronousTool::Glob
-            | SynchronousTool::Grep
-            | SynchronousTool::WriteFile
-            | SynchronousTool::EditFile
-            | SynchronousTool::WriteConfig),
-        ) => tool.execute(state, input, ReadScope::ApprovedExternal),
-        _ => error_output(format!("tool `{id}` has no Horizon-side execution")),
+#[cfg(test)]
+pub(super) fn execute_approved(state: &ToolSessionState, id: &str, value: &Value) -> Value {
+    match super::input::ToolInput::parse(id, value) {
+        Ok(input) => super::execute_approved(state, &input),
+        Err(message) => super::error_output(message),
     }
 }
 

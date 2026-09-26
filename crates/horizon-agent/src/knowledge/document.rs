@@ -2,8 +2,11 @@
 
 /// An entry's publication status. Only `Active` entries appear in the
 /// always-loaded prompt index; `knowledge.read` returns any status.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) enum KnowledgeStatus {
+#[derive(
+    Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub(crate) enum KnowledgeStatus {
     Active,
     NeedsReview,
     Expired,

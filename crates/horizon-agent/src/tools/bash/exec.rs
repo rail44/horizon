@@ -39,7 +39,7 @@ pub(super) const BASH_NICE_LEVEL: i32 = 10;
 /// doc comments for the constants they replaced).
 pub(super) fn run(
     registration: &Registration,
-    input: &Value,
+    input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
 ) -> Value {
@@ -58,7 +58,7 @@ pub(super) fn run(
 #[cfg(test)]
 pub(super) fn run_with_drain_grace(
     registration: &Registration,
-    input: &Value,
+    input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
@@ -68,19 +68,14 @@ pub(super) fn run_with_drain_grace(
 
 fn run_inner(
     registration: &Registration,
-    input: &Value,
+    input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
 ) -> Value {
-    let Some(command) = input.get("command").and_then(Value::as_str) else {
-        return failed_output("bash requires a `command` string argument", None, config);
-    };
-    if command.trim().is_empty() {
-        return failed_output("bash requires a non-empty `command` string", None, config);
-    }
+    let command = &*input.command;
 
-    let timeout = resolve_timeout(input, config);
+    let timeout = Duration::from_secs(input.timeout_secs.get());
     let cwd = cwd_handle
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -106,22 +101,6 @@ fn run_inner(
         cwd_handle,
         config,
     ))
-}
-
-// `pub(super)`, not private: exercised directly from `tests.rs` so the
-// zero-`timeout_max_secs` edge case (see the doc comment below) is proven
-// against the function itself, not just indirectly through `run`.
-pub(super) fn resolve_timeout(input: &Value, config: &BashToolConfig) -> Duration {
-    let secs = input
-        .get("timeout_secs")
-        .and_then(Value::as_u64)
-        .unwrap_or(config.timeout_default_secs);
-    // `Ord::clamp` panics if `min > max`; guard against a misconfigured
-    // `timeout_max_secs` of 0 (which would make the clamp's max less than
-    // its min of 1) rather than let that panic take down the whole bash
-    // FIFO for the session (see the panic-safety notes on `bash::spawn` and
-    // `registry::run_job`).
-    Duration::from_secs(secs.clamp(1, config.timeout_max_secs.max(1)))
 }
 
 fn take(buf: &Arc<StdMutex<Vec<u8>>>) -> Vec<u8> {

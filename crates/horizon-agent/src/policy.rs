@@ -2,6 +2,7 @@
 //! `plan_tool_call` selects automatic execution, an exact approval candidate,
 //! or a terminal rejection. The execution coordinator consumes this decision.
 
+use crate::tools::input::{PreparedCall, ToolInput};
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -55,9 +56,9 @@ pub(crate) enum BoundaryDisposition {
 /// `config.write` always asks, regardless of isolation -- it edits
 /// Horizon's own config file, not anything inside a session's workspace, so
 /// worktree isolation buys it nothing.
-pub(crate) fn classify_call(
+fn classify_input(
     tool_id: &str,
-    input: &Value,
+    input: &ToolInput,
     session_isolated: bool,
     sandbox_available: bool,
 ) -> Classification {
@@ -71,7 +72,7 @@ pub(crate) fn classify_call(
         }
         "bash" => {
             if session_isolated && sandbox_available {
-                if crate::tools::requires_metadata_write(input) {
+                if input.requires_metadata_write() {
                     Classification::AlwaysAsk
                 } else {
                     Classification::Contained
@@ -93,17 +94,20 @@ pub(crate) fn classify_call(
     }
 }
 
-pub(crate) fn boundary_disposition(
+fn boundary_input(
     tool_state: &ToolSessionState,
     tool_id: &str,
-    input: &Value,
+    input: &ToolInput,
 ) -> BoundaryDisposition {
     match tool_id {
         "web_search" => BoundaryDisposition::Auto,
-        "web_fetch" => match crate::tools::web::fetch_gate(tool_state, input) {
-            crate::tools::web::FetchGate::NeedsApproval { .. } => BoundaryDisposition::Human,
-            crate::tools::web::FetchGate::Invalid
-            | crate::tools::web::FetchGate::Allowed { .. } => BoundaryDisposition::Auto,
+        "web_fetch" => match input {
+            ToolInput::WebFetch(input) => match crate::tools::web::fetch_gate(tool_state, input) {
+                crate::tools::web::FetchGate::NeedsApproval { .. } => BoundaryDisposition::Human,
+                crate::tools::web::FetchGate::Invalid
+                | crate::tools::web::FetchGate::Allowed { .. } => BoundaryDisposition::Auto,
+            },
+            _ => BoundaryDisposition::Auto,
         },
         _ => BoundaryDisposition::Human,
     }
@@ -389,7 +393,10 @@ pub(crate) enum AutomaticTool {
     Web,
 }
 
-pub(crate) fn plan_tool_call(tool_state: &ToolSessionState, request: &ToolCallRequest) -> ToolPlan {
+pub(crate) fn plan_prepared_call(
+    tool_state: &ToolSessionState,
+    request: &PreparedCall<'_>,
+) -> ToolPlan {
     let approval = |reason, kind| {
         ToolPlan::Approval(ApprovalRequest {
             call_id: request.call_id.clone(),
@@ -400,13 +407,8 @@ pub(crate) fn plan_tool_call(tool_state: &ToolSessionState, request: &ToolCallRe
     };
     match crate::tools::permission_for_tool(&request.tool_id) {
         Some(ToolPermission::AutoAllowRead | ToolPermission::AutoAllowUi) => {
-            if call_escapes_root(tool_state, &request.tool_id, &request.input) {
-                let path = request
-                    .input
-                    .get("path")
-                    .or_else(|| request.input.get("base_path"))
-                    .and_then(Value::as_str)
-                    .expect("validated escaping path");
+            if call_escapes_root(tool_state, &request.input) {
+                let path = request.input.read_path().expect("validated escaping path");
                 let verb = match request.tool_id.as_str() {
                     "fs.grep" => "search",
                     "fs.glob" => "find files in",
@@ -418,7 +420,7 @@ pub(crate) fn plan_tool_call(tool_state: &ToolSessionState, request: &ToolCallRe
             }
         }
         Some(ToolPermission::RequireApproval) => {
-            match classify_call(
+            match classify_input(
                 &request.tool_id,
                 &request.input,
                 tool_state.is_isolated_worktree(),
@@ -430,13 +432,18 @@ pub(crate) fn plan_tool_call(tool_state: &ToolSessionState, request: &ToolCallRe
                     AutomaticTool::ContainedFilesystem
                 }),
                 Classification::BoundaryCrossing
-                    if boundary_disposition(tool_state, &request.tool_id, &request.input)
+                    if boundary_input(tool_state, &request.tool_id, &request.input)
                         == BoundaryDisposition::Auto =>
                 {
                     ToolPlan::Automatic(AutomaticTool::Web)
                 }
                 Classification::BoundaryCrossing if request.tool_id == "web_fetch" => {
-                    let domain = crate::tools::web::domain_grant_from_input(&request.input);
+                    let domain = match &request.input {
+                        ToolInput::WebFetch(input) => {
+                            crate::tools::web::domain_grant_from_input(input)
+                        }
+                        _ => None,
+                    };
                     let reason = domain.as_ref().map_or_else(
                         || "`web_fetch` requested an invalid or unavailable domain.".into(),
                         |domain| {
@@ -495,12 +502,12 @@ fn standard_approval_reason(request: &ToolCallRequest) -> String {
 
 fn git_operation_approval(
     tool_state: &ToolSessionState,
-    request: &crate::contract::ToolCallRequest,
+    request: &PreparedCall<'_>,
 ) -> Option<(String, ApprovalKind)> {
     if request.tool_id != "bash"
         || !tool_state.is_isolated_worktree()
         || !horizon_sandbox::is_available()
-        || !crate::tools::requires_metadata_write(&request.input)
+        || !request.input.requires_metadata_write()
     {
         return None;
     }
@@ -533,6 +540,33 @@ fn git_operation_approval(
             },
         ),
     })
+}
+
+#[cfg(test)]
+pub(crate) fn plan_tool_call(state: &ToolSessionState, request: &ToolCallRequest) -> ToolPlan {
+    match PreparedCall::new(request) {
+        Ok(request) => plan_prepared_call(state, &request),
+        Err(message) => ToolPlan::Reject(crate::tools::error_output(message)),
+    }
+}
+
+#[cfg(test)]
+fn classify_call(id: &str, input: &Value, isolated: bool, sandbox: bool) -> Classification {
+    classify_input(
+        id,
+        &ToolInput::parse(id, input).unwrap_or(ToolInput::External),
+        isolated,
+        sandbox,
+    )
+}
+
+#[cfg(test)]
+fn boundary_disposition(state: &ToolSessionState, id: &str, input: &Value) -> BoundaryDisposition {
+    boundary_input(
+        state,
+        id,
+        &ToolInput::parse(id, input).unwrap_or(ToolInput::External),
+    )
 }
 
 #[cfg(test)]
@@ -785,7 +819,14 @@ mod tests {
         let tool_state = crate::tools::ToolSessionBuilder::new(std::env::temp_dir())
             .with_isolated_worktree(true)
             .build();
-        let events = policy_events(&requested("fs.write"), &tool_state, SessionId::new());
+        let events = policy_events(
+            &requested_with_input(
+                "fs.write",
+                serde_json::json!({"path": "/tmp/example", "content": "hello"}),
+            ),
+            &tool_state,
+            SessionId::new(),
+        );
 
         assert_eq!(
             events.len(),
@@ -800,7 +841,14 @@ mod tests {
     #[test]
     fn non_isolated_fs_write_still_gets_the_ordinary_approval_prompt() {
         let tool_state = ToolSessionState::new(std::env::temp_dir());
-        let events = policy_events(&requested("fs.write"), &tool_state, SessionId::new());
+        let events = policy_events(
+            &requested_with_input(
+                "fs.write",
+                serde_json::json!({"path": "/tmp/example", "content": "hello"}),
+            ),
+            &tool_state,
+            SessionId::new(),
+        );
 
         assert!(events
             .iter()

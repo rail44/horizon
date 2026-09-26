@@ -10,9 +10,6 @@ use crate::tools::state::ToolSessionState;
 /// Per-line character cap, independent of `limit`, so one absurdly long
 /// line can't blow out the tool result.
 const MAX_LINE_LEN: usize = 2000;
-/// Explicit callers may ask for a larger window than the conservative
-/// default, but never an unbounded one.
-const MAX_LINE_LIMIT: usize = 2000;
 /// Hard cap on the rendered `content` field. This is deliberately independent
 /// of the line window: many ordinary-width lines can still dwarf the useful
 /// context budget before the line limit is reached.
@@ -20,12 +17,10 @@ const MAX_CONTENT_CHARS: usize = 50_000;
 
 pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
-    input: &Value,
+    input: &crate::tools::input::ReadFile,
     allow_out_of_root: bool,
 ) -> Value {
-    let Some(path_arg) = input.get("path").and_then(Value::as_str) else {
-        return error_output("fs.read requires a `path` string argument");
-    };
+    let path_arg = input.path.as_str();
 
     let resolved = match resolve_read_path(tool_state, path_arg, allow_out_of_root) {
         Ok(path) => path,
@@ -51,7 +46,7 @@ pub(in crate::tools) fn execute(
         }
     };
 
-    let mut output = render_content(&content, input, tool_state.tools_config().fs.read_line_cap);
+    let mut output = render_content(&content, input);
 
     let mtime = metadata.modified().ok();
     if let Some(mtime) = mtime {
@@ -74,19 +69,9 @@ pub(in crate::tools) fn execute(
 }
 
 /// Render a bounded line window independently of filesystem access and staleness tracking.
-fn render_content(content: &str, input: &Value, default_limit: usize) -> Value {
-    let offset = input
-        .get("offset")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .max(1) as usize;
-    let limit = input
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-        .unwrap_or(default_limit)
-        .clamp(1, MAX_LINE_LIMIT);
-    let requested_limit = input.get("limit").and_then(Value::as_u64);
+fn render_content(content: &str, input: &crate::tools::input::ReadFile) -> Value {
+    let offset = usize::try_from(input.offset.get()).unwrap_or(usize::MAX);
+    let limit = input.limit.get() as usize;
 
     let lines: Vec<&str> = content.lines().collect();
     let total_lines = lines.len();
@@ -147,11 +132,6 @@ fn render_content(content: &str, input: &Value, default_limit: usize) -> Value {
     } else if start_index >= total_lines {
         notices.push(format!(
             "`offset` {offset} is beyond the end of the file ({total_lines} lines)."
-        ));
-    }
-    if requested_limit.is_some_and(|requested| requested > MAX_LINE_LIMIT as u64) {
-        notices.push(format!(
-            "`limit` was capped at the maximum of {MAX_LINE_LIMIT} lines."
         ));
     }
     if truncated_line_count > 0 {

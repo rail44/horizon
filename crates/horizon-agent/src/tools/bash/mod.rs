@@ -31,8 +31,8 @@ pub(crate) use job::{spawn_approved_host, spawn_sandboxed, BashJob, SandboxedRun
 pub(crate) use registry::cancel_call;
 
 pub(crate) use git::{
-    approved_metadata_roots, git_prefilter, metadata_writable_roots, requires_metadata_write,
-    GitPrefilterVerdict,
+    approved_metadata_roots, command_requires_metadata_write, git_prefilter,
+    metadata_writable_roots, GitPrefilterVerdict,
 };
 pub(crate) use recent::{find_reusable_output, guidance_output};
 

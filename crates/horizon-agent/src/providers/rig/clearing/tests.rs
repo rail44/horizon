@@ -667,6 +667,9 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
             input: serde_json::json!({ "session_id": child.as_uuid().to_string() }).into(),
             occurrence_id: crate::contract::OccurrenceId((call_id("fetch-1")).0.clone()),
         },
+        &crate::tools::input::TaskOutput {
+            session_id: child.as_uuid(),
+        },
     );
     let output = fetch.output;
     assert_eq!(output["status"], "finished");

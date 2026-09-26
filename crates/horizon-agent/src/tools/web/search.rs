@@ -18,29 +18,6 @@ const MAX_TITLE_CHARACTERS: usize = 500;
 const MAX_RESULT_URL_CHARACTERS: usize = 2_048;
 const MAX_PUBLISHED_DATE_CHARACTERS: usize = 128;
 const MAX_AUTHOR_CHARACTERS: usize = 500;
-const DEFAULT_RESULTS: usize = 5;
-const MAX_RESULTS: usize = 10;
-const DEFAULT_MAX_CHARACTERS: usize = 2_000;
-const MAX_CHARACTERS: usize = 4_000;
-const MAX_QUERY_CHARS: usize = 2_048;
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SearchInput {
-    query: String,
-    #[serde(default = "default_results")]
-    num_results: usize,
-    #[serde(default = "default_max_characters")]
-    max_characters: usize,
-}
-
-fn default_results() -> usize {
-    DEFAULT_RESULTS
-}
-
-fn default_max_characters() -> usize {
-    DEFAULT_MAX_CHARACTERS
-}
 
 #[derive(Clone, Debug)]
 struct SearchRequest {
@@ -221,14 +198,7 @@ struct ExaResult {
     highlights: Vec<String>,
 }
 
-pub(super) async fn execute(input: Value) -> Value {
-    let input: SearchInput = match serde_json::from_value(input) {
-        Ok(input) => input,
-        Err(error) => return error_output(format!("invalid web_search input: {error}")),
-    };
-    if let Err(message) = validate(&input) {
-        return error_output(message);
-    }
+pub(super) async fn execute(input: crate::tools::input::WebSearch) -> Value {
     let api_key = match std::env::var(EXA_API_KEY_VAR) {
         Ok(value) if !value.trim().is_empty() => value,
         _ => {
@@ -244,9 +214,9 @@ pub(super) async fn execute(input: Value) -> Value {
     execute_with_adapter(
         &adapter,
         SearchRequest {
-            query: input.query.clone(),
-            num_results: input.num_results,
-            max_characters: input.max_characters,
+            query: input.query.into_string(),
+            num_results: input.num_results.get() as usize,
+            max_characters: input.max_characters.get() as usize,
         },
     )
     .await
@@ -273,29 +243,6 @@ async fn execute_with_adapter(adapter: &dyn SearchAdapter, request: SearchReques
         }
         Err(message) => error_output(message),
     }
-}
-
-fn validate(input: &SearchInput) -> Result<(), String> {
-    let query_chars = input.query.chars().count();
-    if input.query.trim().is_empty() {
-        return Err("web_search query must not be empty".to_string());
-    }
-    if query_chars > MAX_QUERY_CHARS {
-        return Err(format!(
-            "web_search query exceeds the {MAX_QUERY_CHARS} character limit"
-        ));
-    }
-    if !(1..=MAX_RESULTS).contains(&input.num_results) {
-        return Err(format!(
-            "web_search num_results must be between 1 and {MAX_RESULTS}"
-        ));
-    }
-    if !(1..=MAX_CHARACTERS).contains(&input.max_characters) {
-        return Err(format!(
-            "web_search max_characters must be between 1 and {MAX_CHARACTERS}"
-        ));
-    }
-    Ok(())
 }
 
 async fn read_capped(response: &mut reqwest::Response, limit: usize) -> Result<Vec<u8>, String> {
@@ -384,27 +331,21 @@ mod tests {
 
     #[test]
     fn validation_caps_query_results_and_content_budget() {
-        let valid = SearchInput {
-            query: "rust".to_string(),
-            num_results: MAX_RESULTS,
-            max_characters: MAX_CHARACTERS,
-        };
-        assert!(validate(&valid).is_ok());
-        assert!(validate(&SearchInput {
-            query: "".to_string(),
-            ..valid.clone()
-        })
-        .is_err());
-        assert!(validate(&SearchInput {
-            num_results: MAX_RESULTS + 1,
-            ..valid.clone()
-        })
-        .is_err());
-        assert!(validate(&SearchInput {
-            max_characters: MAX_CHARACTERS + 1,
-            ..valid
-        })
-        .is_err());
+        for (input, accepted) in [
+            (
+                json!({"query": "rust", "num_results": 10, "max_characters": 4000}),
+                true,
+            ),
+            (json!({"query": ""}), false),
+            (json!({"query": "rust", "num_results": 11}), false),
+            (json!({"query": "rust", "max_characters": 4001}), false),
+        ] {
+            assert_eq!(
+                crate::tools::input::ToolInput::parse("web_search", &input).is_ok(),
+                accepted,
+                "{input}"
+            );
+        }
     }
 
     #[test]

@@ -23,10 +23,9 @@ pub(super) use write::execute as write;
 /// call to the approval gate instead of auto-executing it.
 pub(crate) fn call_escapes_root(
     tool_state: &ToolSessionState,
-    tool_id: &str,
-    input: &Value,
+    input: &crate::tools::input::ToolInput,
 ) -> bool {
-    let Some(path_arg) = read_path_arg(tool_id, input) else {
+    let Some(path_arg) = input.read_path() else {
         return false;
     };
     safety::escapes_root(tool_state, path_arg)

@@ -1,8 +1,9 @@
+use super::input::{PreparedCall, ToolInput};
 use super::transition::ToolUpdate;
 use crate::contract::{Event, Message, MessageRole, SessionId, ToolCallRequest, ToolCallResult};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;
-use crate::policy::{annotate_auto_approval, plan_tool_call, AutomaticTool, ToolPlan};
+use crate::policy::{annotate_auto_approval, plan_prepared_call, AutomaticTool, ToolPlan};
 use crate::tools::state::{session_runtime, ToolSessionState};
 use crate::tools::{bash, board, error_output};
 use serde_json::Value;
@@ -46,7 +47,14 @@ pub fn execute_agent_tool(
     live: &LiveState,
     request: &ToolCallRequest,
 ) -> Result<Execution, String> {
-    match plan_tool_call(tool_state, request) {
+    let prepared = match PreparedCall::new(request) {
+        Ok(prepared) => prepared,
+        Err(message) => {
+            return ToolUpdate::finish(live, request.identity().result(error_output(message)))
+                .map(Execution::Applied)
+        }
+    };
+    match plan_prepared_call(tool_state, &prepared) {
         ToolPlan::Approval(approval) => Ok(Execution::AwaitApproval(Box::new(ApprovalCandidate {
             request: request.clone(),
             approval,
@@ -55,7 +63,7 @@ pub fn execute_agent_tool(
             ToolUpdate::finish(live, request.identity().result(output)).map(Execution::Applied)
         }
         ToolPlan::Automatic(mode) => {
-            execute_automatic(host, tool_state, session_id, live, request, mode)
+            execute_automatic(host, tool_state, session_id, live, &prepared, mode)
                 .map(Execution::Applied)
         }
     }
@@ -66,7 +74,7 @@ fn execute_automatic(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     live: &LiveState,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     mode: AutomaticTool,
 ) -> Result<ToolUpdate, String> {
     // Every dispatch, including a synchronous effect, starts beyond this acknowledged boundary.
@@ -74,8 +82,7 @@ fn execute_automatic(
     let output = match mode {
         AutomaticTool::Synchronous => execute_synchronous(host, tool_state, session_id, request),
         AutomaticTool::ContainedFilesystem => {
-            let mut output =
-                crate::tools::execute_approved(tool_state, &request.tool_id, &request.input);
+            let mut output = crate::tools::execute_approved(tool_state, &request.input);
             annotate_auto_approval(&mut output, "contained", "isolated worktree session");
             output.into()
         }
@@ -109,7 +116,8 @@ fn execute_automatic(
                     Vec::new(),
                 );
             };
-            if let Some(command) = request.input.get("command").and_then(Value::as_str) {
+            if let ToolInput::Bash(input) = &request.input {
+                let command = &input.command;
                 if let Some(prior) = bash::find_reusable_output(&live.frame(), command) {
                     let mut output = bash::guidance_output(command, &prior);
                     annotate_auto_approval(&mut output, "contained", "isolated worktree session");
@@ -139,24 +147,27 @@ fn execute_synchronous(
     host: &dyn HostTools,
     tool_state: &ToolSessionState,
     session_id: SessionId,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
 ) -> ToolOutput {
+    match &request.input {
+        ToolInput::Task(input) => {
+            return crate::tools::explore::start(tool_state, session_id, request, input)
+        }
+        ToolInput::TaskOutput(input) => {
+            return crate::tools::explore::output(session_id, request, input)
+        }
+        _ => {}
+    }
     match request.tool_id.as_str() {
-        crate::tools::TASK_TOOL_ID => {
-            return crate::tools::explore::start(tool_state, session_id, request)
-        }
-        crate::tools::TASK_OUTPUT_TOOL_ID => {
-            return crate::tools::explore::output(session_id, request)
-        }
         "board.update" | "board.session" => {
             return board::execute_operation(tool_state, session_id, request)
         }
         "board.comment" => return board::execute_comment(tool_state, session_id, request),
         _ => {}
     }
-    host.execute_auto(&request.tool_id, &request.input)
-        .or_else(|| super::synchronous::execute_auto(tool_state, &request.tool_id, &request.input))
-        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.input))
+    super::synchronous::execute(tool_state, &request.input, false)
+        .or_else(|| host.execute_auto(&request.tool_id, &request.request.input))
+        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.request.input))
         .unwrap_or_else(|| {
             error_output(format!(
                 "Tool `{}` cannot be executed automatically.",
@@ -196,6 +207,133 @@ mod tests {
     impl HostTools for MustNotRun {
         fn execute_auto(&self, _: &str, _: &Value) -> Option<Value> {
             panic!("host effect before a persisted start");
+        }
+    }
+
+    #[test]
+    fn invalid_builtin_inputs_finish_before_approval_start_or_host_dispatch() {
+        let dir = tempfile::tempdir().unwrap();
+        for isolated in [false, true] {
+            let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf())
+                .with_isolated_worktree(isolated)
+                .build();
+            for (id, mut input) in crate::tools::input::tests::samples() {
+                input["unexpected"] = serde_json::json!(true);
+                let request = ToolCallRequest {
+                    call_id: ToolCallId(id.into()),
+                    occurrence_id: OccurrenceId::new(),
+                    tool_id: id.into(),
+                    input: input.into(),
+                };
+                let live = LiveState::with_disabled_persistence();
+                let Execution::Applied(ToolUpdate::Finished { events, result }) =
+                    execute_agent_tool(&MustNotRun, &state, SessionId::new(), &live, &request)
+                        .unwrap()
+                else {
+                    panic!("{id} must reject invalid input before asking for approval or starting");
+                };
+                assert!(result.is_error(), "{id}");
+                assert_eq!(result.occurrence_id, request.occurrence_id);
+                assert!(
+                    !events.iter().any(|event| matches!(
+                        event,
+                        Event::ToolCallStarted(_) | Event::ApprovalRequested(_)
+                    )),
+                    "{id}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn restored_invalid_approvals_cannot_write_spawn_or_install_grants() {
+        use crate::contract::{ApprovalKind, ApprovalRequest};
+        use crate::tools::{
+            resolve_approval, resolve_auto_approval, ApprovalDecision, ApprovalOutcome,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("marker");
+        for judged in [false, true] {
+            for (id, input, kind) in [
+                (
+                    "fs.write",
+                    serde_json::json!({"path": marker, "content": "wrong", "extra": 1}),
+                    ApprovalKind::Standard,
+                ),
+                (
+                    "fs.edit",
+                    serde_json::json!({"edits": [{"path": marker, "old_string": "original", "new_string": "wrong"}, {"path": marker}]}),
+                    ApprovalKind::Standard,
+                ),
+                (
+                    "bash",
+                    serde_json::json!({"command": "echo must-not-run", "timeout_secs": "1"}),
+                    ApprovalKind::Standard,
+                ),
+                (
+                    "web_fetch",
+                    serde_json::json!({"url": "https://example.com", "max_characters": "1"}),
+                    ApprovalKind::DomainGrant {
+                        domains: vec!["example.com".into()],
+                    },
+                ),
+            ] {
+                std::fs::write(&marker, "original").unwrap();
+                let session = SessionId::new();
+                let state = crate::tools::ToolSessionBuilder::new(dir.path().to_path_buf()).build();
+                let live = LiveState::with_disabled_persistence();
+                let request = ToolCallRequest {
+                    call_id: ToolCallId(id.into()),
+                    occurrence_id: OccurrenceId::new(),
+                    tool_id: id.into(),
+                    input: input.into(),
+                };
+                let candidate = ApprovalCandidate {
+                    approval: ApprovalRequest {
+                        call_id: request.call_id.clone(),
+                        occurrence_id: request.occurrence_id.clone(),
+                        kind,
+                        reason: "restored approval".into(),
+                    },
+                    request: request.clone(),
+                };
+                let mut history = vec![Event::ToolCallRequested(request.clone())];
+                if !judged {
+                    history.push(Event::ApprovalRequested(candidate.approval.clone()));
+                }
+                live.extend_provider_events(history.into_iter().map(Into::into))
+                    .unwrap();
+                let (tx, rx) = crossbeam_channel::unbounded();
+                register_session_runtime(session, state.clone(), live.clone(), tx);
+                let frame = live.frame();
+                let outcome = if judged {
+                    resolve_auto_approval(&frame, session, &candidate)
+                } else {
+                    resolve_approval(
+                        &frame,
+                        session,
+                        request.identity(),
+                        ApprovalDecision::Approve,
+                    )
+                };
+                let ApprovalOutcome::Applied(ToolUpdate::Finished { events, result }) = outcome
+                else {
+                    panic!(
+                        "{id}: malformed restored input must finish without execution: {outcome:?}"
+                    );
+                };
+                assert!(result.is_error(), "{id}");
+                assert!(
+                    !events
+                        .iter()
+                        .any(|event| matches!(event, Event::ToolCallStarted(_))),
+                    "{id}"
+                );
+                assert_eq!(std::fs::read_to_string(&marker).unwrap(), "original");
+                assert!(!state.is_domain_allowed("example.com"));
+                assert!(rx.try_recv().is_err(), "{id}");
+                unregister_session_runtime(session);
+            }
         }
     }
 
@@ -242,9 +380,15 @@ mod tests {
                 LiveState::with_event_log_and_history(session, None, None, writer, history.clone());
             let (tx, rx) = crossbeam_channel::unbounded();
             register_session_runtime(session, state.clone(), live.clone(), tx);
-            assert!(
-                execute_automatic(&MustNotRun, &state, session, &live, &request, mode).is_err()
-            );
+            assert!(execute_automatic(
+                &MustNotRun,
+                &state,
+                session,
+                &live,
+                &PreparedCall::new(&request).unwrap(),
+                mode
+            )
+            .is_err());
             assert_eq!(live.events(), history);
             assert!(!marker.exists());
             assert!(rx.try_recv().is_err());

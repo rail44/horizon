@@ -8,21 +8,12 @@ use crate::tools::state::ToolSessionState;
 
 pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
-    input: &Value,
+    input: &crate::tools::input::Glob,
     allow_out_of_root: bool,
 ) -> Value {
-    let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
-        return error_output("fs.glob requires a `base_path` string argument");
-    };
-    let Some(pattern) = input.get("pattern").and_then(Value::as_str) else {
-        return error_output("fs.glob requires a `pattern` string argument");
-    };
-    let limit = input
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|limit| limit as usize)
-        .unwrap_or(tool_state.tools_config().fs.glob_result_limit)
-        .max(1);
+    let base_arg = input.base_path.as_str();
+    let pattern = input.pattern.as_str();
+    let limit = usize::try_from(input.limit.get()).unwrap_or(usize::MAX);
 
     let base = match resolve_read_path(tool_state, base_arg, allow_out_of_root) {
         Ok(path) => path,

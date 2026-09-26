@@ -7,7 +7,6 @@ use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
 };
 use reqwest::{redirect, Client, StatusCode, Url};
-use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::error_output;
@@ -19,49 +18,24 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REDIRECTS: usize = 5;
 const MAX_BODY_BYTES: usize = 2 * 1024 * 1024;
-const DEFAULT_MAX_CHARACTERS: usize = 20_000;
-const MAX_CHARACTERS: usize = 50_000;
 const MAX_DOM_ELEMENTS: usize = 20_000;
 const MAX_TITLE_CHARACTERS: usize = 1_000;
 const MAX_BYLINE_CHARACTERS: usize = 1_000;
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct FetchInput {
-    url: String,
-    #[serde(default = "default_max_characters")]
-    max_characters: usize,
-}
-
-fn default_max_characters() -> usize {
-    DEFAULT_MAX_CHARACTERS
-}
 
 pub(super) enum FetchOutcome {
     Finished(Value),
     DomainGrantRequired(Vec<String>),
 }
 
-pub(super) fn domain_from_input(input: &Value) -> Result<String, String> {
-    let input: FetchInput = serde_json::from_value(input.clone())
-        .map_err(|error| format!("invalid web_fetch input: {error}"))?;
-    validate_input(&input)?;
+pub(super) fn domain_from_input(input: &crate::tools::input::WebFetch) -> Result<String, String> {
     let url = Url::parse(&input.url).map_err(|error| format!("invalid web_fetch URL: {error}"))?;
     validate_url(&url)
 }
 
-pub(super) async fn execute(input: Value, domains: Arc<Allowlist>) -> FetchOutcome {
-    let input: FetchInput = match serde_json::from_value(input) {
-        Ok(input) => input,
-        Err(error) => {
-            return FetchOutcome::Finished(error_output(format!(
-                "invalid web_fetch input: {error}"
-            )))
-        }
-    };
-    if let Err(message) = validate_input(&input) {
-        return FetchOutcome::Finished(error_output(message));
-    }
+pub(super) async fn execute(
+    input: crate::tools::input::WebFetch,
+    domains: Arc<Allowlist>,
+) -> FetchOutcome {
     let initial_url = match Url::parse(&input.url) {
         Ok(url) => url,
         Err(error) => {
@@ -71,7 +45,7 @@ pub(super) async fn execute(input: Value, domains: Arc<Allowlist>) -> FetchOutco
 
     let fetched = tokio::time::timeout(
         REQUEST_TIMEOUT,
-        fetch(initial_url, input.max_characters, domains),
+        fetch(initial_url, input.max_characters.get() as usize, domains),
     )
     .await;
     match fetched {
@@ -87,15 +61,6 @@ pub(super) async fn execute(input: Value, domains: Arc<Allowlist>) -> FetchOutco
             Err(message) => FetchOutcome::Finished(error_output(message)),
         },
     }
-}
-
-fn validate_input(input: &FetchInput) -> Result<(), String> {
-    if !(1..=MAX_CHARACTERS).contains(&input.max_characters) {
-        return Err(format!(
-            "web_fetch max_characters must be between 1 and {MAX_CHARACTERS}"
-        ));
-    }
-    Ok(())
 }
 
 async fn fetch(
@@ -334,6 +299,17 @@ fn supported_content_type(content_type: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn domain_from_input(raw: &Value) -> Result<String, String> {
+        let input = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
+        super::domain_from_input(&input)
+    }
+    async fn execute(raw: Value, domains: Arc<Allowlist>) -> FetchOutcome {
+        match serde_json::from_value(raw) {
+            Ok(input) => super::execute(input, domains).await,
+            Err(error) => FetchOutcome::Finished(error_output(error.to_string())),
+        }
+    }
+
     #[tokio::test]
     async fn response_validation_rejects_unsafe_or_undecodable_bodies() {
         for (status, header, value, body, expected) in [
@@ -422,7 +398,7 @@ mod tests {
         assert!(domain_from_input(&json!({ "url": "file:///etc/passwd" })).is_err());
         assert!(domain_from_input(&json!({
             "url": "https://example.com",
-            "max_characters": MAX_CHARACTERS + 1
+            "max_characters": 50001
         }))
         .is_err());
         assert!(domain_from_input(&json!({

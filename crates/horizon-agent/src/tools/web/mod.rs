@@ -12,7 +12,7 @@ use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
 use serde_json::Value;
 
-use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity, ToolCallRequest};
+use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity};
 use crate::policy::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::error_output;
 use crate::tools::state::ToolSessionState;
@@ -31,7 +31,10 @@ pub(crate) enum WebApprovalOrigin {
     ManualDomainGrant { domains: Vec<String> },
 }
 
-pub(crate) fn fetch_gate(tool_state: &ToolSessionState, input: &Value) -> FetchGate {
+pub(crate) fn fetch_gate(
+    tool_state: &ToolSessionState,
+    input: &crate::tools::input::WebFetch,
+) -> FetchGate {
     match fetch::domain_from_input(input) {
         Ok(domain) if tool_state.is_domain_allowed(&domain) => FetchGate::Allowed { domain },
         Ok(domain) => FetchGate::NeedsApproval { domain },
@@ -39,7 +42,7 @@ pub(crate) fn fetch_gate(tool_state: &ToolSessionState, input: &Value) -> FetchG
     }
 }
 
-pub(crate) fn domain_grant_from_input(input: &Value) -> Option<String> {
+pub(crate) fn domain_grant_from_input(input: &crate::tools::input::WebFetch) -> Option<String> {
     fetch::domain_from_input(input).ok()
 }
 
@@ -67,13 +70,13 @@ pub(crate) fn validate_domain_grant(domain: &str) -> Result<String, String> {
 
 pub(crate) fn spawn(
     session_id: SessionId,
-    request: &ToolCallRequest,
+    request: &super::input::PreparedCall<'_>,
     domains: Arc<Allowlist>,
     origin: WebApprovalOrigin,
     result_tx: Sender<ToolCompletion>,
 ) {
     let identity = request.identity();
-    let input = request.input.0.clone();
+    let input = request.input.clone();
     let registration = super::background::Registration::new(
         session_id,
         super::background::Lifetime::Call(identity.clone()),
@@ -115,13 +118,15 @@ pub(crate) fn spawn(
 async fn run(
     identity: crate::contract::ToolCallIdentity,
     tool_id: &str,
-    input: Value,
+    input: super::input::ToolInput,
     domains: Arc<Allowlist>,
     origin: &WebApprovalOrigin,
 ) -> ToolCompletion {
-    let outcome = match tool_id {
-        "web_search" => WebOutcome::Finished(search::execute(input).await),
-        "web_fetch" => match fetch::execute(input, domains).await {
+    let outcome = match input {
+        super::input::ToolInput::WebSearch(input) => {
+            WebOutcome::Finished(search::execute(input).await)
+        }
+        super::input::ToolInput::WebFetch(input) => match fetch::execute(input, domains).await {
             fetch::FetchOutcome::Finished(output) => WebOutcome::Finished(output),
             fetch::FetchOutcome::DomainGrantRequired(domains) => {
                 WebOutcome::DomainGrantRequired(domains)
@@ -243,6 +248,7 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::contract::ToolCallRequest;
 
     #[test]
     fn spawned_web_work_keeps_its_dispatch_occurrence_in_results_and_grant_requests() {
@@ -257,7 +263,7 @@ mod tests {
             let (tx, rx) = crossbeam_channel::unbounded();
             spawn(
                 SessionId::new(),
-                &request,
+                &super::super::input::PreparedCall::new(&request).unwrap(),
                 tools.domain_allowlist(),
                 WebApprovalOrigin::Auto,
                 tx,

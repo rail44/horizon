@@ -40,20 +40,23 @@
       "target": {
         "file": "crates/horizon-agent/src/policy.rs",
         "owner": "<free>",
-        "name": "plan_tool_call",
+        "name": "plan_prepared_call",
         "partition": "production"
       },
-      "sha256": "d40a40c636db751bb9410485d94d3c4d92e0ff51d26a22fb23821d33ddecb493",
+      "sha256": "df337781816cf5adb457623ca8d6c988a6d186d80e4736d17bd2ab152034281c",
       "related": {
-        "crates/horizon-agent/src/tools/approval.rs": "062bac01d71ffb913611155d33bffd1df46277713439f579a746ff3c287cfb0f",
-        "crates/horizon-agent/src/tools/execution.rs": "a997969c0d34bfdc9d915ed763dfc9e22062f559543d24a858a2794fed3bde6c",
-        "crates/horizon-agent/src/tools/processing.rs": "a2ee87f9b8393b90eedb552fe5011b41da7e1831aefa2f8b06adedb74c021788",
-        "crates/horizon-agent/src/tools/transition.rs": "e2995b43fc9de9287095d96b74a4d893316a514ef8dcd511cc29c953bf988898",
-        "crates/horizon-agentd/src/session/run.rs": "9c9a84794e9548893ce01f0b17ec585218dd00d1aaad14fa1affe6a91eee26d5"
+        "crates/horizon-agent/src/tools/approval.rs": "2ee953eb50db8a18d22ebc3e20f3e5618cb317a924f5c490b0a4109b487a2ee0",
+        "crates/horizon-agent/src/tools/execution.rs": "98ce80bd439f9c8acaf51788bfd300dc8d89541eaea119fdde54a727813eac0b",
+        "crates/horizon-agent/src/tools/input/bounded.rs": "38e3db0da6a75983f690a88a6db2ac26d1d9f0605faab32999283fe699f7dcf3",
+        "crates/horizon-agent/src/tools/input/context.rs": "af587427003e3a26743de5db3d518e2e9933f8dfeb0f4d4442e37aef710f34b2",
+        "crates/horizon-agent/src/tools/input/filesystem.rs": "f44b99fce555a07a387aa9fd5e89e46487fe56604fea95d90355ab2f03d80b1c",
+        "crates/horizon-agent/src/tools/input/memory.rs": "c2ba0b21e76857633a3f72670dd36031e40d0e4ffe2898b1c08ecbea372c6d68",
+        "crates/horizon-agent/src/tools/input/mod.rs": "4282b467a91dc86c70d2fcbd9e50dc471f8106096d947a3efcf6dc5b0790c6ed",
+        "crates/horizon-agent/src/tools/transition.rs": "e2995b43fc9de9287095d96b74a4d893316a514ef8dcd511cc29c953bf988898"
       },
       "decision": "preserve",
-      "reason": "One typed decision owns automatic mode, approval candidate or rejection. Permission classification and grant validation remain explicit; shared background registration owns exact-occurrence cancellation without changing these policies.",
-      "commit": "901edb40f671b54ab4136c9c85db74bfbdc60d90"
+      "reason": "Keep permission and containment policy explicit. Tool input is now decoded and validated before this decision; approval replay validates the recorded request again before grants or effects. Handlers and workers consume typed arguments, with mutable filesystem and network checks retained at use. Board contracts remain outside this change.",
+      "commit": "306b59853f6fe411d916400c557d0c5f034f61dc"
     },
     {
       "target": {

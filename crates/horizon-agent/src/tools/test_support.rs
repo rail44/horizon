@@ -45,3 +45,14 @@ pub(crate) fn policy_events(
     }
     events
 }
+
+/// Exercise typed handlers from JSON fixtures through their real deserializer.
+pub(crate) fn with_input<T: serde::de::DeserializeOwned>(
+    raw: &serde_json::Value,
+    execute: impl FnOnce(&T) -> serde_json::Value,
+) -> serde_json::Value {
+    match super::input::decode(raw) {
+        Ok(input) => execute(&input),
+        Err(error) => super::error_output(error.to_string()),
+    }
+}

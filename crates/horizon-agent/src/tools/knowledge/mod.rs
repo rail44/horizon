@@ -15,22 +15,26 @@ use serde_json::Value;
 
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn read(state: &ToolSessionState, input: &Value) -> Value {
-    with_main_root(state, input, crate::knowledge::execute_read)
+pub(super) fn read(state: &ToolSessionState, input: &crate::tools::input::ReadEntry) -> Value {
+    with_main_root(state, |root| {
+        crate::knowledge::execute_read(root, &input.id)
+    })
 }
 
-pub(super) fn write(state: &ToolSessionState, input: &Value) -> Value {
-    with_main_root(state, input, crate::knowledge::execute_write)
+pub(super) fn write(
+    state: &ToolSessionState,
+    input: &crate::tools::input::KnowledgeWrite,
+) -> Value {
+    with_main_root(state, |root| crate::knowledge::execute_write(root, input))
 }
 
 fn with_main_root(
     state: &ToolSessionState,
-    input: &Value,
-    execute: impl FnOnce(&std::path::Path, &Value) -> Value,
+    execute: impl FnOnce(&std::path::Path) -> Value,
 ) -> Value {
     let Some(root) = state.workspace_root() else {
         return crate::tools::error_output("knowledge tools require a workspace root");
     };
     let main_root = crate::knowledge::main_root(root).unwrap_or(root.to_path_buf());
-    execute(&main_root, input)
+    execute(&main_root)
 }

@@ -12,7 +12,7 @@ use crate::tools::state::ToolSessionState;
 pub(super) fn execute(
     tool_state: &ToolSessionState,
     path: Option<PathBuf>,
-    input: &Value,
+    input: &crate::tools::input::ConfigWrite,
 ) -> Value {
     let Some(path) = path else {
         return error_output(
@@ -20,9 +20,7 @@ pub(super) fn execute(
              $HOME or $XDG_CONFIG_HOME is set",
         );
     };
-    let Some(content) = input.get("content").and_then(Value::as_str) else {
-        return error_output("config.write requires a `content` string argument");
-    };
+    let content = input.content.as_str();
 
     if let Err(error) = toml::from_str::<toml::Table>(content) {
         return error_output(format!("`content` is not valid TOML: {error}"));
@@ -115,6 +113,12 @@ fn write_atomically(path: &Path, content: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execute(state: &ToolSessionState, path: Option<PathBuf>, raw: &Value) -> Value {
+        crate::tools::test_support::with_input::<crate::tools::input::ConfigWrite>(raw, |input| {
+            super::execute(state, path, input)
+        })
+    }
 
     fn temp_path(label: &str) -> PathBuf {
         std::env::temp_dir().join(format!(

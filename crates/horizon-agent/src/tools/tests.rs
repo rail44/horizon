@@ -756,15 +756,11 @@ fn fs_read_uses_a_smaller_default_but_allows_an_explicit_larger_window() {
     let explicit_output = sync_tools::execute_auto(
         &tool_state,
         "fs.read",
-        &json!({ "path": file.display().to_string(), "limit": 5000 }),
+        &json!({ "path": file.display().to_string(), "limit": 2000 }),
     )
     .expect("fs.read is auto-executed");
     assert_eq!(explicit_output["end_line"], 2000);
     assert_eq!(explicit_output["next_offset"], 2001);
-    assert!(explicit_output["notice"]
-        .as_str()
-        .unwrap()
-        .contains("maximum of 2000"));
 }
 
 #[test]
@@ -1413,7 +1409,7 @@ fn fs_edit_rejects_a_malformed_list_before_applying_anything() {
     );
 
     assert!(is_error(&output));
-    assert!(output["message"].as_str().unwrap().contains("index 1"));
+    assert!(output["message"].as_str().unwrap().contains("edits[1]"));
     assert_eq!(fs::read_to_string(&target).unwrap(), "one\n");
 }
 
@@ -1431,7 +1427,7 @@ fn fs_edit_requires_a_non_empty_edits_list() {
     assert!(empty["message"]
         .as_str()
         .unwrap()
-        .contains("at least one edit"));
+        .contains("at least one entry"));
 }
 
 // --- fs.glob / fs.grep ------------------------------------------------
@@ -1514,8 +1510,7 @@ fn fs_grep_searches_one_file_and_returns_locations_only() {
         "fs.grep",
         &json!({
             "base_path": file.display().to_string(),
-            "pattern": "TODO",
-            "context": 1
+            "pattern": "TODO"
         }),
     )
     .expect("fs.grep is auto-executed");
@@ -1529,12 +1524,6 @@ fn fs_grep_searches_one_file_and_returns_locations_only() {
     assert!(output["matches"][0]["line"].is_null());
     assert!(output["matches"][0]["context_before"].is_null());
     assert!(output["matches"][0]["context_after"].is_null());
-    // A `context` argument is now inert, and says so rather than being
-    // silently ignored.
-    assert!(output["note"]
-        .as_str()
-        .unwrap()
-        .contains("`context` is no longer accepted"));
 }
 
 #[test]

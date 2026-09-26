@@ -28,9 +28,7 @@
 
 use serde_json::{json, Value};
 
-use crate::contract::{
-    Event, FoldedLogRange, MemoryDigest, MemoryField, MemoryFieldUpdate, MemoryOp,
-};
+use crate::contract::{Event, MemoryDigest, MemoryField, MemoryOp};
 use crate::tools::error_output;
 
 /// The model-visible tool id.
@@ -199,109 +197,8 @@ pub fn memory_document_from_events(events: &[Event]) -> MemoryDocument {
 /// and by the session loop (to emit the event) — the input is the same
 /// `ToolCallDescriptor::args` in both places, so the parse is idempotent.
 pub(crate) fn parse_update(input: &Value) -> Result<MemoryDigest, String> {
-    let obj = input.as_object().ok_or("input must be a JSON object")?;
-
-    let no_update = obj.get("no_update");
-    let field_keys: Vec<&str> = FIELD_LABELS.iter().map(|(_, key, _)| *key).collect();
-    let present_fields: Vec<&str> = field_keys
-        .iter()
-        .copied()
-        .filter(|key| obj.contains_key(*key))
-        .collect();
-
-    if let Some(no_update_val) = no_update {
-        if !present_fields.is_empty() {
-            return Err(format!(
-                "cannot combine `no_update` with field operations ({})",
-                present_fields.join(", ")
-            ));
-        }
-        let reason = no_update_val
-            .get("reason")
-            .and_then(Value::as_str)
-            .ok_or("`no_update.reason` must be a non-empty string")?
-            .trim();
-        if reason.is_empty() {
-            return Err("`no_update.reason` must be a non-empty string".to_string());
-        }
-        return Ok(MemoryDigest {
-            updates: Vec::new(),
-            folded_log_range: None,
-            no_update_reason: Some(reason.to_string()),
-        });
-    }
-
-    if present_fields.is_empty() {
-        return Err(
-            "provide at least one field operation (goal/decisions/completed/in_progress/\
-             stuck/next_step/related) or declare `no_update` with a reason"
-                .to_string(),
-        );
-    }
-
-    let mut updates = Vec::new();
-    for key in &present_fields {
-        let (field, _, _) = FIELD_LABELS
-            .iter()
-            .find(|(_, k, _)| k == key)
-            .copied()
-            .expect("present_fields are all valid keys");
-        let op_obj = obj
-            .get(*key)
-            .and_then(Value::as_object)
-            .ok_or(format!("`{key}` must be an object with `op` and `content`"))?;
-        let op_str = op_obj
-            .get("op")
-            .and_then(Value::as_str)
-            .ok_or(format!("`{key}.op` must be one of: set, append, clear"))?;
-        let op = match op_str {
-            "set" => MemoryOp::Set,
-            "append" => MemoryOp::Append,
-            "clear" => MemoryOp::Clear,
-            other => {
-                return Err(format!(
-                    "`{key}.op` must be set/append/clear, got `{other}`"
-                ))
-            }
-        };
-        let content = match op {
-            MemoryOp::Clear => String::new(),
-            MemoryOp::Set | MemoryOp::Append => {
-                let content = op_obj
-                    .get("content")
-                    .and_then(Value::as_str)
-                    .ok_or(format!(
-                        "`{key}.content` must be a string when op is {op_str:?}"
-                    ))?
-                    .trim();
-                if content.is_empty() {
-                    return Err(format!(
-                        "`{key}.content` must be non-empty when op is {op_str:?}"
-                    ));
-                }
-                content.to_string()
-            }
-        };
-        updates.push(MemoryFieldUpdate { field, op, content });
-    }
-
-    let folded_log_range = obj
-        .get("folded_log_range")
-        .and_then(|v| v.as_object())
-        .and_then(|o| {
-            let from = o.get("from_seq")?.as_u64()?;
-            let to = o.get("to_seq")?.as_u64()?;
-            Some(FoldedLogRange {
-                from_seq: from,
-                to_seq: to,
-            })
-        });
-
-    Ok(MemoryDigest {
-        updates,
-        folded_log_range,
-        no_update_reason: None,
-    })
+    let input: crate::tools::input::MemoryUpdate = crate::tools::input::decode(input)?;
+    input.digest()
 }
 
 /// Executes the `memory.update` auto-allowed tool: validates the input and
@@ -310,8 +207,8 @@ pub(crate) fn parse_update(input: &Value) -> Result<MemoryDigest, String> {
 /// **No side effect here.** The session loop owns the state mutation and event
 /// emission (see the module doc): this handler only validates and confirms, so
 /// the model sees whether its edit was well-formed before the loop applies it.
-pub(super) fn execute(input: &Value) -> Value {
-    match parse_update(input) {
+pub(super) fn execute(input: &crate::tools::input::MemoryUpdate) -> Value {
+    match input.digest() {
         Ok(digest) => {
             if let Some(reason) = &digest.no_update_reason {
                 json!({
@@ -345,6 +242,14 @@ pub(super) fn execute(input: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::contract::FoldedLogRange;
+    fn execute(raw: &Value) -> Value {
+        crate::tools::test_support::with_input::<crate::tools::input::MemoryUpdate>(
+            raw,
+            super::execute,
+        )
+    }
 
     fn op(op: &str, content: &str) -> Value {
         json!({ "op": op, "content": content })

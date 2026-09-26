@@ -5,11 +5,12 @@ use super::{
     SandboxedApprovalOrigin,
 };
 use crate::config::BashToolConfig;
-use crate::contract::{SessionId, ToolCallIdentity, ToolCallRequest};
+use crate::contract::{SessionId, ToolCallIdentity};
 use crate::policy::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
 };
+use crate::tools::input::{Bash, PreparedCall};
 use crate::tools::network::SessionNetworkProxy;
 use crate::tools::{error_output, ToolSessionState};
 use crossbeam_channel::Sender;
@@ -22,7 +23,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) struct BashJob {
     session_id: SessionId,
     identity: ToolCallIdentity,
-    input: Value,
+    input: Bash,
     cwd: Arc<Mutex<PathBuf>>,
     config: BashToolConfig,
     result_tx: Sender<BashCompletion>,
@@ -31,14 +32,14 @@ pub(crate) struct BashJob {
 impl BashJob {
     pub(crate) fn new(
         session_id: SessionId,
-        request: &ToolCallRequest,
+        request: &PreparedCall<'_>,
         tools: &ToolSessionState,
         result_tx: Sender<BashCompletion>,
     ) -> Self {
         Self {
             session_id,
             identity: request.identity(),
-            input: request.input.0.clone(),
+            input: request.input.bash().clone(),
             cwd: tools.bash_cwd_handle(),
             config: tools.bash_config(),
             result_tx,
@@ -203,7 +204,7 @@ pub(super) fn spawn(
         BashJob {
             session_id,
             identity: crate::test_support::tool_identity(&call_id),
-            input,
+            input: serde_json::from_value(input).expect("valid bash fixture"),
             cwd,
             config,
             result_tx,
@@ -340,7 +341,7 @@ mod tests {
             RecallContext::default(),
         );
         let session_id = SessionId::new();
-        let request = |id: &str| ToolCallRequest {
+        let request = |id: &str| crate::contract::ToolCallRequest {
             call_id: (ToolCallId(id.into())).clone(),
             occurrence_id: crate::contract::OccurrenceId((ToolCallId(id.into())).0.clone()),
             tool_id: "bash".into(),
@@ -349,7 +350,12 @@ mod tests {
         let (results, completed) = unbounded();
         let (started, running) = unbounded();
         let (release, blocked) = unbounded();
-        let first = BashJob::new(session_id, &request("first"), &tools, results.clone());
+        let first = BashJob::new(
+            session_id,
+            &PreparedCall::new(&request("first")).unwrap(),
+            &tools,
+            results.clone(),
+        );
         first.enqueue(move |job, _registration| {
             started.send(()).unwrap();
             blocked.recv().unwrap();
@@ -357,7 +363,12 @@ mod tests {
             panic!("first job failed after changing cwd");
         });
         running.recv_timeout(Duration::from_secs(2)).unwrap();
-        let second = BashJob::new(session_id, &request("second"), &tools, results);
+        let second = BashJob::new(
+            session_id,
+            &PreparedCall::new(&request("second")).unwrap(),
+            &tools,
+            results,
+        );
         spawn_approved_host(second, HostExecutionApproval::new(ApprovalSource::Human));
         assert!(!session_tool_work_settled(session_id));
         assert!(completed.try_recv().is_err());

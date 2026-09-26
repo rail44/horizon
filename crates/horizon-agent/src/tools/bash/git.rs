@@ -54,13 +54,6 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
 
 /// Whether a bash tool input contains a directly-recognizable Git invocation
 /// that may write repository metadata.
-pub(crate) fn requires_metadata_write(input: &Value) -> bool {
-    input
-        .get("command")
-        .and_then(Value::as_str)
-        .is_some_and(command_requires_metadata_write)
-}
-
 pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
     if output
         .get("git_operation_approved")
@@ -78,7 +71,7 @@ pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
     (!roots.is_empty()).then_some(roots)
 }
 
-fn command_requires_metadata_write(command: &str) -> bool {
+pub(crate) fn command_requires_metadata_write(command: &str) -> bool {
     any_command_segment(command, segment_requires_metadata_write)
 }
 

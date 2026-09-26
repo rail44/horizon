@@ -221,11 +221,8 @@ pub(crate) fn start(
     tool_state: &ToolSessionState,
     session_id: SessionId,
     request: &ToolCallRequest,
+    input: &crate::tools::input::Task,
 ) -> ToolOutput {
-    let input = match Input::parse(&request.input) {
-        Ok(input) => input,
-        Err(message) => return synchronous(request, error_output(message)),
-    };
     let Some(host) = tool_state.exploration_host() else {
         return synchronous(
             request,
@@ -241,7 +238,7 @@ pub(crate) fn start(
     if work.is_cancelled() {
         return synchronous(request, error_output("session is stopping"));
     }
-    let started = match host.start(ExplorationRequest::for_prompt(input.prompt)) {
+    let started = match host.start(ExplorationRequest::for_prompt(input.prompt.to_string())) {
         Ok(started) => started,
         Err(message) => {
             return synchronous(
@@ -252,7 +249,7 @@ pub(crate) fn start(
     };
 
     let child_id = started.session_id;
-    let description = input.description;
+    let description = input.description.trim().to_string();
     let started_at_epoch_ms = unix_epoch_ms();
     children::register(session_id, child_id, description.clone());
     let child_work = worker::ChildWork::attach(work, host.clone(), child_id);
@@ -331,21 +328,12 @@ pub(crate) fn register_finished_child_for_test(
 /// session (decision 3). Ownership is checked, and an id belonging to
 /// another session reports exactly like an unknown one -- a session must
 /// not be able to probe another's task ids.
-pub(crate) fn output(session_id: SessionId, request: &ToolCallRequest) -> ToolOutput {
-    let target = match request
-        .input
-        .get("session_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| "`session_id` is required and must be a string".to_string())
-        .and_then(|raw| {
-            raw.trim()
-                .parse::<uuid::Uuid>()
-                .map(SessionId::from_uuid)
-                .map_err(|_| format!("`{raw}` is not a task session id"))
-        }) {
-        Ok(target) => target,
-        Err(message) => return synchronous(request, error_output(message)),
-    };
+pub(crate) fn output(
+    session_id: SessionId,
+    request: &ToolCallRequest,
+    input: &crate::tools::input::TaskOutput,
+) -> ToolOutput {
+    let target = SessionId::from_uuid(input.session_id);
 
     let output = match children::lookup(session_id, target) {
         children::Lookup::Unknown => error_output(format!(
@@ -433,41 +421,6 @@ pub(crate) fn deliver_test_completion(
     children::register_hostless(requester, child, description);
     if let Some(requester) = children::complete(child, output) {
         notify::wake(requester);
-    }
-}
-
-/// What the model may say: a short display label and the question with the
-/// exact deliverable wanted back.
-struct Input {
-    description: String,
-    prompt: String,
-}
-
-impl Input {
-    /// Validates both required fields. `description` is not forwarded to
-    /// the child (which is seeded with `prompt` alone) -- it labels the
-    /// requester's own transcript row while the task runs
-    /// (`transcript::tool_call::classify`) and names the task in the
-    /// completion notification.
-    fn parse(input: &Value) -> Result<Self, String> {
-        let description = input
-            .get("description")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "`description` is required and must be a string".to_string())?;
-        if description.trim().is_empty() {
-            return Err("`description` must not be empty".to_string());
-        }
-        let prompt = input
-            .get("prompt")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "`prompt` is required and must be a string".to_string())?;
-        if prompt.trim().is_empty() {
-            return Err("`prompt` must not be empty".to_string());
-        }
-        Ok(Self {
-            description: description.trim().to_string(),
-            prompt: prompt.to_string(),
-        })
     }
 }
 

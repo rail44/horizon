@@ -1,4 +1,5 @@
 use super::completion::approval_is_unresolved;
+use super::input::PreparedCall;
 use super::transition::ToolUpdate;
 use serde_json::Value;
 
@@ -205,6 +206,11 @@ fn dispatch_approval(
     kind: ApprovalKind,
     source: ApprovalSource,
 ) -> ApprovalOutcome {
+    let prepared = match PreparedCall::new(request) {
+        Ok(prepared) => prepared,
+        Err(message) => return unstarted_error(runtime, &request.call_id, &message),
+    };
+    let request = &prepared;
     match request.tool_id.as_str() {
         "bash" => resolve_bash(session_id, runtime, request, decision, kind, source),
         "web_fetch" => resolve_web_fetch(session_id, runtime, request, decision, kind),
@@ -215,7 +221,7 @@ fn dispatch_approval(
 fn resolve_web_fetch(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     kind: ApprovalKind,
 ) -> ApprovalOutcome {
@@ -279,17 +285,13 @@ fn resolve_web_fetch(
 /// `tools::execute_approved`, which picks the owning module by tool id.
 fn resolve_synchronous_tool(
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
 ) -> ApprovalOutcome {
     match decision {
         ApprovalDecision::Approve => {
             ApprovalOutcome::from(ToolUpdate::execute(&runtime.live_state, request, || {
-                crate::tools::execute_approved(
-                    &runtime.tool_state,
-                    &request.tool_id,
-                    &request.input,
-                )
+                crate::tools::execute_approved(&runtime.tool_state, &request.input)
             }))
         }
         ApprovalDecision::Deny { .. } => {
@@ -307,7 +309,7 @@ fn resolve_synchronous_tool(
 fn resolve_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     kind: ApprovalKind,
     approval_source: ApprovalSource,
@@ -366,14 +368,14 @@ fn resolve_bash(
 fn resolve_git_operation(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     writable_roots: Vec<std::path::PathBuf>,
 ) -> ApprovalOutcome {
     if matches!(decision, ApprovalDecision::Deny { .. }) {
         return declined_result(runtime, &request.call_id, denied_output());
     }
-    if !bash::requires_metadata_write(&request.input) {
+    if !request.input.requires_metadata_write() {
         return unstarted_error(
             runtime,
             &request.call_id,
@@ -429,7 +431,7 @@ fn resolve_git_operation(
 fn resolve_standard_bash(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     approval_source: ApprovalSource,
 ) -> ApprovalOutcome {
@@ -480,7 +482,7 @@ fn resolve_standard_bash(
 fn resolve_filesystem_denial_retry(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     denials: Vec<horizon_sandbox::FilesystemDenial>,
     grants: Vec<horizon_sandbox::FilesystemGrant>,
@@ -566,7 +568,7 @@ fn resolve_filesystem_denial_retry(
 /// attempt first, preserving the old and new occurrence identities.
 fn begin_execution(
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     prior_result: Option<&ToolCallResult>,
 ) -> ApprovalOutcome {
     ApprovalOutcome::from(ToolUpdate::start(
@@ -602,7 +604,7 @@ fn forward_prior_result(runtime: &SessionRuntime, prior_result: ToolCallResult) 
 fn resolve_domain_denial_retry(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     domains: Vec<String>,
     prior_result: ToolCallResult,
@@ -663,7 +665,7 @@ fn resolve_domain_denial_retry(
 fn resolve_mach_service_grant(
     session_id: SessionId,
     runtime: &SessionRuntime,
-    request: &ToolCallRequest,
+    request: &PreparedCall<'_>,
     decision: &ApprovalDecision,
     services: Vec<String>,
     prior_result: ToolCallResult,

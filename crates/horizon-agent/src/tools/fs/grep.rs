@@ -69,25 +69,13 @@ fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults
 
 pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
-    input: &Value,
+    input: &crate::tools::input::Grep,
     allow_out_of_root: bool,
 ) -> Value {
-    let Some(base_arg) = input.get("base_path").and_then(Value::as_str) else {
-        return error_output(
-            "fs.grep requires a `base_path` string argument — the directory to search under \
-             (there is no `path` field)",
-        );
-    };
-    let Some(pattern) = input.get("pattern").and_then(Value::as_str) else {
-        return error_output("fs.grep requires a `pattern` regex string argument");
-    };
-    let glob_filter = input.get("glob").and_then(Value::as_str);
-    let limit = input
-        .get("limit")
-        .and_then(Value::as_u64)
-        .map(|limit| usize::try_from(limit).unwrap_or(usize::MAX))
-        .unwrap_or(tool_state.tools_config().fs.grep_result_limit)
-        .max(1);
+    let base_arg = input.base_path.as_str();
+    let pattern = input.pattern.as_str();
+    let glob_filter = input.glob.as_deref();
+    let limit = usize::try_from(input.limit.get()).unwrap_or(usize::MAX);
 
     let base = match resolve_read_path(tool_state, base_arg, allow_out_of_root) {
         Ok(path) => path,
@@ -119,7 +107,7 @@ pub(in crate::tools) fn execute(
         limit,
         &tool_state.tools_config().fs,
     );
-    render_results(results, base_arg, pattern, input.get("context").is_some())
+    render_results(results, base_arg, pattern)
 }
 
 /// Traverse and collect locations, keeping scan budgets independent of output caps.
@@ -166,12 +154,7 @@ fn scan(
     results
 }
 
-fn render_results(
-    results: GrepResults,
-    base_arg: &str,
-    pattern: &str,
-    legacy_context: bool,
-) -> Value {
+fn render_results(results: GrepResults, base_arg: &str, pattern: &str) -> Value {
     let mut notes = Vec::new();
     if results.scan_truncated {
         notes.push(traverse::scan_truncated_note(results.visited));
@@ -181,14 +164,6 @@ fn render_results(
             "Returned matches stopped at the {MAX_OUTPUT_CHARS}-character output cap; narrow the path or pattern."
         ));
     }
-    if legacy_context {
-        notes.push(
-            "`context` is no longer accepted: fs.grep returns locations only. \
-             Use fs.read with offset/limit around a reported line."
-                .to_string(),
-        );
-    }
-
     // `rendered_chars` bounds match bodies while scanning. Measure the final
     // JSON too so paths, field names, and notes cannot push the actual tool
     // result over the same hard cap.

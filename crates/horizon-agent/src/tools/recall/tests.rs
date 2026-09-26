@@ -219,10 +219,7 @@ fn search_rejects_an_invalid_session_id() {
     .expect("recall.search handled");
 
     assert_eq!(output["is_error"], true);
-    assert!(output["message"]
-        .as_str()
-        .unwrap()
-        .contains("invalid session_id"));
+    assert!(output["message"].as_str().unwrap().contains("session_id"));
 
     let _ = std::fs::remove_file(path);
 }

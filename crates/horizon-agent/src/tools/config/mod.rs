@@ -35,11 +35,14 @@ use serde_json::{json, Value};
 
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn read(tool_state: &ToolSessionState, _input: &Value) -> Value {
+pub(super) fn read(tool_state: &ToolSessionState) -> Value {
     read_at(tool_state, tool_state.config_path())
 }
 
-pub(super) fn write(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn write(
+    tool_state: &ToolSessionState,
+    input: &crate::tools::input::ConfigWrite,
+) -> Value {
     write::execute(
         tool_state,
         tool_state.config_path().map(Path::to_path_buf),

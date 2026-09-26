@@ -38,10 +38,8 @@ use std::path::{Path, PathBuf};
 use crate::instructions::cap_to_chars;
 
 mod document;
-use document::{
-    is_valid_slug, parse_knowledge_md, parse_status, serialize_entry, KnowledgeStatus,
-    ParsedKnowledgeMd,
-};
+pub(crate) use document::KnowledgeStatus;
+use document::{is_valid_slug, parse_knowledge_md, serialize_entry, ParsedKnowledgeMd};
 
 // --- constants -----------------------------------------------------------
 
@@ -229,10 +227,7 @@ use crate::tools::error_output;
 /// re-read from disk. Any status is readable. The entry is looked up by
 /// `id` in the store keyed by `root` (the session's project main root,
 /// resolved by the caller).
-pub(crate) fn execute_read(root: &Path, input: &serde_json::Value) -> serde_json::Value {
-    let Some(id) = input.get("id").and_then(serde_json::Value::as_str) else {
-        return error_output("knowledge.read requires an `id` string argument");
-    };
+pub(crate) fn execute_read(root: &Path, id: &str) -> serde_json::Value {
     if !is_valid_slug(id) {
         return error_output(format!(
             "knowledge.read: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
@@ -273,47 +268,21 @@ pub(crate) fn execute_read(root: &Path, input: &serde_json::Value) -> serde_json
 /// today. Optional fields (`anchors`, `status`) default to the existing
 /// entry's values (or empty/active for a new entry). No approval — the
 /// tool-event recording is the audit.
-pub(crate) fn execute_write(root: &Path, input: &serde_json::Value) -> serde_json::Value {
-    let Some(id) = input.get("id").and_then(serde_json::Value::as_str) else {
-        return error_output("knowledge.write requires an `id` string argument");
-    };
+pub(crate) fn execute_write(
+    root: &Path,
+    input: &crate::tools::input::KnowledgeWrite,
+) -> serde_json::Value {
+    let id = input.id.as_str();
     if !is_valid_slug(id) {
         return error_output(format!(
             "knowledge.write: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
         ));
     }
-    let Some(description) = input.get("description").and_then(serde_json::Value::as_str) else {
-        return error_output("knowledge.write requires a `description` string argument");
-    };
-    if description.trim().is_empty() {
-        return error_output("knowledge.write: `description` must not be empty");
-    }
-    let Some(body) = input.get("body").and_then(serde_json::Value::as_str) else {
-        return error_output("knowledge.write requires a `body` string argument");
-    };
-    let Some(sources) = input.get("sources").and_then(serde_json::Value::as_array) else {
-        return error_output("knowledge.write requires a `sources` array argument");
-    };
-    let sources: Vec<String> = sources
-        .iter()
-        .filter_map(|s| s.as_str().map(|s| s.to_string()))
-        .collect();
-    if sources.is_empty() {
-        return error_output("knowledge.write: `sources` must contain at least one entry");
-    }
-
-    let anchors = input
-        .get("anchors")
-        .and_then(serde_json::Value::as_array)
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                .collect()
-        });
-    let status = input
-        .get("status")
-        .and_then(serde_json::Value::as_str)
-        .and_then(parse_status);
+    let description = &input.description;
+    let body = &input.body;
+    let sources = input.sources.to_vec();
+    let anchors = input.anchors.clone();
+    let status = input.status.clone();
 
     let path = store_dir_for_root(root).join(format!("{id}.md"));
 
@@ -376,6 +345,18 @@ pub(crate) fn execute_write(root: &Path, input: &serde_json::Value) -> serde_jso
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execute_read(root: &Path, raw: &serde_json::Value) -> serde_json::Value {
+        crate::tools::test_support::with_input::<crate::tools::input::ReadEntry>(raw, |input| {
+            super::execute_read(root, &input.id)
+        })
+    }
+    fn execute_write(root: &Path, raw: &serde_json::Value) -> serde_json::Value {
+        crate::tools::test_support::with_input::<crate::tools::input::KnowledgeWrite>(
+            raw,
+            |input| super::execute_write(root, input),
+        )
+    }
 
     /// Creates a real (empty) git repo in a temp directory. Uses `git init`
     /// (not just a fake `.git` dir) so `main_root`'s `git rev-parse

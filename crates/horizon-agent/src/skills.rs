@@ -365,16 +365,8 @@ fn parse_skill_md(source: &str) -> Option<ParsedSkillMd> {
 /// Executes the `skill.read` tool against `registry` (this session's
 /// composed [`SkillRegistry`]): returns `id`'s full body (capped at
 /// [`SKILL_BODY_CAP_CHARS`]), or an error listing every id this session can
-/// see if `id` doesn't match one. Takes the raw tool input rather than an
-/// already-extracted `&str` so `tools::config` (the one caller) can
-/// dispatch to this without its own argument-shape checking.
-pub(crate) fn execute_read(
-    registry: &SkillRegistry,
-    input: &serde_json::Value,
-) -> serde_json::Value {
-    let Some(id) = input.get("id").and_then(serde_json::Value::as_str) else {
-        return error_output("skill.read requires an `id` string argument");
-    };
+/// see if `id` does not match one. Argument decoding belongs to tools::input.
+pub(crate) fn execute_read(registry: &SkillRegistry, id: &str) -> serde_json::Value {
     match registry.get(id) {
         Some(skill) => {
             let (body, truncated) = cap_to_chars(skill.body(), SKILL_BODY_CAP_CHARS);
@@ -397,6 +389,12 @@ use crate::tools::error_output;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn execute_read(registry: &SkillRegistry, raw: &serde_json::Value) -> serde_json::Value {
+        crate::tools::test_support::with_input::<crate::tools::input::ReadEntry>(raw, |input| {
+            super::execute_read(registry, &input.id)
+        })
+    }
 
     fn temp_repo(label: &str) -> tempfile::TempDir {
         let directory = tempfile::Builder::new()

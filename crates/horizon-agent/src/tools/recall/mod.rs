@@ -32,9 +32,6 @@ use crate::contract::SessionId;
 use crate::persistence::projection::duckdb::RecallEntry;
 use crate::tools::state::ToolSessionState;
 
-const DEFAULT_SEARCH_LIMIT: usize = 20;
-const DEFAULT_READ_LIMIT: usize = 20;
-const MAX_LIMIT: usize = 100;
 /// Half-width (in characters) of the context window built around a search
 /// hit's first match by [`snippet_around_match`] -- combined with the match
 /// itself this yields a snippet of roughly 200 characters, per the task
@@ -48,48 +45,17 @@ const SNIPPET_RADIUS_CHARS: usize = 100;
 /// not re-inlining everything).
 const READ_TOTAL_CHAR_CAP: usize = 16_000;
 
-/// Valid `turn_outcome` filter values -- mirrors `agent_turns.end_reason`'s
-/// four `TurnEndReason` variants (`contract::TurnEndReason`; see
-/// `docs/agent-feedback-design.md`'s implementation-shape addendum for why
-/// there are four, not three).
-const VALID_TURN_OUTCOMES: &[&str] = &["completed", "cancelled", "failed", "halted"];
-
-pub(super) fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
-    let query = input.get("query").and_then(Value::as_str);
-    let scope_arg = input.get("scope").and_then(Value::as_str);
-    // An explicit `session_id` names *which* session to search, the way
-    // `recall.read` already does; `scope` may then only agree with it
-    // ("session") or be omitted. Parsed up front, with the same error
-    // shape `recall.read` gives an unparseable id.
-    let named_session_id = match input.get("session_id").and_then(Value::as_str) {
-        Some(raw) => match parse_session_id(raw) {
-            Ok(session_id) => Some(session_id),
-            Err(_) => return error_output(format!("recall.search: invalid session_id `{raw}`")),
-        },
-        None => None,
-    };
-    let limit = clamp_limit(
-        input.get("limit").and_then(Value::as_u64),
-        DEFAULT_SEARCH_LIMIT,
-    );
-    let turn_outcome = match input.get("turn_outcome").and_then(Value::as_str) {
-        Some(value) if VALID_TURN_OUTCOMES.contains(&value) => Some(value),
-        Some(other) => {
-            return error_output(format!(
-                "recall.search: unknown turn_outcome `{other}` (expected one of {})",
-                VALID_TURN_OUTCOMES.join(", ")
-            ))
-        }
-        None => None,
-    };
-    // Listing mode: `query` may be omitted only when `turn_outcome` narrows
-    // the result set instead -- e.g. "list how recent work ended" mining
-    // recipes have no substring to search for. Omitting both would mean
-    // "return this store's entire matched history", which is never useful
-    // and is rejected the same way v1's always-required `query` was.
-    if query.is_none() && turn_outcome.is_none() {
-        return error_output("recall.search requires a `query` or a `turn_outcome` filter");
-    }
+pub(super) fn search(
+    tool_state: &ToolSessionState,
+    input: &crate::tools::input::RecallSearch,
+) -> Value {
+    let query = input.query.as_deref();
+    let named_session_id = input.session_id.map(SessionId::from_uuid);
+    let limit = input.limit.get() as usize;
+    let turn_outcome = input
+        .turn_outcome
+        .as_ref()
+        .map(crate::tools::input::TurnOutcome::as_str);
 
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
@@ -98,30 +64,12 @@ pub(super) fn search(tool_state: &ToolSessionState, input: &Value) -> Value {
         );
     };
 
-    let scope = match scope_arg {
-        Some("all") => {
-            if named_session_id.is_some() {
-                return error_output(
-                    "recall.search: session_id cannot be combined with scope \"all\" -- drop one \
-                     (session_id searches that one session, scope \"all\" searches every session)",
-                );
-            }
-            None
-        }
-        None | Some("session") => match named_session_id.or(recall.session_id) {
-            Some(session_id) => Some(session_id),
-            None => {
-                return error_output(
-                    "recall.search scope \"session\" requires a session id, but this session \
-                     has none configured -- pass a session_id, or scope: \"all\" instead",
-                )
-            }
+    let scope = match input.scope {
+        crate::tools::input::RecallScope::All => None,
+        crate::tools::input::RecallScope::Session => match named_session_id.or(recall.session_id) {
+            Some(session) => Some(session),
+            None => return error_output("recall.search requires a session id for scope=session"),
         },
-        Some(other) => {
-            return error_output(format!(
-                "recall.search: unknown scope `{other}` (expected \"session\" or \"all\")"
-            ))
-        }
     };
 
     let report = store.query(|store| store.search_history(scope, query, limit, turn_outcome));
@@ -164,7 +112,10 @@ fn hit_json(entry: RecallEntry, query: Option<&str>, own_session_id: Option<Sess
     })
 }
 
-pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
+pub(super) fn read(
+    tool_state: &ToolSessionState,
+    input: &crate::tools::input::RecallRead,
+) -> Value {
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
         return error_output(
@@ -172,29 +123,17 @@ pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
         );
     };
 
-    let session_id = match input.get("session_id").and_then(Value::as_str) {
-        Some(raw) => match parse_session_id(raw) {
-            Ok(session_id) => session_id,
-            Err(_) => return error_output(format!("recall.read: invalid session_id `{raw}`")),
-        },
-        None => match recall.session_id {
-            Some(session_id) => session_id,
-            None => {
-                return error_output(
-                    "recall.read requires a session_id (this session has none configured in \
-                     context)",
-                )
-            }
-        },
+    let Some(session_id) = input
+        .session_id
+        .map(SessionId::from_uuid)
+        .or(recall.session_id)
+    else {
+        return error_output(
+            "recall.read requires a session_id (this session has none configured)",
+        );
     };
-
-    let Some(from_sequence) = input.get("from_sequence").and_then(Value::as_i64) else {
-        return error_output("recall.read requires a `from_sequence` integer argument");
-    };
-    let limit = clamp_limit(
-        input.get("limit").and_then(Value::as_u64),
-        DEFAULT_READ_LIMIT,
-    );
+    let from_sequence = input.from_sequence;
+    let limit = input.limit.get() as usize;
 
     let entries = store.query(|store| store.read_history_window(session_id, from_sequence, limit));
     let entries = match entries {
@@ -240,20 +179,6 @@ pub(super) fn read(tool_state: &ToolSessionState, input: &Value) -> Value {
         ));
     }
     output
-}
-
-fn parse_session_id(raw: &str) -> Result<SessionId, serde_json::Error> {
-    serde_json::from_value(Value::String(raw.to_string()))
-}
-
-fn session_id_json(session_id: SessionId) -> Value {
-    serde_json::to_value(session_id).unwrap_or(Value::Null)
-}
-
-fn clamp_limit(raw: Option<u64>, default: usize) -> usize {
-    raw.map(|value| value as usize)
-        .unwrap_or(default)
-        .clamp(1, MAX_LIMIT)
 }
 
 /// Builds a snippet of roughly [`SNIPPET_RADIUS_CHARS`] * 2 characters
@@ -320,6 +245,10 @@ fn snippet_head(text: &str) -> String {
 }
 
 use super::error_output;
+
+fn session_id_json(session: SessionId) -> Value {
+    json!(session.as_uuid().to_string())
+}
 
 #[cfg(test)]
 mod tests;
