@@ -390,8 +390,10 @@ This changes:
 - **Cancellation is a stop reason, not an error** (borrowed from the Agent
   Client Protocol): text already streamed is kept and the turn is committed
   as cancelled; pending approval requests belonging to the cancelled turn are
-  marked cancelled; a `ToolCallResult` arriving after cancel is accepted and
-  dropped.
+  settled by the host. Recorded results, including completed edits and denied
+  attempts awaiting a retry decision, remain real results. Only unfinished
+  occurrences receive cancellation; later results cannot replace a settled
+  occurrence. See [response settlement](agent-response-lifecycle.md).
 - Cargo: add `tokio-util`; enable tokio `macros`, `process`, `time` features.
 
 ## System Prompt

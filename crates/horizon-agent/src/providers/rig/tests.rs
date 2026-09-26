@@ -19,9 +19,7 @@ use super::retry::{
     retry_backoff, retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
     Retried, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
-use super::session::{
-    append_cancelled_tool_results_to_history, fold_batched_tool_result, BatchStep, SessionLoopState,
-};
+use super::session::{fold_batched_tool_result, BatchStep, SessionLoopState};
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
 use crate::config::RigAgentConfig;
@@ -361,18 +359,13 @@ async fn a_transient_rejection_is_retried_and_the_second_attempt_wins() {
         || async {
             attempts.set(attempts.get() + 1);
             if attempts.get() == 1 {
-                Attempt {
-                    result: Err(rejected_with(
-                        "503 Service Unavailable",
-                        "upstream is unwell",
-                    )),
+                Attempt::Failed {
+                    error: rejected_with("503 Service Unavailable", "upstream is unwell"),
+                    partial: None,
                     durable_output_emitted: false,
                 }
             } else {
-                Attempt {
-                    result: Ok("the answer"),
-                    durable_output_emitted: true,
-                }
+                Attempt::Complete("the answer")
             }
         },
         |_, _, _| {},
@@ -394,11 +387,9 @@ async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying()
         &token,
         || async {
             attempts.set(attempts.get() + 1);
-            Attempt {
-                result: Err(anyhow::anyhow!(rejected_with(
-                    "429 Too Many Requests",
-                    "slow down"
-                ))),
+            Attempt::Failed {
+                error: anyhow::anyhow!(rejected_with("429 Too Many Requests", "slow down")),
+                partial: None,
                 durable_output_emitted: true,
             }
         },
@@ -406,7 +397,7 @@ async fn a_failure_after_durable_output_emitted_ends_the_turn_without_retrying()
     )
     .await;
 
-    assert!(matches!(outcome, Retried::Failed(_)));
+    assert!(matches!(outcome, Retried::Failed(..)));
     assert_eq!(attempts.get(), 1);
 }
 
@@ -422,11 +413,9 @@ async fn a_cancel_during_backoff_wins_over_the_pending_retry() {
         &token,
         || async {
             attempts.set(attempts.get() + 1);
-            Attempt {
-                result: Err(anyhow::anyhow!(rejected_with(
-                    "429 Too Many Requests",
-                    "slow down"
-                ))),
+            Attempt::Failed {
+                error: anyhow::anyhow!(rejected_with("429 Too Many Requests", "slow down")),
+                partial: None,
                 durable_output_emitted: false,
             }
         },
@@ -472,18 +461,13 @@ async fn a_429_retries_past_the_attempt_budget() {
         || async {
             attempts.set(attempts.get() + 1);
             if attempts.get() <= PROVIDER_REQUEST_MAX_ATTEMPTS {
-                Attempt {
-                    result: Err(anyhow::anyhow!(rejected_with(
-                        "429 Too Many Requests",
-                        "slow down"
-                    ))),
+                Attempt::Failed {
+                    error: anyhow::anyhow!(rejected_with("429 Too Many Requests", "slow down")),
+                    partial: None,
                     durable_output_emitted: false,
                 }
             } else {
-                Attempt {
-                    result: Ok("recovered"),
-                    durable_output_emitted: true,
-                }
+                Attempt::Complete("recovered")
             }
         },
         |number, rejection, _backoff| {
@@ -510,11 +494,12 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
         &token,
         || async {
             attempts.set(attempts.get() + 1);
-            Attempt {
-                result: Err(anyhow::anyhow!(rejected_with(
+            Attempt::Failed {
+                error: anyhow::anyhow!(rejected_with(
                     "503 Service Unavailable",
                     "upstream is unwell"
-                ))),
+                )),
+                partial: None,
                 durable_output_emitted: false,
             }
         },
@@ -522,7 +507,7 @@ async fn a_5xx_exhausts_the_attempt_budget_and_fails() {
     )
     .await;
 
-    assert!(matches!(outcome, Retried::Failed(_)));
+    assert!(matches!(outcome, Retried::Failed(..)));
     assert_eq!(attempts.get(), PROVIDER_REQUEST_MAX_ATTEMPTS);
 }
 
@@ -761,6 +746,28 @@ fn tool_call_delta_buffer_emits_progress_and_final_tool_call_still_works_unchang
         events.as_slice(),
         [Event::ToolCallRequested(request)] if request.tool_id == "workspace.snapshot"
     ));
+}
+
+#[test]
+fn interleaved_tool_progress_retains_each_calls_name_and_byte_count() {
+    let (tx, rx) = crossbeam_channel::unbounded();
+    let mut buffer = ToolCallProgressBuffer::new(tx, &RigAgentConfig::default());
+    buffer.note_name("a", "fs.read".into());
+    buffer.note_delta("a", "abc");
+    buffer.note_name("b", "fs.write".into());
+    buffer.note_delta("b", "12");
+    buffer.note_delta("a", "de");
+    buffer.flush_for_tests();
+    let latest = rx
+        .try_iter()
+        .filter_map(|event| match event {
+            ProviderEvent::ToolCallProgress(progress) if progress.key == "a" => Some(progress),
+            _ => None,
+        })
+        .last()
+        .unwrap();
+    assert_eq!(latest.tool_id.as_deref(), Some("fs.read"));
+    assert_eq!(latest.bytes, 5);
 }
 
 /// The truncation detector: a call that received streaming deltas
@@ -1397,57 +1404,6 @@ fn rebuilt_history_pairing_repair_is_idempotent() {
 }
 
 #[test]
-fn appends_cancelled_tool_results_after_assistant_tool_call_message() {
-    let tool_call = rig_workspace_snapshot_call();
-    let call_id = ToolCallId(tool_call.id.as_str().to_string());
-    let mut history = vec![
-        RigMessage::user("snapshot please"),
-        RigMessage::Assistant {
-            id: None,
-            content: vec![AssistantContent::ToolCall(tool_call)],
-        },
-    ];
-
-    let pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([(
-        call_id.clone(),
-        ToolCallDescriptor {
-            identity: crate::test_support::tool_identity(&call_id),
-            tool_id: "workspace.snapshot".to_string(),
-            args: serde_json::json!({}),
-        },
-    )]);
-    append_cancelled_tool_results_to_history(
-        &mut history,
-        std::slice::from_ref(&call_id),
-        &pending,
-    );
-
-    // The assistant tool_calls message must be followed by one tool-result
-    // message per cancelled call, or the next API request is rejected.
-    assert_eq!(history.len(), 3);
-    assert!(matches!(&history[2], RigMessage::User { content }
-        if matches!(content.first(), Some(UserContent::ToolResult(result))
-            if result.call.as_str() == call_id.0
-                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
-                    if text.text.contains("cancelled")))));
-}
-
-#[test]
-fn cancel_without_tool_calls_appends_no_history_tool_results() {
-    let mut history = vec![
-        RigMessage::user("hello"),
-        RigMessage::assistant("partial answer"),
-    ];
-
-    append_cancelled_tool_results_to_history(&mut history, &[], &HashMap::new());
-
-    assert_eq!(history.len(), 2);
-    assert!(matches!(&history[1], RigMessage::Assistant { content, .. }
-        if matches!(content.first(), Some(AssistantContent::Text(text))
-            if text.text == "partial answer")));
-}
-
-#[test]
 fn cancelled_partial_assistant_message_keeps_streamed_text_and_tool_calls() {
     let message =
         partial_assistant_message(None, "partial text", vec![rig_workspace_snapshot_call()]);
@@ -1967,7 +1923,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
     let (tx, rx) = crossbeam_channel::unbounded();
     // Unused by this test: `role` is `None`, so `halt_turn_loop` never
     // reaches the code that would actually run a turn on these.
-    let (_commands_tx, commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
+    let (commands_tx, commands) = tokio::sync::mpsc::unbounded_channel::<Command>();
     let config = RigAgentConfig::default();
     let environment = crate::prompt::SessionEnvironment::for_workspace_root(None);
     let extra_sections: Vec<String> = Vec::new();
@@ -1977,20 +1933,39 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         config,
         environment,
         extra_sections,
-        events_tx: tx,
+        events_tx: tx.clone(),
         guard,
         rig_history: history,
         execution: pending.into(),
         ..SessionLoopState::default()
     };
 
-    state
-        .halt_turn_loop(
+    tokio::join!(
+        state.halt_turn_loop(
             GuardHalt::IterationCapExceeded,
             &arrived,
-            "workspace.snapshot",
-        )
-        .await;
+            "workspace.snapshot"
+        ),
+        async {
+            let request = loop {
+                if let Ok(event) = rx.try_recv() {
+                    break event;
+                }
+                tokio::task::yield_now().await;
+            };
+            let ProviderEvent::SettleTools { id, calls } = request else {
+                panic!("settlement request")
+            };
+            let results: Vec<_> = calls.into_iter().map(ToolCallResult::cancelled).collect();
+            for result in &results {
+                tx.send(Event::ToolCallFinished(result.clone()).into())
+                    .unwrap();
+            }
+            commands_tx
+                .send(Command::ToolCallsSettled { id, results })
+                .unwrap();
+        }
+    );
 
     // The arrived result is *not* folded into history here -- it's stashed
     // for `Command::ContinueTurn`/a later `Command::UserMessage` to fold in
@@ -2144,7 +2119,29 @@ fn start_fallback_rig_session_with_history(
         },
     );
     let tx = handle.sender();
-    let rx = handle.events();
+    let provider_events = handle.events();
+    let commands = tx.clone();
+    let (forward, rx) = crossbeam_channel::unbounded();
+    // These coordinator fixtures deliberately do not execute tools. Emulate
+    // the host's settlement receipt, leaving real execution to host tests.
+    std::thread::spawn(move || {
+        while let Ok(event) = provider_events.recv() {
+            if let ProviderEvent::SettleTools { id, calls } = event {
+                let results: Vec<_> = calls.into_iter().map(ToolCallResult::cancelled).collect();
+                for result in &results {
+                    if forward
+                        .send(Event::ToolCallFinished(result.clone()).into())
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                let _ = commands.send(Command::ToolCallsSettled { id, results });
+            } else if forward.send(event).is_err() {
+                return;
+            }
+        }
+    });
 
     // Drain session-startup events (Created, init message, WaitingForUser).
     for _ in 0..3 {

@@ -59,6 +59,7 @@ impl Provider for MockProvider {
 
             while let Ok(command) = commands_rx.recv() {
                 match command {
+                    Command::ToolCallsSettled { .. } => {}
                     Command::ToolCallReissued(identity) => {
                         if pending_tool_call
                             .as_ref()
@@ -282,6 +283,7 @@ fn respond_to_user_message(
             }));
             thread::sleep(MOCK_STREAM_CHUNK_TICK);
         }
+        let _ = events_tx.send(ProviderEvent::ToolCallProgressClosed(call_id.0.clone()));
         let _ = events_tx.send(
             Event::ToolCallRequested(ToolCallRequest {
                 call_id,
@@ -538,6 +540,9 @@ mod tests {
                         matches!(event, ProviderEvent::ToolCallProgress(progress) if progress.bytes == expected_bytes)
                     );
                 }
+                assert!(
+                    matches!(receive(), ProviderEvent::ToolCallProgressClosed(key) if key == expected_call)
+                );
             }
             let Event::ToolCallRequested(request) =
                 receive().clone().into_event().expect("conversation event")

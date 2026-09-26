@@ -232,6 +232,15 @@ pub(super) fn run_session(
                         environment.activate(base, &live_state, &mut tool_state, &async_results_tx, &commands_tx);
                         continue;
                     }
+                    if matches!(provider_event, ProviderEvent::SettleTools { .. }) {
+                        // Prefer completions already delivered by workers over a
+                        // cancellation racing this provider settlement barrier.
+                        for completion in async_results_rx.try_iter() {
+                            if !matches!(completion, ToolCompletion::ApprovalJudged(_)) {
+                                fold_tool_completion(state, &live_state, &commands_tx, session_id, completion);
+                            }
+                        }
+                    }
                     handle_provider_event(
                         &host,
                         state,
@@ -376,7 +385,9 @@ fn handle_provider_event(
     }
     for event in processing.horizon_events {
         super::model_selection::record_applied(state, session_id, &event);
-        send_session_event(state, session_id, AgentWireEvent::from(&event));
+        if let Some(event) = AgentWireEvent::from_provider(&event) {
+            send_session_event(state, session_id, event);
+        }
     }
     // A synchronous tool can enqueue commands to its own session (notably
     // environment activation). Forward those before its result releases the

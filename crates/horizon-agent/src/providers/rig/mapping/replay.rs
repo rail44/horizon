@@ -35,20 +35,16 @@ use rig_core::completion::{
 ///    inventing one would put words in its mouth. Dropping a result no
 ///    completed request ever consumed is the honest repair.
 /// 3. **An announced call nothing ever answers gets a cancelled result**,
-///    the same synthesis `session::append_cancelled_tool_results_to_history`
-///    and `horizon-agentd`'s startup fixup already use, inserted where the
+///    matching `horizon-agentd`'s interrupted-session startup fixup, inserted where the
 ///    real result would have gone. The rebuild needs its own copy because
 ///    the two run against different stores: the startup fixup appends to the
 ///    event log, while the rebuild reads the DuckDB projection, which the
 ///    writer thread updates asynchronously — so a resumed session can load
 ///    its history before the fixup's cancelled results have landed there.
 ///
-/// Not repaired: with a *parallel* tool batch whose results arrive out of
-/// order, a result can still sit behind an assistant message that announced
-/// a different call of the same batch. Templates that match the call id
-/// against the nearest assistant message (rather than just requiring one
-/// with tool calls, as the observed failure does) would still object; no
-/// such rejection has been seen.
+/// Explicit provider-request spans are grouped before this repair, so parallel
+/// calls and early results from one response retain one announcement batch.
+/// Historical inputs without those markers retain the order-preserving fallback.
 pub(in crate::providers::rig) fn repair_replayed_message_pairing(
     messages: Vec<Message>,
 ) -> Vec<Message> {

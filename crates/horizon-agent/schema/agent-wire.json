@@ -103,6 +103,19 @@
             "SessionSelection"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Close the preview identified by its streaming key.",
+          "properties": {
+            "ToolCallProgressClosed": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "ToolCallProgressClosed"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -2270,5 +2283,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 25
+  "x-session-protocol-version": 26
 }

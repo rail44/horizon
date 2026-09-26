@@ -9,8 +9,8 @@
 //! - [`mod@turn`] — the turn-execution pipeline methods (`run_turn`,
 //!   `run_cancellable_turn`, `handle_truncation_recovery`,
 //!   `apply_turn_outcome`, `halt_turn_loop`) and the pure helpers
-//!   (`fold_batched_tool_result`, `append_cancelled_tool_results_to_history`,
-//!   `BatchStep`).
+//!   (`fold_batched_tool_result`, `BatchStep`).
+//! - [`mod@settlement`] — host acknowledgement of stopped tool batches.
 //!
 //! The `pub(super)` surface — `spawn_rig_session` plus the six items `tests.rs`
 //! imports — is re-exported from here so callers see the same paths as before
@@ -48,6 +48,7 @@ mod interaction;
 mod memory;
 pub(crate) mod moa;
 mod progress;
+mod settlement;
 mod state;
 mod tool_results;
 mod turn;
@@ -58,9 +59,7 @@ mod turn;
 #[allow(unused_imports)]
 pub(crate) use state::SessionLoopState;
 #[allow(unused_imports)]
-pub(super) use turn::{
-    append_cancelled_tool_results_to_history, fold_batched_tool_result, BatchStep,
-};
+pub(super) use turn::{fold_batched_tool_result, BatchStep};
 
 /// Spawns one rig session with its initial provider configuration.
 pub(super) fn spawn_rig_session(

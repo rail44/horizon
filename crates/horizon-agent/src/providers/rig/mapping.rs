@@ -14,6 +14,7 @@ use rig_core::completion::ToolDefinition;
 use crate::{contract::ToolPermission, tools::Definition};
 
 mod replay;
+mod response_order;
 mod tool_calls;
 
 #[cfg(test)]
@@ -108,8 +109,8 @@ pub(super) fn horizon_tool_definition_from_rig(
 
 pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
     let mut calls = tool_calls::ReplayedToolCalls::default();
-    let messages = events
-        .iter()
+    let messages = response_order::ordered_for_provider(events)
+        .into_iter()
         .filter_map(|event| match event {
             Event::MessageCommitted(message) => Some(match message.role.provider_side() {
                 ProviderSide::User => {

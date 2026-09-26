@@ -20,6 +20,9 @@ pub fn process_agent_provider_event(
     provider_event: impl Into<ProviderEvent>,
 ) -> Result<Processing, String> {
     let provider_event = provider_event.into();
+    if let ProviderEvent::SettleTools { id, calls } = provider_event {
+        return super::settlement::settle(live, session_id, id, calls);
+    }
     live.extend_provider_events([provider_event.clone()])?;
     let mut processing = Processing {
         horizon_events: vec![provider_event.clone()],

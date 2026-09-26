@@ -17,7 +17,7 @@ impl SessionLoopState {
         // result from the new turn is mistaken for a non-final
         // member of the old batch, leaving the session waiting
         // forever.
-        if self.cancel_outstanding_tool_calls() {
+        if self.cancel_outstanding_tool_calls().await {
             self.emit_cancelled_turn();
         }
         self.begin_interaction();

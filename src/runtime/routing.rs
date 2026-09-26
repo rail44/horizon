@@ -173,6 +173,9 @@ impl AgentRoutes {
             AgentWireEvent::ToolCallProgress(progress) => {
                 self.send_agent(key, ProviderEvent::tool_call_progress(progress));
             }
+            AgentWireEvent::ToolCallProgressClosed(key_value) => {
+                self.send_agent(key, ProviderEvent::ToolCallProgressClosed(key_value));
+            }
             AgentWireEvent::TaskProgress(progress) => {
                 self.send_agent(key, ProviderEvent::task_progress(progress));
             }

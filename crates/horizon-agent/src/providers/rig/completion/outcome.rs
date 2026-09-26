@@ -20,6 +20,8 @@ pub(in crate::providers::rig) enum CompletionStop {
     Finished { text: String },
     Cancelled,
     Failed,
+    Refused,
+    Unknown { reason: String },
     Truncated(Truncation),
 }
 
@@ -52,10 +54,38 @@ impl CompletionStop {
         }
     }
 
+    pub(super) fn from_provider(
+        reason: Option<rig_core::completion::FinishReason>,
+        unfinished: usize,
+        output_tokens: Option<u64>,
+        cap: u64,
+        text: String,
+    ) -> Self {
+        use rig_core::completion::FinishReason;
+        match reason {
+            Some(FinishReason::ContentFilter) => Self::Refused,
+            Some(FinishReason::Other(reason)) => Self::Unknown { reason },
+            Some(FinishReason::Length) => Self::from_response(false, unfinished, true, text),
+            Some(FinishReason::Stop | FinishReason::ToolCalls) => {
+                Self::from_response(false, unfinished, false, text)
+            }
+            None => Self::from_response(
+                false,
+                unfinished,
+                super::output_cap_truncated(output_tokens, cap, false),
+                text,
+            ),
+        }
+    }
+
     pub(in crate::providers::rig) fn truncation(&self) -> Option<Truncation> {
         match self {
             Self::Truncated(reason) => Some(*reason),
-            Self::Finished { .. } | Self::Cancelled | Self::Failed => None,
+            Self::Finished { .. }
+            | Self::Cancelled
+            | Self::Failed
+            | Self::Refused
+            | Self::Unknown { .. } => None,
         }
     }
 }

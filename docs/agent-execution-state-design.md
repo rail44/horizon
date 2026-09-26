@@ -19,7 +19,7 @@ an input arriving after that cancellation could execute after a restart.
 | State | Retained data | Transition |
 | --- | --- | --- |
 | Idle | None | A provider round installs its requested tool batch. |
-| Tools | Outstanding call descriptors | Each accepted result removes one call; the last returns to Idle. Cancellation drains the batch. |
+| Tools | Outstanding call descriptors | Each accepted result removes one call; the last returns to Idle. Cancellation drains the batch and awaits host settlement. |
 | Halted | An executed result and its tool name | Continue consumes it as the next prompt; fresh input consumes it into history. |
 
 A provider future is owned by the coordinator's call stack, so another provider
@@ -31,6 +31,14 @@ proposals, settle the input receipt, then publish the turn boundary and state.
 Attempt identity is checked by the daemon. The provider's batch remains keyed
 by provider call ID: declining a retry legitimately returns the prior attempt's
 result. Superseded results never advance a batch.
+
+A stopped response retains its issued calls, including after a stream error.
+Before cancellation, failure, guard halt, or truncation recovery can close the
+turn or send another request, the provider asks the host to settle the batch.
+The host returns recorded results unchanged and cancels only unfinished
+occurrences, following approved retries and retaining a denial result held in
+an unapproved retry. The provider consumes this receipt into history exactly
+once. See [response lifecycle](agent-response-lifecycle.md).
 
 ## Tool decisions and completion
 
@@ -71,5 +79,5 @@ Continue with no retained continuation must leave admission unchanged, including
 when a paused queue was restored. Environment handoff, task notifications, and
 reply routing keep their existing semantics.
 
-No wire or event-log format changes are required by this refactor. The earlier
+The response-lifecycle follow-up uses agent wire v26; event-log v3 is unchanged. The earlier
 v24/v3 cutover still follows [history activation](agent-history-format.md).

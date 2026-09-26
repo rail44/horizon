@@ -184,7 +184,9 @@ Notes:
   processing (see `docs/agent-duckdb-state-design.md` and the
   `agent-inspect` skill). `ProviderRequestSent` carries the model id;
   Horizon renders none of the three in the transcript — they are pure
-  timing markers for replay/inspection, folded into the frame as no-ops.
+  timing markers for replay/inspection. They also delimit response previews:
+  a new attempt retires the previous uncommitted text; ending a request closes
+  its unfinished tool previews.
   Every sent marker has a matching finished marker, including provider setup
   errors, cancellation, and response-stream timeouts. Stream establishment
   and silence between chunks are independently bounded at 120 seconds.
@@ -195,14 +197,14 @@ Notes:
   cannot prove that retrying would avoid duplicate generation, billing, or
   tool-call intent. A timeout instead follows the normal failed-turn path:
   `Error`, `TurnEnded(Failed)`, then `StateChanged(WaitingForUser)`.
-  A rejection received **before any chunk of the response has been decoded**
-  is the one exception, and it is not a weakening of that rule: nothing was
-  generated, so re-sending cannot duplicate anything. HTTP 429/502/503/504
-  and connection/handshake-level failures are re-sent up to three attempts
-  total, with exponentially backed-off jittered waits (~1s/2s, capped at
-  30s, honouring a `Retry-After` the provider names in its error body); a
-  turn cancellation wins over a pending retry immediately, every other 4xx
-  stays fatal, and one stderr line per retry names the attempt and status.
+  Before any tool request is issued, transient HTTP 500/502/503/504 and
+  transport failures can retry up to three attempts. HTTP 429 keeps pacing
+  until cancellation. This includes a dropped stream containing only text
+  previews: retry selection discards that attempt's text from provider history.
+  It prevents duplicated local tool effects, not duplicate remote generation
+  or billing. Timeouts and other 4xx responses stay fatal. Waits use jittered
+  exponential backoff capped at 30s, with structured Retry-After preferred;
+  cancellation interrupts backoff. See [response ownership](agent-response-lifecycle.md).
   Each attempt is a genuinely separate request and emits its own
   `ProviderRequestSent`/`ProviderRequestFinished` pair.
   `ProviderRequestFirstToken` marks the first *successfully decoded* chunk,

@@ -39,6 +39,7 @@ use super::types::{AgentFrame, AgentFrameItem};
 pub(crate) struct TurnClock {
     started_at: Option<Instant>,
     model: Option<String>,
+    response_start: usize,
 }
 
 impl TurnClock {
@@ -87,7 +88,7 @@ pub(crate) fn apply_agent_event_to_frame(
         }
         Event::ReasoningDelta(delta) => {
             if let Some(AgentFrameItem::ReasoningDelta(existing)) =
-                last_current_turn_item_mut(frame, is_turn_boundary_item, |item| {
+                last_response_item_mut(frame, turn.response_start, |item| {
                     matches!(item, AgentFrameItem::ReasoningDelta(_))
                 })
             {
@@ -102,7 +103,7 @@ pub(crate) fn apply_agent_event_to_frame(
         }
         Event::AssistantTextDelta(delta) => {
             if let Some(AgentFrameItem::AssistantTextDelta(existing)) =
-                last_current_turn_item_mut(frame, is_turn_boundary_item, |item| {
+                last_response_item_mut(frame, turn.response_start, |item| {
                     matches!(item, AgentFrameItem::AssistantTextDelta(_))
                 })
             {
@@ -149,7 +150,7 @@ pub(crate) fn apply_agent_event_to_frame(
             // tool-call/approval boundaries
             // (`is_turn_opening_boundary_item`, the loose boundary) to reach
             // a pre-tool delta.
-            if promote_assistant_text_deltas_to_message(frame, message) {
+            if promote_assistant_text_deltas_to_message(frame, message, turn.response_start) {
                 return;
             }
             // No streaming delta to promote: replace the last `Message` of
@@ -160,29 +161,18 @@ pub(crate) fn apply_agent_event_to_frame(
                     matches!(item, AgentFrameItem::Message(_))
                 })
             {
-                if let AgentFrameItem::Message(existing) = &frame.items[index] {
-                    if existing.role == message.role {
-                        frame.items[index] = AgentFrameItem::Message(message.clone());
-                        return;
+                if index >= turn.response_start {
+                    if let AgentFrameItem::Message(existing) = &frame.items[index] {
+                        if existing.role == message.role {
+                            frame.items[index] = AgentFrameItem::Message(message.clone());
+                            return;
+                        }
                     }
                 }
             }
             frame.items.push(AgentFrameItem::Message(message.clone()));
         }
         Event::ToolCallRequested(request) => {
-            // Supersede a pending `ToolCallPreparing` progress item in
-            // place, the same way `MessageCommitted` above replaces a
-            // streaming `AssistantTextDelta` — otherwise the ephemeral
-            // "preparing…" block would linger in the transcript right next
-            // to the real tool-call block it was standing in for.
-            if let Some(index) =
-                last_current_turn_item_index(frame, is_turn_boundary_item, |item| {
-                    matches!(item, AgentFrameItem::ToolCallPreparing(_))
-                })
-            {
-                frame.items[index] = AgentFrameItem::ToolCallRequested(request.clone());
-                return;
-            }
             frame
                 .items
                 .push(AgentFrameItem::ToolCallRequested(request.clone()));
@@ -202,20 +192,32 @@ pub(crate) fn apply_agent_event_to_frame(
                 .items
                 .push(AgentFrameItem::ApprovalRequested(request.clone()));
         }
-        // Provider request lifecycle markers are timing-only (see their doc
-        // comments on `Event`): they exist for persisted replay/inspection,
-        // not for pane rendering, so they leave the frame untouched — the
-        // same treatment `Event::StateChanged` gives `frame.state` without
-        // an item, just with nothing to set. `ProviderRequestSent` is the
-        // one exception: its `model` is remembered on `turn` (not pushed as
-        // an item) so a later `TurnEnded` fold can attach it to the turn's
-        // receipt.
+        // Request markers bound live previews without adding transcript rows.
+        // Remember the model for the turn receipt as well.
         Event::ProviderRequestSent(sent) => {
+            // Failed attempts never commit their text. Retire only their live
+            // preview; completed messages and diagnostic reasoning remain.
+            let mut index = 0;
+            frame.items.retain(|item| {
+                let keep = index < turn.response_start
+                    || !matches!(
+                        item,
+                        AgentFrameItem::AssistantTextDelta(_)
+                            | AgentFrameItem::ToolCallPreparing(_)
+                    );
+                index += 1;
+                keep
+            });
+            turn.response_start = frame.items.len();
             turn.model = Some(sent.model.clone());
         }
-        Event::ProviderRequestFirstToken
-        | Event::ProviderRequestFinished
-        | Event::ProviderRequestUsage(_) => {}
+        Event::ProviderRequestFinished => {
+            frame
+                .items
+                .retain(|item| !matches!(item, AgentFrameItem::ToolCallPreparing(_)));
+            turn.response_start = turn.response_start.min(frame.items.len());
+        }
+        Event::ProviderRequestFirstToken | Event::ProviderRequestUsage(_) => {}
         Event::ProviderRateLimited(rate_limited) => {
             frame
                 .items
@@ -294,7 +296,7 @@ pub(crate) fn apply_tool_call_progress_to_frame(
 ) {
     if let Some(AgentFrameItem::ToolCallPreparing(existing)) = last_current_turn_item_mut(
         frame,
-        is_turn_boundary_item,
+        is_turn_opening_boundary_item,
         |item| matches!(item, AgentFrameItem::ToolCallPreparing(existing) if existing.key == progress.key),
     ) {
         *existing = progress;
@@ -410,13 +412,18 @@ fn is_turn_opening_boundary_item(item: &AgentFrameItem) -> bool {
 /// and later same-role deltas are dropped -- their content is subsumed by
 /// the full-text commit, and the text appears once, before the tool, per
 /// the design intent that assistant text precedes its tool calls.
-fn promote_assistant_text_deltas_to_message(frame: &mut AgentFrame, message: &Message) -> bool {
+fn promote_assistant_text_deltas_to_message(
+    frame: &mut AgentFrame,
+    message: &Message,
+    response_start: usize,
+) -> bool {
     let start = frame
         .items
         .iter()
         .rposition(is_turn_opening_boundary_item)
         .map_or(0, |index| index + 1);
 
+    let start = start.max(response_start).min(frame.items.len());
     let delta_indices: Vec<usize> = frame.items[start..]
         .iter()
         .enumerate()
@@ -441,4 +448,75 @@ fn promote_assistant_text_deltas_to_message(frame: &mut AgentFrame, message: &Me
         frame.items.remove(index);
     }
     true
+}
+
+fn last_response_item_mut(
+    frame: &mut AgentFrame,
+    start: usize,
+    predicate: impl Fn(&AgentFrameItem) -> bool,
+) -> Option<&mut AgentFrameItem> {
+    let index = last_current_turn_item_index(frame, is_turn_boundary_item, predicate)?;
+    (index >= start).then(|| &mut frame.items[index])
+}
+
+#[cfg(test)]
+mod response_tests {
+    use super::*;
+    #[test]
+    fn failed_attempt_text_is_retired_before_the_next_response_and_replay_agrees() {
+        let live = crate::live::LiveState::with_disabled_persistence();
+        let events = vec![
+            Event::MessageCommitted(Message {
+                role: MessageRole::User,
+                text: "question".into(),
+            }),
+            Event::ProviderRequestSent(ProviderRequestSent {
+                model: "model".into(),
+            }),
+            Event::AssistantTextDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "failed prefix".into(),
+            }),
+            Event::ProviderRequestFinished,
+            Event::ProviderRequestSent(ProviderRequestSent {
+                model: "model".into(),
+            }),
+            Event::AssistantTextDelta(MessageDelta {
+                role: MessageRole::Assistant,
+                text: "new answer".into(),
+            }),
+            Event::ProviderRequestFinished,
+            Event::MessageCommitted(Message {
+                role: MessageRole::Assistant,
+                text: "new answer".into(),
+            }),
+        ];
+        live.extend_events(events.clone());
+        let frame = live.frame();
+        assert_eq!(frame, agent_frame_from_events(&events));
+        assert_eq!(frame.items.iter().filter(|item| matches!(item, AgentFrameItem::Message(message) if message.role == MessageRole::Assistant && message.text == "new answer")).count(), 1);
+        assert!(!frame
+            .items
+            .iter()
+            .any(|item| matches!(item, AgentFrameItem::AssistantTextDelta(_))));
+    }
+    #[test]
+    fn finalizing_one_interleaved_preview_does_not_remove_its_sibling() {
+        let live = crate::live::LiveState::with_disabled_persistence();
+        for key in ["a", "b", "a"] {
+            live.extend_provider_events([ProviderEvent::ToolCallProgress(ToolCallProgress {
+                key: key.into(),
+                tool_id: Some("fs.read".into()),
+                bytes: 3,
+            })])
+            .unwrap();
+        }
+        live.extend_provider_events([ProviderEvent::ToolCallProgressClosed("a".into())])
+            .unwrap();
+        assert!(
+            matches!(&live.frame().items[..], [AgentFrameItem::ToolCallPreparing(progress)] if progress.key == "b")
+        );
+        live.extend_events([Event::ProviderRequestFinished]);
+        assert!(live.frame().items.is_empty());
+    }
 }

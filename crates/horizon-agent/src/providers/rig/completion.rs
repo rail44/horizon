@@ -1,6 +1,9 @@
+mod attempt;
 mod outcome;
 mod response;
+use attempt::ResponseAttempt;
 pub(super) use outcome::{CompletionStop, Truncation, TurnCompletion};
+use response::ResponseEnd;
 
 use std::{future::Future, time::Duration};
 
@@ -19,8 +22,8 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     config::{ProviderKind, RigAgentConfig},
     contract::{
-        Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ProviderRequestSent,
-        ProviderRequestUsage, ToolCallId, ToolCallResult,
+        Error, Event, MessageRole, ProviderEvent, ProviderRateLimited, ProviderRequestUsage,
+        ToolCallId, ToolCallResult,
     },
     prompt::{system_prompt, SessionEnvironment},
     tools::{definitions, Definition},
@@ -53,6 +56,20 @@ const PROVIDER_STREAM_ESTABLISH_TIMEOUT: Duration = Duration::from_secs(120);
 /// provider is already generating, so a retry could duplicate a generation
 /// that is merely slow to reach us.
 const PROVIDER_STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+#[derive(Clone, Copy)]
+struct ProviderDeadlines {
+    establish: Duration,
+    idle: Duration,
+}
+impl Default for ProviderDeadlines {
+    fn default() -> Self {
+        Self {
+            establish: PROVIDER_STREAM_ESTABLISH_TIMEOUT,
+            idle: PROVIDER_STREAM_IDLE_TIMEOUT,
+        }
+    }
+}
 
 #[derive(Debug, Eq, PartialEq)]
 pub(super) enum ProviderWait<T> {
@@ -165,11 +182,39 @@ pub(super) async fn complete_rig_turn(
                 if let Some(input_tokens) = completion.input_tokens {
                     clearing.record_input_tokens(input_tokens);
                 }
+                if completion.stop != CompletionStop::Failed {
+                    publish_response_text(events_tx, &assistant_message);
+                }
+                match &completion.stop {
+                    CompletionStop::Refused => {
+                        let _ = events_tx.send(
+                            Event::Error(Error {
+                                message: "Provider refused the response (content filter).".into(),
+                            })
+                            .into(),
+                        );
+                    }
+                    CompletionStop::Unknown { reason } => {
+                        let _ = events_tx.send(
+                            Event::Error(Error {
+                                message: format!(
+                                    "Provider stopped with an unrecognized reason: {reason}"
+                                ),
+                            })
+                            .into(),
+                        );
+                    }
+                    _ => {}
+                }
                 rig_history.push(prompt);
-                rig_history.push(assistant_message);
+                if matches!(&assistant_message, Message::Assistant { content, .. } if content.iter().any(|part| !matches!(part, AssistantContent::Text(text) if text.text.is_empty())))
+                {
+                    rig_history.push(assistant_message);
+                }
                 return completion;
             }
             Err(error) => {
+                rig_history.push(prompt);
                 let _ = events_tx.send(
                     Event::Error(Error {
                         message: format!("Rig completion failed: {error}"),
@@ -215,13 +260,30 @@ pub(super) async fn complete_rig_turn(
     }
 }
 
-/// Runs one turn's provider request under the pre-generation retry policy.
-///
-/// Each attempt is a genuinely new request and emits its own
-/// `ProviderRequestSent`/`ProviderRequestFinished` pair, which is what a
-/// turn with several provider rounds already looks like in the log. Nothing
-/// is retried once a chunk has been decoded, so no attempt can have emitted
-/// transcript content before the next one starts.
+fn publish_response_text(events: &Sender<ProviderEvent>, message: &Message) {
+    if let Message::Assistant { content, .. } = message {
+        let text: String = content
+            .iter()
+            .filter_map(|part| match part {
+                AssistantContent::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect();
+        if !text.is_empty() {
+            let _ = events.send(
+                Event::MessageCommitted(crate::contract::Message {
+                    role: MessageRole::Assistant,
+                    text,
+                })
+                .into(),
+            );
+        }
+    }
+}
+
+/// Select one response after bounded transport retries or rate-limit pacing.
+/// Only the selected attempt commits text. Issued tool calls prevent retries,
+/// and a failed attempt retains those calls and reported usage for settlement.
 async fn rig_provider_turn_with_retry(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
@@ -234,12 +296,7 @@ async fn rig_provider_turn_with_retry(
     let outcome = with_pre_generation_retry(
         token,
         || async {
-            let mut durable_output_emitted = false;
-            // One client per attempt, exactly like the single-kind
-            // predecessor: the request is new even when rig's HTTP client
-            // could be reused, and the entry's API-key variable is re-read
-            // per attempt (never stored).
-            let result = match completion_client(config) {
+            match completion_client(config) {
                 Ok(client) => {
                     rig_provider_turn_streaming(
                         config,
@@ -250,15 +307,14 @@ async fn rig_provider_turn_with_retry(
                         history.clone(),
                         events_tx.clone(),
                         token,
-                        &mut durable_output_emitted,
                     )
                     .await
                 }
-                Err(error) => Err(error),
-            };
-            Attempt {
-                result,
-                durable_output_emitted,
+                Err(error) => Attempt::Failed {
+                    error,
+                    partial: None,
+                    durable_output_emitted: false,
+                },
             }
         },
         |number, rejection, backoff| {
@@ -285,7 +341,20 @@ async fn rig_provider_turn_with_retry(
                 ..TurnCompletion::default()
             },
         )),
-        Retried::Failed(error) => Err(error),
+        Retried::Failed(error, partial) => {
+            if let Some(partial) = partial {
+                publish_response_text(events_tx, &partial.0);
+                let _ = events_tx.send(
+                    Event::Error(Error {
+                        message: format!("Rig completion failed: {error}"),
+                    })
+                    .into(),
+                );
+                Ok(partial)
+            } else {
+                Err(error)
+            }
+        }
     }
 }
 
@@ -299,8 +368,7 @@ async fn rig_provider_turn_streaming(
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
-    durable_output_emitted: &mut bool,
-) -> anyhow::Result<(Message, TurnCompletion)> {
+) -> Attempt<(Message, TurnCompletion)> {
     match client {
         RigCompletionClient::OpenAi(client) => {
             run_provider_stream(
@@ -312,7 +380,7 @@ async fn rig_provider_turn_streaming(
                 history,
                 events_tx,
                 token,
-                durable_output_emitted,
+                ProviderDeadlines::default(),
             )
             .await
         }
@@ -326,7 +394,7 @@ async fn rig_provider_turn_streaming(
                 history,
                 events_tx,
                 token,
-                durable_output_emitted,
+                ProviderDeadlines::default(),
             )
             .await
         }
@@ -350,8 +418,8 @@ async fn run_provider_stream<C>(
     history: Vec<Message>,
     events_tx: Sender<ProviderEvent>,
     token: &CancellationToken,
-    durable_output_emitted: &mut bool,
-) -> anyhow::Result<(Message, TurnCompletion)>
+    deadlines: ProviderDeadlines,
+) -> Attempt<(Message, TurnCompletion)>
 where
     C: CompletionClient,
     // `Clone` is the `completion_request` builder's own bound; both bundled
@@ -360,16 +428,7 @@ where
     C::CompletionModel: Clone,
 {
     let model = client.completion_model(&config.model);
-    // Marks the request leaving Horizon for the provider, before the
-    // (possibly slow) network call below — see `Event::ProviderRequestSent`'s
-    // doc comment for why this is persisted rather than only observed live.
-    let _ = events_tx.send(
-        Event::ProviderRequestSent(ProviderRequestSent {
-            model: config.model.clone(),
-        })
-        .into(),
-    );
-    let mut request_span = ProviderRequestSpan::new(events_tx.clone());
+    let mut attempt = ResponseAttempt::new(config, events_tx);
     // `history` is the *provider view* of canonical history, already
     // projected through the Tier 1 clearing seam by the caller
     // (`super::clearing::history_for_provider_request`). Nothing is dropped:
@@ -390,46 +449,30 @@ where
     let mut stream = match await_provider_phase(
         stream_request,
         token,
-        PROVIDER_STREAM_ESTABLISH_TIMEOUT,
+        deadlines.establish,
         "stream establishment",
     )
-    .await?
+    .await
     {
-        ProviderWait::Ready(result) => result?,
-        ProviderWait::Cancelled => {
-            return Ok((
-                partial_assistant_message(None, "", Vec::new()),
-                TurnCompletion {
-                    stop: CompletionStop::Cancelled,
-                    ..TurnCompletion::default()
-                },
-            ));
+        Ok(ProviderWait::Ready(Ok(stream))) => stream,
+        Ok(ProviderWait::Cancelled) => {
+            return attempt.close(Ok(ResponseEnd::Cancelled), None, Vec::new())
+        }
+        Ok(ProviderWait::Ready(Err(error))) => {
+            return attempt.close(Err(error.into()), None, Vec::new())
+        }
+        Err(error) => return attempt.close(Err(error), None, Vec::new()),
+    };
+    let end = loop {
+        match await_provider_phase(stream.next(), token, deadlines.idle, "response stream").await {
+            Ok(ProviderWait::Cancelled) => break Ok(ResponseEnd::Cancelled),
+            Ok(ProviderWait::Ready(None)) => break Ok(ResponseEnd::Finished),
+            Ok(ProviderWait::Ready(Some(Ok(chunk)))) => attempt.push(chunk),
+            Ok(ProviderWait::Ready(Some(Err(error)))) => break Err(error.into()),
+            Err(error) => break Err(error),
         }
     };
-
-    let mut response = response::ResponseCollector::new(config, events_tx, durable_output_emitted);
-    let cancelled = loop {
-        let chunk = match await_provider_phase(
-            stream.next(),
-            token,
-            PROVIDER_STREAM_IDLE_TIMEOUT,
-            "response stream",
-        )
-        .await?
-        {
-            ProviderWait::Cancelled => break true,
-            ProviderWait::Ready(None) => break false,
-            ProviderWait::Ready(Some(chunk)) => chunk?,
-        };
-        // Decode before marking first-token or durable output. OpenAI may
-        // deliver a rejected HTTP request on the stream's first poll.
-        response.push(chunk);
-    };
-
-    // End the request span before final deltas and the committed message.
-    // Errors instead drop both the span and the uncommitted response.
-    request_span.finish();
-    Ok(response.finish(cancelled, stream.message_id.clone(), stream.choice.clone()))
+    attempt.close(end, stream.message_id.clone(), stream.choice.clone())
 }
 
 pub(super) fn provider_request_usage_event_from_stream_final(
@@ -449,34 +492,10 @@ pub(super) fn provider_request_usage_event_from_stream_final(
     })
 }
 
-/// Detects output-cap truncation by comparing the provider-reported output
-/// token count against the configured ceiling (`config.max_output_tokens`).
-///
-/// rig 0.42's streaming terminal element (`StreamFinal`) does carry a
-/// normalized `finish_reason`, but adopting it here is a behavior change this
-/// migration deliberately defers: the token-count heuristic below was
-/// validated against live traffic, and switching the detector to
-/// `finish_reason` deserves its own measured change. So truncation stays
-/// *inferred* from the token count.
-///
-/// The heuristic is `output_tokens == Some(cap)`: the turn produced exactly
-/// as many tokens as the ceiling allowed. Measurement backs this up — across
-/// ~6,700 provider requests the cap-exact count appeared only twice (both
-/// genuine truncations) and the 28,000–32,767 band was empty (next-highest
-/// was 25,674), so a false positive is very unlikely.
-///
-/// Two holes remain, both inherent to the approach:
-///
-/// 1. **No usage event may arrive.** When the stream ends on an error or
-///    cancellation before the `Final` chunk, `FinalResponse` is never
-///    delivered and `output_tokens` stays `None` — this detector cannot
-///    fire (syn:large:text saw this in 2.3% = 60/2,591 of requests).
-///
-/// 2. **Zero-usage responses are indistinguishable from small turns.** If
-///    the provider omits usage entirely, rig substitutes `Usage::default()`,
-///    yielding `output_tokens: 0`, which this detector correctly treats as
-///    "not truncated" — but a genuinely truncated turn that also reported
-///    zero usage would be missed the same way.
+/// Fallback only for a final record with no normalized finish reason.
+/// Explicit Stop/ToolCalls/Length/ContentFilter/Other always take precedence.
+/// Missing usage cannot prove a cap was reached; absent final records instead
+/// produce an unknown stop, never an ordinary successful completion.
 pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancelled: bool) -> bool {
     !cancelled && output_tokens == Some(cap)
 }

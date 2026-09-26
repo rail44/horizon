@@ -14,27 +14,7 @@ impl SessionLoopState {
             return;
         };
 
-        // Standing-agent memory (`docs/standing-agent-memory-
-        // design.md`): a `memory.update` result applies the
-        // parsed digest to the session's memory document (the
-        // tool handler already validated it and returned a
-        // confirmation — this is the state-mutation half) and
-        // emits the `MemoryDigest` event for persistence and
-        // transcript display. Both `Updated` and `Skipped`
-        // (no_update) satisfy the turn-end checkpoint.
-        if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID
-            && result.outcome == ToolOutcome::Succeeded
-        {
-            if let Some(memory) = self.memory.as_mut() {
-                if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
-                    memory.document.apply(&digest);
-                    let _ = self
-                        .events_tx
-                        .send(crate::contract::Event::MemoryDigest(digest).into());
-                    memory.checkpoint = super::memory::MemoryCheckpoint::Satisfied;
-                }
-            }
-        }
+        self.record_tool_effects(&result, &descriptor);
 
         // Doom-loop fingerprinting is per *result* (every call's
         // outcome must be checked, not just the batch's last), so
@@ -65,6 +45,34 @@ impl SessionLoopState {
 
         self.advance_from_tool_result(result, &descriptor.tool_id)
             .await;
+    }
+
+    pub(super) fn record_tool_effects(
+        &mut self,
+        result: &ToolCallResult,
+        descriptor: &super::ToolCallDescriptor,
+    ) {
+        // Standing-agent memory (`docs/standing-agent-memory-
+        // design.md`): a `memory.update` result applies the
+        // parsed digest to the session's memory document (the
+        // tool handler already validated it and returned a
+        // confirmation — this is the state-mutation half) and
+        // emits the `MemoryDigest` event for persistence and
+        // transcript display. Both `Updated` and `Skipped`
+        // (no_update) satisfy the turn-end checkpoint.
+        if descriptor.tool_id == crate::tools::MEMORY_UPDATE_TOOL_ID
+            && result.outcome == ToolOutcome::Succeeded
+        {
+            if let Some(memory) = self.memory.as_mut() {
+                if let Ok(digest) = crate::tools::parse_update(&descriptor.args) {
+                    memory.document.apply(&digest);
+                    let _ = self
+                        .events_tx
+                        .send(crate::contract::Event::MemoryDigest(digest).into());
+                    memory.checkpoint = super::memory::MemoryCheckpoint::Satisfied;
+                }
+            }
+        }
     }
 
     pub(super) async fn continue_halted_turn(&mut self) {
@@ -128,7 +136,7 @@ mod tests {
             guard: super::super::TurnLoopGuard::new(20, 10),
             ..SessionLoopState::default()
         };
-        assert!(state.cancel_outstanding_tool_calls());
+        assert!(state.cancel_outstanding_tool_calls().await);
         state.apply_turn_outcome(TurnCompletion {
             requested_tool_call_ids: vec![reused.clone(), sibling.clone()],
             requested_tool_calls: HashMap::from([

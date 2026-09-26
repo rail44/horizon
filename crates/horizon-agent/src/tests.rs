@@ -537,33 +537,32 @@ fn runtime_state_store_folds_tool_call_progress_but_excludes_it_from_the_jsonl_l
 }
 
 #[test]
-fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() {
-    let mut frame = AgentFrame::empty();
-
-    apply_tool_call_progress_to_frame(
-        &mut frame,
-        agent::ToolCallProgress {
-            key: "call-1".to_string(),
-            tool_id: None,
-            bytes: 16,
-        },
-    );
+fn tool_call_progress_updates_in_place_and_closes_before_the_real_request() {
+    let live = crate::live::LiveState::with_disabled_persistence();
+    let mut frame = live
+        .extend_provider_events([crate::contract::ProviderEvent::tool_call_progress(
+            agent::ToolCallProgress {
+                key: "stream-1".to_string(),
+                tool_id: None,
+                bytes: 16,
+            },
+        )])
+        .unwrap();
     assert_eq!(frame.items.len(), 1);
     assert!(matches!(
         &frame.items[0],
         AgentFrameItem::ToolCallPreparing(progress) if progress.bytes == 16
     ));
 
-    // A second tick for the same call updates the existing item in place
-    // rather than appending a new one.
-    apply_tool_call_progress_to_frame(
-        &mut frame,
-        agent::ToolCallProgress {
-            key: "call-1".to_string(),
-            tool_id: Some("fs.write".to_string()),
-            bytes: 96,
-        },
-    );
+    frame = live
+        .extend_provider_events([crate::contract::ProviderEvent::tool_call_progress(
+            agent::ToolCallProgress {
+                key: "stream-1".to_string(),
+                tool_id: Some("fs.write".to_string()),
+                bytes: 96,
+            },
+        )])
+        .unwrap();
     assert_eq!(frame.items.len(), 1);
     assert!(matches!(
         &frame.items[0],
@@ -571,20 +570,19 @@ fn tool_call_progress_updates_in_place_then_is_superseded_by_the_real_request() 
             if progress.bytes == 96 && progress.tool_id.as_deref() == Some("fs.write")
     ));
 
-    // Once the real tool call arrives, it replaces the preparing item
-    // rather than leaving it dangling in the transcript.
-    apply_agent_event_to_frame(
-        &mut frame,
-        &agent::Event::ToolCallRequested(agent::ToolCallRequest {
-            call_id: (agent::ToolCallId("call-1".to_string())).clone(),
-            tool_id: "fs.write".to_string(),
-            input: serde_json::json!({ "path": "/tmp/x" }).into(),
-            occurrence_id: crate::contract::OccurrenceId(
-                (agent::ToolCallId("call-1".to_string())).0.clone(),
-            ),
-        }),
-        &mut TurnClock::new(),
-    );
+    // The stream key can differ from the provider's finalized call ID.
+    frame = live
+        .extend_provider_events([
+            crate::contract::ProviderEvent::ToolCallProgressClosed("stream-1".into()),
+            agent::Event::ToolCallRequested(agent::ToolCallRequest {
+                call_id: agent::ToolCallId("call-1".into()),
+                tool_id: "fs.write".into(),
+                input: serde_json::json!({ "path": "/tmp/x" }).into(),
+                occurrence_id: crate::contract::OccurrenceId::new(),
+            })
+            .into(),
+        ])
+        .unwrap();
     assert_eq!(frame.items.len(), 1);
     assert!(matches!(
         &frame.items[0],

@@ -249,6 +249,12 @@ pub enum Command {
     #[serde(skip)]
     #[schemars(skip)]
     ToolCallReissued(ToolCallIdentity),
+    #[serde(skip)]
+    #[schemars(skip)]
+    ToolCallsSettled {
+        id: String,
+        results: Vec<ToolCallResult>,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]

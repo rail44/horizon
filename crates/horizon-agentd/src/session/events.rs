@@ -42,7 +42,9 @@ pub(super) fn apply_and_send_session_events(
     match live.extend_provider_events(events.clone()) {
         Ok(_) => {
             for event in events {
-                send_session_event(state, session_id, AgentWireEvent::from(&event));
+                if let Some(event) = AgentWireEvent::from_provider(&event) {
+                    send_session_event(state, session_id, event);
+                }
             }
             true
         }

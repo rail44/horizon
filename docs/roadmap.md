@@ -36,6 +36,10 @@ Their result bodies and execution evidence are now typed as well. File change
 views preserve partial edit success, child notifications share stored report types,
 and bash reuse excludes failed captures. See
 [the result contract](agent-tools-design.md#result-contract-2026-09-26).
+Provider attempts now retain issued tools across stream failures and settle
+stopped batches against host results before continuing. Explicit finish reasons
+and per-call progress govern response completion and display; see
+[response lifecycle and verification](agent-response-lifecycle.md).
 Agent input admission, retained tool work, and approval/result publication now
 have explicit owners; empty-queue stops survive replay and stale Continue cannot
 unpause them. See [execution state and recovery](agent-execution-state-design.md).

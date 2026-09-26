@@ -4,8 +4,7 @@
 //! methods on [`super::state::SessionLoopState`], taking `&mut self`
 //! instead of the 10+ individual arguments the free-function form
 //! accumulated. The pure helpers that touch no loop state
-//! (`fold_batched_tool_result`, `append_cancelled_tool_results_to_history`,
-//! `BatchStep`) stay as free `pub(super)` functions so the tests can keep
+//! (`fold_batched_tool_result`, `BatchStep`) stay as free `pub(super)` functions so the tests can keep
 //! calling them without a `SessionLoopState`.
 
 use super::memory::MemoryCheckpoint;
@@ -21,7 +20,6 @@ use crate::{
         Command, Error, Event, Message as AgentMessage, MessageRole, SessionState, ToolCallId,
         ToolCallResult, TurnEndReason,
     },
-    tools::cancelled_tool_call_result,
 };
 
 use super::super::completion::{CompletionStop, Truncation};
@@ -84,6 +82,9 @@ impl SessionLoopState {
                         .await;
                     continue;
                 }
+            }
+            if !matches!(outcome.stop, CompletionStop::Finished { .. }) {
+                self.settle_outcome(&mut outcome).await;
             }
             self.apply_turn_outcome(outcome);
             return;
@@ -220,22 +221,12 @@ impl SessionLoopState {
     pub(crate) fn apply_turn_outcome(&mut self, outcome: TurnCompletion) {
         match outcome.stop {
             CompletionStop::Cancelled => {
-                append_cancelled_tool_results_to_history(
-                    &mut self.rig_history,
-                    &outcome.requested_tool_call_ids,
-                    &outcome.requested_tool_calls,
-                );
-                for call_id in outcome.requested_tool_call_ids {
-                    let _ = self.events_tx.send(
-                        Event::ToolCallFinished(cancelled_tool_call_result(
-                            outcome.requested_tool_calls[&call_id].identity.clone(),
-                        ))
-                        .into(),
-                    );
-                }
                 self.emit_cancelled_turn();
             }
-            CompletionStop::Failed | CompletionStop::Truncated(_) => {
+            CompletionStop::Failed
+            | CompletionStop::Refused
+            | CompletionStop::Unknown { .. }
+            | CompletionStop::Truncated(_) => {
                 self.end_interaction(
                     TurnEndReason::Failed,
                     crate::contract::InputResult::Failure {
@@ -275,24 +266,19 @@ impl SessionLoopState {
         mut outcome: TurnCompletion,
     ) -> Option<TurnCompletion> {
         while let Some(reason) = outcome.stop.truncation() {
-            // Cancel any finalized tool calls from the truncated turn — the
-            // turn is ending as Failed, so they must not hang as pending.
-            if !outcome.requested_tool_call_ids.is_empty() {
-                append_cancelled_tool_results_to_history(
-                    &mut self.rig_history,
-                    &outcome.requested_tool_call_ids,
-                    &outcome.requested_tool_calls,
-                );
-                for call_id in &outcome.requested_tool_call_ids {
-                    let _ = self.events_tx.send(
-                        Event::ToolCallFinished(cancelled_tool_call_result(
-                            outcome.requested_tool_calls[call_id].identity.clone(),
-                        ))
-                        .into(),
-                    );
-                }
+            self.settle_outcome(&mut outcome).await;
+            if self
+                .inbox
+                .iter()
+                .any(|command| matches!(command, Command::Shutdown))
+            {
+                return None;
             }
 
+            if self.has_pending_stop() {
+                outcome.stop = CompletionStop::Cancelled;
+                return Some(outcome);
+            }
             // The event log must tell the truth: this was not a normal
             // completion. The turn is Failed, not Completed. The message
             // distinguishes the two truncation modes (tool calls cut mid-stream
@@ -411,22 +397,14 @@ impl SessionLoopState {
     /// for a retired call, so its result cannot advance the loop. The daemon
     /// also checks async dispatch identity before forwarding a result when a
     /// later provider batch reuses the same call ID.
-    pub(crate) fn cancel_outstanding_tool_calls(&mut self) -> bool {
+    pub(crate) async fn cancel_outstanding_tool_calls(&mut self) -> bool {
         let drained: HashMap<ToolCallId, ToolCallDescriptor> = self.execution.cancel_tools();
         if drained.is_empty() {
             return false;
         }
         let call_ids: Vec<ToolCallId> = drained.keys().cloned().collect();
 
-        append_cancelled_tool_results_to_history(&mut self.rig_history, &call_ids, &drained);
-        for call_id in call_ids {
-            let _ = self.events_tx.send(
-                Event::ToolCallFinished(cancelled_tool_call_result(
-                    drained[&call_id].identity.clone(),
-                ))
-                .into(),
-            );
-        }
+        self.settle_calls(call_ids, drained).await;
         true
     }
 
@@ -467,7 +445,7 @@ impl SessionLoopState {
     /// tool already executed (an `fs.write` is already on disk) and the app
     /// already surfaced its genuine `ToolCallFinished`. Any *other*
     /// still-pending calls in the batch (only possible on the doom-loop path —
-    /// see the module doc) are cancelled immediately with the same helpers
+    /// see the module doc) are settled by the host through the same barrier
     /// `Command::Cancel` uses, since those never get a second chance to
     /// land.
     ///
@@ -503,7 +481,7 @@ impl SessionLoopState {
         arrived_result: &ToolCallResult,
         tool_id: &str,
     ) {
-        self.cancel_outstanding_tool_calls();
+        self.cancel_outstanding_tool_calls().await;
 
         let summarized = halt == GuardHalt::IterationCapExceeded
             && self.role.is_some_and(|role| role.summarize_on_cap)
@@ -620,25 +598,6 @@ pub(crate) fn fold_batched_tool_result(
     } else {
         rig_history.push(rig_tool_result_message(result, tool_id));
         BatchStep::Continue
-    }
-}
-
-/// Appends one cancelled tool-result message per cancelled call id, directly
-/// after the assistant message that carried the tool calls. This keeps the
-/// rig history self-consistent for the API: an assistant `tool_calls`
-/// message not followed by a result message per call is rejected by OpenAI
-/// on the next request. Mirrors the cancelled `ToolCallFinished` events
-/// synthesized for the UI and persistence.
-pub(crate) fn append_cancelled_tool_results_to_history(
-    rig_history: &mut Vec<Message>,
-    cancelled_call_ids: &[ToolCallId],
-    pending: &HashMap<ToolCallId, ToolCallDescriptor>,
-) {
-    for call_id in cancelled_call_ids {
-        rig_history.push(rig_tool_result_message(
-            &cancelled_tool_call_result(pending[call_id].identity.clone()),
-            &pending[call_id].tool_id,
-        ));
     }
 }
 

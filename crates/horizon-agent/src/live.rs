@@ -78,6 +78,11 @@ impl State {
                 ProviderEvent::ToolCallProgress(progress) => {
                     apply_tool_call_progress_to_frame(&mut self.frame, progress);
                 }
+                ProviderEvent::ToolCallProgressClosed(key) => {
+                    self.frame.items.retain(|item| !matches!(item,
+                        crate::frame::AgentFrameItem::ToolCallPreparing(progress) if progress.key == key));
+                }
+                ProviderEvent::SettleTools { .. } => {}
                 ProviderEvent::SessionModel(model) => self.session_model = Some(model),
                 ProviderEvent::SessionSelection(selection) => {
                     self.session_selection = Some(selection)

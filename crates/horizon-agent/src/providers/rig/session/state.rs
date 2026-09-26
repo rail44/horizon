@@ -246,7 +246,7 @@ impl SessionLoopState {
                 }
                 crate::contract::Command::Cancel { .. } => {
                     self.pause_inputs(true);
-                    if !self.cancel_outstanding_tool_calls() {
+                    if !self.cancel_outstanding_tool_calls().await {
                         // Admission remains paused even without a tool batch;
                         // there is no active turn to finish.
                         continue;
@@ -264,7 +264,8 @@ impl SessionLoopState {
                     break;
                 }
                 crate::contract::Command::ApproveToolCall { .. }
-                | crate::contract::Command::DenyToolCall { .. } => {}
+                | crate::contract::Command::DenyToolCall { .. }
+                | crate::contract::Command::ToolCallsSettled { .. } => {}
             }
         }
 

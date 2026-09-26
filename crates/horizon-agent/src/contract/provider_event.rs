@@ -19,6 +19,14 @@ pub enum ProviderEvent {
     SessionModel(String),
     TaskProgress(TaskProgress),
     SessionSelection(ModelSelection),
+    /// Close exactly one streamed preview when its request is finalized.
+    ToolCallProgressClosed(String),
+    /// Internal provider-to-host settlement barrier; never published or persisted.
+    #[serde(skip)]
+    SettleTools {
+        id: String,
+        calls: Vec<super::ToolCallIdentity>,
+    },
 }
 
 impl ProviderEvent {
@@ -43,6 +51,8 @@ impl ProviderEvent {
             Self::SessionModel(_) => "session_model",
             Self::TaskProgress(_) => "task_progress",
             Self::SessionSelection(_) => "session_selection",
+            Self::ToolCallProgressClosed(_) => "tool_call_progress_closed",
+            Self::SettleTools { .. } => "settle_tools",
         }
     }
 

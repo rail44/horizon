@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crossbeam_channel::Sender;
@@ -74,112 +74,102 @@ impl StreamDeltaBuffer {
     }
 }
 
-/// Coalesces rig's `StreamedAssistantContent::ToolCallDelta` chunks (a tool
-/// call's name and JSON arguments, streamed piecemeal before the call is
-/// complete) into periodic [`ToolCallProgress`] ticks, the same
-/// time-gated-flush shape as [`StreamDeltaBuffer`] but keyed by rig's
-/// `internal_call_id` — the one identifier stable across every chunk of a
-/// single tool call from the very first one (the provider's own tool-call
-/// id may still be empty at that point).
-///
-/// A name chunk always flushes immediately (it's a discrete, rare event
-/// worth surfacing right away, e.g. "preparing `fs.write`…"); argument
-/// chunks flush on the same cadence as text/reasoning deltas.
+/// Each tool stream owns its counters and flush clock until finalization.
+/// Tombstones suppress late chunks and duplicate final records.
 pub(super) struct ToolCallProgressBuffer {
     events_tx: Sender<ProviderEvent>,
-    key: Option<String>,
-    tool_id: Option<String>,
-    bytes: usize,
-    last_flush: Instant,
+    calls: HashMap<String, ToolReception>,
     flush_interval: std::time::Duration,
-    /// Every `internal_call_id` that ever received a streaming delta —
-    /// the "started" side of the truncation detector. A call that started
-    /// streaming but was never finalized (the provider hit its output
-    /// ceiling mid-argument, and rig's `take_finalized_tool_calls` dropped
-    /// the incomplete call) appears here but not in `finalized`.
-    started: HashSet<String>,
-    /// Every `internal_call_id` that was finalized into a complete
-    /// `ToolCall` — the "finalized" side. The set difference `started −
-    /// finalized` is the truncated set.
-    finalized: HashSet<String>,
 }
-
+enum ToolReception {
+    Receiving {
+        tool_id: Option<String>,
+        bytes: usize,
+        last_flush: Instant,
+    },
+    Finalized,
+}
 impl ToolCallProgressBuffer {
     pub(super) fn new(events_tx: Sender<ProviderEvent>, config: &RigAgentConfig) -> Self {
         Self {
             events_tx,
-            key: None,
-            tool_id: None,
-            bytes: 0,
-            last_flush: Instant::now(),
+            calls: HashMap::new(),
             flush_interval: std::time::Duration::from_millis(config.stream_flush_interval_ms),
-            started: HashSet::new(),
-            finalized: HashSet::new(),
         }
     }
-
-    pub(super) fn note_name(&mut self, key: &str, name: String) {
-        self.ensure_key(key);
-        self.tool_id = Some(name);
-        self.flush_now();
+    fn receiving(&mut self, key: &str) -> &mut ToolReception {
+        self.calls
+            .entry(key.to_owned())
+            .or_insert_with(|| ToolReception::Receiving {
+                tool_id: None,
+                bytes: 0,
+                last_flush: Instant::now(),
+            })
     }
-
+    pub(super) fn note_name(&mut self, key: &str, name: String) {
+        if let ToolReception::Receiving { tool_id, .. } = self.receiving(key) {
+            *tool_id = Some(name);
+            self.flush_call(key);
+        }
+    }
     pub(super) fn note_delta(&mut self, key: &str, chunk: &str) {
         if chunk.is_empty() {
             return;
         }
-        self.ensure_key(key);
-        self.bytes += chunk.len();
-        if self.last_flush.elapsed() >= self.flush_interval {
-            self.flush_now();
+        let interval = self.flush_interval;
+        if let ToolReception::Receiving {
+            bytes, last_flush, ..
+        } = self.receiving(key)
+        {
+            *bytes += chunk.len();
+            if last_flush.elapsed() >= interval {
+                self.flush_call(key);
+            }
         }
     }
-
-    /// Forces an immediate flush regardless of the time gate, for
-    /// deterministic tests.
     #[cfg(test)]
     pub(super) fn flush_for_tests(&mut self) {
-        self.flush_now();
-    }
-
-    /// Records that a tool call was finalized into a complete `ToolCall`
-    /// (the `StreamedAssistantContent::ToolCall` arm in
-    /// `rig_openai_turn_streaming`), keyed by the same `internal_call_id`
-    /// the delta arm used. This is the "finalized" side of the truncation
-    /// detector.
-    pub(super) fn note_finalized(&mut self, internal_call_id: &str) {
-        self.finalized.insert(internal_call_id.to_string());
-    }
-
-    /// The `internal_call_id`s that received streaming deltas but were
-    /// never finalized — non-empty when the provider truncated tool calls
-    /// mid-stream. Empty for a normal stream (every started call is
-    /// finalized). The caller guards on `!cancelled` since a cancelled
-    /// turn may have started-but-unfinalized calls by design.
-    pub(super) fn truncated_ids(&self) -> Vec<String> {
-        self.started.difference(&self.finalized).cloned().collect()
-    }
-
-    fn ensure_key(&mut self, key: &str) {
-        self.started.insert(key.to_string());
-        if self.key.as_deref() != Some(key) {
-            self.key = Some(key.to_string());
-            self.tool_id = None;
-            self.bytes = 0;
+        for key in self.calls.keys().cloned().collect::<Vec<_>>() {
+            self.flush_call(&key);
         }
     }
-
-    fn flush_now(&mut self) {
-        let Some(key) = self.key.clone() else {
+    /// Returns false when this stream already finalized the same call.
+    pub(super) fn note_finalized(&mut self, key: &str) -> bool {
+        if matches!(
+            self.calls.insert(key.to_owned(), ToolReception::Finalized),
+            Some(ToolReception::Finalized)
+        ) {
+            return false;
+        }
+        let _ = self
+            .events_tx
+            .send(ProviderEvent::ToolCallProgressClosed(key.to_owned()));
+        true
+    }
+    pub(super) fn truncated_ids(&self) -> Vec<String> {
+        self.calls
+            .iter()
+            .filter_map(|(key, state)| {
+                matches!(state, ToolReception::Receiving { .. }).then_some(key.clone())
+            })
+            .collect()
+    }
+    fn flush_call(&mut self, key: &str) {
+        let Some(ToolReception::Receiving {
+            tool_id,
+            bytes,
+            last_flush,
+        }) = self.calls.get_mut(key)
+        else {
             return;
         };
         let _ = self
             .events_tx
             .send(ProviderEvent::tool_call_progress(ToolCallProgress {
-                key,
-                tool_id: self.tool_id.clone(),
-                bytes: self.bytes,
+                key: key.to_owned(),
+                tool_id: tool_id.clone(),
+                bytes: *bytes,
             }));
-        self.last_flush = Instant::now();
+        *last_flush = Instant::now();
     }
 }

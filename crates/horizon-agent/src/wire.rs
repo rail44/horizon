@@ -92,17 +92,21 @@ pub enum AgentWireEvent {
     /// that [`Self::SessionModel`] carries. An appended variant, so the wire
     /// stays additive (no protocol bump — the `TaskProgress` precedent).
     SessionSelection(ModelSelection),
+    /// Close the preview identified by its streaming key.
+    ToolCallProgressClosed(String),
 }
 
-impl From<&ProviderEvent> for AgentWireEvent {
-    fn from(event: &ProviderEvent) -> Self {
-        match event {
+impl AgentWireEvent {
+    pub fn from_provider(event: &ProviderEvent) -> Option<Self> {
+        Some(match event {
             ProviderEvent::Event { event, .. } => Self::Event(event.clone()),
             ProviderEvent::ToolCallProgress(progress) => Self::ToolCallProgress(progress.clone()),
             ProviderEvent::SessionModel(model) => Self::SessionModel(model.clone()),
             ProviderEvent::SessionSelection(selection) => Self::SessionSelection(selection.clone()),
             ProviderEvent::TaskProgress(progress) => Self::TaskProgress(progress.clone()),
-        }
+            ProviderEvent::ToolCallProgressClosed(key) => Self::ToolCallProgressClosed(key.clone()),
+            ProviderEvent::SettleTools { .. } => return None,
+        })
     }
 }
 
@@ -289,6 +293,7 @@ mod tests {
                 tool_id: Some("fs.read".to_string()),
                 bytes: 64,
             }),
+            AgentWireEvent::ToolCallProgressClosed("call-1".into()),
             AgentWireEvent::SessionModel("gpt-4o".to_string()),
             AgentWireEvent::WorkspaceRootResolved(WorkspaceRootResolved {
                 workspace_root: PathBuf::from("/tmp/some-workspace/.horizon/worktrees/abcd1234"),

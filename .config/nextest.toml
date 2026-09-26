@@ -179,6 +179,8 @@ max-threads = 1
 # "the skip set is not self-maintaining".
 # The auxiliary-client routing test binds two real HTTP listeners to check
 # endpoint, key-variable, and reload behavior for both titles and judgments.
+# Provider HTTP/SSE lifecycle tests (provider_wire_ prefix) bind loopback listeners
+# for both adapters, including disconnect, timeout, retry and parallel calls.
 [profile.sandboxed]
 default-filter = '''
     not (
@@ -204,7 +206,7 @@ default-filter = '''
         + binary_id(horizon-sandbox::linux_supervised_helper)
         + (binary_id(horizon-sandbox-proxy) & test(/^tests::/))
         + test(/exa_adapter_uses_the_fixed_post_contract_and_normalizes_results$/)
-        + test(/^providers::rig::completion::tests::provider_wire_contract_covers_both_adapters_and_rejections$/)
+        + test(/^providers::rig::completion::tests::provider_wire_/)
         + test(/^judge::client::tests::auxiliary_clients_keep_their_selected_endpoint_and_credentials$/)
         + test(/^providers::rig::session::turn::tests::cap_summary_request_disables_tools_without_changing_session_config$/)
         + test(/^providers::rig::model_limits::tests::(the_entrys_own_key_variable_authenticates_the_lookup|entries_differing_only_by_key_variable_do_not_share_an_answer|the_cached_answer_is_reused_for_the_same_entry|the_default_single_provider_setup_still_reads_openai_api_key|an_anthropic_entry_is_never_asked_for_an_openai_listing)$/)

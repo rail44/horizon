@@ -26,8 +26,7 @@ fn call() -> ToolCall {
 #[test]
 fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     let (tx, rx) = crossbeam_channel::unbounded();
-    let mut durable = false;
-    let mut response = ResponseCollector::new(&config(), tx, &mut durable);
+    let mut response = ResponseCollector::new(&config(), tx);
     response.push(StreamedAssistantContent::ReasoningDelta {
         id: "reasoning-1".into(),
         provider_id: None,
@@ -41,7 +40,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
         internal_call_id: "internal-1".into(),
     });
     let before_finish: Vec<_> = rx.try_iter().collect();
-    assert_eq!(before_finish.len(), 4);
+    assert_eq!(before_finish.len(), 5);
     assert!(matches!(
         before_finish[0]
             .clone()
@@ -63,7 +62,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
             .expect("conversation event"),
         Event::AssistantTextDelta(_)
     ));
-    let Event::ToolCallRequested(request) = &before_finish[3]
+    let Event::ToolCallRequested(request) = &before_finish[4]
         .clone()
         .into_event()
         .expect("conversation event")
@@ -72,15 +71,20 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     };
     assert_eq!(request.input.0, serde_json::json!({"path":"README.md"}));
     assert!(
-        matches!(&before_finish[3], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+        matches!(&before_finish[4], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
     );
 
+    response.push(StreamedAssistantContent::Final(
+        StreamFinal::new("test", Usage::new())
+            .with_finish_reason(rig_core::completion::FinishReason::ToolCalls),
+    ));
+    let _ = rx.try_iter().collect::<Vec<_>>();
     let (message, outcome) = response.finish(
-        false,
+        ResponseEnd::Finished,
         Some("message-1".into()),
         vec![AssistantContent::ToolCall(raw)],
     );
-    assert!(durable);
+
     assert_eq!(outcome.final_text(), Some("reading"));
     assert_eq!(
         outcome.requested_tool_call_ids,
@@ -95,9 +99,9 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     };
     assert_eq!(replayed.function.arguments, request.input.0);
     let after_finish: Vec<_> = rx.try_iter().collect();
-    assert_eq!(after_finish.len(), 1);
     assert!(
-        matches!(&after_finish[0].clone().into_event().expect("conversation event"), Event::MessageCommitted(message) if message.text == "reading")
+        after_finish.is_empty(),
+        "commit is published only after retry selection"
     );
 }
 
@@ -105,8 +109,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
 fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
     for with_call in [false, true] {
         let (tx, rx) = crossbeam_channel::unbounded();
-        let mut durable = false;
-        let mut response = ResponseCollector::new(&config(), tx, &mut durable);
+        let mut response = ResponseCollector::new(&config(), tx);
         response.push(StreamedAssistantContent::text("partial"));
         if with_call {
             response.push(StreamedAssistantContent::ToolCall {
@@ -116,7 +119,7 @@ fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
         }
         // A stream error drops the collector without calling finish.
         drop(response);
-        assert_eq!(durable, with_call);
+
         let events: Vec<_> = rx
             .try_iter()
             .filter_map(ProviderEvent::into_event)
@@ -137,8 +140,7 @@ fn failed_response_does_not_commit_text_but_keeps_tool_call_durability() {
 #[test]
 fn cancelled_response_retains_observed_history_and_suppresses_truncation() {
     let (tx, _) = crossbeam_channel::unbounded();
-    let mut durable = false;
-    let mut response = ResponseCollector::new(&config(), tx, &mut durable);
+    let mut response = ResponseCollector::new(&config(), tx);
     response.push(StreamedAssistantContent::text("partial"));
     response.push(StreamedAssistantContent::ToolCall {
         tool_call: call(),
@@ -156,7 +158,11 @@ fn cancelled_response_retains_observed_history_and_suppresses_truncation() {
             ..Usage::new()
         },
     )));
-    let (message, outcome) = response.finish(true, Some("partial-id".into()), Vec::new());
+    let (message, outcome) = response.finish(
+        ResponseEnd::Cancelled,
+        Some("partial-id".into()),
+        Vec::new(),
+    );
     assert_eq!(outcome.stop, CompletionStop::Cancelled);
     assert_eq!(outcome.requested_tool_call_ids.len(), 1);
     assert_eq!(outcome.requested_tool_calls.len(), 1);
@@ -176,8 +182,7 @@ fn cancelled_response_retains_observed_history_and_suppresses_truncation() {
 #[test]
 fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     let (tx, _) = crossbeam_channel::unbounded();
-    let mut durable = false;
-    let mut response = ResponseCollector::new(&config(), tx, &mut durable);
+    let mut response = ResponseCollector::new(&config(), tx);
     response.push(StreamedAssistantContent::text("partial"));
     response.push(StreamedAssistantContent::ToolCallDelta {
         internal_call_id: "unfinished".into(),
@@ -191,7 +196,7 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
             ..Usage::new()
         },
     )));
-    let (_, outcome) = response.finish(false, None, Vec::new());
+    let (_, outcome) = response.finish(ResponseEnd::Finished, None, Vec::new());
     assert_eq!(
         outcome.stop,
         CompletionStop::Truncated(super::super::Truncation::Tools {
@@ -202,4 +207,72 @@ fn unfinished_call_and_usage_cap_withhold_a_normal_final_answer() {
     assert_eq!(outcome.input_tokens, Some(10));
     assert_eq!(outcome.output_tokens, Some(20));
     assert!(outcome.final_text().is_none());
+}
+
+#[test]
+fn explicit_finish_reasons_override_usage_and_missing_metadata_is_bounded() {
+    use rig_core::completion::FinishReason;
+    for (reason, tokens, expected) in [
+        (
+            Some(FinishReason::Stop),
+            20,
+            CompletionStop::Finished {
+                text: "answer".into(),
+            },
+        ),
+        (
+            Some(FinishReason::Length),
+            0,
+            CompletionStop::Truncated(super::super::Truncation::OutputCap),
+        ),
+        (
+            Some(FinishReason::ContentFilter),
+            20,
+            CompletionStop::Refused,
+        ),
+        (
+            Some(FinishReason::Other("new_reason".into())),
+            20,
+            CompletionStop::Unknown {
+                reason: "new_reason".into(),
+            },
+        ),
+        (
+            None,
+            20,
+            CompletionStop::Truncated(super::super::Truncation::OutputCap),
+        ),
+    ] {
+        let (tx, _) = crossbeam_channel::unbounded();
+        let mut response = ResponseCollector::new(&config(), tx);
+        response.push(StreamedAssistantContent::text("answer"));
+        response.push(StreamedAssistantContent::Final(
+            StreamFinal::new(
+                "test",
+                Usage {
+                    input_tokens: 10,
+                    total_tokens: tokens + 10,
+                    ..Usage::new()
+                },
+            )
+            .with_optional_finish_reason(reason),
+        ));
+        let (_, completion) = response.finish(
+            ResponseEnd::Finished,
+            None,
+            vec![AssistantContent::Text(rig_core::message::Text::new(
+                "answer",
+            ))],
+        );
+        assert_eq!(completion.stop, expected);
+    }
+    let (tx, _) = crossbeam_channel::unbounded();
+    let response = ResponseCollector::new(&config(), tx);
+    assert!(matches!(
+        response
+            .finish(ResponseEnd::Finished, None, Vec::new())
+            .1
+            .stop,
+        CompletionStop::Unknown { .. }
+    ));
 }

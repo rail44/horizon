@@ -18,6 +18,7 @@ mod network;
 pub(crate) mod output;
 mod processing;
 mod recall;
+mod settlement;
 mod state;
 mod synchronous;
 pub use background::{drain_session_work, session_tool_work_settled};

@@ -8,15 +8,16 @@
         "name": "apply_agent_event_to_frame",
         "partition": "production"
       },
-      "sha256": "39f72cb42ece4f843f28fd110dc197b7bd0fff1dfe2534e84819c1e34e843af8",
+      "sha256": "942bd9f561974ef427f86a4a0b015f580867be1de0781b21b8d2f096be0435e5",
       "related": {
-        "crates/horizon-agent/src/frame/queries.rs": "357da1a33da3eb33a17cf15b6c4364f65e3e4469d612a9d9fb64c39a99ece1e7",
         "crates/horizon-agent/src/frame/tool_calls.rs": "cef5f9dc9acb07b54d1d7cc57cdfea0ca9d7fe5d349f54c168f848eaa5ef45c2",
+        "crates/horizon-agent/src/live.rs": "83a4399323df65bc6bc2e9fa8656ab41c93a17fccff897381d8c3b0d3b3357c6",
+        "crates/horizon-agent/src/providers/rig/stream.rs": "22e5dfbb50482610973d2114ecad6007676d1fc5b288174e2e5d011cd3ce18c2",
         "crates/horizon-agent/src/transcript/tool_call/approval.rs": "7202be0a11efb17ed04123eaaea52e677b1b87d6caf25d2b920674a4510d88e5"
       },
       "decision": "preserve",
-      "reason": "Keep event folding as the history owner. ApprovalResolved now consumes its exact human decision in replay and informs row projection; ContinueTurnRequested remains audit-only. Pending approvals compare both execution ids.",
-      "commit": "cc30ff0ee8ec9c9e6a90145f69f1d7e5ac235ea2"
+      "reason": "Keep event folding as the history owner. Request boundaries discard abandoned previews and prevent text or reasoning accumulation across attempts; keyed closure removes only its matching tool preview. Exact approval occurrence semantics remain unchanged. Live frames and persisted replay are covered together.",
+      "commit": "6cab1f6ee724363d3f1b6d51f69968e0df891297"
     },
     {
       "target": {
@@ -78,6 +79,24 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/providers/rig/completion.rs",
+        "owner": "<free>",
+        "name": "run_provider_stream",
+        "partition": "production"
+      },
+      "sha256": "ef36d03e489e403fad243fbba64da51c79a4f482017e3d048aed8902507b2c74",
+      "related": {
+        "crates/horizon-agent/src/providers/rig/completion/attempt.rs": "4e9db09c9006eee7c81dd75275a77339a35d29aa5830260dacba9f3eb134e6e1",
+        "crates/horizon-agent/src/providers/rig/completion/outcome.rs": "3db7e7ff5ea1d1a79d1095ad997ed6ed61ce8bde38c426cd1e7caff78212ad3d",
+        "crates/horizon-agent/src/providers/rig/completion/response.rs": "de6c25f73b371d11574239f8f77d7fd0ff7204c01becdee81f7166313c3cbaae",
+        "crates/horizon-agent/src/providers/rig/retry.rs": "856b9f875e79f1d99069d8954ef3fdb2bf81718b486a9e4fa4da06471c748057"
+      },
+      "decision": "preserve",
+      "reason": "ResponseAttempt owns collection and request closure on completion, cancellation, timeout and transport failure. Retain partial responses until retry selection; issued calls prohibit retries. Both provider adapters have real HTTP/SSE interruption and finish-reason coverage.",
+      "commit": "6cab1f6ee724363d3f1b6d51f69968e0df891297"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/providers/rig/session/input.rs",
         "owner": "Inputs",
         "name": "restore",
@@ -99,14 +118,16 @@
         "name": "apply_turn_outcome",
         "partition": "production"
       },
-      "sha256": "f24a4e49187d45d4f634d4bb434e6202a9669875eefad8fd995fc1fd86dec5db",
+      "sha256": "d7c6fa4fedc9b577a6a023a312c2a14f865c8ebb5058bff36b6ac1450e3eecd7",
       "related": {
+        "crates/horizon-agent/src/providers/rig/completion/outcome.rs": "3db7e7ff5ea1d1a79d1095ad997ed6ed61ce8bde38c426cd1e7caff78212ad3d",
         "crates/horizon-agent/src/providers/rig/session/progress.rs": "bc14aa4c48a634d83e64bd5619373178b0619de8d1af5e7c3d992a438d6ec7df",
-        "crates/horizon-agent/src/providers/rig/session/tool_results.rs": "efc5543a216966ec0661a92c524e4eff3a394e6ce8bcd91bda883f336129c730"
+        "crates/horizon-agent/src/providers/rig/session/settlement.rs": "843d071e59b368a2bbdd3e873389642637c99b8be630060f9507896fccad4bff",
+        "crates/horizon-agent/src/tools/settlement.rs": "94f83f7130e56bd3f3b82622a7adaaf20b05d80006d741fc3ad40c597a22ed8f"
       },
       "decision": "preserve",
-      "reason": "Turn endings share receipt and proposal cleanup. Execution owns mutually exclusive pending tools or a halted result; provider futures and independent configuration remain coordinator-owned.",
-      "commit": "b9a2f2ae7c8f6d06b5b9ab2ed2bb9d76c28ca45d"
+      "reason": "Provider outcomes distinguish normal, cancelled, failed, refused, unknown and truncated responses. Stopped batches receive acknowledged host results before ending or recovery; completed effects stay in history. Execution still owns pending tools or a halted result, and runtime shutdown prevents continuation with unresolved history.",
+      "commit": "6cab1f6ee724363d3f1b6d51f69968e0df891297"
     },
     {
       "target": {

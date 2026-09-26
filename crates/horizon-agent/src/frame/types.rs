@@ -24,9 +24,8 @@ pub enum AgentFrameItem {
     /// Ephemeral tool-call-argument-streaming progress (see
     /// [`ToolCallProgress`]): folded in place by
     /// [`apply_tool_call_progress_to_frame`] while arguments stream, and
-    /// superseded in place once the real `ToolCallRequested` arrives (see
-    /// the `Event::ToolCallRequested` arm in
-    /// [`apply_agent_event_to_frame`]). Never produced by
+    /// removed by the matching `ToolCallProgressClosed` notification before
+    /// the real request is appended. Never produced by
     /// `agent_frame_from_events`/persisted replay — it never reaches the
     /// event log in the first place (`ProviderEvent::tool_call_progress`).
     ToolCallPreparing(ToolCallProgress),

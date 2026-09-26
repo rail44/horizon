@@ -6,12 +6,10 @@ use std::{future::Future, time::Duration};
 use rig_core::completion::CompletionError;
 use tokio_util::sync::CancellationToken;
 
-/// How many times one provider request may be sent when the provider keeps
-/// rejecting it before generating anything: the first send plus two retries.
+/// Maximum attempts for transient failures before a tool call is issued.
 ///
 /// Applies to 5xx gateway failures and transport-level failures. A 429
-/// (rate limit) is exempt: it is a pre-generation rejection where re-sending
-/// is always safe, so the harness paces on time (exponential backoff capped
+/// (rate limit) is exempt: the harness paces on time (exponential backoff capped
 /// at [`PROVIDER_RETRY_MAX_BACKOFF`]) and retries indefinitely — the turn
 /// only ends via cancellation (`sleep_unless_cancelled`).
 pub(super) const PROVIDER_REQUEST_MAX_ATTEMPTS: u32 = 3;
@@ -27,27 +25,18 @@ pub(super) const PROVIDER_RETRY_MAX_BACKOFF: Duration = Duration::from_secs(30);
 /// other 4xx describes the request itself and would fail identically on a
 /// retry.
 ///
-/// 500 earns its place empirically: synthetic.new fronts its models with a
-/// gateway that reports an upstream hiccup as `500 Internal Server Error`
-/// with an `{"error":"Error from inference backend: ..."}` body, and on
-/// 2026-07-30 one such incident killed two sessions within a minute of each
-/// other. Including it is safe for the same reason the rest of this list is:
-/// [`retryable_rejection`] only ever fires before any durable output, so the
-/// request provably never reached generation and a repeat cannot duplicate
-/// one. A 500 that is genuinely deterministic still terminates the turn --
-/// it just costs [`PROVIDER_REQUEST_MAX_ATTEMPTS`] attempts first.
+/// The budget bounds deterministic server failures as well. Retries cannot
+/// repeat local tool effects, but remote inference or billing may repeat.
 const RETRYABLE_STATUSES: [u16; 5] = [429, 500, 502, 503, 504];
 
-/// A provider rejection that arrived before any of the response had been
-/// decoded, so re-sending the request cannot duplicate a generation: the
-/// provider answered "no" (or never answered at all) instead of starting to
-/// produce tokens.
+/// A transient rejection or transport failure eligible for retry, provided
+/// the response has not issued any tool calls.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct TransientRejection {
     /// The status the provider answered with. `None` is the
     /// connection/handshake-level shape (rig renders it as `Http client
-    /// error: error sending request for url ...`), where the request never
-    /// reached the model at all.
+    /// error: error sending request for url ...`). This does not establish
+    /// whether the server started inference.
     pub(super) status: Option<u16>,
     /// A `Retry-After` the provider named. rig surfaces no response headers,
     /// so this only fires when the provider repeats the hint in its error
@@ -56,7 +45,7 @@ pub(super) struct TransientRejection {
     /// Whether a transport failure (`status: None`) occurred mid-stream —
     /// the response had started but a body decode failed (rig renders it
     /// as `Http client error: error decoding response body: ...`) — rather
-    /// than pre-send (the request never reached the model). Only meaningful
+    /// than request setup. Only meaningful
     /// when `status` is `None`; always `false` for status-based rejections.
     pub(super) mid_stream: bool,
 }
@@ -66,21 +55,21 @@ impl TransientRejection {
         match self.status {
             Some(status) => format!("HTTP {status}"),
             None if self.mid_stream => "transport failure (mid-stream decode)".to_string(),
-            None => "transport failure (pre-send)".to_string(),
+            None => "transport failure (request setup)".to_string(),
         }
     }
 }
 
 /// One attempt's outcome as [`with_pre_generation_retry`] needs to see it.
-pub(super) struct Attempt<T> {
-    pub(super) result: anyhow::Result<T>,
-    /// Whether this attempt produced durable output — a `ToolCallRequested`
-    /// or `MessageCommitted` event — by the time it ended. Once true, no
-    /// failure of this attempt may be retried: a retry could duplicate the
-    /// committed tool call or message in history. Reasoning and text
-    /// deltas are volatile (never entered history), so an attempt that
-    /// only streamed those is still safe to retry.
-    pub(super) durable_output_emitted: bool,
+#[derive(Debug)]
+pub(super) enum Attempt<T> {
+    Complete(T),
+    Failed {
+        error: anyhow::Error,
+        partial: Option<T>,
+        /// Issued calls may already have effects. A retry must not repeat them.
+        durable_output_emitted: bool,
+    },
 }
 
 /// How a retried provider request finally ended.
@@ -89,20 +78,18 @@ pub(super) enum Retried<T> {
     /// The turn was cancelled while a backoff was being waited out. Cancel
     /// wins over a pending retry, always.
     Cancelled,
-    Failed(anyhow::Error),
+    Failed(anyhow::Error, Option<T>),
 }
 
 /// The retry decision, kept free of I/O so the classification is directly
 /// testable: `Some` exactly when this attempt may be sent again.
 ///
-/// Gates that must pass: the request must not have reached generation
-/// (anything after the provider started answering could be duplicated by a
-/// retry); and the failure must be one of the transient shapes above rather
-/// than a contract error or a stream timeout.
+/// No tool call may have been issued, and the failure must be a transient
+/// shape rather than a contract error or a stream timeout. Text previews
+/// can be discarded by the next attempt.
 ///
 /// The attempt budget (`PROVIDER_REQUEST_MAX_ATTEMPTS`) applies to 5xx and
-/// transport failures. A 429 rate-limit rejection is exempt: re-sending is
-/// always safe before generation, so the harness paces on time and retries
+/// transport failures. A 429 rate-limit rejection is exempt: the harness paces on time and retries
 /// indefinitely rather than giving up after a fixed attempt count.
 pub(super) fn retryable_rejection(
     attempt: u32,
@@ -118,8 +105,7 @@ pub(super) fn retryable_rejection(
         if !RETRYABLE_STATUSES.contains(&status) {
             return None;
         }
-        // 429 is a pre-generation rate-limit: re-sending is always safe, so it
-        // retries on time rather than on an attempt count. 5xx stays under the
+        // 429 retries on time rather than on an attempt count. 5xx stays under the
         // budget — a 500 can be deterministic, and the budget bounds that cost.
         if status != 429 && attempt >= PROVIDER_REQUEST_MAX_ATTEMPTS {
             return None;
@@ -296,17 +282,17 @@ where
 {
     let mut number = 1;
     loop {
-        let Attempt {
-            result,
-            durable_output_emitted,
-        } = attempt().await;
-        let error = match result {
-            Ok(value) => return Retried::Ok(value),
-            Err(error) => error,
+        let (error, partial, durable_output_emitted) = match attempt().await {
+            Attempt::Complete(value) => return Retried::Ok(value),
+            Attempt::Failed {
+                error,
+                partial,
+                durable_output_emitted,
+            } => (error, partial, durable_output_emitted),
         };
         let message = format!("{error:#}");
         let Some(rejection) = retryable_rejection(number, durable_output_emitted, &error) else {
-            return Retried::Failed(error);
+            return Retried::Failed(error, partial);
         };
         let backoff = retry_backoff(number, rejection.retry_after, jitter_permille());
         // The 2026-07-28 investigation had to infer this whole failure class
