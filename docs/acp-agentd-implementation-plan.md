@@ -95,7 +95,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | agent→client 通知 | `_horizon/task_progress` | `AgentWireEvent::TaskProgress` |
 | agent→client 通知 | `_horizon/tool_call_progress` | `ToolCallProgress` と `ToolCallProgressClosed` |
 | agent→client 通知 | `_horizon/memory` | `MemoryDigest` / `MemoryCheckpointMissed` |
-| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`skipped_lines`、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
+| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`Error`、`Exited`、`skipped_lines`、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
 | agent→client 通知 | `_horizon/provider_request` | `ProviderRequestSent` / `FirstToken` / `Finished`（turn receipt 用） |
 
 `ReplayStarted` / `ReplayComplete` は `session/resume` の要求と応答に対応する
@@ -116,8 +116,11 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 
 線を越えないもの（agentd 内に留まる）: Input routing 系 6 種、Environment 系
 3 種、`MoaPassStarted`、`MemorySeeded`、`ApprovalResolved`、
-`ContinueTurnRequested`、`ConversationRecorded`。`ProviderRequestUsage` は
-`usage_update` で代替。
+`ContinueTurnRequested`、`ConversationRecorded`、`ProviderRequestUsage`
+（ペインは token 数を描いていない。`usage_update` は当面送らない）。
+`WorkspaceRootResolved` は `session_info_update` の `_meta.horizon`
+（`SessionInfoMeta`）で運ぶ。`ToolCallResult`（host tool の結果）は
+`_horizon/host_tool` の応答そのもの。
 
 ### agentd 側
 

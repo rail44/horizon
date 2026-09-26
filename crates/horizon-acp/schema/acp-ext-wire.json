@@ -613,7 +613,7 @@
       "type": "object"
     },
     "SessionEventNotification": {
-      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared}` (crates/horizon-agent/src/contract.rs),\n`wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)\nand `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),\n`wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)\nand `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).",
       "oneOf": [
         {
           "properties": {
@@ -707,6 +707,48 @@
             },
             "type": {
               "const": "attachment_closed",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "reason"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "A mid-session failure the daemon reports outside any request.",
+          "properties": {
+            "message": {
+              "type": "string"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "error",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "session_id",
+            "message"
+          ],
+          "type": "object"
+        },
+        {
+          "description": "The session's process-level exit.",
+          "properties": {
+            "reason": {
+              "type": "string"
+            },
+            "session_id": {
+              "$ref": "#/$defs/SessionId"
+            },
+            "type": {
+              "const": "exited",
               "type": "string"
             }
           },

@@ -227,7 +227,7 @@ pub struct FoldedLogRange {
 }
 
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
-/// HistoryCleared}` (crates/horizon-agent/src/contract.rs),
+/// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
 /// `wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)
 /// and `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
@@ -251,6 +251,16 @@ pub enum SessionEventNotification {
     AttachmentClosed {
         session_id: SessionId,
         reason: AttachmentEnd,
+    },
+    /// A mid-session failure the daemon reports outside any request.
+    Error {
+        session_id: SessionId,
+        message: String,
+    },
+    /// The session's process-level exit.
+    Exited {
+        session_id: SessionId,
+        reason: String,
     },
     /// The daemon's startup event-log corruption summary; not per-session.
     SkippedLines {
@@ -416,6 +426,14 @@ mod tests {
                 session_id,
                 cleared_occurrence_ids: vec!["occ-1".into(), "occ-2".into()],
                 recovered_chars: 4096,
+            },
+            SessionEventNotification::Error {
+                session_id,
+                message: "provider unreachable".into(),
+            },
+            SessionEventNotification::Exited {
+                session_id,
+                reason: "terminated".into(),
             },
             SessionEventNotification::SkippedLines {
                 summary: "2 lines skipped".into(),
