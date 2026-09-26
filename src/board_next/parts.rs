@@ -12,9 +12,9 @@ use gpui_component::text::{TextView, TextViewStyle};
 use gpui_component::v_flex;
 use horizon_board::{Item, StoreError};
 
+use super::activity::BoardSessionActivity;
 use super::model;
 use super::spec::*;
-use crate::board_pane::activity::BoardSessionActivity;
 use crate::theme;
 
 /// A view's own floor. A guest window opens at one pixel and is resized

@@ -1,4 +1,15 @@
 use super::*;
+
+// The tree-independent half of the pane's model — where a dragged row
+// lands, how a task moves among its siblings, which sessions the board
+// binds, and whether a message was on screen — lives in
+// [`crate::board_next::model`], next to the views that will replace this
+// pane.
+pub(super) use crate::board_next::model::{
+    bound_sessions, drop_half_for_row, drop_position_from_half, message_visible, sibling_move,
+    BoardDragValue, DropHalf,
+};
+
 /// Flattens `items` into parent→child tree order for display, returning the
 /// display list and a parallel depth vector. When `top_level_only` is true,
 /// only true roots (items whose parent is `None`) are
@@ -36,119 +47,6 @@ pub(super) fn format_timestamp(unix_ms: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let year = y + if m <= 2 { 1 } else { 0 };
     format!("{year:04}-{m:02}-{d:02} {hour:02}:{minute:02}")
-}
-
-/// The `Position` (if any) for dropping `dragged_id` onto the given `half`
-/// of `target_id`'s row, or `None` when the drop is a no-op -- it would
-/// leave the item where it already is.
-///
-/// `Above` maps to `Before(target_id)` and `Below` to `After(target_id)`,
-/// but both are suppressed when the resulting insertion point equals the
-/// dragged item's current position. A drop is a no-op when the dragged
-/// and target items are the same, or when dropping on the near half of an
-/// adjacent row (the half that faces the dragged item): `Above` on the row
-/// immediately *below* the dragged item, or `Below` on the row immediately
-/// *above* it. This is the invariant behind the indicator: a position that
-/// shows an indicator is always one where a drop will execute a move.
-pub(super) fn drop_position_from_half(
-    dragged_id: u64,
-    items: &[Item],
-    target_id: u64,
-    half: DropHalf,
-) -> Option<Position> {
-    let dragged = items.iter().find(|item| item.id == dragged_id)?;
-    let target = items.iter().find(|item| item.id == target_id)?;
-    if dragged.parent != target.parent {
-        return None;
-    }
-    let mut siblings: Vec<_> = items
-        .iter()
-        .filter(|item| item.parent == dragged.parent)
-        .collect();
-    siblings.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
-    let di = siblings.iter().position(|i| i.id == dragged_id)?;
-    let ti = siblings.iter().position(|i| i.id == target_id)?;
-    match half {
-        DropHalf::Above => {
-            // `Before(target)`: a no-op when the dragged item is the target
-            // itself, or already sits immediately before it.
-            if di == ti || di + 1 == ti {
-                None
-            } else {
-                Some(Position::Before(target_id))
-            }
-        }
-        DropHalf::Below => {
-            // `After(target)`: a no-op when the dragged item is the target
-            // itself, or already sits immediately after it.
-            if di == ti || di == ti + 1 {
-                None
-            } else {
-                Some(Position::After(target_id))
-            }
-        }
-    }
-}
-
-/// Which half of a row the cursor is in during a drag, used to decide
-/// whether the drop indicator line shows above or below the row and
-/// whether the move is `Before` or `After`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum DropHalf {
-    Above,
-    Below,
-}
-
-/// The drop-half decision for a row during a drag, gated on the cursor
-/// actually being over the row. Returns `None` when the cursor is outside
-/// `row_bounds`, so the per-row `on_drag_move` caller skips writing the
-/// shared `drop_indicator` for rows the cursor isn't over.
-///
-/// `on_drag_move` is dispatched in the capture phase with no hit-test, so a
-/// handler registered on every row fires for every row on each mouse move.
-/// Without this containment guard every row would overwrite the single
-/// `drop_indicator` slot and the last row to handle would win, drawing the
-/// indicator on the wrong row. The drop itself is dispatched at the list level
-/// (a single `on_drop` on the list wrapper) and reads the target from
-/// `drop_indicator`, so a release anywhere over the list -- row, gap, or
-/// padding -- executes the insertion the indicator was showing.
-pub(super) fn drop_half_for_row(
-    cursor: &Point<Pixels>,
-    row_bounds: &Bounds<Pixels>,
-) -> Option<DropHalf> {
-    if !row_bounds.contains(cursor) {
-        return None;
-    }
-    let mid_y = row_bounds.origin.y + row_bounds.size.height / 2.0;
-    if cursor.y < mid_y {
-        Some(DropHalf::Above)
-    } else {
-        Some(DropHalf::Below)
-    }
-}
-
-/// The drag payload for board item reordering: carried by GPUI's native
-/// `on_drag`/`on_drop` system. Also implements `Render` to produce the
-/// ghost view that follows the cursor during the drag.
-#[derive(Clone)]
-pub(super) struct BoardDragValue {
-    pub(super) item_id: u64,
-    pub(super) title: String,
-}
-
-impl Render for BoardDragValue {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_2()
-            .py_1()
-            .bg(theme::surface_selected())
-            .text_color(theme::readable_on(
-                theme::text_primary(),
-                theme::surface_selected(),
-            ))
-            .text_size(px(13.0))
-            .child(self.title.clone())
-    }
 }
 
 /// The pure fallback behind the pane's root resolution, kept free of
@@ -206,23 +104,6 @@ pub(super) fn select_first_row_on_open<D: ListDelegate>(
     }
 }
 
-pub(super) fn bound_sessions(items: &[Item]) -> Vec<horizon_workspace::SessionId> {
-    let mut seen = std::collections::HashSet::new();
-    items
-        .iter()
-        .flat_map(|item| {
-            [
-                item.session_id.as_deref(),
-                item.review_session_id.as_deref(),
-            ]
-        })
-        .flatten()
-        .filter_map(|id| uuid::Uuid::parse_str(id).ok())
-        .map(horizon_workspace::SessionId::from_uuid)
-        .filter(|id| seen.insert(*id))
-        .collect()
-}
-
 pub(super) fn task_state(item: &Item) -> String {
     match (item.is_closed, item.status.is_empty()) {
         (true, true) => "Closed".into(),
@@ -260,25 +141,6 @@ pub(super) fn unread_tasks(
     unread
 }
 
-pub(super) fn sibling_move(items: &[Item], id: u64, up: bool) -> Option<Position> {
-    let item = items.iter().find(|item| item.id == id)?;
-    let mut siblings: Vec<_> = items
-        .iter()
-        .filter(|other| other.parent == item.parent)
-        .collect();
-    siblings.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
-    let index = siblings.iter().position(|item| item.id == id)?;
-    if up {
-        Some(Position::Before(siblings.get(index.checked_sub(1)?)?.id))
-    } else {
-        Some(Position::After(siblings.get(index + 1)?.id))
-    }
-}
-
-pub(super) fn message_visible(marker: &Bounds<Pixels>, viewport: &Bounds<Pixels>) -> bool {
-    marker.intersects(viewport)
-}
-
 pub(super) fn navigation_matches(
     request_epoch: u64,
     current_epoch: u64,
@@ -290,11 +152,8 @@ pub(super) fn navigation_matches(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        drop_position_from_half, flatten_with_depth, message_visible, navigation_matches,
-        sibling_move, unread_tasks, DropHalf,
-    };
-    use horizon_board::{Item, Position};
+    use super::{flatten_with_depth, navigation_matches, unread_tasks};
+    use horizon_board::Item;
     fn task(id: u64, parent: Option<u64>, rank: &str) -> Item {
         Item {
             id,
@@ -311,24 +170,6 @@ mod tests {
             at: None,
             source: None,
         }
-    }
-    #[test]
-    fn refreshed_bindings_include_task_and_reviewer_once_each() {
-        let task_id = uuid::Uuid::new_v4();
-        let reviewer_id = uuid::Uuid::new_v4();
-        let mut a = task(1, None, "a");
-        a.session_id = Some(task_id.to_string());
-        a.review_session_id = Some(reviewer_id.to_string());
-        let mut b = task(2, None, "b");
-        b.session_id = Some(task_id.to_string());
-        b.review_session_id = Some("invalid".into());
-        assert_eq!(
-            super::bound_sessions(&[a, b]),
-            vec![
-                horizon_workspace::SessionId::from_uuid(task_id),
-                horizon_workspace::SessionId::from_uuid(reviewer_id)
-            ]
-        );
     }
     #[test]
     fn top_level_filter_does_not_promote_filtered_orphans() {
@@ -368,31 +209,11 @@ mod tests {
         assert!(unread_tasks(&[item], &positions).is_empty());
     }
     #[test]
-    fn long_consultation_viewport_excludes_unseen_messages() {
-        use gpui::{bounds, point, px, size};
-        let viewport = bounds(point(px(0.), px(210.)), size(px(300.), px(60.)));
-        let markers =
-            [20., 120., 220.].map(|y| bounds(point(px(0.), px(y)), size(px(300.), px(80.))));
-        assert!(!message_visible(&markers[0], &viewport));
-        assert!(!message_visible(&markers[1], &viewport));
-        assert!(message_visible(&markers[2], &viewport));
-    }
-    #[test]
     fn async_results_require_same_navigation_generation() {
         assert!(navigation_matches(2, 2, 7, Some(7)));
         assert!(!navigation_matches(2, 3, 7, Some(7)));
         assert!(!navigation_matches(2, 2, 7, Some(8)));
         assert!(!navigation_matches(2, 2, 7, None));
-    }
-    #[test]
-    fn reorder_stays_within_siblings_even_with_interleaved_descendants() {
-        let tasks = vec![
-            task(1, None, "a"),
-            task(2, Some(1), "a"),
-            task(3, None, "b"),
-        ];
-        assert_eq!(sibling_move(&tasks, 3, true), Some(Position::Before(1)));
-        assert_eq!(drop_position_from_half(2, &tasks, 3, DropHalf::Above), None);
     }
     #[test]
     fn search_preserves_hierarchy_and_never_promotes_filtered_children() {
@@ -452,20 +273,5 @@ mod tests {
             list.filtered.iter().map(|i| i.id).collect::<Vec<_>>(),
             vec![3]
         );
-    }
-
-    #[test]
-    fn drag_uses_real_sibling_order_including_hidden_tasks() {
-        let a = task(1, None, "a");
-        let mut hidden = task(2, None, "b");
-        hidden.is_closed = true;
-        let b = task(3, None, "c");
-        let child = task(4, Some(1), "a");
-        let items = vec![b, child, hidden, a];
-        assert_eq!(
-            drop_position_from_half(1, &items, 3, DropHalf::Above),
-            Some(Position::Before(3))
-        );
-        assert_eq!(drop_position_from_half(3, &items, 2, DropHalf::Below), None);
     }
 }

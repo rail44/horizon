@@ -19,8 +19,10 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod agent;
-// A board that exists only as named previews: two views that read a store
-// and drive nothing, so they build for both targets as they stand.
+// The board's two views. Their shell-facing halves — the commands, the
+// session observation, the events the workspace subscribes to — have no
+// caller in a plugin build, which has no shell above a view.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 mod board_next;
 // The shell drives a good part of this module: the subscriptions it installs
 // on the pane, the commands it executes, the accessors it reads. A plugin

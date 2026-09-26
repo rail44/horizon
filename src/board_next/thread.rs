@@ -10,27 +10,31 @@ use std::collections::{HashMap, HashSet};
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::button::{Button, ButtonVariants as _};
-use gpui_component::input::{InputEvent, Textarea, TextareaState};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, Sizable as _};
 use horizon_board::{Comment, Item, Store};
 use horizon_workspace::SessionId;
 
+use super::activity::{task_session_state, BoardSessionActivity};
+use super::events::{BoardSessionsRefreshed, OpenTaskSession};
 use super::model::{self, ThreadCommand};
 use super::parts::{
     activity_label, author_label, chip, fade, key_chip, markdown_body, post_cells, status_tone,
     write_refusal, VIEW_MIN_WIDTH,
 };
 use super::spec::*;
-use crate::board_pane::activity::{task_session_state, BoardSessionActivity};
-use crate::board_pane::execute::{run_store_job, BoardStoreSource};
+use crate::board_pane::execute::{run_store_job, BoardStoreSource, StoreJob};
 use crate::theme;
 
 /// One task's thread.
 pub(crate) struct BoardThreadView {
     store: BoardStoreSource,
-    /// The activity of every session the board binds, as the shell would
-    /// report it.
+    /// The activity of every session this task binds, as the shell reports
+    /// it.
     activity: HashMap<SessionId, BoardSessionActivity>,
+    /// Bindings reported to the shell whose inventory answer has not come
+    /// back yet.
+    inventory_pending: HashSet<SessionId>,
     task_id: u64,
     item: Option<Item>,
     positions: HashMap<u64, String>,
@@ -43,20 +47,39 @@ pub(crate) struct BoardThreadView {
     /// Whether the header band draws its actions under the title instead of
     /// beside it. Decided from the band's own measured width.
     header_stacked: bool,
+    status: Entity<InputState>,
     reply: Entity<TextareaState>,
+    #[cfg(not(target_family = "wasm"))]
+    session_watches: HashMap<SessionId, super::sessions::SessionWatch>,
+    /// The live-update pump, started when the store resolved from a project
+    /// directory.
+    #[cfg(not(target_family = "wasm"))]
+    _live_updates: Option<super::live::LiveUpdates>,
     scroll: ScrollHandle,
     focus_handle: FocusHandle,
+    _status_subscription: Subscription,
     _reply_subscription: Subscription,
 }
 
 impl BoardThreadView {
     pub(crate) fn new(
-        store: Store,
+        store: BoardStoreSource,
         activity: HashMap<SessionId, BoardSessionActivity>,
         task_id: u64,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        let status = cx.new(|cx| {
+            InputState::new(window, cx)
+                .placeholder("状態を変更")
+                .submit_on_enter(true)
+        });
+        let _status_subscription =
+            cx.subscribe_in(&status, window, |view, _input, event, window, cx| {
+                if let InputEvent::PressEnter { shift: false, .. } = event {
+                    view.execute(ThreadCommand::SaveStatus, window, cx);
+                }
+            });
         let reply = cx.new(|cx| {
             TextareaState::new(window, cx)
                 .placeholder("返信を書く")
@@ -74,9 +97,11 @@ impl BoardThreadView {
         );
         let focus_handle = cx.focus_handle();
         window.focus(&focus_handle, cx);
-        let view = Self {
-            store: BoardStoreSource::Ready(store),
+        #[allow(unused_mut)]
+        let mut view = Self {
+            store,
             activity,
+            inventory_pending: HashSet::new(),
             task_id,
             item: None,
             positions: HashMap::new(),
@@ -84,13 +109,47 @@ impl BoardThreadView {
             expanded_posts: HashSet::new(),
             notice: None,
             header_stacked: false,
+            status,
             reply,
+            #[cfg(not(target_family = "wasm"))]
+            session_watches: HashMap::new(),
+            #[cfg(not(target_family = "wasm"))]
+            _live_updates: None,
             scroll: ScrollHandle::new(),
             focus_handle,
+            _status_subscription,
             _reply_subscription,
         };
+        // A store that resolved from a project directory has a log behind
+        // it, so anything else writing to this task pokes the view.
+        #[cfg(not(target_family = "wasm"))]
+        {
+            let root = view.store.root().map(std::path::Path::to_path_buf);
+            if let Some(root) = root {
+                view._live_updates =
+                    Some(super::live::start_live_updates(&root, Self::on_poke, cx));
+            }
+        }
         view.load(cx);
         view
+    }
+
+    /// Builds the thread over a store the caller already holds, the way a
+    /// preview does.
+    pub(crate) fn over_store(
+        store: Store,
+        activity: HashMap<SessionId, BoardSessionActivity>,
+        task_id: u64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        Self::new(
+            BoardStoreSource::Ready(store),
+            activity,
+            task_id,
+            window,
+            cx,
+        )
     }
 
     // -- store ------------------------------------------------------------
@@ -118,6 +177,13 @@ impl BoardThreadView {
         cx: &mut Context<Self>,
     ) {
         let posts = item.as_ref().map(|item| item.comments.len()).unwrap_or(0);
+        if let Some(item) = item.as_ref() {
+            let fresh: Vec<SessionId> = model::bound_sessions(std::slice::from_ref(item))
+                .into_iter()
+                .filter(|id| self.inventory_pending.insert(*id))
+                .collect();
+            cx.emit(BoardSessionsRefreshed(fresh));
+        }
         self.item = item;
         self.positions = positions;
         // A thread opens on its first post, and a reload keeps the cursor
@@ -135,7 +201,7 @@ impl BoardThreadView {
     fn mutate(
         &self,
         cx: &mut Context<Self>,
-        job: impl FnOnce(Store) -> crate::board_pane::execute::StoreJob<()> + Send + 'static,
+        job: impl FnOnce(Store) -> StoreJob<()> + Send + 'static,
     ) {
         let source = self.store.clone();
         cx.spawn(async move |this, cx| {
@@ -151,7 +217,14 @@ impl BoardThreadView {
         .detach();
     }
 
-    fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
+    /// One external write reached the board: re-read this task and the
+    /// read positions with it.
+    #[cfg(not(target_family = "wasm"))]
+    fn on_poke(&mut self, cx: &mut Context<Self>) {
+        self.load(cx);
+    }
+
+    pub(crate) fn set_notice(&mut self, notice: String, cx: &mut Context<Self>) {
         self.notice = Some(notice);
         cx.notify();
     }
@@ -161,6 +234,35 @@ impl BoardThreadView {
             self.header_stacked = stacked;
             cx.notify();
         }
+    }
+
+    /// Records that a post was on screen. The furthest post displayed is
+    /// the read position, so this is what makes the unread counts fall.
+    /// A read position is a side effect of displaying, not an operation
+    /// the owner asked for, so a store that refuses the write says nothing
+    /// on the notice line.
+    fn mark_displayed(&mut self, message: String, cx: &mut Context<Self>) {
+        let Some(item) = self.item.as_ref() else {
+            return;
+        };
+        let id = item.id;
+        if !horizon_board::read_position_advances(
+            item,
+            self.positions.get(&id).map(String::as_str),
+            &message,
+        ) {
+            return;
+        }
+        self.positions.insert(id, message.clone());
+        cx.notify();
+        let source = self.store.clone();
+        cx.spawn(async move |_this, cx| {
+            let _ = run_store_job(cx, source, move |store| {
+                Box::pin(async move { store.mark_read(id, "owner", &message).await })
+            })
+            .await;
+        })
+        .detach();
     }
 
     // -- the cursor -------------------------------------------------------
@@ -233,10 +335,8 @@ impl BoardThreadView {
                 cx.notify();
             }
             ThreadCommand::ToggleClosed => self.toggle_closed(cx),
-            ThreadCommand::OpenTaskSession => self.set_notice(
-                "セッションを開くのはシェルのコマンドです。ここでは入口だけを示します。".into(),
-                cx,
-            ),
+            ThreadCommand::SaveStatus => self.save_status(window, cx),
+            ThreadCommand::OpenTaskSession => self.open_task_session(cx),
             ThreadCommand::PostMessage => self.post_message(window, cx),
         }
     }
@@ -265,13 +365,41 @@ impl BoardThreadView {
         });
     }
 
+    /// Writes what the header's status field holds. The field starts
+    /// empty next to the chip that shows the current status, and an empty
+    /// submit writes nothing.
+    fn save_status(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let id = self.task_id;
+        let status = self.status.read(cx).value().trim().to_string();
+        if status.is_empty() {
+            return;
+        }
+        self.status
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.mutate(cx, move |store| {
+            Box::pin(async move { store.set_status(id, &status).await })
+        });
+    }
+
+    fn open_task_session(&mut self, cx: &mut Context<Self>) {
+        let Some(session) = self.item.as_ref().and_then(model::task_session_id) else {
+            return;
+        };
+        // A preview has no shell above it to attach the session, so the
+        // guest build states the request on the notice line instead.
+        #[cfg(target_family = "wasm")]
+        self.set_notice("セッションを開くのはシェルの仕事です。".into(), cx);
+        cx.emit(OpenTaskSession(session));
+    }
+
     // -- input ------------------------------------------------------------
 
-    /// Whether keystrokes belong to the composer rather than to the key
-    /// map. It is inside the focus path, so its keys bubble through the root
-    /// handler on their way to the input.
+    /// Whether keystrokes belong to one of the fields rather than to the
+    /// key map. Both are inside the focus path, so their keys bubble
+    /// through the root handler on their way to the input.
     fn editing(&self, window: &Window, cx: &App) -> bool {
         self.reply.read(cx).focus_handle(cx).is_focused(window)
+            || self.status.read(cx).focus_handle(cx).is_focused(window)
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -280,8 +408,8 @@ impl BoardThreadView {
             return;
         }
         if self.editing(window, cx) {
-            // Esc is the way back out of the composer; everything else is
-            // the composer's own.
+            // Esc is the way back out of a field; everything else is the
+            // field's own.
             if keystroke.key == "escape" {
                 self.execute(ThreadCommand::LeaveComposer, window, cx);
                 cx.stop_propagation();
@@ -297,14 +425,115 @@ impl BoardThreadView {
 }
 
 // ---------------------------------------------------------------------------
+// What the shell drives
+// ---------------------------------------------------------------------------
+
+/// The half a preview has no caller for: the commands the workspace
+/// executes on the focused pane, the session inventory hand-off, and the
+/// pump's teardown. Nothing calls it in this build - the workspace does
+/// not hold these two views yet.
+#[cfg(not(target_family = "wasm"))]
+#[allow(dead_code)]
+impl BoardThreadView {
+    /// The project directory the shell watches for this view.
+    pub(crate) fn root(&self) -> Option<std::path::PathBuf> {
+        self.store.root().map(std::path::Path::to_path_buf)
+    }
+
+    /// The agent session bound to the open task, which is what
+    /// [`OpenTaskSession`] names.
+    pub(crate) fn task_session(&self) -> Option<SessionId> {
+        self.item.as_ref().and_then(model::task_session_id)
+    }
+
+    pub(crate) fn finish_inventory_refresh(&mut self, sessions: &[SessionId]) {
+        for id in sessions {
+            self.inventory_pending.remove(id);
+        }
+    }
+
+    pub(crate) fn observe_sessions(
+        &mut self,
+        available: &HashMap<SessionId, Entity<crate::agent::AgentSession>>,
+        cx: &mut Context<Self>,
+    ) {
+        super::sessions::observe_sessions(self, available, cx);
+    }
+
+    /// The workspace's command model, mapped onto this view's own.
+    pub(crate) fn board_command(
+        &mut self,
+        command: horizon_workspace::commands::CommandId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use horizon_workspace::commands::CommandId;
+        let command = match command {
+            CommandId::PostBoardMessage => ThreadCommand::PostMessage,
+            CommandId::ToggleBoardClosed => ThreadCommand::ToggleClosed,
+            CommandId::SaveBoardState => ThreadCommand::SaveStatus,
+            CommandId::OpenBoardTaskSession => ThreadCommand::OpenTaskSession,
+            _ => return,
+        };
+        self.execute(command, window, cx);
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl super::sessions::SessionActivityHost for BoardThreadView {
+    fn bound_session_ids(&self, _cx: &App) -> Vec<SessionId> {
+        self.item
+            .as_ref()
+            .map(|item| model::bound_sessions(std::slice::from_ref(item)))
+            .unwrap_or_default()
+    }
+
+    fn session_watches(&mut self) -> &mut HashMap<SessionId, super::sessions::SessionWatch> {
+        &mut self.session_watches
+    }
+
+    fn retain_session_activity(&mut self, bound: &[SessionId], cx: &mut Context<Self>) {
+        let before = self.activity.len();
+        self.activity.retain(|id, _| bound.contains(id));
+        if self.activity.len() != before {
+            cx.notify();
+        }
+    }
+
+    fn set_session_activity(
+        &mut self,
+        id: SessionId,
+        state: BoardSessionActivity,
+        cx: &mut Context<Self>,
+    ) {
+        if self.activity.insert(id, state) != Some(state) {
+            cx.notify();
+        }
+    }
+
+    fn inventory_pending(&self, id: SessionId) -> bool {
+        self.inventory_pending.contains(&id)
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+impl Drop for BoardThreadView {
+    fn drop(&mut self) {
+        if let Some(live) = self._live_updates.take() {
+            let _ = live.shutdown.send(());
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The pieces
 // ---------------------------------------------------------------------------
 
 impl BoardThreadView {
     /// The band over the thread: the task's title as its one anchor, its
-    /// chips and last update, and the task-level actions with exactly one
-    /// filled among them. It sits outside the scrolling region, so a long
-    /// thread never takes it off screen.
+    /// chips and last update, the status field, and the task-level actions
+    /// with exactly one filled among them. It sits outside the scrolling
+    /// region, so a long thread never takes it off screen.
     ///
     /// Narrow panes stack it: the title keeps the first row to itself and
     /// the actions drop down beside the chips, rather than the title being
@@ -312,7 +541,7 @@ impl BoardThreadView {
     fn render_band(&self, item: &Item, cx: &mut Context<Self>) -> impl IntoElement {
         let id = item.id;
         let closed = item.is_closed;
-        let has_session = item.session_id.is_some() || item.review_session_id.is_some();
+        let has_session = item.session_id.is_some();
         let status = model::status_text(item);
         let activity = task_session_state(item, &self.activity);
         let unread = model::unread_count(item, &self.positions);
@@ -424,10 +653,21 @@ impl BoardThreadView {
                                 .child(format!("更新 {}", model::relative_time(at, now))),
                         )
                     })
-                    .when(stacked, |line| line.child(div().flex_1().min_w_0()))
+                    .child(div().flex_1().min_w_0())
+                    .child(self.render_status_field())
                     .children(under_title),
             )
             .child(self.measure_band(labels, cx))
+    }
+
+    /// The status field: the task's own progress text, written by Enter.
+    /// Closure is the two buttons' business and is not typed here.
+    fn render_status_field(&self) -> impl IntoElement {
+        div()
+            .flex_none()
+            .w(STATUS_FIELD)
+            .text_size(META.size)
+            .child(Input::new(&self.status).appearance(false).xsmall())
     }
 
     /// Reports the band's own width back to the view, so the stacking
@@ -557,9 +797,37 @@ impl BoardThreadView {
                         })),
                 )
             })
+            .child(self.render_read_probe(comment, cx))
             .on_click(cx.listener(move |view, _, window, cx| {
                 view.execute(ThreadCommand::SelectPost(index), window, cx);
             }))
+    }
+
+    /// The marker that says a post was displayed. A post the scroll
+    /// region never covered was never read, so the probe reports only when
+    /// its own bounds intersect what is on screen.
+    fn render_read_probe(&self, comment: &Comment, cx: &mut Context<Self>) -> impl IntoElement {
+        let view = cx.entity().downgrade();
+        let message = comment.id.clone();
+        canvas(
+            |_, _, _| {},
+            move |bounds, _, window, cx| {
+                if !model::message_visible(&bounds, &window.content_mask().bounds) {
+                    return;
+                }
+                let view = view.clone();
+                let message = message.clone();
+                window.defer(cx, move |_, cx| {
+                    if let Some(view) = view.upgrade() {
+                        view.update(cx, |view, cx| view.mark_displayed(message, cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
     }
 
     /// The first line inside a post: the author as the unit's one anchor,

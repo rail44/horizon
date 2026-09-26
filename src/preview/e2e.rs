@@ -756,6 +756,10 @@ async fn preview_plugin_paints_the_board_next_list(cx: &mut TestAppContext) {
         .chars()
         .next()
         .expect("a title");
+    let child_marker = board_next::COLLAPSED_CHILD_TITLE
+        .chars()
+        .next()
+        .expect("a title");
 
     // --- the rows the sample events fold into -----------------------------
     let list = load(&live, board_next::LIST, cx).expect("the list preview instantiates");
@@ -774,6 +778,27 @@ async fn preview_plugin_paints_the_board_next_list(cx: &mut TestAppContext) {
         count_of(&rows, second_marker),
         1,
         "a task is painted as one row and nothing else: {rows:?}"
+    );
+    assert_eq!(
+        count_of(&rows, child_marker),
+        0,
+        "the first row starts folded, so its children are off the list: {rows:?}"
+    );
+
+    // --- `l` opens the folded parent, `h` closes it again -----------------
+    // The selection opens on the first row, which is the folded parent.
+    press(&surface, "l", cx);
+    let expanded = glyph_counts(&summary(&surface, cx));
+    assert!(
+        painted(&expanded, board_next::COLLAPSED_CHILD_TITLE),
+        "`l` on the folded parent painted no child row: {expanded:?}"
+    );
+    press(&surface, "h", cx);
+    let refolded = glyph_counts(&summary(&surface, cx));
+    assert_eq!(
+        count_of(&refolded, child_marker),
+        0,
+        "`h` left the child on the list: {refolded:?}"
     );
 
     // --- `j` then Enter reports the task it landed on ---------------------
@@ -803,6 +828,12 @@ async fn preview_plugin_paints_the_board_next_list(cx: &mut TestAppContext) {
         count_of(&blank, first_marker),
         0,
         "the empty list painted a sample row: {blank:?}"
+    );
+    // The add-task input is pinned under the rows, so an empty board still
+    // offers the one way to put work on it.
+    assert!(
+        painted(&blank, "タスクを追加"),
+        "the empty list painted no add-task input: {blank:?}"
     );
 
     cx.update(|_| drop(empty));

@@ -124,6 +124,16 @@ pub(crate) const ROW_HEIGHT: Pixels = px(48.0);
 /// The strip on a row's left the unread dot sits in.
 pub(crate) const UNREAD_GUTTER: Pixels = px(8.0);
 
+/// How far one level of the task tree indents a row.
+pub(crate) const ROW_INDENT: Pixels = px(16.0);
+
+/// The fixed cell a row's disclosure triangle sits in, so a leaf's title
+/// starts where a parent's does.
+pub(crate) const DISCLOSURE: Pixels = px(12.0);
+
+/// How wide the status field in a task header band is.
+pub(crate) const STATUS_FIELD: Pixels = px(112.0);
+
 /// The dot that marks an unread row.
 pub(crate) const UNREAD_DOT: Pixels = px(6.0);
 

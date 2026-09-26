@@ -1,19 +1,22 @@
-//! The two views' pure half: the steering order, unread counts, post
-//! folding, the post cursor, relative times, the header's narrow decision,
-//! and the two key maps.
+//! The two views' pure half: the tree order the list draws, unread counts,
+//! post folding, the post cursor, relative times, the header's narrow
+//! decision, where a dragged row lands, and the two key maps.
 //!
 //! Nothing here builds an element, so the decisions both views are built on
 //! are unit-testable on their own.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use gpui::{px, Pixels};
-use horizon_board::Item;
+use gpui::{
+    div, px, Bounds, Context, IntoElement, ParentElement as _, Pixels, Point, Render, Styled as _,
+    Window,
+};
+use horizon_board::{tree_order, Item, Position};
 
 use super::spec::{
     ACTION_PAD, BODY, CELL_EM, GAP_TIGHT, GAP_UNIT, HEADER_TITLE_MIN_CELLS, PAD_X, T1,
 };
-use crate::board_pane::activity::BoardSessionActivity;
+use crate::theme;
 
 // ---------------------------------------------------------------------------
 // Commands
@@ -35,6 +38,8 @@ pub(crate) enum ThreadCommand {
     FocusComposer,
     LeaveComposer,
     ToggleClosed,
+    /// Writes the status the header's input holds.
+    SaveStatus,
     OpenTaskSession,
     PostMessage,
 }
@@ -45,10 +50,23 @@ pub(crate) enum ListCommand {
     SelectNext,
     SelectPrevious,
     SelectTask(u64),
+    /// Shows the selected parent's children.
+    Expand,
+    /// Hides them again.
+    Collapse,
+    /// The same for a named task, for the disclosure affordance on a row.
+    ToggleExpansion(u64),
     ToggleFinished,
     /// Opens the selected task's thread. A pane of its own holds that
     /// thread, so the list reports the request rather than rendering it.
     OpenThread,
+    /// Moves the selected task among its siblings.
+    MoveUp,
+    MoveDown,
+    /// Adds a top-level task from the pinned input.
+    AddTask,
+    /// Applies the move the drop indicator is showing.
+    Reorder,
 }
 
 /// The thread view's key map. `key` is a GPUI keystroke key name; a chord
@@ -69,6 +87,8 @@ pub(crate) fn list_command_for_key(key: &str) -> Option<ListCommand> {
     Some(match key {
         "j" | "down" => ListCommand::SelectNext,
         "k" | "up" => ListCommand::SelectPrevious,
+        "l" | "right" => ListCommand::Expand,
+        "h" | "left" => ListCommand::Collapse,
         "o" => ListCommand::ToggleFinished,
         "enter" => ListCommand::OpenThread,
         _ => return None,
@@ -76,27 +96,30 @@ pub(crate) fn list_command_for_key(key: &str) -> Option<ListCommand> {
 }
 
 // ---------------------------------------------------------------------------
-// The steering order
+// The tree order
 // ---------------------------------------------------------------------------
-
-/// The bands the list is ordered in. Declaration order is display order.
-#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
-pub(crate) enum Group {
-    /// Messages nobody has read yet — the reason to open the board.
-    Unread,
-    /// A bound session that is running or waiting on something.
-    Active,
-    Open,
-    /// `done` or closed, folded behind one row.
-    Finished,
-}
 
 /// One list row: the task plus everything the row draws.
 #[derive(Clone, Debug)]
 pub(crate) struct Row {
     pub(crate) item: Item,
-    pub(crate) group: Group,
+    /// How deep under a top-level task the row sits.
+    pub(crate) depth: usize,
+    /// Messages in this task nobody has read.
     pub(crate) unread: usize,
+    /// The same, counted over this task and everything under it.
+    pub(crate) subtree_unread: usize,
+    /// Whether the task has children to disclose.
+    pub(crate) has_children: bool,
+    /// Whether those children are hidden right now.
+    pub(crate) collapsed: bool,
+    /// Whether a collapsed task above it hides this row.
+    pub(crate) hidden: bool,
+    /// Closed, or carrying the status the board uses for finished work.
+    pub(crate) finished: bool,
+    /// Whether the row belongs to the band at the bottom: a finished
+    /// top-level task, and everything under it.
+    pub(crate) in_finished_band: bool,
 }
 
 /// How many of `item`'s messages the reader has already seen: everything up
@@ -124,79 +147,107 @@ pub(crate) fn is_finished(item: &Item) -> bool {
     item.is_closed || item.status.eq_ignore_ascii_case("done")
 }
 
-/// A session that still has somewhere to get to.
-pub(crate) fn is_active(activity: Option<BoardSessionActivity>) -> bool {
-    matches!(
-        activity,
-        Some(
-            BoardSessionActivity::Starting
-                | BoardSessionActivity::Running
-                | BoardSessionActivity::ToolRunning
-                | BoardSessionActivity::WaitingForApproval
-                | BoardSessionActivity::WaitingForInput
-        )
-    )
-}
-
-/// Unread wins over finished: an agent that reports and closes its task
-/// would otherwise post into a collapsed group.
-fn group_of(item: &Item, unread: usize, activity: Option<BoardSessionActivity>) -> Group {
-    if unread > 0 {
-        Group::Unread
-    } else if is_finished(item) {
-        Group::Finished
-    } else if is_active(activity) {
-        Group::Active
-    } else {
-        Group::Open
+/// The unread messages of `id` and of every task under it. A parent shows
+/// this rather than its own count, so unread work never hides inside a
+/// collapsed subtree.
+fn subtree_unread(
+    id: u64,
+    children: &HashMap<u64, Vec<u64>>,
+    own: &HashMap<u64, usize>,
+    seen: &mut HashSet<u64>,
+) -> usize {
+    if !seen.insert(id) {
+        return 0;
     }
+    let mut total = own.get(&id).copied().unwrap_or(0);
+    for child in children.get(&id).into_iter().flatten() {
+        total += subtree_unread(*child, children, own, seen);
+    }
+    total
 }
 
-/// The list, ordered for steering: unread first, then live sessions, then
-/// the rest by rank, with finished work last.
-pub(crate) fn rows(
+/// Every row the list can show, in the owner's own order: top-level tasks
+/// by rank with their children indented under them, and the finished
+/// top-level subtrees moved to the end as the band's contents. A row under
+/// a collapsed task is still in the list, marked `hidden`; the finished
+/// band's rows are marked too, so one pass builds both foldings.
+pub(crate) fn tree_rows(
     items: &[Item],
     positions: &HashMap<u64, String>,
-    states: &HashMap<horizon_workspace::SessionId, BoardSessionActivity>,
+    collapsed: &HashSet<u64>,
 ) -> Vec<Row> {
-    let mut rows: Vec<Row> = items
-        .iter()
-        .map(|item| {
-            let unread = unread_count(item, positions);
-            let activity = crate::board_pane::activity::task_session_state(item, states);
-            Row {
-                group: group_of(item, unread, activity),
-                unread,
-                item: item.clone(),
+    let mut children: HashMap<u64, Vec<u64>> = HashMap::new();
+    let mut own: HashMap<u64, usize> = HashMap::new();
+    for item in items {
+        own.insert(item.id, unread_count(item, positions));
+        if let Some(parent) = item.parent {
+            children.entry(parent).or_default().push(item.id);
+        }
+    }
+
+    // `tree_order` emits each top-level task followed by its own subtree, so
+    // a depth-0 entry is where one subtree ends and the next begins.
+    let ordered = tree_order(items, false);
+    let mut groups: Vec<(bool, Vec<(&Item, usize)>)> = Vec::new();
+    for (item, depth) in ordered {
+        if depth == 0 || groups.is_empty() {
+            groups.push((is_finished(item), Vec::new()));
+        }
+        groups
+            .last_mut()
+            .expect("a group was just pushed")
+            .1
+            .push((item, depth));
+    }
+
+    let mut rows = Vec::new();
+    for finished_band in [false, true] {
+        for (band, group) in groups.iter().filter(|(band, _)| *band == finished_band) {
+            let mut collapse_depth: Option<usize> = None;
+            for (item, depth) in group {
+                if collapse_depth.is_some_and(|open_at| *depth <= open_at) {
+                    collapse_depth = None;
+                }
+                let hidden = collapse_depth.is_some();
+                let has_children = children.contains_key(&item.id);
+                let is_collapsed = has_children && collapsed.contains(&item.id);
+                if !hidden && is_collapsed {
+                    collapse_depth = Some(*depth);
+                }
+                rows.push(Row {
+                    depth: *depth,
+                    unread: own.get(&item.id).copied().unwrap_or(0),
+                    subtree_unread: subtree_unread(item.id, &children, &own, &mut HashSet::new()),
+                    has_children,
+                    collapsed: is_collapsed,
+                    hidden,
+                    finished: is_finished(item),
+                    in_finished_band: *band,
+                    item: (*item).clone(),
+                });
             }
-        })
-        .collect();
-    rows.sort_by(|a, b| {
-        a.group
-            .cmp(&b.group)
-            .then_with(|| a.item.rank.cmp(&b.item.rank))
-            .then_with(|| a.item.id.cmp(&b.item.id))
-    });
+        }
+    }
     rows
 }
 
-/// Indices into `rows` that are on screen: the finished band only when it
-/// is expanded.
+/// Indices into `rows` that are on screen: nothing under a collapsed task,
+/// and the finished band only when it is expanded.
 pub(crate) fn visible_rows(rows: &[Row], finished_expanded: bool) -> Vec<usize> {
     rows.iter()
         .enumerate()
-        .filter(|(_, row)| finished_expanded || row.group != Group::Finished)
+        .filter(|(_, row)| !row.hidden && (finished_expanded || !row.in_finished_band))
         .map(|(index, _)| index)
         .collect()
 }
 
-/// How many rows the finished band holds, and how many unread messages are
-/// hidden with them.
+/// How many top-level tasks the finished band holds, and how many unread
+/// messages are folded away with them.
 pub(crate) fn finished_summary(rows: &[Row]) -> (usize, usize) {
     rows.iter()
-        .filter(|row| row.group == Group::Finished)
+        .filter(|row| row.in_finished_band && row.depth == 0)
         .fold((0, 0), |(count, unread), row| {
-            (count + 1, unread + row.unread)
+            (count + 1, unread + row.subtree_unread)
         })
 }
 
@@ -228,6 +279,179 @@ pub(crate) fn step_post(posts: usize, cursor: Option<usize>, forward: bool) -> O
         (Some(index), false) => index.saturating_sub(1),
     };
     Some(next.min(posts - 1))
+}
+
+// ---------------------------------------------------------------------------
+// Moving a task among its siblings
+// ---------------------------------------------------------------------------
+
+/// Where moving `id` one place up (or down) among its siblings puts it, or
+/// `None` when it is already at that end. Siblings are the tasks sharing its
+/// parent, whatever the display currently hides.
+pub(crate) fn sibling_move(items: &[Item], id: u64, up: bool) -> Option<Position> {
+    let item = items.iter().find(|item| item.id == id)?;
+    let mut siblings: Vec<_> = items
+        .iter()
+        .filter(|other| other.parent == item.parent)
+        .collect();
+    siblings.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
+    let index = siblings.iter().position(|item| item.id == id)?;
+    if up {
+        Some(Position::Before(siblings.get(index.checked_sub(1)?)?.id))
+    } else {
+        Some(Position::After(siblings.get(index + 1)?.id))
+    }
+}
+
+/// Which half of a row the cursor is in during a drag, used to decide
+/// whether the drop indicator line shows above or below the row and
+/// whether the move is `Before` or `After`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DropHalf {
+    Above,
+    Below,
+}
+
+/// The drop-half decision for a row during a drag, gated on the cursor
+/// actually being over the row. Returns `None` when the cursor is outside
+/// `row_bounds`, so the per-row `on_drag_move` caller skips writing the
+/// shared drop indicator for rows the cursor isn't over.
+///
+/// `on_drag_move` is dispatched in the capture phase with no hit-test, so a
+/// handler registered on every row fires for every row on each mouse move.
+/// Without this containment guard every row would overwrite the single
+/// indicator slot and the last row to handle would win, drawing the
+/// indicator on the wrong row.
+pub(crate) fn drop_half_for_row(
+    cursor: &Point<Pixels>,
+    row_bounds: &Bounds<Pixels>,
+) -> Option<DropHalf> {
+    if !row_bounds.contains(cursor) {
+        return None;
+    }
+    let mid_y = row_bounds.origin.y + row_bounds.size.height / 2.0;
+    if cursor.y < mid_y {
+        Some(DropHalf::Above)
+    } else {
+        Some(DropHalf::Below)
+    }
+}
+
+/// The `Position` (if any) for dropping `dragged_id` onto the given `half`
+/// of `target_id`'s row, or `None` when the drop is a no-op -- it would
+/// leave the item where it already is.
+///
+/// `Above` maps to `Before(target_id)` and `Below` to `After(target_id)`,
+/// but both are suppressed when the resulting insertion point equals the
+/// dragged item's current position. A drop is a no-op when the dragged
+/// and target items are the same, or when dropping on the near half of an
+/// adjacent row (the half that faces the dragged item). This is the
+/// invariant behind the indicator: a position that shows an indicator is
+/// always one where a drop will execute a move.
+pub(crate) fn drop_position_from_half(
+    dragged_id: u64,
+    items: &[Item],
+    target_id: u64,
+    half: DropHalf,
+) -> Option<Position> {
+    let dragged = items.iter().find(|item| item.id == dragged_id)?;
+    let target = items.iter().find(|item| item.id == target_id)?;
+    if dragged.parent != target.parent {
+        return None;
+    }
+    let mut siblings: Vec<_> = items
+        .iter()
+        .filter(|item| item.parent == dragged.parent)
+        .collect();
+    siblings.sort_by(|a, b| a.rank.cmp(&b.rank).then(a.id.cmp(&b.id)));
+    let di = siblings.iter().position(|i| i.id == dragged_id)?;
+    let ti = siblings.iter().position(|i| i.id == target_id)?;
+    match half {
+        DropHalf::Above => {
+            // `Before(target)`: a no-op when the dragged item is the target
+            // itself, or already sits immediately before it.
+            if di == ti || di + 1 == ti {
+                None
+            } else {
+                Some(Position::Before(target_id))
+            }
+        }
+        DropHalf::Below => {
+            // `After(target)`: a no-op when the dragged item is the target
+            // itself, or already sits immediately after it.
+            if di == ti || di == ti + 1 {
+                None
+            } else {
+                Some(Position::After(target_id))
+            }
+        }
+    }
+}
+
+/// The drag payload for row reordering: carried by GPUI's native
+/// `on_drag`/`on_drop` system. Also implements `Render` to produce the
+/// ghost view that follows the cursor during the drag.
+#[derive(Clone)]
+pub(crate) struct BoardDragValue {
+    pub(crate) item_id: u64,
+    pub(crate) title: String,
+}
+
+impl Render for BoardDragValue {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .px_2()
+            .py_1()
+            .bg(theme::surface_selected())
+            .text_color(theme::readable_on(
+                theme::text_primary(),
+                theme::surface_selected(),
+            ))
+            .text_size(px(13.0))
+            .child(self.title.clone())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The sessions a board binds
+// ---------------------------------------------------------------------------
+
+/// Every session id the board's tasks name, task bindings and reviewer
+/// bindings alike, each reported once. An id that is not a uuid names no
+/// session the shell can resolve, so it is dropped here.
+pub(crate) fn bound_sessions(items: &[Item]) -> Vec<horizon_workspace::SessionId> {
+    let mut seen = HashSet::new();
+    items
+        .iter()
+        .flat_map(|item| {
+            [
+                item.session_id.as_deref(),
+                item.review_session_id.as_deref(),
+            ]
+        })
+        .flatten()
+        .filter_map(|id| uuid::Uuid::parse_str(id).ok())
+        .map(horizon_workspace::SessionId::from_uuid)
+        .filter(|id| seen.insert(*id))
+        .collect()
+}
+
+/// The session id a task's own binding names, if it has one.
+pub(crate) fn task_session_id(item: &Item) -> Option<horizon_workspace::SessionId> {
+    uuid::Uuid::parse_str(item.session_id.as_deref()?)
+        .ok()
+        .map(horizon_workspace::SessionId::from_uuid)
+}
+
+// ---------------------------------------------------------------------------
+// What the reader has actually seen
+// ---------------------------------------------------------------------------
+
+/// Whether a post's marker is inside the scroll region that is on screen.
+/// A post the viewport never covered was never displayed, so it never
+/// advances the read position.
+pub(crate) fn message_visible(marker: &Bounds<Pixels>, viewport: &Bounds<Pixels>) -> bool {
+    marker.intersects(viewport)
 }
 
 // ---------------------------------------------------------------------------
@@ -427,27 +651,38 @@ pub(crate) fn list_header_text(tasks: usize, unread: usize) -> String {
     }
 }
 
-/// What the list reports when a task is opened. Opening a thread means
-/// putting it in a pane, which is the workspace's business, so the list
-/// states the request instead of carrying it out.
+/// What the list reports when a task is opened, in a build with no shell
+/// above it to open anything. The guest build paints it; the native one
+/// emits the request as an event instead.
+#[cfg_attr(not(target_family = "wasm"), allow(dead_code))]
 pub(crate) fn open_notice(title: &str) -> String {
     format!("スレッドを開く: {title}")
+}
+
+/// The title the add-task input takes, or `None` when it holds nothing but
+/// whitespace.
+pub(crate) fn parse_new_task(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        cell_width, command_for_key, display_width, finished_summary, fold_preview,
-        header_one_row_width, header_stacks, is_active, is_finished, list_command_for_key,
-        list_header_text, open_notice, relative_time, rendered_lines, rows, status_text, step_post,
-        step_selection, unread_count, visible_rows, Group, ListCommand, ThreadCommand, Voice,
-        FOLD_RENDERED_LINES,
+        bound_sessions, cell_width, command_for_key, display_width, drop_half_for_row,
+        drop_position_from_half, finished_summary, fold_preview, header_one_row_width,
+        header_stacks, is_finished, list_command_for_key, list_header_text, message_visible,
+        open_notice, parse_new_task, relative_time, rendered_lines, sibling_move, status_text,
+        step_post, step_selection, task_session_id, tree_rows, unread_count, visible_rows,
+        DropHalf, ListCommand, ThreadCommand, Voice, FOLD_RENDERED_LINES,
     };
-    use crate::board_pane::activity::BoardSessionActivity;
     use gpui::px;
-    use horizon_board::{Comment, Item};
-    use horizon_workspace::SessionId;
-    use std::collections::HashMap;
+    use horizon_board::{Comment, Item, Position};
+    use std::collections::{HashMap, HashSet};
 
     fn message(id: &str) -> Comment {
         Comment {
@@ -468,6 +703,20 @@ mod tests {
         }
     }
 
+    fn child(id: u64, parent: u64, rank: &str) -> Item {
+        Item {
+            parent: Some(parent),
+            ..task(id, rank)
+        }
+    }
+
+    fn ids(rows: &[super::Row], expanded: bool) -> Vec<u64> {
+        visible_rows(rows, expanded)
+            .into_iter()
+            .map(|index| rows[index].item.id)
+            .collect()
+    }
+
     #[test]
     fn the_thread_keys_move_a_post_cursor_and_the_list_keys_move_a_row() {
         assert_eq!(command_for_key("j"), Some(ThreadCommand::NextPost));
@@ -480,8 +729,9 @@ mod tests {
             command_for_key("escape"),
             Some(ThreadCommand::LeaveComposer)
         );
-        // The list's own key is not the thread's.
+        // The list's own keys are not the thread's.
         assert_eq!(command_for_key("o"), None);
+        assert_eq!(command_for_key("l"), None);
         assert_eq!(command_for_key("x"), None);
 
         assert_eq!(list_command_for_key("j"), Some(ListCommand::SelectNext));
@@ -491,6 +741,10 @@ mod tests {
             list_command_for_key("up"),
             Some(ListCommand::SelectPrevious)
         );
+        assert_eq!(list_command_for_key("l"), Some(ListCommand::Expand));
+        assert_eq!(list_command_for_key("right"), Some(ListCommand::Expand));
+        assert_eq!(list_command_for_key("h"), Some(ListCommand::Collapse));
+        assert_eq!(list_command_for_key("left"), Some(ListCommand::Collapse));
         assert_eq!(list_command_for_key("o"), Some(ListCommand::ToggleFinished));
         assert_eq!(list_command_for_key("enter"), Some(ListCommand::OpenThread));
         assert_eq!(list_command_for_key("e"), None);
@@ -550,6 +804,16 @@ mod tests {
             open_notice("貼り付け時に末尾の改行が落ちる"),
             "スレッドを開く: 貼り付け時に末尾の改行が落ちる"
         );
+    }
+
+    #[test]
+    fn a_blank_add_task_input_adds_nothing() {
+        assert_eq!(
+            parse_new_task("   新しいタスク "),
+            Some("新しいタスク".into())
+        );
+        assert_eq!(parse_new_task("   "), None);
+        assert_eq!(parse_new_task(""), None);
     }
 
     #[test]
@@ -654,56 +918,100 @@ mod tests {
         assert!(is_finished(&item));
     }
 
+    /// The owner's own order is the list's order: rank, with children under
+    /// their parent and finished top-level work at the end.
     #[test]
-    fn only_running_and_waiting_sessions_are_active() {
-        assert!(is_active(Some(BoardSessionActivity::Running)));
-        assert!(is_active(Some(BoardSessionActivity::ToolRunning)));
-        assert!(is_active(Some(BoardSessionActivity::WaitingForApproval)));
-        assert!(is_active(Some(BoardSessionActivity::WaitingForInput)));
-        assert!(!is_active(Some(BoardSessionActivity::Completed)));
-        assert!(!is_active(Some(BoardSessionActivity::Terminated)));
-        assert!(!is_active(None));
+    fn rows_follow_rank_as_a_tree_with_finished_top_level_work_last() {
+        let items = vec![
+            task(1, "a"),
+            child(11, 1, "b"),
+            child(10, 1, "a"),
+            task(2, "b"),
+            {
+                let mut done = task(3, "c");
+                done.status = "done".into();
+                done
+            },
+            child(30, 3, "a"),
+        ];
+        let rows = tree_rows(&items, &HashMap::new(), &HashSet::new());
+        assert_eq!(ids(&rows, false), vec![1, 10, 11, 2]);
+        assert_eq!(ids(&rows, true), vec![1, 10, 11, 2, 3, 30]);
+        // A finished child of an open parent stays under it rather than
+        // moving into the band.
+        assert_eq!(finished_summary(&rows), (1, 0));
+        let depths: Vec<usize> = rows.iter().map(|row| row.depth).collect();
+        assert_eq!(depths, vec![0, 1, 1, 0, 0, 1]);
+        assert!(rows[0].has_children);
+        assert!(!rows[1].has_children);
     }
 
     #[test]
-    fn unread_leads_then_live_sessions_then_rank_with_finished_last() {
-        let session = SessionId::new();
-        let mut unread_done = task(1, "z");
-        unread_done.status = "done".into();
-        unread_done.comments = vec![message("m1")];
-        let mut running = task(2, "y");
-        running.session_id = Some(session.as_uuid().to_string());
-        let plain_late = task(3, "c");
-        let plain_early = task(4, "b");
-        let mut finished = task(5, "a");
-        finished.is_closed = true;
+    fn a_finished_child_stays_under_its_open_parent() {
+        let mut done_child = child(10, 1, "a");
+        done_child.is_closed = true;
+        let items = vec![task(1, "a"), done_child, task(2, "b")];
+        let rows = tree_rows(&items, &HashMap::new(), &HashSet::new());
+        assert_eq!(ids(&rows, false), vec![1, 10, 2]);
+        assert_eq!(finished_summary(&rows), (0, 0));
+        assert!(rows[1].finished);
+        assert!(!rows[1].in_finished_band);
+    }
 
-        let states = HashMap::from([(session, BoardSessionActivity::ToolRunning)]);
-        let ordered = rows(
-            &[
-                unread_done.clone(),
-                running,
-                plain_late,
-                plain_early,
-                finished,
-            ],
-            &HashMap::new(),
-            &states,
-        );
-        assert_eq!(
-            ordered.iter().map(|row| row.item.id).collect::<Vec<_>>(),
-            vec![1, 2, 4, 3, 5]
-        );
-        assert_eq!(ordered[0].group, Group::Unread);
-        assert_eq!(ordered[1].group, Group::Active);
-        assert_eq!(ordered[4].group, Group::Finished);
-        // A finished task nobody has read still leads the list.
-        assert_eq!(ordered[0].unread, 1);
+    #[test]
+    fn a_collapsed_parent_hides_its_whole_subtree() {
+        let items = vec![
+            task(1, "a"),
+            child(10, 1, "a"),
+            child(100, 10, "a"),
+            task(2, "b"),
+        ];
+        let collapsed = HashSet::from([1]);
+        let rows = tree_rows(&items, &HashMap::new(), &collapsed);
+        assert_eq!(ids(&rows, false), vec![1, 2]);
+        assert!(rows[0].collapsed);
+        assert!(rows[1].hidden && rows[2].hidden);
+        // Collapsing the inner one hides only what is under it.
+        let rows = tree_rows(&items, &HashMap::new(), &HashSet::from([10]));
+        assert_eq!(ids(&rows, false), vec![1, 10, 2]);
+        // A task with no children never reads as collapsed, so no
+        // disclosure affordance appears on it.
+        let rows = tree_rows(&items, &HashMap::new(), &HashSet::from([2]));
+        assert!(!rows[3].collapsed);
+    }
 
-        let visible = visible_rows(&ordered, false);
-        assert_eq!(visible, vec![0, 1, 2, 3]);
-        assert_eq!(visible_rows(&ordered, true).len(), 5);
-        assert_eq!(finished_summary(&ordered), (1, 0));
+    #[test]
+    fn a_parent_carries_the_unread_of_everything_under_it() {
+        let mut parent = task(1, "a");
+        parent.comments = vec![message("p1")];
+        let mut kid = child(10, 1, "a");
+        kid.comments = vec![message("c1"), message("c2")];
+        let mut grandkid = child(100, 10, "a");
+        grandkid.comments = vec![message("g1")];
+        let items = vec![parent, kid, grandkid];
+        let rows = tree_rows(&items, &HashMap::new(), &HashSet::new());
+        assert_eq!(rows[0].unread, 1);
+        assert_eq!(rows[0].subtree_unread, 4);
+        assert_eq!(rows[1].subtree_unread, 3);
+        assert_eq!(rows[2].subtree_unread, 1);
+
+        // Reading the parent's own message leaves the subtree count on it.
+        let positions = HashMap::from([(1, "p1".to_string())]);
+        let rows = tree_rows(&items, &positions, &HashSet::new());
+        assert_eq!(rows[0].unread, 0);
+        assert_eq!(rows[0].subtree_unread, 3);
+    }
+
+    /// A finished top-level task nobody has read still reports its unread
+    /// from the band's own row, so nothing disappears by being folded.
+    #[test]
+    fn the_finished_band_reports_the_unread_it_folds_away() {
+        let mut done = task(3, "c");
+        done.status = "done".into();
+        done.comments = vec![message("m1")];
+        let rows = tree_rows(&[task(1, "a"), done], &HashMap::new(), &HashSet::new());
+        assert_eq!(finished_summary(&rows), (1, 1));
+        assert_eq!(ids(&rows, false), vec![1]);
     }
 
     #[test]
@@ -717,6 +1025,82 @@ mod tests {
         // A selection that scrolled out of the visible set restarts.
         assert_eq!(step_selection(&visible, Some(42), true), Some(7));
         assert_eq!(step_selection(&[], Some(7), true), None);
+    }
+
+    #[test]
+    fn reorder_stays_within_siblings_even_with_interleaved_descendants() {
+        let tasks = vec![task(1, "a"), child(2, 1, "a"), task(3, "b")];
+        assert_eq!(sibling_move(&tasks, 3, true), Some(Position::Before(1)));
+        assert_eq!(sibling_move(&tasks, 1, true), None);
+        assert_eq!(sibling_move(&tasks, 2, false), None);
+        assert_eq!(drop_position_from_half(2, &tasks, 3, DropHalf::Above), None);
+    }
+
+    #[test]
+    fn drag_uses_real_sibling_order_including_hidden_tasks() {
+        let a = task(1, "a");
+        let mut hidden = task(2, "b");
+        hidden.is_closed = true;
+        let b = task(3, "c");
+        let kid = child(4, 1, "a");
+        let items = vec![b, kid, hidden, a];
+        assert_eq!(
+            drop_position_from_half(1, &items, 3, DropHalf::Above),
+            Some(Position::Before(3))
+        );
+        assert_eq!(drop_position_from_half(3, &items, 2, DropHalf::Below), None);
+    }
+
+    #[test]
+    fn the_drop_half_is_the_row_the_cursor_is_inside() {
+        use gpui::{bounds, point, size};
+        let row = bounds(point(px(0.), px(100.)), size(px(300.), px(48.)));
+        assert_eq!(
+            drop_half_for_row(&point(px(10.), px(110.)), &row),
+            Some(DropHalf::Above)
+        );
+        assert_eq!(
+            drop_half_for_row(&point(px(10.), px(140.)), &row),
+            Some(DropHalf::Below)
+        );
+        // A row the cursor is not over writes no indicator at all.
+        assert_eq!(drop_half_for_row(&point(px(10.), px(60.)), &row), None);
+    }
+
+    #[test]
+    fn long_consultation_viewport_excludes_unseen_messages() {
+        use gpui::{bounds, point, size};
+        let viewport = bounds(point(px(0.), px(210.)), size(px(300.), px(60.)));
+        let markers =
+            [20., 120., 220.].map(|y| bounds(point(px(0.), px(y)), size(px(300.), px(80.))));
+        assert!(!message_visible(&markers[0], &viewport));
+        assert!(!message_visible(&markers[1], &viewport));
+        assert!(message_visible(&markers[2], &viewport));
+    }
+
+    #[test]
+    fn refreshed_bindings_include_task_and_reviewer_once_each() {
+        let task_session = uuid::Uuid::new_v4();
+        let reviewer = uuid::Uuid::new_v4();
+        let mut a = task(1, "a");
+        a.session_id = Some(task_session.to_string());
+        a.review_session_id = Some(reviewer.to_string());
+        let mut b = task(2, "b");
+        b.session_id = Some(task_session.to_string());
+        b.review_session_id = Some("invalid".into());
+        assert_eq!(
+            bound_sessions(&[a.clone(), b]),
+            vec![
+                horizon_workspace::SessionId::from_uuid(task_session),
+                horizon_workspace::SessionId::from_uuid(reviewer)
+            ]
+        );
+        // Only the task's own binding is what the session action opens.
+        assert_eq!(
+            task_session_id(&a),
+            Some(horizon_workspace::SessionId::from_uuid(task_session))
+        );
+        assert_eq!(task_session_id(&task(9, "z")), None);
     }
 
     #[test]

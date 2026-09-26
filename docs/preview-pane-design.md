@@ -41,8 +41,9 @@ for `wasm32-wasip2`:
   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` in the root
   `Cargo.toml`.
 - Modules that need them carry `#[cfg(not(target_family = "wasm"))]` at
-  their declaration in `src/lib.rs`. `theme`, `preview` and `board_pane`
-  build for both targets; every other module is native-only. A module that
+  their declaration in `src/lib.rs`. `theme`, `preview`, `board_pane` and
+  `board_next` build for both targets; every other module is native-only.
+  A module that
   carries previews of its own view is gated inside itself instead, so the
   view and the native-only halves it uses can live in one directory.
 - `scripts/check-preview-wasm.sh` checks that the library still builds for
@@ -88,13 +89,19 @@ The previews in this build:
 | `sample` | The seeded widget gallery (`src/preview/sample.rs`). |
 | `board-list`, `board-list-empty`, `board-detail` | The board pane over an in-memory store (`src/board_pane/previews.rs`). |
 | `board-next-thread`, `board-next-thread-long` | One task's thread, over the same kind of in-memory store (`src/board_next/`): the task header band, the task body, agent posts as bordered cards and owner replies as tinted blocks, and the composer pinned under them. The long one opens on a forty-message thread whose third post is long enough to fold. |
-| `board-next-list`, `board-next-list-empty` | The same board's task list as a view of its own: one row per task in steering order, with the finished band folded behind one row. |
+| `board-next-list`, `board-next-list-empty` | The same board's task list as a view of its own: one row per task in rank order as a tree, children indented under their parent and foldable per parent, finished top-level work behind one 「完了」 row at the bottom, and the add-task input pinned under everything. |
 
-`src/board_next/` is reachable from nothing but `registry::PREVIEWS`. It is
-two views, not one — a thread and a list, each taking a pane's whole width,
-with a pane split putting them side by side. Both read a store and emit no
-commands, so they carry no shell wiring and the shipped board pane is
-untouched by them.
+`src/board_next/` is two views, not one — a thread and a list, each
+taking a pane's whole width, with a pane split putting them side by side.
+Both read and write a board through the shipped pane's
+`BoardStoreSource`/`run_store_job` pair, so a preview's in-memory store and
+a log-backed one look the same from inside a view; on the former every
+write answers `StoreError::ReadOnly` and lands on the notice line. What
+reaches the host — the logd poke pump and the observation of the shell's
+`AgentSession` entities — is gated `#[cfg(not(target_family = "wasm"))]`
+inside the module, as is each view's shell-facing block. Neither view calls
+into the shell: a request that needs a pane or a session leaves as an
+event, listed in the module doc.
 
 For a view to be previewable, the code that goes into the plugin must not
 reach sockets, subprocesses, or the filesystem directly — a wasm32-wasip2
@@ -199,9 +206,11 @@ primary entry point and the view chooser does not list the preview kind.
   the header band, with no list row beside it — and the first post's probe
   under it, and `board-next-thread-long` shows the long post's first line
   and not its deep probe until `j`, `j`, `e` put the post cursor on it and
-  unfold it. The list view's: `board-next-list` paints two row titles, and
-  `j` then Enter adds the open notice naming the row the cursor landed on;
-  `board-next-list-empty` paints chrome and no row. A board
+  unfold it. The list view's: `board-next-list` paints two row titles and
+  none of the folded first row's children until `l` opens it (and `h`
+  folds them away again), and `j` then Enter adds the open notice naming
+  the row the cursor landed on; `board-next-list-empty` paints chrome, no
+  row, and the add-task input. A board
   preview's surface is tall, because gpui culls primitives outside the
   content mask and an assertion on text that scrolled out of view is an
   assertion on nothing. Minutes when cold; not part of the gate.

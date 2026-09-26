@@ -3,12 +3,13 @@
 //! what differs between two previews is the view, not the data.
 //!
 //! The sample board is shaped after the live event log these views are
-//! aimed at: twenty-five tasks of which most are finished, a handful open
-//! in different statuses, eight bound to sessions in different activity
-//! states, three carrying messages nobody has read, and threads whose agent
-//! posts are as long as the real ones. The events go through
-//! `horizon_board`'s own fold, so what a preview shows is what the board's
-//! queries make of them.
+//! aimed at: thirty tasks of which most are finished, a handful open in
+//! different statuses, three parents carrying children (one of them a
+//! finished child under an open parent), eight bound to sessions in
+//! different activity states, three carrying messages nobody has read, and
+//! threads whose agent posts are as long as the real ones. The events go
+//! through `horizon_board`'s own fold, so what a preview shows is what the
+//! board's queries make of them.
 
 use std::collections::HashMap;
 
@@ -16,8 +17,8 @@ use gpui::{AnyView, App, AppContext as _, Window};
 use horizon_board::{sample_envelopes, BoardEvent, Envelope, Item, Store};
 use horizon_workspace::SessionId;
 
+use super::activity::BoardSessionActivity;
 use super::{model, BoardListView, BoardThreadView};
-use crate::board_pane::activity::BoardSessionActivity;
 use crate::board_pane::previews::{item, message, read, session, session_id, stored};
 
 pub(crate) const THREAD: &str = "board-next-thread";
@@ -25,8 +26,10 @@ pub(crate) const THREAD_LONG: &str = "board-next-thread-long";
 pub(crate) const LIST: &str = "board-next-list";
 pub(crate) const LIST_EMPTY: &str = "board-next-list-empty";
 
-/// The task the thread preview opens on: the first row of the steering
-/// order, which is the thread the list opens into.
+/// The task the thread preview opens on: the first row of the list, which
+/// is the thread the list opens into. It is also the parent the list
+/// preview starts folded, so `j` from the opening selection still lands on
+/// the second top-level task.
 const THREAD_TASK: u64 = 1;
 
 /// The task the long-thread preview opens on.
@@ -62,12 +65,17 @@ pub(crate) const FOLDED_PROBE: &str = "計測結果の要約";
 /// so "not painted" cannot be satisfied by another string's characters.
 pub(crate) const DEEP_PROBE: &str = "縞模様の残像はスクロール補間の丸め誤差だった";
 
+/// The title of a child of the first task, which starts folded away under
+/// it. Its leading `枠` occurs nowhere else, so painting it means that one
+/// row appeared.
+pub(crate) const COLLAPSED_CHILD_TITLE: &str = "枠だけ残ったペインに再接続の口を出す";
+
 // ---------------------------------------------------------------------------
 // The previews
 // ---------------------------------------------------------------------------
 
 fn thread_on(task: u64, window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| BoardThreadView::new(sample_store(), sample_activity(), task, window, cx))
+    cx.new(|cx| BoardThreadView::over_store(sample_store(), sample_activity(), task, window, cx))
         .into()
 }
 
@@ -80,12 +88,17 @@ pub(crate) fn build_thread_long(window: &mut Window, cx: &mut App) -> AnyView {
 }
 
 pub(crate) fn build_list(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| BoardListView::new(sample_store(), sample_activity(), window, cx))
-        .into()
+    cx.new(|cx| {
+        // The first task starts folded, so both states of the disclosure
+        // are on screen and a check can open one.
+        BoardListView::over_store(sample_store(), sample_activity(), window, cx)
+            .with_collapsed([THREAD_TASK])
+    })
+    .into()
 }
 
 pub(crate) fn build_list_empty(window: &mut Window, cx: &mut App) -> AnyView {
-    cx.new(|cx| BoardListView::new(Store::in_memory(Vec::new()), HashMap::new(), window, cx))
+    cx.new(|cx| BoardListView::over_store(Store::in_memory(Vec::new()), HashMap::new(), window, cx))
         .into()
 }
 
@@ -127,6 +140,12 @@ fn ago(ms: u64) -> u64 {
 fn task(id: u64, rank: &str, title: &str, status: &str) -> Item {
     let mut task = item(id, rank, title);
     task.status = status.to_string();
+    task
+}
+
+fn child(id: u64, parent: u64, rank: &str, title: &str, status: &str) -> Item {
+    let mut task = task(id, rank, title, status);
+    task.parent = Some(parent);
     task
 }
 
@@ -237,6 +256,40 @@ fn sample_events() -> Vec<Envelope> {
         "テーマ切り替えの直後だけスクロール位置がずれる件。計測とログはスレッドに。".to_string();
     layout.session_id = Some(session(4));
     events.push(stored(layout));
+
+    // -- the children -----------------------------------------------------
+    //
+    // Three parents carry work under them. The first task's subtree holds
+    // a finished child under an open parent, which stays where it is
+    // rather than moving into the band at the bottom.
+
+    events.push(stored(child(26, 1, "a", COLLAPSED_CHILD_TITLE, "設計中")));
+    let mut unreachable = child(27, 1, "b", "到達不能ペインの見せ方を決める", "done");
+    unreachable.body = "落として詰めるか、状態を描いて再接続の口を出すか。".to_string();
+    events.push(stored(unreachable));
+
+    events.push(stored(child(
+        28,
+        4,
+        "a",
+        "履歴の重複を再現する検査を足す",
+        "進行中",
+    )));
+
+    events.push(stored(child(
+        29,
+        LONG_THREAD_TASK,
+        "a",
+        "高さのキャッシュに世代番号を持たせる",
+        "doing",
+    )));
+    events.push(stored(child(
+        30,
+        LONG_THREAD_TASK,
+        "b",
+        "折り返しの追随を別に測る",
+        "backlog",
+    )));
 
     // -- finished work, the bulk of the board -----------------------------
 
@@ -730,8 +783,8 @@ fn long_report() -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        sample_activity, sample_events, sample_store, DEEP_PROBE, FIRST_TASK_TITLE, FOLDED_PROBE,
-        LONG_THREAD_TASK, SECOND_TASK_TITLE, THREAD_PROBE, THREAD_TASK,
+        sample_events, sample_store, COLLAPSED_CHILD_TITLE, DEEP_PROBE, FIRST_TASK_TITLE,
+        FOLDED_PROBE, LONG_THREAD_TASK, SECOND_TASK_TITLE, THREAD_PROBE, THREAD_TASK,
     };
 
     /// How many posts into the long thread the long report sits. Two `j`s
@@ -739,8 +792,25 @@ mod tests {
     const LONG_REPORT_POST: usize = 2;
     use crate::board_next::model;
     use crate::board_next::spec::MEASURE_CELLS;
-    use horizon_board::{BoardEvent, Store};
-    use std::collections::HashMap;
+    use horizon_board::{BoardEvent, Item, Store};
+    use std::collections::{HashMap, HashSet};
+
+    /// The rows the list preview derives: the sample board, the read
+    /// positions it carries, and the one parent that starts folded.
+    fn preview_rows(collapsed: &HashSet<u64>) -> (Vec<Item>, Vec<model::Row>) {
+        let store = sample_store();
+        let items = store.list(None, true).expect("list").items;
+        let positions = store.read_positions("owner").expect("read positions");
+        let rows = model::tree_rows(&items, &positions, collapsed);
+        (items, rows)
+    }
+
+    fn visible_ids(rows: &[model::Row]) -> Vec<u64> {
+        model::visible_rows(rows, false)
+            .into_iter()
+            .map(|index| rows[index].item.id)
+            .collect()
+    }
 
     /// Every string the sample board can paint from its own data.
     fn corpus() -> String {
@@ -770,17 +840,14 @@ mod tests {
     /// The board both previews show.
     #[test]
     fn the_sample_board_is_mostly_finished_work_with_a_few_live_threads() {
-        let store = sample_store();
-        let items = store.list(None, true).expect("list").items;
-        assert_eq!(items.len(), 25);
-        let positions = store.read_positions("owner").expect("read positions");
-        let rows = model::rows(&items, &positions, &sample_activity());
+        let (items, rows) = preview_rows(&HashSet::new());
+        assert_eq!(items.len(), 30);
 
-        let finished = rows
-            .iter()
-            .filter(|row| row.group == model::Group::Finished)
-            .count();
-        assert!(finished >= 13, "the board is mostly finished work");
+        let (finished, _) = model::finished_summary(&rows);
+        assert!(
+            finished >= 13,
+            "the board is mostly finished work: {finished}"
+        );
         let unread: Vec<u64> = rows
             .iter()
             .filter(|row| row.unread > 0)
@@ -792,28 +859,53 @@ mod tests {
             .filter(|item| item.session_id.is_some())
             .count();
         assert_eq!(bound, 8, "eight tasks carry a session");
-        let active = rows
-            .iter()
-            .filter(|row| row.group == model::Group::Active)
-            .count();
-        assert!(
-            (3..=6).contains(&active),
-            "some sessions are live: {active}"
-        );
     }
 
-    /// The list opens on the first task and `j` lands on the second, which
-    /// is what the windowless check drives.
+    /// The hierarchy the list preview is there to show: parents with work
+    /// under them, one of those children finished while its parent is
+    /// open, and one parent folded.
+    #[test]
+    fn the_sample_board_carries_a_hierarchy_with_a_finished_child_under_an_open_parent() {
+        let (items, rows) = preview_rows(&HashSet::new());
+        let parents: Vec<u64> = rows
+            .iter()
+            .filter(|row| row.has_children)
+            .map(|row| row.item.id)
+            .collect();
+        assert_eq!(parents, vec![1, 4, LONG_THREAD_TASK]);
+
+        let finished_child = rows
+            .iter()
+            .find(|row| row.depth > 0 && row.finished)
+            .expect("a finished child");
+        assert_eq!(finished_child.item.parent, Some(THREAD_TASK));
+        assert!(
+            !finished_child.in_finished_band,
+            "a finished child stays under its open parent"
+        );
+        assert!(items.iter().any(|item| item.title == COLLAPSED_CHILD_TITLE));
+
+        // Folding the first task takes its children off the list without
+        // touching anything else.
+        let folded = preview_rows(&HashSet::from([THREAD_TASK])).1;
+        let hidden: Vec<u64> = rows
+            .iter()
+            .filter(|row| row.item.parent == Some(THREAD_TASK))
+            .map(|row| row.item.id)
+            .collect();
+        assert!(!hidden.is_empty());
+        for id in hidden {
+            assert!(visible_ids(&rows).contains(&id));
+            assert!(!visible_ids(&folded).contains(&id));
+        }
+    }
+
+    /// The list opens on the first task, folded, so `j` lands on the
+    /// second top-level task — which is what the windowless check drives.
     #[test]
     fn the_first_two_rows_are_the_two_marked_tasks() {
-        let store = sample_store();
-        let items = store.list(None, true).expect("list").items;
-        let positions = store.read_positions("owner").expect("read positions");
-        let rows = model::rows(&items, &positions, &sample_activity());
-        let visible: Vec<u64> = model::visible_rows(&rows, false)
-            .into_iter()
-            .map(|index| rows[index].item.id)
-            .collect();
+        let (items, rows) = preview_rows(&HashSet::from([THREAD_TASK]));
+        let visible = visible_ids(&rows);
         assert_eq!(visible.first(), Some(&1));
         assert_eq!(model::step_selection(&visible, Some(1), true), Some(2));
         assert_eq!(rows[0].item.title, FIRST_TASK_TITLE);
@@ -829,7 +921,7 @@ mod tests {
     #[test]
     fn each_probe_character_occurs_once_in_the_whole_sample_board() {
         let corpus = corpus();
-        for title in [FIRST_TASK_TITLE, SECOND_TASK_TITLE] {
+        for title in [FIRST_TASK_TITLE, SECOND_TASK_TITLE, COLLAPSED_CHILD_TITLE] {
             let marker = title.chars().next().expect("a title");
             assert_eq!(
                 corpus.matches(marker).count(),
@@ -957,6 +1049,6 @@ mod tests {
     fn the_empty_preview_has_a_store_with_no_tasks() {
         let store = Store::in_memory(Vec::new());
         assert!(store.list(None, true).expect("list").items.is_empty());
-        assert!(model::rows(&[], &HashMap::new(), &HashMap::new()).is_empty());
+        assert!(model::tree_rows(&[], &HashMap::new(), &HashSet::new()).is_empty());
     }
 }
