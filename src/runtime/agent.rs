@@ -18,7 +18,7 @@ use horizon_agent::wire::{
     AGENT_PROTOCOL_VERSION,
 };
 use horizon_wire::{
-    receive_pump, CappedReceiver, DecodeSkipLog, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
+    receive_pump, CappedReceiver, HubError, WireCodec, CONTROL_MAX_ITEM_BYTES,
     TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
@@ -36,6 +36,8 @@ use super::routing::{AgentRoutes, RouteKey};
 
 /// The daemon this module talks to, named in every classified error.
 const DAEMON: &str = "horizon-agentd";
+// Allow the daemon's 120-second bootstrap deadline to report its own error.
+const ATTACH_TIMEOUT: Duration = Duration::from_secs(125);
 
 /// One typed request from the sync world to the runtime — the v10
 /// replacement for the raw-envelope FIFO. Requests that used to need a
@@ -499,9 +501,9 @@ fn handle_op(op: Op, live: &Live) {
             let hub = live.hub.clone();
             let routes = live.routes.clone();
             tokio::spawn(async move {
-                match with_deadline(OP_TIMEOUT, "new_agent", hub.new_agent(new)).await {
+                match with_deadline(ATTACH_TIMEOUT, "new_agent", hub.new_agent(new)).await {
                     Ok(attachment) => {
-                        run_agent_attachment(routes, route, attachment, commands).await
+                        super::attachment::run(routes, route, attachment, commands).await
                     }
                     Err(error) => routes
                         .agent_failed(route, format!("failed to start the agent session: {error}")),
@@ -513,14 +515,14 @@ fn handle_op(op: Op, live: &Live) {
             let routes = live.routes.clone();
             tokio::spawn(async move {
                 match with_deadline(
-                    OP_TIMEOUT,
+                    ATTACH_TIMEOUT,
                     "attach_agent",
                     hub.attach_agent(route.session_id()),
                 )
                 .await
                 {
                     Ok(attachment) => {
-                        run_agent_attachment(routes, route, attachment, commands).await
+                        super::attachment::run(routes, route, attachment, commands).await
                     }
                     Err(error) => routes.agent_failed(
                         route,
@@ -620,45 +622,6 @@ fn handle_op(op: Op, live: &Live) {
                     eprintln!("horizon-agentd client: provider config reload failed: {error}");
                 }
             });
-        }
-    }
-}
-
-/// One live agent attachment: forwards handle commands to the daemon and
-/// routes events to the pane, until either side goes away.
-async fn run_agent_attachment(
-    routes: Arc<AgentRoutes>,
-    route: RouteKey<contract::SessionId>,
-    attachment: horizon_agent::wire::AgentAttachment,
-    mut commands: UnboundedReceiver<Command>,
-) {
-    let horizon_agent::wire::AgentAttachment {
-        mut events,
-        commands: remote_commands,
-    } = attachment;
-    let mut event_skips = DecodeSkipLog::new("agent events");
-    let mut command_skips = DecodeSkipLog::new("agent commands");
-    loop {
-        tokio::select! {
-            command = commands.recv() => match command {
-                Some(command) => {
-                    if let Err(err) = remote_commands.send(command).await {
-                        // rch latches remote-send errors on the sender (one
-                        // failure means every later send fails too), so any
-                        // send error ends the attachment rather than
-                        // skip-looping.
-                        command_skips.note(&err);
-                        break;
-                    }
-                }
-                None => break,
-            },
-            event = events.recv() => match event {
-                Ok(Some(event)) => routes.route_agent_event(route, event),
-                Ok(None) => break,
-                Err(err) if err.is_final() => break,
-                Err(err) => event_skips.note(&err),
-            },
         }
     }
 }

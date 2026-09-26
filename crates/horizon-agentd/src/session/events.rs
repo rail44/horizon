@@ -9,11 +9,9 @@ use horizon_agent::wire::AgentWireEvent;
 
 use super::state::{lock_unpoisoned, AgentdState};
 
-/// Sends a session-scoped wire event to whichever attachment is currently
-/// subscribed to `session_id`, silently dropping it if none is (no client
-/// attached right now -- see the module doc; committed events are replayed
-/// on the next attach anyway). A failed send means the subscriber's bridge
-/// is gone, so its entry is removed rather than kept as a dead letter box.
+/// Publish a new event to internal observers and the current attachment.
+/// Ephemeral progress is retained for the next snapshot. A full live mailbox
+/// revokes that attachment; it never blocks session work or skips silently.
 pub(super) fn send_session_event(
     state: &AgentdState,
     session_id: SessionId,
@@ -22,13 +20,10 @@ pub(super) fn send_session_event(
     if let AgentWireEvent::Event(event) = &event {
         state.publish_to_subscriber(session_id, event);
     }
-    let mut subscribers = lock_unpoisoned(&state.agent_subscribers);
-    if subscribers
-        .get(&session_id)
-        .is_some_and(|tx| tx.send(event).is_err())
-    {
-        subscribers.remove(&session_id);
-    }
+    lock_unpoisoned(&state.agent_subscribers)
+        .entry(session_id)
+        .or_default()
+        .publish(event);
 }
 
 /// The sole publication boundary for newly produced conversation batches.

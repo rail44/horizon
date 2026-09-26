@@ -88,36 +88,40 @@ fn dropping_an_old_agent_registration_keeps_the_replacement() {
     let (roots, _roots_rx) = crossbeam_channel::unbounded();
     let routes = AgentRoutes::new(host, roots);
     let id = contract::SessionId::new();
-    let (old_tx, _old_rx) = crossbeam_channel::unbounded();
+    let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
-    let (new_tx, new_rx) = crossbeam_channel::unbounded();
+    let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(16);
     let current = routes.register_agent(id, new_tx);
     routes.unregister_agent(old);
     routes.agent_failed(current, "current diagnostic".into());
     assert!(
-        matches!(new_rx.try_recv().unwrap().clone().into_event().expect("conversation event"), Event::Error(error) if error.message == "current diagnostic")
+        matches!(new_rx.try_recv().unwrap(), AgentUpdate::State(AttachmentState::Failed(message)) if message == "current diagnostic")
     );
 }
 
-#[test]
-fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() {
+#[tokio::test]
+async fn stale_agent_events_and_workspace_roots_do_not_reach_a_new_attachment() {
     let (host, _host_rx) = crossbeam_channel::unbounded();
     let (roots, roots_rx) = crossbeam_channel::unbounded();
     let routes = AgentRoutes::new(host, roots);
     let id = contract::SessionId::new();
-    let (old_tx, _old_rx) = crossbeam_channel::unbounded();
+    let (old_tx, _old_rx) = tokio::sync::mpsc::channel(16);
     let old = routes.register_agent(id, old_tx);
-    let (new_tx, new_rx) = crossbeam_channel::unbounded();
+    let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(16);
     let current = routes.register_agent(id, new_tx);
     routes.agent_failed(old, "stale failure".into());
     let root = wire::WorkspaceRootResolved {
         workspace_root: "/stale".into(),
         parent_session_id: None,
     };
-    routes.route_agent_event(old, AgentWireEvent::WorkspaceRootResolved(root.clone()));
+    routes
+        .route_agent_event(old, AgentWireEvent::WorkspaceRootResolved(root.clone()))
+        .await;
     assert!(new_rx.try_recv().is_err());
     assert!(roots_rx.try_recv().is_err());
-    routes.route_agent_event(current, AgentWireEvent::WorkspaceRootResolved(root));
+    routes
+        .route_agent_event(current, AgentWireEvent::WorkspaceRootResolved(root))
+        .await;
     assert_eq!(roots_rx.try_recv().unwrap().0, id);
 }
 
@@ -137,4 +141,48 @@ fn stale_terminal_updates_and_cleanup_leave_the_replacement_live() {
     assert_eq!(frames.borrow().text(), "current");
     assert!(events.try_recv().is_err());
     assert!(!commands.is_closed());
+}
+
+#[tokio::test]
+async fn replacing_a_route_cancels_a_send_blocked_by_a_slow_view() {
+    let (host, _host_rx) = crossbeam_channel::unbounded();
+    let (roots, _roots_rx) = crossbeam_channel::unbounded();
+    let routes = std::sync::Arc::new(AgentRoutes::new(host, roots));
+    let id = contract::SessionId::new();
+    let (old_tx, mut old_rx) = tokio::sync::mpsc::channel(1);
+    let old = routes.register_agent(id, old_tx);
+    assert!(
+        routes
+            .send_agent(old, AgentUpdate::State(AttachmentState::Restoring))
+            .await
+    );
+    let sender_routes = routes.clone();
+    let blocked = tokio::spawn(async move {
+        sender_routes
+            .send_agent(old, AgentUpdate::State(AttachmentState::Ready))
+            .await
+    });
+    tokio::task::yield_now().await;
+    let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(1);
+    let current = routes.register_agent(id, new_tx);
+    assert!(
+        !tokio::time::timeout(std::time::Duration::from_secs(1), blocked)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    assert!(matches!(
+        old_rx.recv().await,
+        Some(AgentUpdate::State(AttachmentState::Restoring))
+    ));
+    assert!(old_rx.recv().await.is_none());
+    assert!(
+        routes
+            .send_agent(current, AgentUpdate::State(AttachmentState::Ready))
+            .await
+    );
+    assert!(matches!(
+        new_rx.recv().await,
+        Some(AgentUpdate::State(AttachmentState::Ready))
+    ));
 }

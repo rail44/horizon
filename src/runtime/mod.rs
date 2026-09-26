@@ -22,20 +22,21 @@
 //! rather than re-grown per kind.
 
 mod agent;
+mod attachment;
 mod common;
 mod connection;
 mod link;
 mod notify;
 mod request;
 mod routing;
+pub(crate) use attachment::{AgentUpdate, AttachmentState};
 mod terminal;
 
 use std::path::Path;
 use std::sync::Arc;
 
 use crossbeam_channel::{unbounded, Receiver, Sender};
-use horizon_agent::contract::{self, Command, ProviderEvent};
-use horizon_agent::registry;
+use horizon_agent::contract::{self, Command};
 use horizon_agent::wire::{self, HostToolRequest, HostToolResponse};
 use horizon_terminal_core::{
     TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, TerminalUpdate,
@@ -122,7 +123,8 @@ impl TerminaldSlot {
 }
 
 pub(crate) struct AgentSessionHandle {
-    inner: registry::SessionHandle,
+    commands: Sender<Command>,
+    events: Option<tokio::sync::mpsc::Receiver<AgentUpdate>>,
     route: RouteKey<contract::SessionId>,
     routes: Arc<AgentRoutes>,
 }
@@ -142,11 +144,13 @@ pub(crate) struct TerminalSessionHandle {
 
 impl AgentSessionHandle {
     pub(crate) fn sender(&self) -> Sender<Command> {
-        self.inner.sender()
+        self.commands.clone()
     }
 
-    pub(crate) fn events(&self) -> Receiver<ProviderEvent> {
-        self.inner.events()
+    pub(crate) fn take_events(&mut self) -> tokio::sync::mpsc::Receiver<AgentUpdate> {
+        self.events
+            .take()
+            .expect("attachment has one event consumer")
     }
 
     /// The daemon-side session id, for hub-level RPCs that address the
@@ -330,7 +334,7 @@ impl AgentdHandle {
         tokio::sync::mpsc::UnboundedReceiver<Command>,
     ) {
         let (command_tx, command_rx) = unbounded::<Command>();
-        let (event_tx, event_rx) = unbounded::<ProviderEvent>();
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel::<AgentUpdate>(256);
         let route = self.routes.register_agent(session_id, event_tx);
 
         let (bridge_tx, bridge_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -343,7 +347,8 @@ impl AgentdHandle {
         });
         (
             AgentSessionHandle {
-                inner: registry::SessionHandle::new(command_tx, event_rx),
+                commands: command_tx,
+                events: Some(event_rx),
                 route,
                 routes: self.routes.clone(),
             },

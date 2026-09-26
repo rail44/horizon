@@ -570,11 +570,19 @@ mod delivery_tests {
             .unwrap()
             .replay
             .clone();
-        let (reply, receive) = crossbeam_channel::unbounded();
+        let (reply, receive) = tokio::sync::oneshot::channel();
         replay.send(reply).unwrap();
-        let events = receive
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .unwrap();
+        let bootstrap = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                tokio::time::timeout(std::time::Duration::from_secs(5), receive)
+                    .await
+                    .unwrap()
+                    .unwrap()
+            });
+        let events = bootstrap.history;
         assert!(events.contains(&original));
         assert!(events.contains(&Event::StateChanged(SessionState::Terminated)));
         assert_eq!(

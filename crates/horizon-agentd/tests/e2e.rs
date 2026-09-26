@@ -299,34 +299,28 @@ async fn collect_events_until(
     panic!("gave up waiting for the expected event after 400 reads; got: {collected:?}");
 }
 
-/// Reads a session's replayed events off a fresh `attach_agent` attachment
-/// (`AgentAttachment::events`) until they go quiet -- `attach_agent`'s
-/// replay burst has no single terminal event to watch for. Same two-wait
-/// shape as the JSONL era: a long first-event budget (the daemon's
-/// `replay_events` can take real time under contention), then a short
-/// quiescence window once the burst starts.
+/// Collect exactly the private snapshot, using its protocol boundary rather
+/// than guessing completion from a quiet interval in the live stream.
 async fn collect_replayed_events(
     events: &mut CappedReceiver<AgentWireEvent, TOOL_IO_MAX_ITEM_BYTES>,
 ) -> Vec<Event> {
-    const REPLAY_FIRST_EVENT_TIMEOUT: Duration = Duration::from_secs(120);
-    const REPLAY_QUIESCENCE_WINDOW: Duration = Duration::from_millis(500);
-
-    let mut collected = Vec::new();
-    let mut budget = REPLAY_FIRST_EVENT_TIMEOUT;
-    loop {
-        match tokio::time::timeout(budget, events.recv()).await {
-            Ok(Ok(Some(AgentWireEvent::Event(event)))) => {
-                collected.push(event);
-                budget = REPLAY_QUIESCENCE_WINDOW;
+    tokio::time::timeout(Duration::from_secs(120), async {
+        assert_eq!(
+            events.recv().await.unwrap(),
+            Some(AgentWireEvent::ReplayStarted)
+        );
+        let mut collected = Vec::new();
+        loop {
+            match events.recv().await.unwrap().expect("replay stream ended") {
+                AgentWireEvent::Event(event) => collected.push(event),
+                AgentWireEvent::ReplayComplete => return collected,
+                AgentWireEvent::AttachmentClosed(reason) => panic!("replay closed: {reason:?}"),
+                _ => {}
             }
-            // Non-event announcements (SessionModel, etc.) also arrive on
-            // this channel -- keep waiting, they don't end the burst.
-            Ok(Ok(Some(_))) => budget = REPLAY_QUIESCENCE_WINDOW,
-            Ok(Ok(None)) => panic!("attachment closed while collecting replayed events"),
-            Ok(Err(err)) => panic!("channel error while collecting replayed events: {err}"),
-            Err(_timeout) => return collected,
         }
-    }
+    })
+    .await
+    .expect("replay timed out")
 }
 
 /// Reads the connection-global host-tool request channel
@@ -2422,4 +2416,140 @@ async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_rest
             daemon = daemon.respawn_at_same_paths();
         }
     }
+}
+
+/// Attach while deltas are being committed. The full wire event sequence,
+/// including the replay/live join, must equal a subsequent quiescent replay.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn repeated_attachments_during_streaming_join_history_and_live_exactly_once() {
+    let agentd = spawn_agentd();
+    let client = connect_hub(&agentd.socket_path).await;
+    let session = SessionId::new();
+    let mut first = client.hub.new_agent(session_new(session)).await.unwrap();
+    first
+        .commands
+        .send(AgentCommand::UserMessage {
+            text: format!("slow {}", "word ".repeat(100)),
+        })
+        .await
+        .unwrap();
+    collect_events_until(&mut first.events, |event| {
+        matches!(event, Event::AssistantTextDelta(_))
+    })
+    .await;
+    for _ in 0..4 {
+        let mut replacement = client.hub.attach_agent(session).await.unwrap();
+        let history = collect_replayed_events(&mut replacement.events).await;
+        assert!(history
+            .iter()
+            .any(|event| matches!(event, Event::AssistantTextDelta(_))));
+        first = replacement;
+    }
+    let mut current = client.hub.attach_agent(session).await.unwrap();
+    let mut events = collect_replayed_events(&mut current.events).await;
+    // An old sender can still have space in its transport buffer. Even when
+    // enqueue succeeds, that attachment has lost command authority.
+    let _ = first
+        .commands
+        .send(AgentCommand::Cancel { request_id: None })
+        .await;
+    if agent_frame_from_events(&events).state != Some(SessionState::WaitingForUser) {
+        events.extend(
+            collect_events_until(&mut current.events, |event| {
+                matches!(event, Event::StateChanged(SessionState::WaitingForUser))
+            })
+            .await,
+        );
+    }
+    assert!(!events
+        .iter()
+        .any(|event| matches!(event, Event::StateChanged(SessionState::Cancelled))));
+    let mut reopened = client.hub.attach_agent(session).await.unwrap();
+    let replay = collect_replayed_events(&mut reopened.events).await;
+    assert_eq!(
+        events, replay,
+        "streaming attach must preserve the entire ordered sequence"
+    );
+    assert_eq!(
+        agent_frame_from_events(&events),
+        agent_frame_from_events(&replay)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn large_history_survives_abandoned_replay_and_daemon_restart() {
+    let temp = tempfile::tempdir().unwrap();
+    let session = SessionId::new();
+    let socket = temp.path().join("agentd.sock");
+    let log = temp.path().join("events.jsonl");
+    let history: Vec<_> = (0..3000)
+        .map(|index| {
+            Event::MessageCommitted(horizon_agent::contract::Message {
+                role: MessageRole::User,
+                text: format!("historical message {index}: {}", "x".repeat(512)),
+            })
+        })
+        .collect();
+    write_session_fixture(&log, vec![(session, history.clone())]);
+    let agentd = spawn_agentd_at(socket.clone(), log.clone());
+    let client = connect_hub(&socket).await;
+    let mut abandoned = client.hub.attach_agent(session).await.unwrap();
+    assert_eq!(
+        abandoned.events.recv().await.unwrap(),
+        Some(AgentWireEvent::ReplayStarted)
+    );
+    drop(abandoned);
+    let mut replacement = client.hub.attach_agent(session).await.unwrap();
+    let replay = collect_replayed_events(&mut replacement.events).await;
+    assert!(replay.starts_with(&history));
+    drop(replacement);
+    drop(client);
+    agentd.kill_and_wait();
+    let _restarted = spawn_agentd_at(socket.clone(), log);
+    let client = connect_hub(&socket).await;
+    let mut reopened = client.hub.attach_agent(session).await.unwrap();
+    let restored = collect_replayed_events(&mut reopened.events).await;
+    assert!(restored.starts_with(&history));
+    assert_eq!(
+        restored
+            .iter()
+            .filter(|event| matches!(event, Event::MessageCommitted(message) if message.role == MessageRole::User && message.text.starts_with("historical message ")))
+            .cloned().collect::<Vec<_>>(),
+        history
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn startup_isolation_warning_is_visible_and_survives_reattachment() {
+    let agentd = spawn_agentd();
+    let client = connect_hub(&agentd.socket_path).await;
+    let session = SessionId::new();
+    let plain_directory = tempfile::tempdir().unwrap();
+    let mut new = session_new(session);
+    new.isolate = true;
+    new.workspace_root = Some(plain_directory.path().into());
+    let mut attachment = client.hub.new_agent(new).await.unwrap();
+    let events = collect_events_until(&mut attachment.events, |event| {
+        matches!(event,
+            Event::Error(error) if error.message.contains("continuing without isolation")
+        )
+    })
+    .await;
+    let warning = events
+        .into_iter()
+        .find(|event| matches!(event, Event::Error(_)))
+        .unwrap();
+    let mut reopened = client.hub.attach_agent(session).await.unwrap();
+    let replay = collect_replayed_events(&mut reopened.events).await;
+    assert_eq!(replay.iter().filter(|event| **event == warning).count(), 1);
+    let records = horizon_agent::persistence::event_log::read(&agentd.event_log_path)
+        .unwrap()
+        .records;
+    assert_eq!(
+        records
+            .iter()
+            .filter(|record| record.session_id == session && record.event == warning)
+            .count(),
+        1
+    );
 }

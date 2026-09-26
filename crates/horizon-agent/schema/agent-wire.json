@@ -27,6 +27,29 @@
       "description": "Everything a hosted agent session pushes to its attached client, on the\nattachment's event channel (`horizon_session_protocol::AgentAttachment::\nevents`): the session's provider events, plus the session-scoped\nannouncements that were their own control envelopes on the JSONL wire.",
       "oneOf": [
         {
+          "const": "ReplayStarted",
+          "description": "Start of this attachment's private history and metadata snapshot.",
+          "type": "string"
+        },
+        {
+          "const": "ReplayComplete",
+          "description": "Every snapshot item precedes this marker; live updates follow it.",
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "The attachment ended; the session itself may still be running.",
+          "properties": {
+            "AttachmentClosed": {
+              "$ref": "#/$defs/AttachmentEnd"
+            }
+          },
+          "required": [
+            "AttachmentClosed"
+          ],
+          "type": "object"
+        },
+        {
           "additionalProperties": false,
           "description": "A folded provider event — the transcript's raw material, identical\nto what the event log persists.",
           "properties": {
@@ -80,7 +103,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Live progress of one of this session's background `task` children —\nthe daemon-side task watcher mirroring what the child was last\nobserved doing. Ephemeral like [`ToolCallProgress`]: a completion is\nrecorded durably as a `MessageRole::TaskNotification` message; this\nevent only drives the client's live progress rows. Not emitted while\nno client is attached, and not replayed on attach — a re-attached\nclient sees a child's row again at its next activity.",
+          "description": "Live progress of one of this session's background `task` children —\nthe daemon-side task watcher mirroring what the child was last\nobserved doing. Ephemeral like [`ToolCallProgress`]: a completion is\nrecorded durably as a `MessageRole::TaskNotification` message; this\nevent only drives the client's live progress rows. The daemon retains\ncurrent running rows and seeds them during attachment bootstrap.",
           "properties": {
             "TaskProgress": {
               "$ref": "#/$defs/TaskProgress"
@@ -343,6 +366,16 @@
         "decision"
       ],
       "type": "object"
+    },
+    "AttachmentEnd": {
+      "description": "Why an attachment ended. Reattach to obtain a fresh, complete snapshot.",
+      "enum": [
+        "Replaced",
+        "Lagged",
+        "Detached",
+        "SessionEnded"
+      ],
+      "type": "string"
     },
     "ClientHello": {
       "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
@@ -2414,5 +2447,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 27
+  "x-session-protocol-version": 28
 }

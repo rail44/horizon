@@ -21,19 +21,11 @@
 //! deadlock a single-threaded async runtime but is harmless on its own
 //! dedicated thread.
 //!
-//! **Sessions are scoped to the process, not the connection (step 4).**
-//! `AgentdState::sessions`/`pending_host_tool_requests`/`outgoing` are
-//! process-lifetime (built once in `main`, shared via `Arc`) rather than
-//! recreated per accepted connection: a session's thread outlives any one
-//! connection, and a fresh connection re-targets the *same* running
-//! sessions rather than starting over. `outgoing` is the seam that makes
-//! that possible — a swappable "current connection's writer channel" cell
-//! (`Connection::new` installs it, `Connection::disconnect` clears it) that
-//! every session thread sends through by reference, so a session spawned
-//! before any connection existed (a resumed session at startup) and a
-//! session spawned mid-connection are indistinguishable once they're
-//! running: both just send through whatever `outgoing` currently points at,
-//! silently dropping events when it's `None` (no client to see them).
+//! Sessions outlive their UI connections. Each attachment owns a revocable
+//! lease covering its private history bootstrap, live updates and command
+//! acceptance. The session owner captures history and installs the subscriber
+//! at one event boundary; replacement closes the previous lease without
+//! terminating the session. See `docs/agent-attachment-design.md`.
 //!
 //! **Where things live.** [`state`] holds the process-lifetime registry every
 //! other module works through; [`connection`] is one connection's view of it.
@@ -49,6 +41,7 @@
 //! thread's panic boundary.
 
 mod approval;
+mod attachment;
 mod board;
 mod completion;
 mod connection;
@@ -68,6 +61,7 @@ mod subscription;
 #[cfg(test)]
 pub(crate) mod test_support;
 
+pub(crate) use self::attachment::Bootstrap;
 pub(crate) use self::connection::Connection;
 pub(crate) use self::resume::{resume_persisted_sessions, resume_session};
 pub(crate) use self::spawn::spawn_session_thread;

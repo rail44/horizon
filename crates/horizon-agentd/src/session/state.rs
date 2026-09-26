@@ -10,12 +10,12 @@ use std::sync::Mutex;
 use crossbeam_channel::Sender;
 
 use horizon_agent::config::AgentConfig;
-use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
+use horizon_agent::contract::{Command, ProviderId, SessionId};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
-use horizon_agent::wire::{AgentWireEvent, HostToolRequest, HostToolResponse};
+use horizon_agent::wire::{HostToolRequest, HostToolResponse};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
 
@@ -26,17 +26,6 @@ pub(super) fn lock_unpoisoned<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, 
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
-
-/// The per-session event subscribers (one per live agent attachment,
-/// installed by the hub's `new_agent`/`attach_agent` and replaced by a
-/// re-attach) every session thread sends through — the v10 shape of the
-/// old connection-swappable outgoing envelope queue; see the module doc's
-/// "sessions are scoped to the process" note. The sender is the local
-/// (unbounded, sync-sendable) half of an attachment's event bridge; an
-/// async pump owned by the hub drains it into the attachment's remote
-/// channel. A send failing means that attachment's bridge is gone
-/// (client detached or connection died), so the entry is dropped lazily.
-pub(super) type AgentSubscribers = Mutex<HashMap<SessionId, UnboundedSender<AgentWireEvent>>>;
 
 /// Process-lifetime state, built once in `main` and shared (via `Arc`) by
 /// every connection `horizon-agentd` ever serves, and by every session
@@ -66,7 +55,7 @@ pub(crate) struct AgentdState {
     writer: Mutex<Option<WriterHandle>>,
     pub(super) sessions: Mutex<HashMap<SessionId, SessionEntry>>,
     pub(super) pending_host_tool_requests: Mutex<HashMap<String, Sender<HostToolResponse>>>,
-    pub(super) agent_subscribers: AgentSubscribers,
+    pub(super) agent_subscribers: super::attachment::Streams,
     /// In-process observers of a session's `contract::Event` stream,
     /// installed alongside (never instead of) the client-facing
     /// [`AgentSubscribers`] above -- see [`super::subscription`], which owns
@@ -316,7 +305,7 @@ impl AgentdState {
     ) -> crossbeam_channel::Receiver<Command> {
         let (inbound_tx, inbound_rx) = crossbeam_channel::unbounded::<Command>();
         let (replay_tx, _replay_rx) =
-            crossbeam_channel::unbounded::<crossbeam_channel::Sender<Vec<Event>>>();
+            crossbeam_channel::unbounded::<crate::session::attachment::AttachRequest>();
         self.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {
@@ -363,7 +352,7 @@ pub(super) struct SessionEntry {
     /// the same role-adjusted resolution `run_session`'s own
     /// `providers.start_session` call performs, just without waiting on it.
     /// Retained for the whole session lifetime so a later `session_load`
-    /// (`Connection::session_model`) can re-announce it to a (re)attaching
+    /// (`attachment::capture`) can re-announce it to a (re)attaching
     /// client -- see `docs/agent-output-ui-amendment.md`'s dated model-chip
     /// addendum.
     pub(super) model: Option<String>,
@@ -375,11 +364,9 @@ pub(super) struct SessionEntry {
     /// spawn-time provider has no config entry (e.g. the mock provider).
     pub(super) selection: Option<horizon_agent::wire::ModelSelection>,
     pub(super) inbound: Sender<Command>,
-    /// Answers a `session_load` for this session: the session's own thread
-    /// receives a one-shot reply channel here and sends back everything its
-    /// `LiveState::events()` has accumulated — see
-    /// [`super::connection::Connection::replay_events`].
-    pub(super) replay: Sender<Sender<Vec<Event>>>,
+    /// Requests an atomic history/live handoff from the session owner.
+    /// The reply owns the subscription, so abandoning it revokes delivery.
+    pub(super) replay: Sender<crate::session::attachment::AttachRequest>,
     /// The session this one derives from -- `Some` only when this session
     /// was actually spawned isolated (see [`AgentdState::
     /// record_isolated_worktree`]); `docs/session-relationship-design.md`
@@ -405,7 +392,6 @@ mod tests {
     use super::*;
     use crate::session::test_support::state_with_rig_config;
     use crossbeam_channel::unbounded;
-    use horizon_agent::contract::Event;
 
     /// An id agentd has never hosted (or has already ended) reports no
     /// directory -- the "no source" case [`crate::worktree::resolve_isolation_source`]
@@ -425,7 +411,7 @@ mod tests {
         let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         let root = std::path::PathBuf::from("/tmp/plain-root");
         state.sessions.lock().unwrap().insert(
             session_id,
@@ -455,7 +441,7 @@ mod tests {
         let session_id = SessionId::new();
         let parent_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {

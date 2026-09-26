@@ -20,8 +20,9 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use super::attachment::{AgentUpdate, AttachmentState};
 use crossbeam_channel::Sender;
-use horizon_agent::contract::{self, Event, ProviderEvent};
+use horizon_agent::contract::{self, ProviderEvent};
 use horizon_agent::wire::{self, AgentWireEvent, HostToolRequest};
 use horizon_terminal_core::{TerminalCommand, TerminalFrame, TerminalUpdate};
 use uuid::Uuid;
@@ -50,7 +51,14 @@ impl<I: Copy> RouteKey<I> {
 
 struct AgentRoute {
     key: RouteKey<contract::SessionId>,
-    events: Sender<ProviderEvent>,
+    events: tokio::sync::mpsc::Sender<AgentUpdate>,
+    cancelled: tokio::sync::watch::Sender<bool>,
+}
+
+impl Drop for AgentRoute {
+    fn drop(&mut self) {
+        self.cancelled.send_replace(true);
+    }
 }
 
 /// The `horizon-agentd` connection's routes: per-agent-session event
@@ -119,14 +127,12 @@ impl AgentRoutes {
     pub(super) fn register_agent(
         &self,
         session_id: contract::SessionId,
-        sender: Sender<ProviderEvent>,
+        sender: tokio::sync::mpsc::Sender<AgentUpdate>,
     ) -> RouteKey<contract::SessionId> {
         let key = RouteKey::new(session_id);
         let mut state = self.state.lock().unwrap();
         if let Some(message) = state.failure.clone() {
-            let _ = sender.send(ProviderEvent::from(Event::Error(contract::Error {
-                message,
-            })));
+            let _ = sender.try_send(AgentUpdate::State(AttachmentState::Failed(message)));
             return key;
         }
         state.agent.insert(
@@ -134,6 +140,7 @@ impl AgentRoutes {
             AgentRoute {
                 key,
                 events: sender,
+                cancelled: tokio::sync::watch::channel(false).0,
             },
         );
         key
@@ -150,43 +157,56 @@ impl AgentRoutes {
         }
     }
 
-    pub(super) fn send_agent(&self, key: RouteKey<contract::SessionId>, event: ProviderEvent) {
-        let mut state = self.state.lock().unwrap();
-        if state
+    pub(super) async fn send_agent(
+        &self,
+        key: RouteKey<contract::SessionId>,
+        event: AgentUpdate,
+    ) -> bool {
+        let registration = self
+            .state
+            .lock()
+            .unwrap()
             .agent
             .get(&key.session_id)
-            .is_some_and(|route| route.key == key && route.events.send(event).is_err())
-        {
-            state.agent.remove(&key.session_id);
+            .filter(|route| route.key == key)
+            .map(|route| (route.events.clone(), route.cancelled.subscribe()));
+        let Some((sender, mut cancelled)) = registration else {
+            return false;
+        };
+        tokio::select! {
+            biased;
+            _ = cancelled.changed() => false,
+            permit = sender.reserve() => {
+                let Ok(permit) = permit else { return false; };
+                // Replacement/failure may have occurred while waiting for a
+                // slow view. Recheck under the same lock as route retirement.
+                let state = self.state.lock().unwrap();
+                if state.agent.get(&key.session_id).is_none_or(|route| route.key != key) { return false; }
+                permit.send(event);
+                true
+            }
         }
     }
 
     /// One incoming event from an agent attachment's channel, fanned to
     /// the pane (or the process-wide workspace-root channel).
-    pub(super) fn route_agent_event(
+    pub(super) async fn route_agent_event(
         &self,
         key: RouteKey<contract::SessionId>,
         event: AgentWireEvent,
-    ) {
-        match event {
-            AgentWireEvent::Event(event) => self.send_agent(key, ProviderEvent::from(event)),
+    ) -> bool {
+        let provider = match event {
+            AgentWireEvent::Event(event) => ProviderEvent::from(event),
             AgentWireEvent::ToolCallProgress(progress) => {
-                self.send_agent(key, ProviderEvent::tool_call_progress(progress));
+                ProviderEvent::tool_call_progress(progress)
             }
-            AgentWireEvent::ToolCallProgressClosed(key_value) => {
-                self.send_agent(key, ProviderEvent::ToolCallProgressClosed(key_value));
+            AgentWireEvent::ToolCallProgressClosed(key) => {
+                ProviderEvent::ToolCallProgressClosed(key)
             }
-            AgentWireEvent::TaskProgress(progress) => {
-                self.send_agent(key, ProviderEvent::task_progress(progress));
-            }
-            AgentWireEvent::SessionModel(model) => {
-                self.send_agent(key, ProviderEvent::session_model(model));
-            }
+            AgentWireEvent::TaskProgress(progress) => ProviderEvent::task_progress(progress),
+            AgentWireEvent::SessionModel(model) => ProviderEvent::session_model(model),
             AgentWireEvent::SessionSelection(selection) => {
-                self.send_agent(
-                    key,
-                    ProviderEvent::session_selection(selection.provider, selection.model),
-                );
+                ProviderEvent::session_selection(selection.provider, selection.model)
             }
             AgentWireEvent::WorkspaceRootResolved(resolved) => {
                 let state = self.state.lock().unwrap();
@@ -196,43 +216,46 @@ impl AgentRoutes {
                     .is_some_and(|route| route.key == key)
                 {
                     let _ = self.workspace_roots.send((key.session_id, resolved));
+                    return true;
                 }
+                return false;
             }
-        }
+            AgentWireEvent::ReplayStarted
+            | AgentWireEvent::ReplayComplete
+            | AgentWireEvent::AttachmentClosed(_) => {
+                unreachable!("attachment control is consumed before routing")
+            }
+        };
+        self.send_agent(key, AgentUpdate::Event(Box::new(provider)))
+            .await
     }
 
     pub(super) fn host_tool_request(&self, request: HostToolRequest) {
         let _ = self.host_tools.send(request);
     }
 
-    /// An agent attach/spawn call failed outright — surfaced into the
-    /// session's own transcript channel as an error event, the same shape
-    /// a connection-wide failure takes.
+    /// Transport failures are attachment state, never conversation events.
     pub(super) fn agent_failed(&self, key: RouteKey<contract::SessionId>, message: String) {
-        self.send_agent(
-            key,
-            ProviderEvent::from(Event::Error(contract::Error { message })),
-        );
+        let mut state = self.state.lock().unwrap();
+        if state
+            .agent
+            .get(&key.session_id)
+            .is_some_and(|route| route.key == key)
+        {
+            let route = state.agent.remove(&key.session_id).unwrap();
+            let _ = route
+                .events
+                .try_send(AgentUpdate::State(AttachmentState::Failed(message)));
+        }
     }
 
-    /// The agent runtime is gone: every registered agent session hears
-    /// about it, and later registrations inherit the sticky failure. No
-    /// terminal is touched — that is a different connection with a
-    /// different table.
     pub(super) fn connection_failed(&self, message: String) {
-        let agent_routes = {
-            let mut state = self.state.lock().unwrap();
-            state.failure = Some(message.clone());
-            state
-                .agent
-                .values()
-                .map(|route| route.events.clone())
-                .collect::<Vec<_>>()
-        };
-        for sender in agent_routes {
-            let _ = sender.send(ProviderEvent::from(Event::Error(contract::Error {
-                message: message.clone(),
-            })));
+        let mut state = self.state.lock().unwrap();
+        state.failure = Some(message.clone());
+        for (_, route) in state.agent.drain() {
+            let _ = route
+                .events
+                .try_send(AgentUpdate::State(AttachmentState::Failed(message.clone())));
         }
     }
 }

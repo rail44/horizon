@@ -22,7 +22,8 @@ use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;
 use super::environment::{EnvironmentLocation, PreparedEnvironment, SessionEnvironment};
 use super::events::{
-    persist_and_send_session_event, report_persistence_failure, send_session_event,
+    apply_and_send_session_events, persist_and_send_session_event, report_persistence_failure,
+    send_session_event,
 };
 use super::host_tools::AgentdHostTools;
 use super::panic::{
@@ -54,7 +55,7 @@ pub(super) fn run_session(
     restored_worktree: Option<WorktreeInfo>,
     state: &Arc<AgentdState>,
     inbound_rx: Receiver<Command>,
-    replay_rx: Receiver<Sender<Vec<Event>>>,
+    replay_rx: Receiver<crate::session::attachment::AttachRequest>,
     history: Vec<Event>,
     phase: &Cell<SessionLoopPhase>,
     retained_grants: Vec<horizon_sandbox::FilesystemGrant>,
@@ -77,17 +78,20 @@ pub(super) fn run_session(
     // immediate teardown; `spawn_session_thread`'s post-`run_session`
     // cleanup removes it regardless of how this function returns, so
     // nothing is leaked.
-    let (workspace_root, isolated) = if let Some(worktree) = restored_worktree {
-        (Some(worktree.path), true)
+    let (workspace_root, isolated, startup_warning) = if let Some(worktree) = restored_worktree {
+        (Some(worktree.path), true, None)
     } else if isolate {
-        resolve_and_create_isolated_worktree(
+        match resolve_and_create_isolated_worktree(
             state,
             session_id,
             spawn_source_session_id,
-            workspace_root,
-        )
+            workspace_root.clone(),
+        ) {
+            Ok(root) => (Some(root), true, None),
+            Err(warning) => (workspace_root, false, Some(warning)),
+        }
     } else {
-        (workspace_root, false)
+        (workspace_root, false, None)
     };
 
     // Repository-trust gate: resolved from the
@@ -162,6 +166,14 @@ pub(super) fn run_session(
         ),
         None => LiveState::with_disabled_persistence(),
     };
+    if let Some(message) = startup_warning {
+        apply_and_send_session_events(
+            state,
+            &live_state,
+            session_id,
+            vec![Event::Error(AgentError { message }).into()],
+        );
+    }
     if isolated
         && !live_state
             .events()
@@ -295,7 +307,7 @@ pub(super) fn run_session(
             recv(replay_rx) -> message => {
                 if let Ok(reply_tx) = message {
                     phase.set(SessionLoopPhase::Replay);
-                    let _ = reply_tx.send(live_state.replay_events());
+                    super::attachment::capture(state, session_id, &live_state, reply_tx);
                 }
             },
         }

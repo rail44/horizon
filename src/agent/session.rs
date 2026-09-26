@@ -9,7 +9,6 @@
 
 use std::time::Instant;
 
-use futures::StreamExt;
 use gpui::*;
 use horizon_agent::contract::{
     Command, MessageRole, TaskProgress, TaskProgressState, ToolCallIdentity,
@@ -19,12 +18,13 @@ use horizon_agent::live::LiveState;
 use horizon_workspace::SessionId;
 
 use crate::runtime::{
-    event_stream, AgentSessionHandle, NotifyCoalescer, NotifyDecision, RuntimeLink,
+    AgentSessionHandle, AgentUpdate, AttachmentState, NotifyCoalescer, NotifyDecision, RuntimeLink,
 };
 use crate::title::derive_session_title;
 
 pub(crate) struct AgentSession {
     pub(crate) frame: AgentFrame,
+    pub(crate) attachment: AttachmentState,
     /// The session's resolved model id, if known -- set once a
     /// `horizon_agent::wire::Control::SessionModel` announcement (folded via
     /// `LiveState::session_model`) arrives, either right after a fresh
@@ -43,10 +43,9 @@ pub(crate) struct AgentSession {
     pub(crate) selection: Option<horizon_agent::wire::ModelSelection>,
     /// Live background-`task` rows, in launch order: one entry per child
     /// still running, as last observed via `ProviderEvent::task_progress`
-    /// (`wire::AgentWireEvent::TaskProgress`). Ephemeral by design — never
-    /// rebuilt from the frame on re-attach, so a re-attached client sees a
-    /// child's row again at its next activity. Read by the pane's
-    /// background-tasks strip.
+    /// (`wire::AgentWireEvent::TaskProgress`). The daemon seeds current rows
+    /// during attachment bootstrap; later progress updates or retires them.
+    /// These rows are ephemeral and never enter conversation history.
     pub(crate) tasks: Vec<TaskProgress>,
     _wire: Option<AgentSessionHandle>,
     attachment_generation: u64,
@@ -95,20 +94,34 @@ impl AgentSession {
     }
 
     fn new_attachment(
-        handle: AgentSessionHandle,
+        mut handle: AgentSessionHandle,
         session_id: SessionId,
         title_tx: futures::channel::mpsc::UnboundedSender<(SessionId, Option<String>)>,
         attachment_generation: u64,
         cx: &mut Context<Self>,
     ) -> Self {
-        let mut events = event_stream(handle.events());
+        let mut events = handle.take_events();
         let live = LiveState::with_disabled_persistence();
         cx.spawn(async move |this, cx| {
-            while let Some(event) = events.next().await {
+            while let Some(update) = events.recv().await {
                 let apply = this.update(cx, |session: &mut AgentSession, cx| {
                     if session.attachment_generation != attachment_generation {
                         return;
                     }
+                    let event = match update {
+                        AgentUpdate::State(state) => {
+                            session.attachment = state;
+                            if session.attachment.is_closed() {
+                                session.link.mark_unreachable();
+                            }
+                            if session.attachment.is_ready() {
+                                session.link.mark_reachable();
+                            }
+                            cx.notify();
+                            return;
+                        }
+                        AgentUpdate::Event(event) => *event,
+                    };
                     // The view owns running-task rows; LiveState owns the
                     // conversation frame and session metadata.
                     if let horizon_agent::contract::ProviderEvent::TaskProgress(progress) = event {
@@ -129,9 +142,8 @@ impl AgentSession {
                     // (`refine_title_with_model`), once per attach.
                     session.derive_title_from_first_user_message();
                     session.refine_title_with_model(cx);
-                    // Stale-death recovery (backlog #35): an event
-                    // arriving means the runtime is reachable again.
-                    session.link.mark_reachable();
+                    // Reachability follows the explicit attachment boundary,
+                    // never an arbitrary event from a partial replay.
                     // The fold above is already applied -- only the
                     // notify is coalesced, so a burst's re-renders cap
                     // at the window rate while state never lags.
@@ -141,11 +153,19 @@ impl AgentSession {
                     return;
                 }
             }
+            let _ = this.update(cx, |session: &mut AgentSession, cx| {
+                if session.attachment_generation == attachment_generation {
+                    session.attachment.stream_ended();
+                    session.link.mark_unreachable();
+                    cx.notify();
+                }
+            });
         })
         .detach();
 
         Self {
             frame: AgentFrame::empty(),
+            attachment: AttachmentState::Connecting,
             model: None,
             selection: None,
             tasks: Vec::new(),

@@ -52,6 +52,12 @@ pub use hub::*;
 // channel is `wire::AgentAttachment::events` now.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub enum AgentWireEvent {
+    /// Start of this attachment's private history and metadata snapshot.
+    ReplayStarted,
+    /// Every snapshot item precedes this marker; live updates follow it.
+    ReplayComplete,
+    /// The attachment ended; the session itself may still be running.
+    AttachmentClosed(AttachmentEnd),
     /// A folded provider event — the transcript's raw material, identical
     /// to what the event log persists.
     Event(Event),
@@ -78,9 +84,8 @@ pub enum AgentWireEvent {
     /// the daemon-side task watcher mirroring what the child was last
     /// observed doing. Ephemeral like [`ToolCallProgress`]: a completion is
     /// recorded durably as a `MessageRole::TaskNotification` message; this
-    /// event only drives the client's live progress rows. Not emitted while
-    /// no client is attached, and not replayed on attach — a re-attached
-    /// client sees a child's row again at its next activity.
+    /// event only drives the client's live progress rows. The daemon retains
+    /// current running rows and seeds them during attachment bootstrap.
     TaskProgress(TaskProgress),
     /// The session's last applied *selection* — the `(provider, model)` pair
     /// a `set_session_model` call named (an echo of
@@ -94,6 +99,15 @@ pub enum AgentWireEvent {
     SessionSelection(ModelSelection),
     /// Close the preview identified by its streaming key.
     ToolCallProgressClosed(String),
+}
+
+/// Why an attachment ended. Reattach to obtain a fresh, complete snapshot.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub enum AttachmentEnd {
+    Replaced,
+    Lagged,
+    Detached,
+    SessionEnded,
 }
 
 impl AgentWireEvent {
@@ -278,6 +292,12 @@ mod tests {
     #[test]
     fn agent_wire_event_round_trips_each_variant() {
         let events = vec![
+            AgentWireEvent::ReplayStarted,
+            AgentWireEvent::ReplayComplete,
+            AgentWireEvent::AttachmentClosed(AttachmentEnd::Replaced),
+            AgentWireEvent::AttachmentClosed(AttachmentEnd::Lagged),
+            AgentWireEvent::AttachmentClosed(AttachmentEnd::Detached),
+            AgentWireEvent::AttachmentClosed(AttachmentEnd::SessionEnded),
             AgentWireEvent::Event(Event::ToolCallRequested(crate::contract::ToolCallRequest {
                 call_id: (crate::contract::ToolCallId("call-1".to_string())).clone(),
                 tool_id: "fs.read".to_string(),

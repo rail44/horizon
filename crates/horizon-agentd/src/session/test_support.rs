@@ -75,9 +75,7 @@ pub(super) fn judge_candidate(call_id: &str) -> ApprovalCandidate {
     }
 }
 
-pub(super) fn drain_events(
-    rx: &mut tokio::sync::mpsc::UnboundedReceiver<AgentWireEvent>,
-) -> Vec<Event> {
+pub(super) fn drain_events(rx: &mut tokio::sync::mpsc::Receiver<AgentWireEvent>) -> Vec<Event> {
     let mut events = Vec::new();
     while let Ok(wire_event) = rx.try_recv() {
         if let AgentWireEvent::Event(event) = wire_event {

@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use horizon_agent::config::AgentToolsConfig;
-use horizon_agent::contract::{Error as AgentError, Event, SessionId};
+use horizon_agent::contract::SessionId;
 use horizon_agent::tools::{RecallContext, ToolSessionBuilder};
 use horizon_agent::wire::{AgentWireEvent, WorkspaceRootResolved};
 
@@ -171,35 +171,15 @@ pub(super) fn skill_discovery_root(workspace_root: Option<&Path>) -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-/// Resolves and creates this session's isolated worktree (`docs/
-/// session-relationship-design.md` decisions 2-3), returning the directory
-/// its file tools should actually be confined to, plus whether isolation
-/// actually succeeded -- the latter is what `ToolSessionBuilder::
-/// with_isolated_worktree` needs (`docs/agent-approval-design.md`'s tier 1:
-/// the per-call trust predicate's isolation input must reflect the real
-/// outcome, never merely the request). Runs on the session's own dedicated
-/// thread, before `tool_session_state_for` -- a few tens of milliseconds of
-/// blocking `git` subprocess calls at session-start time, the same shape
-/// `state.wait_for_duckdb_store()` just above already accepts for this
-/// thread. Degrades gracefully on any failure (no git repo found, no
-/// commits yet, ...): falls back to `workspace_root` (today's
-/// shared-directory behavior) and records no lineage edge, since isolation
-/// didn't actually happen -- matching decision 2's "the edge exists only
-/// via isolation" for the *actual* outcome, not merely the request. A
-/// `contract::Event::Error` is also emitted so the failure is visible in
-/// the session's own transcript rather than only agentd's stderr.
-///
-/// On success, also pushes a live `Control::WorkspaceRootResolved`
-/// announcement (mirroring `resolve_and_announce_session_model`'s shape) so
-/// a UI connected for this whole session's lifetime sees the authoritative
-/// root/parent immediately, not just via a later resume/reload sweep -- see
-/// that `Control` variant's own doc comment.
+/// Resolve and create the real isolated root, recording its lineage only on
+/// success. The caller keeps the original root on failure and commits the
+/// returned warning after constructing LiveState, before attachment bootstrap.
 pub(super) fn resolve_and_create_isolated_worktree(
     state: &Arc<AgentdState>,
     session_id: SessionId,
     spawn_source_session_id: Option<SessionId>,
     workspace_root: Option<PathBuf>,
-) -> (Option<PathBuf>, bool) {
+) -> Result<PathBuf, String> {
     let fallback_dir = workspace_root
         .clone()
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/")));
@@ -219,23 +199,15 @@ pub(super) fn resolve_and_create_isolated_worktree(
                     parent_session_id: spawn_source_session_id,
                 }),
             );
-            (Some(root), true)
+            Ok(root)
         }
         Err(error) => {
             eprintln!(
                 "horizon-agentd: failed to create isolated worktree for {session_id:?}: {error}"
             );
-            send_session_event(
-                state,
-                session_id,
-                AgentWireEvent::Event(Event::Error(AgentError {
-                    message: format!(
-                        "failed to create an isolated worktree ({error}); continuing without \
-                         isolation"
-                    ),
-                })),
-            );
-            (workspace_root, false)
+            Err(format!(
+                "failed to create an isolated worktree ({error}); continuing without isolation"
+            ))
         }
     }
 }
@@ -563,7 +535,7 @@ mod tests {
 
         fn entry_with_root(
             inbound: Sender<Command>,
-            replay: Sender<Sender<Vec<Event>>>,
+            replay: Sender<crate::session::attachment::AttachRequest>,
             root: PathBuf,
         ) -> SessionEntry {
             SessionEntry {
@@ -595,7 +567,7 @@ mod tests {
             let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
             let parent_id = SessionId::new();
             let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-            let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+            let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
             state.sessions.lock().unwrap().insert(
                 session_id,
                 entry_with_root(inbound_tx, replay_tx, repo.path().to_path_buf()),
@@ -608,8 +580,6 @@ mod tests {
                 Some(repo.path().to_path_buf()),
             );
 
-            let (resolved, isolation_resolved) = resolved;
-            assert!(isolation_resolved, "success path must report resolved=true");
             let root = resolved.expect("isolation against a real git repo should succeed");
             assert!(
                 root.starts_with(repo.path().join(".horizon").join("worktrees")),
@@ -643,7 +613,7 @@ mod tests {
             let session_id = SessionId::new();
             let mut outgoing_rx = Connection::new(state.clone()).subscribe_agent(session_id);
             let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-            let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+            let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
             state.sessions.lock().unwrap().insert(
                 session_id,
                 entry_with_root(inbound_tx, replay_tx, not_a_repo.path().to_path_buf()),
@@ -656,14 +626,9 @@ mod tests {
                 Some(not_a_repo.path().to_path_buf()),
             );
 
-            assert_eq!(
-                resolved,
-                (Some(not_a_repo.path().to_path_buf()), false),
-                "a failed isolation must fall back to the plain workspace_root, resolved=false"
-            );
-            // An `Event::Error` is still sent (see the function's own doc
-            // comment) -- drain it before asserting nothing else follows.
-            let _ = outgoing_rx.try_recv();
+            assert!(resolved
+                .unwrap_err()
+                .contains("continuing without isolation"));
             assert!(
                 outgoing_rx.try_recv().is_err(),
                 "nothing should be announced when isolation never actually happened"

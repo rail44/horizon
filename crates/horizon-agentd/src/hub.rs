@@ -12,29 +12,23 @@
 //! [`SessionHub::drain`] (and therefore `Reload Agent Runtime`) safe to
 //! run as often as an agent-side rebuild demands.
 //!
-//! Bridging pattern, used by every attachment: the session side of the
-//! daemon is synchronous (std threads, crossbeam channels), so each remote
-//! channel gets a local unbounded tokio channel as its sync-sendable half,
-//! and a small async pump task that drains it into the remote `rch`
-//! sender. The receive side is not written here at all — it is
-//! [`horizon_wire::receive_pump`], the same loop terminald drives its
-//! inbound channels with, so adoption condition 2's skip-vs-fatal boundary
-//! has one definition rather than one per runtime. The *send* pumps stay
-//! local: a send error latches on the local sender, so they end the channel
-//! instead of skipping.
+//! Agent attachments use a bounded live mailbox and a private bootstrap
+//! captured by the session owner. `attachment` owns both channel directions
+//! and their revocable lease. Connection-global host-tool traffic keeps the
+//! independent receive pumps below.
 
-use horizon_agent::contract::{Command, SessionId};
+mod attachment;
+use horizon_agent::contract::SessionId;
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
-    agent_version_range, AgentAttachment, AgentWireEvent, HostToolRequest, HostToolResponse,
-    HubHello, ProviderSummary, SessionHub, SessionNew, SessionSummary,
+    agent_version_range, AgentAttachment, HostToolRequest, HostToolResponse, HubHello,
+    ProviderSummary, SessionHub, SessionNew, SessionSummary,
 };
 use horizon_wire::{
     receive_pump, ClientHello, HelloGate, HubError, WireCodec, CHANNEL_BUFFER,
-    COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    CONTROL_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
 };
 use remoc::rch;
-use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::session::Connection;
 use crate::DAEMON_NAME;
@@ -55,44 +49,6 @@ impl Hub {
             connection,
             binary_id,
             hello: HelloGate::new(),
-        }
-    }
-
-    /// Wires one agent attachment: local event bridge → remote events
-    /// channel, remote commands channel → the session thread's inbound
-    /// queue.
-    fn agent_attachment(
-        &self,
-        session_id: SessionId,
-        mut local_events: UnboundedReceiver<AgentWireEvent>,
-    ) -> AgentAttachment {
-        let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(CHANNEL_BUFFER);
-        // Tool I/O size cap (events carry `JsonValue` payloads) -- see
-        // `TOOL_IO_MAX_ITEM_BYTES`'s doc.
-        let event_rx = event_rx.set_max_item_size::<TOOL_IO_MAX_ITEM_BYTES>();
-        tokio::spawn(async move {
-            while let Some(event) = local_events.recv().await {
-                if let Err(err) = event_tx.send(event).await {
-                    // See the terminal-update pump: send errors latch, so
-                    // the attachment ends rather than skip-looping.
-                    eprintln!("horizon-agentd: closing an agent event attachment: {err}");
-                    break;
-                }
-            }
-        });
-
-        let (mut command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(CHANNEL_BUFFER);
-        command_tx.set_max_item_size(COMMAND_MAX_ITEM_BYTES);
-        let connection = self.connection.clone();
-        tokio::spawn(receive_pump(
-            command_rx,
-            "horizon-agentd agent commands",
-            move |command| connection.route_command(session_id, command),
-        ));
-
-        AgentAttachment {
-            events: event_rx,
-            commands: command_tx,
         }
     }
 }
@@ -195,32 +151,30 @@ impl SessionHub for Hub {
         self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
         let session_id = new.session_id;
-        let local_events = self.connection.subscribe_agent(session_id);
-        self.connection.handle_session_new(new);
-        Ok(self.agent_attachment(session_id, local_events))
+        let connection = self.connection.clone();
+        tokio::task::spawn_blocking(move || connection.handle_session_new(new))
+            .await
+            .map_err(|error| HubError::Call(format!("Session startup failed: {error}")))?
+            .map_err(HubError::Call)?;
+        let bootstrap = self
+            .connection
+            .attach(session_id)
+            .await
+            .map_err(HubError::Call)?;
+        Ok(attachment::start(bootstrap))
     }
 
-    /// The old `Control::SessionLoad`: subscribe, replay the session's
-    /// committed events, re-announce its resolved model, then live events
-    /// flow — all in order through the same bridge. An unknown session id
-    /// succeeds with an empty replay, as before.
+    /// The session owner captures history and subscribes at the same event
+    /// boundary. The attachment pump sends that snapshot before live updates.
     async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
         self.hello.require()?;
         self.connection.wait_until_resume_ready().await;
-        let local_events = self.connection.subscribe_agent(session_id);
-        for event in self.connection.replay_events(session_id).await {
-            self.connection
-                .send_session_event(session_id, AgentWireEvent::Event(event));
-        }
-        if let Some(model) = self.connection.session_model(session_id) {
-            self.connection
-                .send_session_event(session_id, AgentWireEvent::SessionModel(model));
-        }
-        if let Some(selection) = self.connection.session_selection(session_id) {
-            self.connection
-                .send_session_event(session_id, AgentWireEvent::SessionSelection(selection));
-        }
-        Ok(self.agent_attachment(session_id, local_events))
+        let bootstrap = self
+            .connection
+            .attach(session_id)
+            .await
+            .map_err(HubError::Call)?;
+        Ok(attachment::start(bootstrap))
     }
 
     /// Since v17 this kills nothing the user is looking at: every PTY lives
@@ -287,28 +241,8 @@ impl SessionHub for Hub {
     }
 }
 
-/// Blocks until every event-log record enqueued so far has actually been
-/// written and flushed to disk (see [`WriterHandle::flush`]'s doc comment),
-/// then returns. An `Appender::append_provider_events` call only enqueues
-/// onto the writer's own background thread; forwarding the resulting event
-/// to a connected client happens after that same enqueue, not after it
-/// becomes durable. Without this, a client observing a session's latest
-/// event over the wire and then shutting the daemon down could still race
-/// the writer's thread and lose it.
-///
-/// **Every exit this process can intercept calls this**, and there are
-/// exactly two: [`SessionHub::drain`] (right before
-/// `std::process::exit(0)`) and [`crate::run`]'s SIGTERM arm — a plain
-/// `kill`, which is what an operator is told to use to stop this daemon by
-/// hand, and which used to unlink the socket and return without flushing.
-/// The durability boundary is therefore only what no handler can run
-/// ahead of: SIGKILL, and a crash. Those lose whatever was still queued on
-/// the writer's channel and can leave a torn final line, which
-/// `event_log::read` tolerates (`ReadReport::ignored_partial_line`).
-///
-/// A blocking call is safe on both paths despite running on an async task:
-/// nothing else the runtime hosts still needs to make progress by the time
-/// either caller reaches this.
+/// Flush queued log work on graceful daemon exit. Session publication already
+/// waits for its own commit; the exit barrier also covers non-session appends.
 pub(crate) fn flush_event_log_before_exit(writer: Option<WriterHandle>) {
     if let Some(writer) = writer {
         if let Err(error) = writer.flush() {

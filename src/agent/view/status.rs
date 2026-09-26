@@ -7,6 +7,7 @@ use horizon_agent::frame::state_indicates_turn_in_flight;
 
 use super::super::session::AgentSession;
 use super::transcript::render_stop_button;
+use crate::runtime::AttachmentState;
 use crate::theme;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,7 +18,7 @@ enum StatusTone {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct StatusProjection {
-    text: &'static str,
+    text: String,
     tone: StatusTone,
     turn_in_flight: bool,
 }
@@ -45,7 +46,7 @@ fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> Sta
     // bit keeps Stop reachable even while that error is shown.
     if runtime_unreachable {
         return StatusProjection {
-            text: "session runtime unreachable — try Reload Agent Runtime",
+            text: "session runtime unreachable — try Reload Agent Runtime".into(),
             tone: StatusTone::Danger,
             turn_in_flight: state_indicates_turn_in_flight(state),
         };
@@ -53,9 +54,27 @@ fn project_status(state: Option<SessionState>, runtime_unreachable: bool) -> Sta
 
     let text = state.and_then(session_state_label).unwrap_or("");
     StatusProjection {
-        text,
+        text: text.into(),
         tone: StatusTone::Muted,
         turn_in_flight: state_indicates_turn_in_flight(state),
+    }
+}
+
+fn attachment_status(session: &AgentSession) -> StatusProjection {
+    let (text, tone) = match &session.attachment {
+        AttachmentState::Connecting => ("connecting…".into(), StatusTone::Muted),
+        AttachmentState::Restoring => ("restoring session history…".into(), StatusTone::Muted),
+        AttachmentState::Failed(message) | AttachmentState::Disconnected(message) => {
+            (message.clone(), StatusTone::Danger)
+        }
+        AttachmentState::Ready => {
+            return project_status(session.frame.state, session.runtime_unreachable())
+        }
+    };
+    StatusProjection {
+        text,
+        tone,
+        turn_in_flight: false,
     }
 }
 
@@ -69,7 +88,7 @@ impl AgentStatus {
         let projection = Self::project(&session, cx);
         let subscription = cx.observe(&session, |status: &mut Self, session, cx| {
             let session = session.read(cx);
-            let next = project_status(session.frame.state, session.runtime_unreachable());
+            let next = attachment_status(session);
             if status.projection != next {
                 status.projection = next;
                 cx.notify();
@@ -83,7 +102,7 @@ impl AgentStatus {
 
     fn project(session: &Entity<AgentSession>, cx: &App) -> StatusProjection {
         let session = session.read(cx);
-        project_status(session.frame.state, session.runtime_unreachable())
+        attachment_status(session)
     }
 }
 
@@ -102,7 +121,7 @@ impl Render for AgentStatus {
             div()
                 .text_size(px(11.0))
                 .text_color(color)
-                .child(self.projection.text),
+                .child(self.projection.text.clone()),
         );
         if self.projection.turn_in_flight {
             bar = bar.right(render_stop_button("status-line-stop"));

@@ -149,6 +149,7 @@ impl std::fmt::Debug for AgentCall {
 /// Scripted behavior shared by both fake hubs.
 #[derive(Default)]
 struct FakeBehavior {
+    manual_agent_bootstrap: bool,
     /// Reject `hello` with a version-range error.
     reject_hello: bool,
     /// Never answer `hello` (the call blocks forever) — for the
@@ -204,10 +205,15 @@ impl FakeTerminalHub {
 }
 
 impl FakeSessionHub {
-    fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
+    async fn agent_attachment(&self) -> (AgentAttachment, AgentPeer) {
         let (event_tx, event_rx) = rch::mpsc::channel::<AgentWireEvent, WireCodec>(16);
         let event_rx = event_rx.set_max_item_size::<{ horizon_wire::TOOL_IO_MAX_ITEM_BYTES }>();
         let (command_tx, command_rx) = rch::mpsc::channel::<Command, WireCodec>(16);
+        let automatic = !self.behavior.lock().unwrap().manual_agent_bootstrap;
+        if automatic {
+            event_tx.send(AgentWireEvent::ReplayStarted).await.unwrap();
+            event_tx.send(AgentWireEvent::ReplayComplete).await.unwrap();
+        }
         (
             AgentAttachment {
                 events: event_rx,
@@ -370,13 +376,13 @@ impl SessionHub for FakeSessionHub {
     }
 
     async fn new_agent(&self, new: SessionNew) -> Result<AgentAttachment, HubError> {
-        let (attachment, peer) = self.agent_attachment();
+        let (attachment, peer) = self.agent_attachment().await;
         let _ = self.calls.send(AgentCall::NewAgent { new, peer });
         Ok(attachment)
     }
 
     async fn attach_agent(&self, session_id: SessionId) -> Result<AgentAttachment, HubError> {
-        let (attachment, peer) = self.agent_attachment();
+        let (attachment, peer) = self.agent_attachment().await;
         let _ = self.calls.send(AgentCall::AttachAgent { session_id, peer });
         Ok(attachment)
     }
@@ -578,19 +584,14 @@ fn an_agent_runtime_failure_does_not_touch_terminal_routes() {
     let (command_tx, _command_rx) = tokio::sync::mpsc::unbounded_channel();
     terminal_routes.register_terminal(terminal_id, frame_tx, terminal_event_tx, command_tx);
     let agent_id = SessionId::new();
-    let (agent_event_tx, agent_event_rx) = unbounded();
+    let (agent_event_tx, mut agent_event_rx) = tokio::sync::mpsc::channel(16);
     agent_routes.register_agent(agent_id, agent_event_tx);
 
     agent_routes.connection_failed("the agent runtime died".to_string());
 
     assert!(matches!(
-        agent_event_rx
-            .recv_timeout(Duration::from_secs(1))
-            .unwrap()
-            .clone()
-            .into_event()
-            .expect("conversation event"),
-        Event::Error(_)
+        agent_event_rx.try_recv().unwrap(),
+        AgentUpdate::State(AttachmentState::Failed(_))
     ));
     assert!(
         terminal_event_rx
@@ -653,7 +654,8 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
     let terminal_id = Uuid::new_v4();
     let terminal = terminald.start_terminal(terminal_id, spec());
     let agent_id = SessionId::new();
-    let agent = agentd.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
+    let mut agent =
+        agentd.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
     let (mut terminal_calls, _tconn, _tserve) =
         serve_fake_terminal_hub(terminal_server, FakeBehavior::default()).await;
@@ -694,16 +696,7 @@ async fn terminal_ops_go_to_terminald_and_agent_ops_go_to_agentd() {
         .unwrap();
 
     assert_eq!(recv_frame(terminal.frames(), "terminal").await, frame);
-    assert_eq!(
-        agent
-            .events()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .clone()
-            .into_event()
-            .expect("conversation event"),
-        event
-    );
+    assert_eq!(next_agent_event(&mut agent).await, event);
     let mut commands = terminal_peer.commands;
     let command = tokio::time::timeout(Duration::from_secs(5), commands.recv())
         .await
@@ -1089,7 +1082,8 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let (handle, _host_tools, _workspace_roots) = AgentdHandle::start_on_stream(client);
     let agent_id = SessionId::new();
-    let agent = handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
+    let mut agent =
+        handle.start_session(agent_id, ProviderId("mock".into()), None, None, None, false);
 
     let (mut calls, conn, serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
     assert!(matches!(
@@ -1102,13 +1096,10 @@ async fn established_disconnect_reports_errors_without_reconnecting() {
     conn.abort();
     serve.abort();
 
-    let agent_error = agent.events().recv_timeout(Duration::from_secs(5)).unwrap();
+    let agent_error = next_agent_update(&mut agent).await;
     assert!(matches!(
-        agent_error
-            .clone()
-            .into_event()
-            .expect("conversation event"),
-        Event::Error(_)
+        agent_error,
+        AgentUpdate::State(AttachmentState::Failed(_))
     ));
 
     assert!(handle
@@ -1167,7 +1158,7 @@ async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
         error.contains("runtime stopped"),
         "the runtime should stop after a rejected hello; error was: {error}"
     );
-    let agent = handle.start_session(
+    let mut agent = handle.start_session(
         SessionId::new(),
         ProviderId("mock".into()),
         None,
@@ -1175,14 +1166,14 @@ async fn a_rejected_hello_on_a_test_stream_is_a_terminal_failure() {
         None,
         false,
     );
-    let event = agent.events().recv_timeout(Duration::from_secs(5)).unwrap();
-    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
+    let event = next_agent_update(&mut agent).await;
+    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
         panic!("expected the rejection to fan out as an error, got {event:?}");
     };
     assert!(
-        error.message.contains("rejected the handshake"),
+        message.contains("rejected the handshake"),
         "error was: {}",
-        error.message
+        message
     );
 }
 
@@ -1288,7 +1279,7 @@ async fn a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop() {
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         AgentdHandle::start(&socket_path, &control_socket);
-    let agent = handle.start_session(
+    let mut agent = handle.start_session(
         SessionId::new(),
         ProviderId("mock".into()),
         None,
@@ -1321,17 +1312,14 @@ async fn a_pre_remoc_daemon_is_reported_as_needing_a_manual_stop() {
 
     // The daemon is still there, so the drain could not be confirmed: the
     // runtime says so, naming the manual fix, and stops.
-    let event = agent
-        .events()
-        .recv_timeout(Duration::from_secs(30))
-        .unwrap();
-    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
+    let event = next_agent_update(&mut agent).await;
+    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
         panic!("expected the unrecoverable mismatch to fan out as an error, got {event:?}");
     };
     assert!(
-        error.message.contains("stop it manually"),
+        message.contains("stop it manually"),
         "error was: {}",
-        error.message
+        message
     );
 
     drop(handle);
@@ -1349,7 +1337,7 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         AgentdHandle::start(&socket_path, &control_socket);
-    let agent = handle.start_session(
+    let mut agent = handle.start_session(
         SessionId::new(),
         ProviderId("mock".into()),
         None,
@@ -1382,17 +1370,14 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
 
     // The runtime gives up rather than draining again, with the rebuild
     // hint, fanned out to the registered routes.
-    let event = agent
-        .events()
-        .recv_timeout(Duration::from_secs(30))
-        .unwrap();
-    let Event::Error(error) = event.clone().into_event().expect("conversation event") else {
+    let event = next_agent_update(&mut agent).await;
+    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
         panic!("expected the fatal mismatch to fan out as an error, got {event:?}");
     };
     assert!(
-        error.message.contains("already attempted") && error.message.contains("rebuild"),
+        message.contains("already attempted") && message.contains("rebuild"),
         "error was: {}",
-        error.message
+        message
     );
     let no_more_connections =
         tokio::time::timeout(Duration::from_millis(500), listener.accept()).await;
@@ -1717,7 +1702,7 @@ async fn replacing_an_agent_handle_keeps_the_new_wire_attachment_live() {
     else {
         panic!("expected the old attachment");
     };
-    let current = agentd.attach_session(id);
+    let mut current = agentd.attach_session(id);
     let AgentCall::AttachAgent {
         session_id,
         mut peer,
@@ -1732,16 +1717,7 @@ async fn replacing_an_agent_handle_keeps_the_new_wire_attachment_live() {
         .send(AgentWireEvent::Event(event.clone()))
         .await
         .unwrap();
-    assert_eq!(
-        current
-            .events()
-            .recv_timeout(Duration::from_secs(5))
-            .unwrap()
-            .clone()
-            .into_event()
-            .expect("conversation event"),
-        event
-    );
+    assert_eq!(next_agent_event(&mut current).await, event);
     current.sender().send(Command::ContinueTurn).unwrap();
     assert_eq!(
         tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
@@ -1796,5 +1772,116 @@ async fn replacing_a_terminal_handle_keeps_the_new_wire_attachment_live() {
             .unwrap()
             .unwrap(),
         Some(input)
+    );
+}
+
+async fn next_agent_update(handle: &mut AgentSessionHandle) -> AgentUpdate {
+    let events = handle.events.as_mut().unwrap();
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let update = events.recv().await.expect("agent update stream ended");
+            if matches!(
+                update,
+                AgentUpdate::State(
+                    AttachmentState::Connecting
+                        | AttachmentState::Restoring
+                        | AttachmentState::Ready
+                )
+            ) {
+                continue;
+            }
+            return update;
+        }
+    })
+    .await
+    .expect("agent update timed out")
+}
+
+async fn next_agent_event(handle: &mut AgentSessionHandle) -> Event {
+    match next_agent_update(handle).await {
+        AgentUpdate::Event(event) => event.into_event().expect("conversation event"),
+        update => panic!("expected conversation event, got {update:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn agent_commands_wait_for_replay_completion_and_incomplete_replay_fails() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let mut handle = agentd.attach_session(SessionId::new());
+    let (mut calls, _conn, _serve) = serve_fake_session_hub(
+        server,
+        FakeBehavior {
+            manual_agent_bootstrap: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    next_agent_call(&mut calls).await;
+    let AgentCall::AttachAgent { mut peer, .. } = next_agent_call(&mut calls).await else {
+        panic!("attach");
+    };
+    handle.sender().send(Command::ContinueTurn).unwrap();
+    peer.events
+        .send(AgentWireEvent::ReplayStarted)
+        .await
+        .unwrap();
+    peer.events
+        .send(AgentWireEvent::Event(Event::StateChanged(
+            SessionState::Running,
+        )))
+        .await
+        .unwrap();
+    assert_eq!(
+        next_agent_event(&mut handle).await,
+        Event::StateChanged(SessionState::Running)
+    );
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), peer.commands.recv())
+            .await
+            .is_err()
+    );
+    peer.events
+        .send(AgentWireEvent::ReplayComplete)
+        .await
+        .unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(5), peer.commands.recv())
+            .await
+            .unwrap()
+            .unwrap(),
+        Some(Command::ContinueTurn)
+    );
+
+    let mut interrupted = agentd.attach_session(SessionId::new());
+    let AgentCall::AttachAgent { peer, .. } = next_agent_call(&mut calls).await else {
+        panic!("attach");
+    };
+    peer.events
+        .send(AgentWireEvent::ReplayStarted)
+        .await
+        .unwrap();
+    drop(peer.events);
+    assert!(
+        matches!(next_agent_update(&mut interrupted).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("interrupted"))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn repeated_replay_boundary_fails_without_becoming_a_conversation_error() {
+    let (client, server) = tokio::io::duplex(64 * 1024);
+    let (agentd, _host, _roots) = AgentdHandle::start_on_stream(client);
+    let mut handle = agentd.attach_session(SessionId::new());
+    let (mut calls, _conn, _serve) = serve_fake_session_hub(server, FakeBehavior::default()).await;
+    next_agent_call(&mut calls).await;
+    let AgentCall::AttachAgent { peer, .. } = next_agent_call(&mut calls).await else {
+        panic!("attach");
+    };
+    peer.events
+        .send(AgentWireEvent::ReplayStarted)
+        .await
+        .unwrap();
+    assert!(
+        matches!(next_agent_update(&mut handle).await, AgentUpdate::State(AttachmentState::Failed(message)) if message.contains("boundary"))
     );
 }

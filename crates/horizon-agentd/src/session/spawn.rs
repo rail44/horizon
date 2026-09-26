@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::thread;
 
-use crossbeam_channel::{unbounded, Sender};
+use crossbeam_channel::unbounded;
 
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
 use horizon_agent::roles::RoleId;
@@ -33,7 +33,7 @@ use crate::worktree::{self, WorktreeInfo};
 /// (`AgentdHandle::start_session` registers the session's route before
 /// sending `SessionNew`), so it sees this immediately; a resumed session
 /// spawned at daemon startup usually has no connection yet
-/// ([`send_session_event`] silently drops it then) -- [`super::connection::Connection::session_model`]
+/// ([`send_session_event`] silently drops it then) -- [`super::attachment::capture`]
 /// re-announces the same value for that case, from `Control::SessionLoad`'s
 /// handler. See `docs/agent-output-ui-amendment.md`'s dated model-chip
 /// addendum.
@@ -157,7 +157,7 @@ pub(super) fn spawn_session_thread_with_context(
         return;
     }
     let (inbound_tx, inbound_rx) = unbounded::<Command>();
-    let (replay_tx, replay_rx) = unbounded::<Sender<Vec<Event>>>();
+    let (replay_tx, replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
     let (model, selection) =
         resolve_and_announce_session_model(&state, session_id, &provider_id, role_id.as_ref());
     let restored_root = restored_worktree
@@ -251,6 +251,7 @@ pub(super) fn spawn_session_thread_with_context(
             horizon_agent::tools::drain_session_work(session_id, std::time::Duration::from_secs(5));
         let _lifecycle = lock_unpoisoned(&thread_state.lifecycle);
         let entry = lock_unpoisoned(&thread_state.sessions).remove(&session_id);
+        lock_unpoisoned(&thread_state.agent_subscribers).remove(&session_id);
         if let Some(worktree) = entry.and_then(|entry| entry.worktree) {
             if !work_settled || !worktree::remove_worktree_if_clean(&worktree) {
                 eprintln!(

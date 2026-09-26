@@ -4,39 +4,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use horizon_agent::contract::{Command, Event, SessionId};
+use horizon_agent::contract::SessionId;
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::wire::{
-    AgentWireEvent, HostToolRequest, HostToolResponse, ProviderSummary, SessionNew, SessionSummary,
+    HostToolRequest, HostToolResponse, ProviderSummary, SessionNew, SessionSummary,
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use super::events::send_session_event;
 use super::spawn::spawn_session_thread;
 use super::state::{lock_unpoisoned, AgentdState};
 
-/// How long [`Connection::replay_events`] waits for a live session's own
-/// thread to answer a replay request. **Not** purely a local channel hop:
-/// a just-resumed session's thread does real work before it ever reaches
-/// the loop that drains the `replay` channel, including blocking on
-/// [`AgentdState::wait_for_duckdb_store`] -- which is deliberately *not*
-/// ordered against [`AgentdState::mark_resume_ready`] (`Control::
-/// SessionList`/`SessionLoad`'s own readiness gate), so a client can see a
-/// resumed session as "listed" before its thread has gotten anywhere near
-/// this channel. Under real contention (many agentd processes competing
-/// for CPU/disk, e.g. the full workspace test suite running in parallel)
-/// that DuckDB rebuild-or-open wait can genuinely take several seconds,
-/// and a timeout here has no way to distinguish "thread not there yet"
-/// from "session truly has no history" -- it silently falls back to an
-/// empty `Vec` either way (see the call site). A production `session_load`
-/// racing this hard would misreport a real session as empty, so this is
-/// sized generously to make that misfire vanishingly rare while still
-/// bounding a genuinely wedged session thread. (Originally 5s -- too tight
-/// under load, see `docs/tasks/backlog.md` #27. This crate's e2e tests
-/// independently hit a comparable real-PTY stall past 60s under a
-/// deliberately extreme concurrent `cargo build --release` loop during that
-/// fix's own validation -- see `TERMINAL_UPDATE_TIMEOUT`'s doc comment in
-/// `tests/e2e.rs` -- so this is sized with the same margin.)
+/// A resumed session may still be waiting for its DuckDB projection.
+/// Timeout is an explicit failure, never a successful empty history.
 const REPLAY_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// One connection's view onto the process-lifetime [`AgentdState`] — thin by
@@ -170,7 +149,7 @@ impl Connection {
 
     /// Installs the current connection's host-tool bridge (the local half
     /// behind `HubHello::host_tools`) — the connection-global counterpart
-    /// of the per-attachment subscribers [`Self::subscribe_agent`] installs.
+    /// of the per-attachment subscriptions installed by [`Self::attach`].
     pub(crate) fn connect_host_tools(&self, outgoing: UnboundedSender<HostToolRequest>) {
         *self.state.host_tools_outgoing.lock().unwrap() = Some(outgoing);
     }
@@ -180,37 +159,40 @@ impl Connection {
     /// into a bridge whose pump already died with the connection. The
     /// per-session subscribers are deliberately *not* swept here: each
     /// attachment's bridge dies with its own pump, and
-    /// [`send_session_event`] already drops an entry lazily on its first
+    /// [`super::events::send_session_event`] already drops an entry lazily on its first
     /// failed send (a fresh attach replaces it anyway).
     pub(crate) fn disconnect(&self) {
         *self.state.host_tools_outgoing.lock().unwrap() = None;
     }
 
-    /// Subscribes an attachment to `session_id`'s wire events, replacing
-    /// any previous attachment's subscription (one client connection at a
-    /// time; a re-attach supersedes). Returns the local receiving half the
-    /// hub pumps into the attachment's remote channel.
+    #[cfg(test)]
     pub(crate) fn subscribe_agent(
         &self,
         session_id: SessionId,
-    ) -> tokio::sync::mpsc::UnboundedReceiver<AgentWireEvent> {
-        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
-        lock_unpoisoned(&self.state.agent_subscribers).insert(session_id, tx);
-        rx
-    }
-
-    /// Pushes a session-scoped wire event to the session's current
-    /// subscriber, if any — the hub's own send path (replay, model
-    /// re-announcement), same semantics as every session thread's sends.
-    pub(crate) fn send_session_event(&self, session_id: SessionId, event: AgentWireEvent) {
-        send_session_event(&self.state, session_id, event);
+    ) -> tokio::sync::mpsc::Receiver<horizon_agent::wire::AgentWireEvent> {
+        super::attachment::subscribe(&self.state, session_id)
     }
 
     /// Spawns the session thread for a `Control::SessionNew`. Reuses the
     /// crate's existing spawn shape (`ProviderRegistry::start_session`) --
     /// the same call the deleted in-process agent runtime used to make
     /// before every agent session moved here.
-    pub(crate) fn handle_session_new(&self, new: SessionNew) {
+    pub(crate) fn handle_session_new(&self, new: SessionNew) -> Result<(), String> {
+        let _lifecycle = lock_unpoisoned(&self.state.lifecycle);
+        if self.state.session_exists(new.session_id) {
+            return Err("Session already exists; attach to it instead".into());
+        }
+        if let Some(failure) = self.state.writer().and_then(|writer| writer.failure()) {
+            return Err(format!("Cannot start session: event log failed: {failure}"));
+        }
+        if !lock_unpoisoned(&self.state.providers).contains(&new.provider_id) {
+            return Err(format!("Unknown agent provider {}", new.provider_id.0));
+        }
+        if let Some(role) = &new.role_id {
+            if horizon_agent::roles::resolve(role).is_none() {
+                return Err(format!("Unknown role `{}`", role.0));
+            }
+        }
         spawn_session_thread(
             self.state.clone(),
             new.session_id,
@@ -222,15 +204,7 @@ impl Connection {
             None,
             Vec::new(),
         );
-    }
-
-    /// Routes a `Command` envelope scoped to `session_id` to that session's
-    /// thread. A miss (unknown session id -- stale/mistargeted envelope) is
-    /// logged and dropped rather than panicking.
-    pub(crate) fn route_command(&self, session_id: SessionId, command: Command) {
-        if !self.state.send_command(session_id, command) {
-            eprintln!("horizon-agentd: command for unknown session {session_id:?}");
-        }
+        Ok(())
     }
 
     /// Routes an incoming `Control::HostToolResponse` back to whichever
@@ -306,7 +280,8 @@ impl Connection {
     /// doc comment. `None` for an unknown `session_id` too (a stale/racing
     /// `session_load`), same "nothing to report" shape [`Self::session_list`]
     /// uses for a missing entry.
-    pub(crate) fn session_model(&self, session_id: SessionId) -> Option<String> {
+    #[cfg(test)]
+    fn session_model(&self, session_id: SessionId) -> Option<String> {
         self.state
             .sessions
             .lock()
@@ -315,73 +290,39 @@ impl Connection {
             .and_then(|entry| entry.model.clone())
     }
 
-    /// This session's last applied selection, if any -- see
-    /// [`super::state::SessionEntry::selection`]'s doc comment. `None` for an
-    /// unknown `session_id` too, the same shape [`Self::session_model`] uses.
-    pub(crate) fn session_selection(
-        &self,
-        session_id: SessionId,
-    ) -> Option<horizon_agent::wire::ModelSelection> {
-        self.state
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .and_then(|entry| entry.selection.clone())
-    }
-
-    /// Delegates to [`AgentdState::writer`] -- the hub's `drain` uses this
-    /// to flush the event log's writer channel to disk before the process
-    /// exits (`crate::run`'s SIGTERM arm does the same, straight off
-    /// [`AgentdState::writer`], since it has no connection in hand). An
-    /// `append` returning only means a record was *enqueued*; the writer's
-    /// background thread is what actually writes and flushes it (see
-    /// `WriterHandle::open`'s "Ordering guarantee" doc comment), and
-    /// forwarding an event to this connection over the wire happens after
-    /// that same enqueue, not after it's durable. Without this, a client
-    /// that drains right after observing a session's latest event over the
-    /// wire could still race the writer and lose it -- unlike a `kill -9`,
-    /// an exit this process actually gets to run code on has no excuse to
-    /// ever do that.
+    /// The hub's graceful-exit flush barrier, including non-session appends.
     pub(crate) fn writer(&self) -> Option<WriterHandle> {
         self.state.writer()
     }
 
-    /// Handles `Control::SessionLoad`: asks `session_id`'s own thread (if
-    /// live) to hand back everything its `LiveState::events()` has
-    /// accumulated -- already-committed history plus anything folded in
-    /// since -- so the caller (the hub's `attach_agent`) can forward it to
-    /// the requesting client as ordinary session events. Per the
-    /// design's "v1 bootstrap" note, this is exactly the events list, not a
-    /// server-side frame snapshot (a later optimization). An unknown
-    /// session id resolves to an empty list rather than an error -- nothing
-    /// to replay.
-    ///
-    /// Runs the actual wait on a `spawn_blocking` thread rather than
-    /// blocking this async call's caller directly, so a slow (or wedged)
-    /// session thread can't stall this connection's envelope-reading loop
-    /// for unrelated traffic.
-    pub(crate) async fn replay_events(&self, session_id: SessionId) -> Vec<Event> {
-        let replay_tx = self
-            .state
-            .sessions
-            .lock()
-            .unwrap()
-            .get(&session_id)
-            .map(|entry| entry.replay.clone());
-        let Some(replay_tx) = replay_tx else {
-            return Vec::new();
-        };
+    /// Capture and register on the session's own thread. Cancelling this wait
+    /// drops the reply receiver; a late reply drops its lease automatically.
+    pub(crate) async fn attach(
+        &self,
+        session_id: SessionId,
+    ) -> Result<super::attachment::Bootstrap, String> {
+        self.attach_with_timeout(session_id, REPLAY_TIMEOUT).await
+    }
 
-        tokio::task::spawn_blocking(move || {
-            let (reply_tx, reply_rx) = crossbeam_channel::bounded(1);
-            if replay_tx.send(reply_tx).is_err() {
-                return Vec::new();
-            }
-            reply_rx.recv_timeout(REPLAY_TIMEOUT).unwrap_or_default()
-        })
-        .await
-        .unwrap_or_default()
+    pub(super) async fn attach_with_timeout(
+        &self,
+        session_id: SessionId,
+        timeout: Duration,
+    ) -> Result<super::attachment::Bootstrap, String> {
+        let request = lock_unpoisoned(&self.state.sessions)
+            .get(&session_id)
+            .map(|entry| entry.replay.clone())
+            .ok_or_else(|| format!("Unknown agent session {session_id:?}"))?;
+        let (reply, response) = tokio::sync::oneshot::channel();
+        request
+            .send(reply)
+            .map_err(|_| "Session ended before history could be restored".to_string())?;
+        tokio::time::timeout(timeout, response)
+            .await
+            .map_err(|_| {
+                "Timed out restoring session history; reopen the session to retry".to_string()
+            })?
+            .map_err(|_| "Session ended while restoring history".to_string())
     }
 }
 
@@ -390,8 +331,9 @@ mod tests {
     use super::*;
     use crate::session::state::SessionEntry;
     use crate::session::test_support::{state_with_rig_config, test_state};
-    use crossbeam_channel::{unbounded, Sender};
+    use crossbeam_channel::unbounded;
     use horizon_agent::config::{NamedProviderConfig, ProviderKind, ProvidersTable};
+    use horizon_agent::contract::Command;
     use horizon_agent::contract::ProviderId;
     use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
     use horizon_agent::registry::ProviderRegistry;
@@ -453,7 +395,7 @@ mod tests {
         let state = state_with_rig_config(true, "test-model");
         let session_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {
@@ -492,7 +434,7 @@ mod tests {
         let session_id = SessionId::new();
         let parent_id = SessionId::new();
         let (inbound_tx, _inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {
@@ -614,7 +556,7 @@ mod tests {
         let (state, _entries) = two_provider_state();
         let session_id = SessionId::new();
         let (inbound_tx, inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {
@@ -730,7 +672,7 @@ mod tests {
         let (state, _entries) = two_provider_state_with_moa(moa_table());
         let session_id = SessionId::new();
         let (inbound_tx, inbound_rx) = unbounded::<Command>();
-        let (replay_tx, _replay_rx) = unbounded::<Sender<Vec<Event>>>();
+        let (replay_tx, _replay_rx) = unbounded::<crate::session::attachment::AttachRequest>();
         state.sessions.lock().unwrap().insert(
             session_id,
             SessionEntry {

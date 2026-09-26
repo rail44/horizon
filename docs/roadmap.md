@@ -705,6 +705,12 @@ external notification path.
 
 ## Shipped (index — details in the named docs and git history)
 
+- **Atomic agent attachment (2026-09-27):** one session-owned handoff joins
+  history and live updates. Explicit replay boundaries, revocable attachment
+  ownership and bounded queues replace timing-based completion and empty-history
+  failure fallbacks. Agent wire v28 requires a full app restart; stored history
+  stays v4. See [attachment contract](agent-attachment-design.md).
+
 - **Canonical agent conversation (2026-09-27):** live execution and restoration
   share response batches, provider metadata and exact tool-result identities.
   Explicit interaction boundaries keep notifications inside active memory context.
