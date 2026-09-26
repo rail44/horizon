@@ -10,11 +10,11 @@ use super::*;
 
 /// One unit of store work, boxed so the execution split below does not have
 /// to be generic over the future's type.
-pub(super) type StoreJob<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
+pub(crate) type StoreJob<T> = Pin<Box<dyn Future<Output = Result<T, StoreError>> + Send>>;
 
 /// Where the pane's store comes from.
 #[derive(Clone)]
-pub(super) enum BoardStoreSource {
+pub(crate) enum BoardStoreSource {
     /// A directory inside the project. `Store::from_dir` collapses a linked
     /// worktree onto its main git root by shelling out to git, so this is
     /// resolved where the job runs rather than on the UI thread.
@@ -26,7 +26,7 @@ pub(super) enum BoardStoreSource {
 
 impl BoardStoreSource {
     /// The store to read or write through.
-    pub(super) fn open(&self) -> Result<Store, StoreError> {
+    pub(crate) fn open(&self) -> Result<Store, StoreError> {
         match self {
             #[cfg(not(target_family = "wasm"))]
             Self::Root(root) => Store::from_dir(root),
@@ -36,7 +36,7 @@ impl BoardStoreSource {
 
     /// The project directory this source resolves from, if it has one.
     #[cfg(not(target_family = "wasm"))]
-    pub(super) fn root(&self) -> Option<&std::path::Path> {
+    pub(crate) fn root(&self) -> Option<&std::path::Path> {
         match self {
             Self::Root(root) => Some(root),
             Self::Ready(_) => None,
@@ -51,7 +51,7 @@ impl BoardStoreSource {
 /// `horizon-logd`, so both want a thread other than the UI one and the
 /// writes need a reactor.
 #[cfg(not(target_family = "wasm"))]
-pub(super) async fn run_store_job<T, F>(
+pub(crate) async fn run_store_job<T, F>(
     cx: &AsyncApp,
     source: BoardStoreSource,
     job: F,
@@ -79,7 +79,7 @@ where
 /// has, and writes resolve to [`StoreError::ReadOnly`] without reaching a
 /// reactor, so neither ever blocks.
 #[cfg(target_family = "wasm")]
-pub(super) async fn run_store_job<T, F>(
+pub(crate) async fn run_store_job<T, F>(
     _cx: &AsyncApp,
     source: BoardStoreSource,
     job: F,

@@ -19,6 +19,11 @@
 
 #[cfg(not(target_family = "wasm"))]
 mod agent;
+// The board's two views. Their shell-facing halves — the commands, the
+// session observation, the events the workspace subscribes to — have no
+// caller in a plugin build, which has no shell above a view.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
+mod board_next;
 // The shell drives a good part of this module: the subscriptions it installs
 // on the pane, the commands it executes, the accessors it reads. A plugin
 // build has no shell above the pane, so those have no caller there.

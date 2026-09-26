@@ -22,9 +22,9 @@ use horizon_board::{tree_order, Item, Position, Store, StoreError};
 use crate::theme;
 use horizon_workspace::commands::CommandId;
 
-mod activity;
+pub(crate) mod activity;
 mod detail;
-mod execute;
+pub(crate) mod execute;
 mod list;
 mod model;
 mod operations;
@@ -43,12 +43,6 @@ use model::*;
 #[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
 
-#[cfg(not(target_family = "wasm"))]
-use futures::channel::{mpsc, oneshot};
-#[cfg(not(target_family = "wasm"))]
-use futures::StreamExt;
-#[cfg(not(target_family = "wasm"))]
-use horizon_board::SubscribeStream;
 #[cfg(not(target_family = "wasm"))]
 use live::*;
 #[cfg(not(target_family = "wasm"))]

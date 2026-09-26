@@ -121,11 +121,11 @@ impl Render for BoardPreview {
 
 /// Session ids are fixed rather than generated so a preview shows the same
 /// activity on the same rows every time it is opened.
-fn session(n: u128) -> String {
+pub(crate) fn session(n: u128) -> String {
     uuid::Uuid::from_u128(n).to_string()
 }
 
-fn session_id(n: u128) -> SessionId {
+pub(crate) fn session_id(n: u128) -> SessionId {
     SessionId::from_uuid(uuid::Uuid::from_u128(n))
 }
 
@@ -156,7 +156,7 @@ fn sample_store() -> Store {
     Store::in_memory(sample_events())
 }
 
-fn item(id: u64, rank: &str, title: &str) -> Item {
+pub(crate) fn item(id: u64, rank: &str, title: &str) -> Item {
     Item {
         id,
         rank: rank.to_string(),
@@ -165,11 +165,11 @@ fn item(id: u64, rank: &str, title: &str) -> Item {
     }
 }
 
-fn stored(item: Item) -> BoardEvent {
+pub(crate) fn stored(item: Item) -> BoardEvent {
     BoardEvent::ItemStored { id: item.id, item }
 }
 
-fn message(id: u64, comment_id: &str, author: &str, text: &str, at: u64) -> BoardEvent {
+pub(crate) fn message(id: u64, comment_id: &str, author: &str, text: &str, at: u64) -> BoardEvent {
     BoardEvent::MessageAdded {
         id,
         message: Comment {
@@ -182,7 +182,7 @@ fn message(id: u64, comment_id: &str, author: &str, text: &str, at: u64) -> Boar
     }
 }
 
-fn read(id: u64, comment_id: &str) -> BoardEvent {
+pub(crate) fn read(id: u64, comment_id: &str) -> BoardEvent {
     BoardEvent::ReadAdvanced {
         id,
         reader: "owner".to_string(),
