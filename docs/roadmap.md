@@ -705,6 +705,12 @@ external notification path.
 
 ## Shipped (index — details in the named docs and git history)
 
+- **Canonical agent conversation (2026-09-27):** live execution and restoration
+  share response batches, provider metadata and exact tool-result identities.
+  Explicit interaction boundaries keep notifications inside active memory context.
+  Event-log v4 requires offline conversion; agent wire v27 requires a full app
+  restart. See [format and migration](agent-history-format.md).
+
 - **Interrupted-turn recovery (2026-09-18):** preserve the original turn ID
   when cancelling interrupted work or terminating orphaned exploration on
   restart; settle pending inputs without re-ending a finished turn. Real

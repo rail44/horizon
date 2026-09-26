@@ -1,5 +1,6 @@
 //! Exercise both adapters through real HTTP/SSE, without an external provider.
 use super::*;
+use crate::contract::ConversationInputKind;
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -130,7 +131,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
             };
             let server = tokio::spawn(serve(listener, rejected, body));
             let (tx, rx) = crossbeam_channel::unbounded();
-            let mut history = Vec::new();
+            let mut history = ConversationHistory::default();
             let outcome = tokio::time::timeout(
                 Duration::from_secs(5),
                 complete_rig_turn(
@@ -138,7 +139,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                     &SessionEnvironment::for_workspace_root(None),
                     &[],
                     &mut history,
-                    Message::user("read the file"),
+                    Prompt::input(ConversationInputKind::User, "read the file"),
                     &tx,
                     &mut ClearingState::new(None, 80),
                     None,
@@ -196,7 +197,7 @@ async fn provider_wire_contract_covers_both_adapters_and_rejections() {
                 rejected
             );
             if rejected {
-                assert_eq!(history, vec![Message::user("read the file")]);
+                assert_eq!(history.messages(), vec![Message::user("read the file")]);
                 assert!(outcome.requested_tool_call_ids.is_empty());
                 assert!(events.iter().any(|e| matches!(e, Event::Error(error) if error.message.starts_with("Rig completion failed:") && error.message.contains("test rejection"))));
                 assert!(!events.iter().any(|e| matches!(
@@ -375,13 +376,13 @@ async fn provider_wire_finish_reasons_override_counts_for_both_adapters() {
             }
             let server = tokio::spawn(serve(listener, false, body));
             let (events, _) = crossbeam_channel::unbounded();
-            let mut history = Vec::new();
+            let mut history = ConversationHistory::default();
             let completion = complete_rig_turn(
                 &config,
                 &SessionEnvironment::for_workspace_root(None),
                 &[],
                 &mut history,
-                Message::user("read"),
+                Prompt::input(ConversationInputKind::User, "read"),
                 &events,
                 &mut ClearingState::new(None, 80),
                 None,
@@ -434,7 +435,7 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
                 }
             });
             let (events, receive) = crossbeam_channel::unbounded();
-            let mut history = Vec::new();
+            let mut history = ConversationHistory::default();
             let completion = tokio::time::timeout(
                 Duration::from_secs(10),
                 complete_rig_turn(
@@ -442,7 +443,7 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
                     &SessionEnvironment::for_workspace_root(None),
                     &[],
                     &mut history,
-                    Message::user("read"),
+                    Prompt::input(ConversationInputKind::User, "read"),
                     &events,
                     &mut ClearingState::new(None, 80),
                     None,
@@ -483,7 +484,7 @@ async fn provider_wire_retry_discards_previous_text_and_never_repeats_issued_too
             );
             let frame = crate::frame::agent_frame_from_events(&events);
             assert!(!frame.items.iter().any(|item| matches!(item, crate::frame::AgentFrameItem::AssistantTextDelta(delta) if delta.text.contains("discarded attempt"))));
-            assert!(!serde_json::to_string(&history)
+            assert!(!serde_json::to_string(&history.messages())
                 .unwrap()
                 .contains("discarded attempt"));
         }
@@ -563,8 +564,8 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             &config,
             &SessionEnvironment::for_workspace_root(None),
             &[],
-            &mut Vec::new(),
-            Message::user("read both"),
+            &mut ConversationHistory::default(),
+            Prompt::input(ConversationInputKind::User, "read both"),
             &events,
             &mut ClearingState::new(None, 80),
             None,
@@ -599,5 +600,112 @@ async fn provider_wire_multiple_calls_keep_distinct_previews_and_requests() {
             .items
             .iter()
             .any(|item| matches!(item, crate::frame::AgentFrameItem::ToolCallPreparing(_))));
+    }
+}
+
+#[tokio::test]
+async fn provider_wire_replay_sends_identical_requests_after_signed_tool_response() {
+    let key = "HORIZON_TEST_HISTORY_REPLAY_KEY";
+    std::env::set_var(key, "local-test-key");
+    for kind in [ProviderKind::OpenAiCompatible, ProviderKind::Anthropic] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = RigAgentConfig {
+            kind,
+            api_key_present: true,
+            api_key_env: key.into(),
+            base_url: Some(format!("http://{}/v1", listener.local_addr().unwrap())),
+            model: "test-model".into(),
+            allowed_tool_ids: Some(vec!["fs.read".into()]),
+            ..Default::default()
+        };
+        let (tx, rx) = crossbeam_channel::unbounded();
+        let mut live = ConversationHistory::default();
+        live.open_turn(&tx);
+        let mut sse = response(kind);
+        if kind == ProviderKind::Anthropic {
+            // A signed thinking block belongs to the same assistant response as its calls.
+            let reasoning = [
+                json!({"type":"content_block_start","index":2,"content_block":{"type":"thinking","thinking":""}}),
+                json!({"type":"content_block_delta","index":2,"delta":{"type":"thinking_delta","thinking":"inspect first"}}),
+                json!({"type":"content_block_delta","index":2,"delta":{"type":"signature_delta","signature":"opaque-signature"}}),
+                json!({"type":"content_block_stop","index":2}),
+            ].into_iter().map(|value|format!("event: {}\ndata: {value}\n\n",value["type"].as_str().unwrap())).collect::<String>();
+            sse = sse.replacen(
+                "event: message_delta",
+                &(reasoning + "event: message_delta"),
+                1,
+            );
+        }
+        let server = tokio::spawn(async move {
+            let _ = serve_transport(&listener, false, sse, Transport::Complete).await;
+            let first = serve_transport(&listener, false, response(kind), Transport::Complete)
+                .await
+                .1;
+            let second = serve_transport(&listener, false, response(kind), Transport::Complete)
+                .await
+                .1;
+            (first, second)
+        });
+        let outcome = complete_rig_turn(
+            &config,
+            &SessionEnvironment::for_workspace_root(None),
+            &[],
+            &mut live,
+            Prompt::input(ConversationInputKind::User, "read"),
+            &tx,
+            &mut ClearingState::disabled(),
+            None,
+            None,
+            || panic!("HTTP expected"),
+            &CancellationToken::new(),
+        )
+        .await;
+        let call = outcome
+            .requested_tool_calls
+            .values()
+            .next()
+            .expect("tool response");
+        let result = call.identity.result(json!({"content":"file data"}));
+        live.append_result(&result, &call.tool_id).unwrap();
+        tx.send(Event::ToolCallFinished(result).into()).unwrap();
+        let events: Vec<_> = rx
+            .try_iter()
+            .filter_map(ProviderEvent::into_event)
+            .collect();
+        let bytes = serde_json::to_vec(&events).unwrap();
+        let mut replay = ConversationHistory::from_events(
+            &serde_json::from_slice::<Vec<Event>>(&bytes).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(live.messages(), replay.messages());
+        for history in [&mut live, &mut replay] {
+            let result = tokio::time::timeout(
+                Duration::from_secs(5),
+                complete_rig_turn(
+                    &config,
+                    &SessionEnvironment::for_workspace_root(None),
+                    &[],
+                    history,
+                    Prompt::input(ConversationInputKind::Notification, "task finished"),
+                    &tx,
+                    &mut ClearingState::disabled(),
+                    None,
+                    None,
+                    || panic!("HTTP expected"),
+                    &CancellationToken::new(),
+                ),
+            )
+            .await
+            .unwrap();
+            assert!(!matches!(result.stop, CompletionStop::Failed));
+        }
+        let (first, second) = server.await.unwrap();
+        assert_eq!(first, second, "{kind:?} request differs after replay");
+        if kind == ProviderKind::Anthropic {
+            assert!(
+                first.to_string().contains("opaque-signature"),
+                "signed reasoning must reach the next request: {first}"
+            );
+        }
     }
 }

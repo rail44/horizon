@@ -265,7 +265,7 @@ impl AgentTranscript {
                 ("context", index),
                 format!(
                     "cleared {} old tool result(s) (~{} chars) — recoverable via recall",
-                    cleared.cleared_call_ids.len(),
+                    cleared.cleared_occurrence_ids.len(),
                     cleared.recovered_chars,
                 ),
             )),

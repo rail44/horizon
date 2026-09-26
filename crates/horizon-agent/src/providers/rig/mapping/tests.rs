@@ -68,7 +68,7 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
             rig_tool_result_message(&finished, "bash"),
         ]
     );
-    assert_eq!(repair_replayed_message_pairing(messages.clone()), messages);
+    let events = super::super::conversation::upgrade::fixture(events);
     let session_id = crate::contract::SessionId::new();
     let store = crate::persistence::projection::duckdb::Store::open_in_memory().unwrap();
     store
@@ -76,11 +76,12 @@ fn approved_retries_replay_one_provider_call_and_its_final_answer() {
         .unwrap();
     let store = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
     for history in [
-        super::super::history::load_rig_session_history(Some(&store), session_id, &[]),
-        super::super::history::load_rig_session_history(None, session_id, &events),
+        super::super::history::load_rig_session_history(Some(&store), session_id, &[]).unwrap(),
+        super::super::history::load_rig_session_history(None, session_id, &events).unwrap(),
     ] {
         assert_eq!(
-            history.messages, messages,
+            history.messages.messages(),
+            messages,
             "both resume sources preserve the provider view"
         );
     }
@@ -94,7 +95,16 @@ fn refusing_a_retry_replays_the_original_attempts_answer_once() {
     assert_eq!(
         rig_messages_from_horizon_events(&[
             Event::ToolCallRequested(first.clone()),
-            Event::ToolCallRequested(retry),
+            Event::ToolCallRequested(retry.clone()),
+            Event::ApprovalRequested(crate::contract::ApprovalRequest {
+                call_id: retry.call_id.clone(),
+                occurrence_id: retry.occurrence_id.clone(),
+                reason: "retry approval".into(),
+                kind: crate::contract::ApprovalKind::DomainDenialRetry {
+                    domains: vec!["example.test".into()],
+                    prior_result: denied.clone()
+                }
+            }),
             Event::ToolCallFinished(denied.clone()),
             Event::ToolCallFinished(denied.clone()),
         ]),
@@ -129,7 +139,6 @@ fn a_later_answer_does_not_hide_an_unanswered_earlier_use_of_the_id() {
             rig_tool_result_message(&answered, "bash"),
         ]
     );
-    assert_eq!(repair_replayed_message_pairing(messages.clone()), messages);
 }
 
 #[test]
@@ -221,7 +230,10 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
             tool_id: tool.into(),
             input: input.into(),
         };
-        live.extend_events([Event::ToolCallRequested(request.clone())]);
+        live.extend_events([
+            super::super::conversation::announcement(&request, &request.occurrence_id.0),
+            Event::ToolCallRequested(request.clone()),
+        ]);
         let Execution::Applied(ToolUpdate::Finished { result, .. }) =
             execute_agent_tool(&NoHost, &state, session, &live, &request).unwrap()
         else {
@@ -281,6 +293,7 @@ fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
         Some(&rig_tool_result_message(&result, "fs.edit"))
     );
     let stored = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
-    let restored = super::super::history::load_rig_session_history(Some(&stored), session, &[]);
-    assert_eq!(restored.messages, messages);
+    let restored =
+        super::super::history::load_rig_session_history(Some(&stored), session, &[]).unwrap();
+    assert_eq!(restored.messages.messages(), messages);
 }

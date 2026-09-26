@@ -2335,3 +2335,91 @@ fn write_smoke_fixture() -> PathBuf {
     .unwrap();
     root
 }
+
+/// A crash between durable announcement and dispatch still leaves a valid
+/// conversation after restoration, including another full daemon restart.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn rig_conversation_survives_an_undispatched_call_and_repeated_daemon_restart() {
+    use horizon_agent::contract::{
+        ConversationInputKind, ConversationRecord, OccurrenceId, ToolCallId, ToolCallIdentity,
+        ToolOutcome,
+    };
+    let paths = AgentdPaths::scratch("rig-history-restart");
+    let session = SessionId::new();
+    let identity = ToolCallIdentity {
+        call_id: ToolCallId("pending".into()),
+        occurrence_id: OccurrenceId::new(),
+    };
+    let (writer, ready) = WriterHandle::open(&paths.event_log_path);
+    assert!(matches!(ready.recv().unwrap(), WriterInit::Ready(_)));
+    let mut appender = Appender::new(
+        writer.clone(),
+        session,
+        Some(ProviderId("builtin.agent.rig".into())),
+        None,
+    );
+    appender.commit_provider_events(vec![
+        Event::StateChanged(SessionState::Running),
+        Event::ConversationRecorded(ConversationRecord::TurnOpened),
+        Event::ConversationRecorded(ConversationRecord::Input {kind:ConversationInputKind::User,text:"earlier question".into()}),
+        Event::ConversationRecorded(ConversationRecord::ToolAnnounced {
+            response_id:"interrupted-response".into(),identity:identity.clone(),codec:1,
+            tool_call:serde_json::json!({"id":"pending","function":{"name":"fs.read","arguments":{"path":"never-dispatched"}},"signature":"signed-call"}).into(),
+            reasoning:serde_json::json!([]).into(),
+        }),
+    ].into_iter().map(Into::into).collect()).unwrap();
+    writer.flush().unwrap();
+    drop(appender);
+    drop(writer);
+    let mut daemon = agentd_spawn(paths)
+        .env_remove("OPENAI_API_KEY")
+        .env_remove("ANTHROPIC_API_KEY")
+        .spawn();
+    let socket = daemon.socket_path.clone();
+    let log = daemon.event_log_path.clone();
+    for round in 0..2 {
+        let client = connect_hub(&socket).await;
+        let mut attached = client.hub.attach_agent(session).await.unwrap();
+        let _ = collect_replayed_events(&mut attached.events).await;
+        attached
+            .commands
+            .send(AgentCommand::UserMessage {
+                text: format!("hello after restart {round}"),
+            })
+            .await
+            .unwrap();
+        let events = collect_events_until(&mut attached.events, |event| {
+            matches!(event, Event::TurnEnded(TurnEndReason::Completed))
+        })
+        .await;
+        assert!(
+            !events.iter().any(|event| matches!(event, Event::Error(_))),
+            "{events:?}"
+        );
+        client.drain().await;
+        drop(attached);
+        drop(client);
+        assert!(wait_for_exit(&mut daemon.child).await.success());
+        let records = horizon_agent::persistence::event_log::read(&log)
+            .unwrap()
+            .records;
+        assert_eq!(records.iter().filter(|record|matches!(&record.event,Event::ToolCallFinished(result) if result.occurrence_id==identity.occurrence_id && result.outcome==ToolOutcome::Cancelled)).count(),1);
+        assert_eq!(
+            records
+                .iter()
+                .filter(|record| matches!(
+                    &record.event,
+                    Event::ConversationRecorded(ConversationRecord::Input {
+                        kind: ConversationInputKind::User,
+                        ..
+                    })
+                ))
+                .count(),
+            round + 2
+        );
+        horizon_agent::persistence::validate_history(&log).unwrap();
+        if round == 0 {
+            daemon = daemon.respawn_at_same_paths();
+        }
+    }
+}

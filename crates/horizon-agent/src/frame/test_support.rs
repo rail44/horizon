@@ -106,7 +106,7 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
             Event::HistoryCleared(cleared) => {
                 lines.push(format!(
                     "history cleared: {} tool result(s), {} chars",
-                    cleared.cleared_call_ids.len(),
+                    cleared.cleared_occurrence_ids.len(),
                     cleared.recovered_chars,
                 ));
             }
@@ -158,6 +158,7 @@ pub(crate) fn render_agent_transcript(events: &[Event]) -> String {
             | Event::InputOutcome(_)
             | Event::DeliveryAcknowledged(_)
             | Event::MemorySeeded => lines.push("memory: seeded".to_string()),
+            Event::ConversationRecorded(_) => {}
             Event::MoaPassStarted(pass) => lines.push(format!(
                 "moa pass: {} ({} proposers)",
                 pass.entry,

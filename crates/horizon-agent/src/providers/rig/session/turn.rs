@@ -1,13 +1,8 @@
-//! The turn-execution pipeline: `run_cancellable_turn` →
-//! `handle_truncation_recovery` → `apply_turn_outcome`, plus the guard-halt
-//! response (`halt_turn_loop`) and the small helpers they share. All are
-//! methods on [`super::state::SessionLoopState`], taking `&mut self`
-//! instead of the 10+ individual arguments the free-function form
-//! accumulated. The pure helpers that touch no loop state
-//! (`fold_batched_tool_result`, `BatchStep`) stay as free `pub(super)` functions so the tests can keep
-//! calling them without a `SessionLoopState`.
+//! Provider rounds, recovery, checkpoints and completion of an interaction.
 
+use super::super::conversation::Prompt;
 use super::memory::MemoryCheckpoint;
+use crate::contract::ConversationInputKind;
 
 use std::collections::HashMap;
 
@@ -25,22 +20,31 @@ use crate::{
 use super::super::completion::{CompletionStop, Truncation};
 use super::state::SessionLoopState;
 use super::{
-    complete_rig_turn, deterministic_rig_response, rig_tool_result_message, GuardHalt,
-    ToolCallDescriptor, TurnCompletion,
+    complete_rig_turn, deterministic_rig_response, GuardHalt, ToolCallDescriptor, TurnCompletion,
 };
 
 impl SessionLoopState {
+    pub(super) fn retain_prompt(&mut self, prompt: Prompt) -> bool {
+        if let Err(message) = self.rig_history.append_prompt(prompt, &self.events_tx) {
+            let _ = self.events_tx.send(Event::Error(Error { message }).into());
+            self.inbox.push_front(Command::Shutdown);
+            false
+        } else {
+            true
+        }
+    }
+
     /// The full turn-execution pipeline as one call: run a cancellable turn,
     /// then (if it wasn't truncated) apply its outcome. Each command arm in
     /// [`super::state::SessionLoopState::run`] does its own arm-specific
     /// setup, then calls this with the prompt message and a fallback closure.
-    pub(crate) async fn run_turn(&mut self, prompt: Message, fallback: impl FnOnce() -> Message) {
+    pub(crate) async fn run_turn(&mut self, prompt: Prompt, fallback: impl FnOnce() -> Message) {
         self.collect_inputs();
         self.activate_environment().await;
         self.collect_inputs();
         if self.has_pending_stop() {
             self.pause_inputs(true);
-            self.rig_history.push(prompt);
+            self.retain_prompt(prompt);
             self.apply_turn_outcome(TurnCompletion {
                 stop: CompletionStop::Cancelled,
                 ..Default::default()
@@ -76,9 +80,10 @@ impl SessionLoopState {
                         .events_tx
                         .send(crate::tools::notification_event(text.clone()).into());
                     outcome = self
-                        .run_cancellable_turn(Message::user(text.clone()), || {
-                            deterministic_rig_response(&text)
-                        })
+                        .run_cancellable_turn(
+                            Prompt::input(ConversationInputKind::Notification, text.clone()),
+                            || deterministic_rig_response(&text),
+                        )
                         .await;
                     continue;
                 }
@@ -109,10 +114,7 @@ impl SessionLoopState {
     /// Returns the prompt to send plus the notification text, which the caller
     /// needs only to drive the deterministic fallback provider (no network
     /// mode) off the message actually sent.
-    pub(crate) fn inject_task_notification(
-        &mut self,
-        prompt: Message,
-    ) -> (Message, Option<String>) {
+    pub(crate) fn inject_task_notification(&mut self, prompt: Prompt) -> (Prompt, Option<String>) {
         self.collect_inputs();
         let mut additions = Vec::new();
         let mut failures = Vec::new();
@@ -126,12 +128,18 @@ impl SessionLoopState {
         let Some(text) = (!additions.is_empty()).then(|| additions.join("\n\n")) else {
             return (prompt, None);
         };
-        self.rig_history.push(prompt);
+        if !self.retain_prompt(prompt) {
+            return (Prompt::Current, None);
+        }
+        self.retain_prompt(Prompt::input(
+            ConversationInputKind::Notification,
+            text.clone(),
+        ));
         let _ = self
             .events_tx
             .send(crate::tools::notification_event(text.clone()).into());
         self.report_task_failures(failures);
-        (Message::user(text.clone()), Some(text))
+        (Prompt::Current, Some(text))
     }
 
     /// Records each child that produced no usable report as an error item in
@@ -152,7 +160,7 @@ impl SessionLoopState {
     /// mid-turn is never silently swallowed.
     async fn run_cancellable_turn(
         &mut self,
-        prompt: Message,
+        prompt: Prompt,
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let config = self.config.clone();
@@ -163,7 +171,7 @@ impl SessionLoopState {
     async fn run_cancellable_turn_with_config(
         &mut self,
         config: &RigAgentConfig,
-        prompt: Message,
+        prompt: Prompt,
         fallback: impl FnOnce() -> Message,
     ) -> TurnCompletion {
         let token = CancellationToken::new();
@@ -235,7 +243,6 @@ impl SessionLoopState {
                 );
             }
             CompletionStop::Finished { text } if outcome.requested_tool_call_ids.is_empty() => {
-                self.moa_conversation.record_answer(text.clone());
                 self.end_interaction(
                     TurnEndReason::Completed,
                     crate::contract::InputResult::Success { text },
@@ -323,9 +330,10 @@ impl SessionLoopState {
                 .into(),
             );
             outcome = self
-                .run_cancellable_turn(Message::user(text), || {
-                    deterministic_rig_response("truncation recovery")
-                })
+                .run_cancellable_turn(
+                    Prompt::input(ConversationInputKind::Continuation, text),
+                    || deterministic_rig_response("truncation recovery"),
+                )
                 .await;
         }
         self.guard.reset_truncation_counter();
@@ -381,9 +389,13 @@ impl SessionLoopState {
                 .into(),
             );
             outcome = self
-                .run_cancellable_turn(Message::user(MEMORY_CHECKPOINT_REMINDER), || {
-                    deterministic_rig_response("memory checkpoint reminder")
-                })
+                .run_cancellable_turn(
+                    Prompt::input(
+                        ConversationInputKind::Continuation,
+                        MEMORY_CHECKPOINT_REMINDER,
+                    ),
+                    || deterministic_rig_response("memory checkpoint reminder"),
+                )
                 .await;
             // The next completing round can only satisfy or miss.
         }
@@ -421,6 +433,7 @@ impl SessionLoopState {
         self.moa_turn = None;
         self.finish_input(result);
         let cancelled = reason == TurnEndReason::Cancelled;
+        let _ = self.rig_history.apply_event(&Event::TurnEnded(reason));
         let _ = self.events_tx.send(Event::TurnEnded(reason).into());
         if cancelled {
             let _ = self
@@ -459,14 +472,10 @@ impl SessionLoopState {
     /// that succeeds, the turn ends right there with the summary already
     /// committed as the session's final message for this turn. Every other
     /// case (doom loop, a role that doesn't opt in, or the wrap-up completion
-    /// itself failing) falls back to the original behavior: `arrived_result`
-    /// is deliberately *not* folded into `rig_history` here —
-    /// `Execution::halt` retains it instead, the same way an ordinary
-    /// tool-driven turn treats a batch's last-landed result: as the *next*
-    /// turn's prompt (see [`fold_batched_tool_result`]'s doc comment), not a
-    /// pre-pushed history entry. `Command::ContinueTurn` consumes it to
-    /// resume; `Command::UserMessage` flushes it into history first if the
-    /// user types past the halt instead.
+    /// itself failing) retains `arrived_result` for Continue. History already
+    /// owns the real result; adding it again on Continue is idempotent.
+    /// `Execution::halt` retains the action needed to resume. A new owner
+    /// interaction consumes that action without changing the recorded result.
     ///
     /// Resets the guard and returns the session to `WaitingForUser` either way
     /// (Continue re-enters the loop with a fresh guard, exactly like a new
@@ -511,24 +520,17 @@ impl SessionLoopState {
     /// "advertise nothing"), so the model cannot keep exploring even if it
     /// tries.
     ///
-    /// Returns whether the wrap-up produced a completion at all. `false`
-    /// (provider failure, or the turn getting cancelled mid-wrap-up) truncates
-    /// `rig_history` back to exactly what the caller passed in -- no half step
-    /// -- so [`Self::halt_turn_loop`]'s ordinary fallback (stash
-    /// `arrived_result` for `Continue`/a new `UserMessage`) stays correct
-    /// rather than double-folding it. Truncating to a recorded length, rather
-    /// than popping a fixed count, is deliberate: `complete_rig_turn` pushes a
-    /// different number of messages depending on how far the wrap-up got
-    /// (zero on a provider-request error, two -- the prompt and a partial
-    /// assistant message -- on cancellation).
+    /// Real results and partial responses remain in canonical history even if
+    /// the summary fails. Re-appending the halted result on Continue is idempotent.
     async fn run_cap_summary_turn(
         &mut self,
         arrived_result: &ToolCallResult,
         tool_id: &str,
     ) -> bool {
-        let baseline_len = self.rig_history.len();
-        self.rig_history
-            .push(rig_tool_result_message(arrived_result, tool_id));
+        if let Err(message) = self.rig_history.append_result(arrived_result, tool_id) {
+            let _ = self.events_tx.send(Event::Error(Error { message }).into());
+            return false;
+        }
 
         let mut wrap_up_config = self.config.clone();
         wrap_up_config.allowed_tool_ids = Some(Vec::new());
@@ -539,7 +541,7 @@ impl SessionLoopState {
         let outcome = self
             .run_cancellable_turn_with_config(
                 &wrap_up_config,
-                Message::user(CAP_SUMMARY_INSTRUCTION),
+                Prompt::input(ConversationInputKind::Continuation, CAP_SUMMARY_INSTRUCTION),
                 || deterministic_rig_response(CAP_SUMMARY_INSTRUCTION),
             )
             .await;
@@ -548,56 +550,9 @@ impl SessionLoopState {
             outcome.stop,
             CompletionStop::Failed | CompletionStop::Cancelled
         ) {
-            self.rig_history.truncate(baseline_len);
             return false;
         }
         true
-    }
-}
-
-/// What the `Command::ToolCallResult` arm should do next for a landed batch
-/// member, once [`fold_batched_tool_result`] has decided whether the rest of
-/// the batch is still outstanding.
-#[derive(Debug, Eq, PartialEq)]
-pub(crate) enum BatchStep {
-    /// More of the batch is still outstanding. The result has already been
-    /// folded into `rig_history`, in arrival order — the caller just keeps
-    /// consuming commands, without emitting `Running` or running a turn.
-    Continue,
-    /// The whole batch has landed (this was its last outstanding call), so
-    /// a follow-up completion should run. The result is deliberately *not*
-    /// yet in `rig_history` — the caller runs the turn with it as the
-    /// prompt message, which appends it right before the resulting
-    /// assistant message (`run_cancellable_turn`/`complete_rig_turn`),
-    /// keeping a single unbroken "tool_calls, then all N results, then the
-    /// assistant's reply" run in history.
-    RunTurn,
-}
-
-/// Decides what a landed `Command::ToolCallResult` should do, per the
-/// "batching" fix in `run_session_loop`'s `Command::ToolCallResult` arm: a
-/// single completion can request several parallel tool calls (e.g. MiniMax
-/// routinely requesting 4 parallel `fs.read`s), each of which arrives as its
-/// own `Command::ToolCallResult`. Running a follow-up completion per result
-/// would send the model a protocol-malformed history (an assistant
-/// `tool_calls` message missing most of its results) for every
-/// still-outstanding call, and burn the iteration-cap guard once per result
-/// instead of once per batch.
-///
-/// The caller must have already removed `result`'s call id from
-/// the pending batch before calling this. `has_pending_tools` is false when
-/// this result was the last outstanding call.
-pub(crate) fn fold_batched_tool_result(
-    rig_history: &mut Vec<Message>,
-    has_pending_tools: bool,
-    result: &ToolCallResult,
-    tool_id: &str,
-) -> BatchStep {
-    if !has_pending_tools {
-        BatchStep::RunTurn
-    } else {
-        rig_history.push(rig_tool_result_message(result, tool_id));
-        BatchStep::Continue
     }
 }
 

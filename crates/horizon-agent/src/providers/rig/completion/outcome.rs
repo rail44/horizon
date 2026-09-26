@@ -95,6 +95,7 @@ impl CompletionStop {
 #[derive(Debug, Default)]
 pub(in crate::providers::rig) struct TurnCompletion {
     pub(in crate::providers::rig) stop: CompletionStop,
+    pub(in crate::providers::rig) response_id: String,
     pub(in crate::providers::rig) requested_tool_call_ids: Vec<ToolCallId>,
     pub(in crate::providers::rig) requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     pub(in crate::providers::rig) input_tokens: Option<u64>,

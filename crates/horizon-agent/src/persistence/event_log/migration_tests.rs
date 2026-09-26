@@ -26,7 +26,7 @@ fn old_record(sequence: u64, session_id: SessionId, event: Value) -> Value {
 
 #[test]
 fn old_log_cannot_be_opened_for_append_before_explicit_conversion() {
-    for version in [1, 2] {
+    for version in [1, 2, 3] {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.jsonl");
         let mut record = old_record(42, SessionId::new(), json!({"TurnEnded":"Completed"}));
@@ -104,13 +104,19 @@ fn converted_history_rebuilds_exact_execution_rows_and_preserves_the_source() {
         original
     );
     assert_eq!(
-        crate::persistence::validate_history(output.join("events.jsonl")).unwrap(),
-        6
+        std::fs::read_to_string(output.join("original.jsonl")).unwrap(),
+        original
     );
-    let report = read(output.join("events.jsonl")).unwrap();
-    assert_eq!(report.records.len(), 6);
+    let v4 = dir.path().join("v4");
+    let converted_count = convert_conversation_file(&output.join("events.jsonl"), &v4).unwrap();
+    let report = read(v4.join("events.jsonl")).unwrap();
+    assert_eq!(report.records.len(), converted_count);
+    assert_eq!(
+        crate::persistence::validate_history(v4.join("events.jsonl")).unwrap(),
+        converted_count
+    );
     assert!(report.skipped_summary().is_none());
-    assert_eq!(report.max_known_sequence, Some(52));
+    assert_eq!(report.max_known_sequence, Some(converted_count as u64));
     let events = report
         .records
         .iter()
@@ -130,7 +136,7 @@ fn converted_history_rebuilds_exact_execution_rows_and_preserves_the_source() {
     let imported = store
         .replace_from_event_log_records(report.records)
         .unwrap();
-    assert_eq!(imported.applied, 6);
+    assert_eq!(imported.applied, converted_count);
     assert_eq!(imported.skipped, 0, "{:?}", imported.first_skip_error);
     assert_eq!(store.frame_for_session(session).unwrap(), expected);
     let manifest: Value =
@@ -302,8 +308,10 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
         String::from_utf8_lossy(&result.stderr)
     );
     assert_eq!(std::fs::read_to_string(source).unwrap(), original);
-    let report = read(output.join("events.jsonl")).unwrap();
-    assert_eq!(report.records.len(), rows.len());
+    let v4 = dir.path().join("v4");
+    let converted_count = convert_conversation_file(&output.join("events.jsonl"), &v4).unwrap();
+    let report = read(v4.join("events.jsonl")).unwrap();
+    assert_eq!(report.records.len(), converted_count);
     assert!(report.skipped_summary().is_none());
     let store = Store::open_in_memory().unwrap();
     let imported = store
@@ -328,4 +336,115 @@ fn v2_outcomes_survive_conversion_projection_and_transcript_without_text_inferen
         4,
         "failure, denial, cancellation and pending retry remain visible"
     );
+}
+
+#[test]
+fn v3_conversion_keeps_provider_metadata_and_resolves_reused_clearing_ids() {
+    use crate::contract::{ConversationRecord, HistoryCleared, OccurrenceId};
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("v3.jsonl");
+    let destination = dir.path().join("v4");
+    let session = SessionId::new();
+    let mut rows = Vec::new();
+    for index in 0..2 {
+        let request = ToolCallRequest {
+            call_id: ToolCallId("reused".into()),
+            occurrence_id: OccurrenceId(format!("occ-{index}")),
+            tool_id: "fs.read".into(),
+            input: json!({"path":format!("file-{index}")}).into(),
+        };
+        let mut row = old_record(
+            rows.len() as u64 + 1,
+            session,
+            serde_json::to_value(Event::ToolCallRequested(request.clone())).unwrap(),
+        );
+        row["provider_payload"] = json!({"rig":{"tool_call":{"id":format!("local-{index}"),"call_id":"reused","signature":"signed","additional_params":{"vendor":"preserved"}}}});
+        rows.push(row);
+        rows.push(old_record(
+            rows.len() as u64 + 1,
+            session,
+            serde_json::to_value(Event::ToolCallFinished(
+                request.identity().result(json!({"content":"body"})),
+            ))
+            .unwrap(),
+        ));
+        rows.push(old_record(
+            rows.len() as u64 + 1,
+            session,
+            json!({"HistoryCleared":{"cleared_call_ids":["reused"],"recovered_chars":100}}),
+        ));
+    }
+    for row in &mut rows {
+        row["version"] = 3.into();
+    }
+    let original = rows
+        .iter()
+        .map(|row| format!("{row}\n"))
+        .collect::<String>();
+    std::fs::write(&source, &original).unwrap();
+    let count = convert_conversation_file(&source, &destination).unwrap();
+    assert_eq!(std::fs::read_to_string(&source).unwrap(), original);
+    assert_eq!(
+        std::fs::read_to_string(destination.join("original.jsonl")).unwrap(),
+        original
+    );
+    let report = read(destination.join("events.jsonl")).unwrap();
+    assert_eq!(report.records.len(), count);
+    let mut cleared = Vec::new();
+    let mut announced = 0;
+    for record in report.records {
+        match record.event {
+            Event::HistoryCleared(HistoryCleared {
+                cleared_occurrence_ids,
+                ..
+            }) => cleared.extend(cleared_occurrence_ids),
+            Event::ConversationRecorded(ConversationRecord::ToolAnnounced {
+                tool_call, ..
+            }) => {
+                assert_eq!(tool_call.0["signature"], "signed");
+                assert_eq!(tool_call.0["additional_params"]["vendor"], "preserved");
+                announced += 1;
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(announced, 2);
+    assert_eq!(
+        cleared,
+        [OccurrenceId("occ-0".into()), OccurrenceId("occ-1".into())]
+    );
+    let copy = dir.path().join("idempotent");
+    assert_eq!(
+        convert_conversation_file(&destination.join("events.jsonl"), &copy).unwrap(),
+        count
+    );
+    assert_eq!(
+        std::fs::read(destination.join("events.jsonl")).unwrap(),
+        std::fs::read(copy.join("events.jsonl")).unwrap()
+    );
+    assert!(convert_conversation_file(&source, &destination).is_err());
+}
+
+#[test]
+fn invalid_current_conversation_cannot_create_an_activation_bundle() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("invalid.jsonl");
+    let destination = dir.path().join("rejected");
+    let mut row = old_record(
+        1,
+        SessionId::new(),
+        json!({"ConversationRecorded":{"Response":{"response_id":"invalid","codec":999,"message":{},"calls":[]}}}),
+    );
+    row["version"] = 4.into();
+    let original = format!("{row}\n");
+    std::fs::write(&source, &original).unwrap();
+    let error = convert_conversation_file(&source, &destination).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Unsupported conversation message codec"),
+        "{error}"
+    );
+    assert!(!destination.exists());
+    assert_eq!(std::fs::read_to_string(source).unwrap(), original);
 }

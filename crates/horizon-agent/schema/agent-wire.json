@@ -655,6 +655,124 @@
       },
       "type": "object"
     },
+    "ConversationInputKind": {
+      "enum": [
+        "User",
+        "Notification",
+        "Continuation"
+      ],
+      "type": "string"
+    },
+    "ConversationRecord": {
+      "description": "The message codec is explicit because opaque provider fields must survive\nwithout being interpreted by the transcript or the persistence layer.",
+      "oneOf": [
+        {
+          "enum": [
+            "TurnOpened"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Input": {
+              "properties": {
+                "kind": {
+                  "$ref": "#/$defs/ConversationInputKind"
+                },
+                "text": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "text"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Input"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "ToolAnnounced": {
+              "properties": {
+                "codec": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "identity": {
+                  "$ref": "#/$defs/ToolCallIdentity"
+                },
+                "reasoning": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "response_id": {
+                  "type": "string"
+                },
+                "tool_call": {
+                  "$ref": "#/$defs/JsonValue"
+                }
+              },
+              "required": [
+                "response_id",
+                "identity",
+                "codec",
+                "tool_call",
+                "reasoning"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "ToolAnnounced"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "Response": {
+              "properties": {
+                "calls": {
+                  "items": {
+                    "$ref": "#/$defs/ToolCallIdentity"
+                  },
+                  "type": "array"
+                },
+                "codec": {
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "message": {
+                  "$ref": "#/$defs/JsonValue"
+                },
+                "response_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "response_id",
+                "codec",
+                "message",
+                "calls"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "Response"
+          ],
+          "type": "object"
+        }
+      ]
+    },
     "Error": {
       "properties": {
         "message": {
@@ -1061,6 +1179,19 @@
             "MoaPassStarted"
           ],
           "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "Exact provider history, independent of display and audit rows.",
+          "properties": {
+            "ConversationRecorded": {
+              "$ref": "#/$defs/ConversationRecord"
+            }
+          },
+          "required": [
+            "ConversationRecorded"
+          ],
+          "type": "object"
         }
       ]
     },
@@ -1155,11 +1286,11 @@
       "type": "object"
     },
     "HistoryCleared": {
-      "description": "Payload for [`Event::HistoryCleared`]: exactly which tool calls' results\nthe pass froze into the session's cleared set, and how many characters of\ntool-result text that removed from every subsequent provider request.\n\n`cleared_call_ids` is in history order (oldest first) — the order the\npass walked — so a replayed set is byte-identical to the live one.",
+      "description": "Payload for [`Event::HistoryCleared`]: exactly which tool calls' results\nthe pass froze into the session's cleared set, and how many characters of\ntool-result text that removed from every subsequent provider request.\n\n`cleared_occurrence_ids` is in history order (oldest first) — the order the\npass walked — so a replayed set is byte-identical to the live one.",
       "properties": {
-        "cleared_call_ids": {
+        "cleared_occurrence_ids": {
           "items": {
-            "$ref": "#/$defs/ToolCallId"
+            "$ref": "#/$defs/OccurrenceId"
           },
           "type": "array"
         },
@@ -1170,7 +1301,7 @@
         }
       },
       "required": [
-        "cleared_call_ids",
+        "cleared_occurrence_ids",
         "recovered_chars"
       ],
       "type": "object"
@@ -2283,5 +2414,5 @@
     }
   },
   "title": "horizon-agent-wire",
-  "x-session-protocol-version": 26
+  "x-session-protocol-version": 27
 }

@@ -1,11 +1,11 @@
 //! Accept tool results and resume halted results before starting the next turn.
 
+use super::super::conversation::Prompt;
 use crate::contract::{ToolCallResult, ToolOutcome};
 
-use super::turn::{fold_batched_tool_result, BatchStep};
 use super::{
-    deterministic_rig_response, deterministic_tool_result_response, rig_tool_result_message,
-    tool_result_fingerprint, SessionLoopState,
+    deterministic_rig_response, deterministic_tool_result_response, tool_result_fingerprint,
+    SessionLoopState,
 };
 
 impl SessionLoopState {
@@ -15,6 +15,13 @@ impl SessionLoopState {
         };
 
         self.record_tool_effects(&result, &descriptor);
+        if let Err(message) = self.rig_history.append_result(&result, &descriptor.tool_id) {
+            let _ = self
+                .events_tx
+                .send(crate::contract::Event::Error(crate::contract::Error { message }).into());
+            self.inbox.push_front(crate::contract::Command::Shutdown);
+            return;
+        }
 
         // Doom-loop fingerprinting is per *result* (every call's
         // outcome must be checked, not just the batch's last), so
@@ -33,13 +40,7 @@ impl SessionLoopState {
             return;
         }
 
-        if fold_batched_tool_result(
-            &mut self.rig_history,
-            self.execution.has_pending_tools(),
-            &result,
-            &descriptor.tool_id,
-        ) == BatchStep::Continue
-        {
+        if self.execution.has_pending_tools() {
             return;
         }
 
@@ -106,8 +107,7 @@ impl SessionLoopState {
         let _ = self.events_tx.send(
             crate::contract::Event::StateChanged(crate::contract::SessionState::Running).into(),
         );
-        let (prompt, injected) =
-            self.inject_task_notification(rig_tool_result_message(&result, tool_id));
+        let (prompt, injected) = self.inject_task_notification(Prompt::result(&result, tool_id));
         self.run_turn(prompt, move || match injected {
             Some(text) => deterministic_rig_response(&text),
             None => deterministic_tool_result_response(&result),
@@ -145,6 +145,22 @@ mod tests {
             ]),
             ..Default::default()
         });
+        for call in [&reused, &sibling] {
+            let descriptor = descriptor(call);
+            let request = crate::contract::ToolCallRequest {
+                call_id: call.clone(),
+                occurrence_id: descriptor.identity.occurrence_id,
+                tool_id: descriptor.tool_id,
+                input: descriptor.args.into(),
+            };
+            state
+                .rig_history
+                .apply_event(&crate::providers::rig::conversation::announcement(
+                    &request,
+                    "new-batch",
+                ))
+                .unwrap();
+        }
         let before = state.rig_history.len();
         state
             .handle_tool_result(ToolCallResult::new(

@@ -1,5 +1,6 @@
 mod clearing;
 mod completion;
+pub(crate) mod conversation;
 mod guards;
 mod history;
 mod mapping;

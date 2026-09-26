@@ -33,6 +33,7 @@ pub(super) enum ResponseEnd {
 
 pub(super) struct ResponseCollector {
     events_tx: Sender<ProviderEvent>,
+    response_id: String,
     finish_reason: Option<rig_core::completion::FinishReason>,
     final_seen: bool,
     first_token_seen: bool,
@@ -40,6 +41,7 @@ pub(super) struct ResponseCollector {
     requested_tool_call_ids: Vec<ToolCallId>,
     requested_tool_calls: HashMap<ToolCallId, ToolCallDescriptor>,
     tool_calls: Vec<ToolCall>,
+    reasoning: Vec<rig_core::completion::message::Reasoning>,
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     max_output_tokens: u64,
@@ -65,6 +67,7 @@ impl ResponseCollector {
             ),
             tool_call_progress: ToolCallProgressBuffer::new(events_tx.clone(), config),
             events_tx,
+            response_id: uuid::Uuid::new_v4().to_string(),
             finish_reason: None,
             final_seen: false,
             first_token_seen: false,
@@ -72,6 +75,7 @@ impl ResponseCollector {
             requested_tool_call_ids: Vec::new(),
             requested_tool_calls: HashMap::new(),
             tool_calls: Vec::new(),
+            reasoning: Vec::new(),
             input_tokens: None,
             output_tokens: None,
             max_output_tokens: config.max_output_tokens,
@@ -93,6 +97,7 @@ impl ResponseCollector {
             }
             StreamedAssistantContent::Reasoning { reasoning, .. } => {
                 self.reasoning_buffer.flush();
+                self.reasoning.push(reasoning.clone());
                 let text = reasoning.display_text();
                 if !text.is_empty() {
                     let _ = self.events_tx.send(
@@ -154,6 +159,20 @@ impl ResponseCollector {
                 args: request.input.0.clone(),
             },
         );
+        let _ = self.events_tx.send(
+            Event::ConversationRecorded(crate::contract::ConversationRecord::ToolAnnounced {
+                response_id: self.response_id.clone(),
+                identity: request.identity(),
+                codec: super::super::conversation::MESSAGE_CODEC,
+                tool_call: serde_json::to_value(&tool_call)
+                    .expect("tool call serializes")
+                    .into(),
+                reasoning: serde_json::to_value(&self.reasoning)
+                    .expect("reasoning serializes")
+                    .into(),
+            })
+            .into(),
+        );
         let _ = self.events_tx.send(ProviderEvent::with_provider_payload(
             Event::ToolCallRequested(request),
             provider_payload,
@@ -176,7 +195,14 @@ impl ResponseCollector {
         let assistant_message = if end != ResponseEnd::Finished {
             // Rig aggregates its choice only on exhaustion. Cancellation
             // must rebuild history from observed chunks to retain call pairs.
-            partial_assistant_message(message_id, &self.text, self.tool_calls)
+            let mut message = partial_assistant_message(message_id, &self.text, self.tool_calls);
+            if let Message::Assistant { content, .. } = &mut message {
+                content.splice(
+                    0..0,
+                    self.reasoning.into_iter().map(AssistantContent::Reasoning),
+                );
+            }
+            message
         } else {
             // Rig's independent aggregate still contains the raw arguments.
             make_tool_call_arguments_replay_safe(&mut content);
@@ -203,6 +229,7 @@ impl ResponseCollector {
             assistant_message,
             TurnCompletion {
                 stop,
+                response_id: self.response_id,
                 requested_tool_call_ids: self.requested_tool_call_ids,
                 requested_tool_calls: self.requested_tool_calls,
                 input_tokens: self.input_tokens,

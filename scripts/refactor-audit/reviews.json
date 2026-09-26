@@ -97,6 +97,23 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/providers/rig/conversation/mod.rs",
+        "owner": "ConversationHistory",
+        "name": "apply",
+        "partition": "production"
+      },
+      "sha256": "4bb1f6a545b34398de35a991ba43323dfd00ab976fd48c35f6b039245ddc6661",
+      "related": {
+        "crates/horizon-agent/src/providers/rig/conversation/projection.rs": "243879b0735201ca3a4685047f4e17e557aaa57c5d2a0b96be3df8e0811958ab",
+        "crates/horizon-agent/src/providers/rig/conversation/upgrade.rs": "802a6736c27069b9f81d8b0c1815f1fd319ba6ae7296d201bb1b079c65098bed",
+        "crates/horizon-agentd/src/session/resume.rs": "ff547eb2c0c97929f1a4cf680bb3e74fde3789ffedb1581f55e68dbccbeecf87"
+      },
+      "decision": "preserve",
+      "reason": "One canonical mutation boundary validates message codecs and correlates provider calls with execution occurrences. Read-only SDK, clearing and proposer projections are separate; legacy inference exists only in the offline converter. Signed metadata, early results, retries, interruption and repeated clearing are covered by replay tests.",
+      "commit": "d66d79a6bc50d896ad7a469bf84ac2c2968005d2"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/providers/rig/session/input.rs",
         "owner": "Inputs",
         "name": "restore",

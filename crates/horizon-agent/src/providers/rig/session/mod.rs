@@ -8,8 +8,7 @@
 //! - [`mod@interaction`] — fresh user/background interaction preparation.
 //! - [`mod@turn`] — the turn-execution pipeline methods (`run_turn`,
 //!   `run_cancellable_turn`, `handle_truncation_recovery`,
-//!   `apply_turn_outcome`, `halt_turn_loop`) and the pure helpers
-//!   (`fold_batched_tool_result`, `BatchStep`).
+//!   `apply_turn_outcome`, `halt_turn_loop`).
 //! - [`mod@settlement`] — host acknowledgement of stopped tool batches.
 //!
 //! The `pub(super)` surface — `spawn_rig_session` plus the six items `tests.rs`
@@ -37,7 +36,6 @@ use super::completion::{
 };
 use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
 use super::history::load_rig_session_history;
-use super::mapping::rig_tool_result_message;
 use super::model_limits::model_limits;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::{ClearingState, ToolCallDescriptor, TurnCompletion};
@@ -58,8 +56,6 @@ mod turn;
 // `tests.rs`.
 #[allow(unused_imports)]
 pub(crate) use state::SessionLoopState;
-#[allow(unused_imports)]
-pub(super) use turn::{fold_batched_tool_result, BatchStep};
 
 /// Spawns one rig session with its initial provider configuration.
 pub(super) fn spawn_rig_session(
@@ -105,11 +101,21 @@ pub(super) fn spawn_rig_session(
             let duckdb_store = duckdb_cell.wait();
             let store_was_available = duckdb_store.is_some();
             let persisted =
-                load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events);
+                match load_rig_session_history(duckdb_store.as_ref(), session_id, &fallback_events)
+                {
+                    Ok(history) => history,
+                    Err(message) => {
+                        let _ =
+                            events_tx.send(Event::Error(crate::contract::Error { message }).into());
+                        let _ = events_tx.send(
+                            Event::StateChanged(crate::contract::SessionState::Failed).into(),
+                        );
+                        return;
+                    }
+                };
             let rig_history = persisted.messages;
-            let cleared_call_ids = persisted.cleared_call_ids;
+            let cleared_occurrence_ids = persisted.cleared_occurrence_ids;
             let memory_document = persisted.memory_document;
-            let moa_conversation = persisted.moa_conversation;
             let seed_from_fallback = persisted.seed_from_fallback;
             // Issue 012: when the DuckDB projection store is unavailable and
             // the JSONL event log also yielded no reconstructable history for
@@ -177,9 +183,8 @@ pub(super) fn spawn_rig_session(
                     extra_sections,
                     role,
                     rig_history,
-                    cleared_call_ids,
+                    cleared_occurrence_ids,
                     memory_document,
-                    moa_conversation,
                 )
                 .await;
                 state.inputs = restored_inputs;

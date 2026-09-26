@@ -4,13 +4,13 @@
 
 use std::collections::VecDeque;
 
+use super::super::conversation::ConversationHistory;
 use crossbeam_channel::Sender;
-use rig_core::completion::Message;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     config::RigAgentConfig,
-    contract::{Command, ProviderEvent, SessionId, ToolCallId},
+    contract::{Command, OccurrenceId, ProviderEvent, SessionId},
     prompt::SessionEnvironment,
     roles::RoleDefinition,
     tools::MemoryDocument,
@@ -37,8 +37,8 @@ pub(crate) struct SessionLoopState {
     pub(crate) activation: VecDeque<String>,
     pub(crate) inputs: super::input::Inputs,
     // --- Mutable loop state ---------------------------------------------
-    /// The rig conversation history, grown and cleared as turns run.
-    pub(crate) rig_history: Vec<Message>,
+    /// Canonical conversation; clearing only changes the provider projection.
+    pub(crate) rig_history: ConversationHistory,
     /// Tier 1 compaction state (`docs/agent-compaction-design.md`).
     pub(crate) clearing: ClearingState,
     /// Commands forwarded from the crossbeam channel onto a tokio channel
@@ -63,11 +63,6 @@ pub(crate) struct SessionLoopState {
     // --- Session identity/configuration and replaceable environment --------
     pub(crate) session_id: SessionId,
     pub(crate) config: RigAgentConfig,
-    /// The owner messages and answers a Mixture-of-Agents pass hands its
-    /// proposers. Maintained for every session (it costs one push per
-    /// message) so switching into a `[[moa]]` entry mid-session starts with
-    /// the conversation that already happened.
-    pub(crate) moa_conversation: super::moa::MoaConversation,
     /// The proposals the current turn's provider rounds carry, `None`
     /// outside a MoA turn.
     pub(crate) moa_turn: Option<super::moa::MoaTurn>,
@@ -85,7 +80,7 @@ impl Default for SessionLoopState {
         Self {
             inputs: super::input::Inputs::default(),
             activation: VecDeque::new(),
-            rig_history: Vec::new(),
+            rig_history: ConversationHistory::default(),
             clearing: ClearingState::disabled(),
             commands,
             task_wake,
@@ -95,7 +90,6 @@ impl Default for SessionLoopState {
             memory: None,
             session_id: SessionId::new(),
             config: RigAgentConfig::default(),
-            moa_conversation: super::moa::MoaConversation::default(),
             moa_turn: None,
             environment: SessionEnvironment::for_workspace_root(None),
             extra_sections: Vec::new(),
@@ -122,13 +116,12 @@ impl SessionLoopState {
         environment: SessionEnvironment,
         extra_sections: Vec<String>,
         role: Option<&'static RoleDefinition>,
-        rig_history: Vec<Message>,
-        cleared_call_ids: Vec<ToolCallId>,
+        rig_history: ConversationHistory,
+        cleared_occurrence_ids: Vec<OccurrenceId>,
         memory_document: Option<MemoryDocument>,
-        moa_conversation: super::moa::MoaConversation,
     ) -> Self {
         let mut clearing = super::discover_clearing_state(&config).await;
-        clearing.seed_cleared(cleared_call_ids);
+        clearing.seed_cleared(cleared_occurrence_ids);
         // A standing role seeds its memory document from the event log; a
         // non-standing role has no memory mechanism, so `memory` stays `None`
         // and the projection skips the memory prepend entirely.
@@ -153,7 +146,6 @@ impl SessionLoopState {
             guard: TurnLoopGuard::new(config.iteration_cap, config.doom_loop_window),
             memory,
             config,
-            moa_conversation,
             moa_turn: None,
             environment,
             extra_sections,
@@ -522,7 +514,7 @@ mod tests {
         };
         state
             .clearing
-            .seed_cleared(vec![crate::contract::ToolCallId("call-0".to_string())]);
+            .seed_cleared(vec![crate::contract::OccurrenceId("call-0".to_string())]);
         state.clearing.record_input_tokens(400_000);
 
         let selection =
@@ -540,7 +532,7 @@ mod tests {
             state
                 .clearing
                 .cleared()
-                .contains(&crate::contract::ToolCallId("call-0".to_string())),
+                .contains(&crate::contract::OccurrenceId("call-0".to_string())),
             "a frozen pass stays frozen across a switch"
         );
     }

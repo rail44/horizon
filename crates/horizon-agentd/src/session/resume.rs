@@ -182,14 +182,23 @@ fn settle_interrupted_turn(
     events: &mut Vec<Event>,
 ) -> anyhow::Result<()> {
     let outcomes = interrupted_input_outcomes(events);
-    if frame.is_turn_in_flight() || !outcomes.is_empty() {
+    let mut closing = cancel_unfinished_tool_calls(frame);
+    let mut restored = events.clone();
+    restored.extend(closing.clone());
+    for identity in horizon_agent::persistence::event_log::interrupted_conversation_calls(&restored)
+        .map_err(anyhow::Error::msg)?
+    {
+        closing.push(Event::ToolCallFinished(cancelled_tool_call_result(
+            identity,
+        )));
+    }
+    if frame.is_turn_in_flight() || !outcomes.is_empty() || !closing.is_empty() {
         // Mirrors what a live `Command::Cancel` does (`providers::rig::
         // session`, `providers::mock`): finish every still-outstanding
         // tool call as cancelled *before* the turn-end/state-change
         // pair, so e.g. a call parked in `WaitingForApproval` doesn't
         // keep reading as pending in the resumed frame -- there is no
         // live provider left to eventually answer it.
-        let mut closing = cancel_unfinished_tool_calls(frame);
         closing.extend(outcomes);
         if frame.is_turn_in_flight() && appender.has_open_turn() {
             closing.push(Event::TurnEnded(TurnEndReason::Cancelled));

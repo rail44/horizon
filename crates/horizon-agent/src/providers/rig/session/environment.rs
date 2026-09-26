@@ -67,7 +67,14 @@ mod tests {
         state.memory = Some(Default::default());
         state
             .rig_history
-            .push(Message::user("retained consultation"));
+            .append_prompt(
+                super::super::super::conversation::Prompt::input(
+                    crate::contract::ConversationInputKind::User,
+                    "retained consultation",
+                ),
+                &state.events_tx,
+            )
+            .unwrap();
         state.inputs.accept(
             SessionInput {
                 resume_work: false,
@@ -91,7 +98,10 @@ mod tests {
         assert_eq!(state.environment.cwd, root);
         assert_eq!(state.config.model, "spawn-model");
         assert!(state.memory.is_some());
-        assert_eq!(state.rig_history, [Message::user("retained consultation")]);
+        assert_eq!(
+            state.rig_history.messages(),
+            [Message::user("retained consultation")]
+        );
         assert_eq!(
             state
                 .inputs

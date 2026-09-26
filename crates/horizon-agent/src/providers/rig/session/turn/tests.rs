@@ -72,6 +72,16 @@ async fn cap_summary_request_disables_tools_without_changing_session_config() {
         events_tx,
         ..Default::default()
     };
+    state.rig_history =
+        crate::providers::rig::conversation::fixture(vec![rig_core::completion::Message::from(
+            rig_core::completion::message::ToolCall::new(
+                rig_core::message::ToolCallId::new_or_mint("last-call"),
+                rig_core::completion::message::ToolFunction::new(
+                    "fs.read".into(),
+                    json!({"path":"file"}),
+                ),
+            ),
+        )]);
     let original_config = state.config.clone();
     let result = ToolCallResult::new(
         ToolCallId("last-call".into()),
@@ -166,6 +176,12 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
             tool_id: crate::tools::MEMORY_UPDATE_TOOL_ID.into(),
             args,
         };
+        let request = crate::contract::ToolCallRequest {
+            call_id: call_id.clone(),
+            occurrence_id: descriptor.identity.occurrence_id.clone(),
+            tool_id: descriptor.tool_id.clone(),
+            input: descriptor.args.clone().into(),
+        };
         let result = ToolCallResult::new(
             call_id.clone(),
             descriptor.identity.occurrence_id.clone(),
@@ -193,6 +209,13 @@ async fn accepted_memory_updates_and_no_update_declarations_satisfy_the_checkpoi
             events_tx,
             ..Default::default()
         };
+        state
+            .rig_history
+            .apply_event(&crate::providers::rig::conversation::announcement(
+                &request,
+                "memory-response",
+            ))
+            .unwrap();
         state.handle_tool_result(result).await;
         assert_eq!(
             state.memory.as_ref().unwrap().checkpoint,

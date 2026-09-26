@@ -14,6 +14,14 @@ pub fn validate_history(path: impl AsRef<std::path::Path>) -> anyhow::Result<usi
     if let Some(summary) = report.skipped_summary() {
         anyhow::bail!("history is not ready for activation: {summary}");
     }
+    crate::providers::rig::conversation::upgrade::validate_conversation_records(
+        &report
+            .records
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<Vec<_>, _>>()?,
+    )
+    .map_err(anyhow::Error::msg)?;
     let expected = report.records.len();
     let store = projection::duckdb::Store::open_in_memory()?;
     let imported = store.replace_from_event_log_records(report.records)?;

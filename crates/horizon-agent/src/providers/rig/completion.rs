@@ -1,3 +1,4 @@
+use super::conversation::{ConversationHistory, Prompt};
 mod attempt;
 mod outcome;
 mod response;
@@ -145,8 +146,8 @@ pub(super) async fn complete_rig_turn(
     config: &RigAgentConfig,
     environment: &SessionEnvironment,
     extra_sections: &[String],
-    rig_history: &mut Vec<Message>,
-    prompt: Message,
+    rig_history: &mut ConversationHistory,
+    prompt: Prompt,
     events_tx: &Sender<ProviderEvent>,
     clearing: &mut ClearingState,
     memory: Option<&crate::tools::MemoryDocument>,
@@ -154,6 +155,20 @@ pub(super) async fn complete_rig_turn(
     fallback: impl FnOnce() -> Message,
     token: &CancellationToken,
 ) -> TurnCompletion {
+    if let Err(message) = rig_history.append_prompt(prompt, events_tx) {
+        let _ = events_tx.send(Event::Error(Error { message }).into());
+        return TurnCompletion {
+            stop: CompletionStop::Failed,
+            ..Default::default()
+        };
+    }
+    if let Err(message) = rig_history.validate_ready() {
+        let _ = events_tx.send(Event::Error(Error { message }).into());
+        return TurnCompletion {
+            stop: CompletionStop::Failed,
+            ..Default::default()
+        };
+    }
     // Tier 1's one execution point: between provider rounds, right before a
     // request is built (`docs/agent-compaction-design.md`). Being here is
     // what gives the design's turn-semantics requirements for free -- a
@@ -166,13 +181,20 @@ pub(super) async fn complete_rig_turn(
     if let Some(cleared) = clearing.run_pass(rig_history) {
         let _ = events_tx.send(Event::HistoryCleared(cleared).into());
     }
+    let mut projected = history_for_provider_request(rig_history, clearing.cleared(), memory, moa);
+    let Some(prompt) = projected.pop() else {
+        return TurnCompletion {
+            stop: CompletionStop::Failed,
+            ..Default::default()
+        };
+    };
     if config.api_key_present {
         match rig_provider_turn_with_retry(
             config,
             environment,
             extra_sections,
             &prompt,
-            history_for_provider_request(rig_history, clearing.cleared(), memory, moa),
+            projected,
             events_tx,
             token,
         )
@@ -206,15 +228,29 @@ pub(super) async fn complete_rig_turn(
                     }
                     _ => {}
                 }
-                rig_history.push(prompt);
                 if matches!(&assistant_message, Message::Assistant { content, .. } if content.iter().any(|part| !matches!(part, AssistantContent::Text(text) if text.text.is_empty())))
                 {
-                    rig_history.push(assistant_message);
+                    let calls = completion
+                        .requested_tool_call_ids
+                        .iter()
+                        .map(|id| completion.requested_tool_calls[id].identity.clone())
+                        .collect();
+                    if let Err(message) = rig_history.record_response(
+                        completion.response_id.clone(),
+                        &assistant_message,
+                        calls,
+                        events_tx,
+                    ) {
+                        let _ = events_tx.send(Event::Error(Error { message }).into());
+                        return TurnCompletion {
+                            stop: CompletionStop::Failed,
+                            ..completion
+                        };
+                    }
                 }
                 return completion;
             }
             Err(error) => {
-                rig_history.push(prompt);
                 let _ = events_tx.send(
                     Event::Error(Error {
                         message: format!("Rig completion failed: {error}"),
@@ -230,12 +266,28 @@ pub(super) async fn complete_rig_turn(
     }
 
     let assistant_message = fallback();
-    rig_history.push(prompt);
-    rig_history.push(assistant_message.clone());
-    let events = horizon_provider_events_from_rig_message(assistant_message);
+    let events = horizon_provider_events_from_rig_message(assistant_message.clone());
     let requested = tool_call_requests_from_events(&events);
     let requested_tool_call_ids = requested.iter().map(|(id, _)| id.clone()).collect();
-    let requested_tool_calls = requested.into_iter().collect();
+    let requested_tool_calls: std::collections::HashMap<_, _> = requested.into_iter().collect();
+    let response_id = uuid::Uuid::new_v4().to_string();
+    let calls = events
+        .iter()
+        .filter_map(ProviderEvent::as_event)
+        .filter_map(|event| match event {
+            Event::ToolCallRequested(request) => Some(request.identity()),
+            _ => None,
+        })
+        .collect();
+    if let Err(message) =
+        rig_history.record_response(response_id.clone(), &assistant_message, calls, events_tx)
+    {
+        let _ = events_tx.send(Event::Error(Error { message }).into());
+        return TurnCompletion {
+            stop: CompletionStop::Failed,
+            ..Default::default()
+        };
+    }
     let final_text = events
         .iter()
         .filter_map(ProviderEvent::as_event)
@@ -253,6 +305,7 @@ pub(super) async fn complete_rig_turn(
         stop: CompletionStop::Finished {
             text: final_text.unwrap_or_default(),
         },
+        response_id,
         requested_tool_call_ids,
         requested_tool_calls,
         input_tokens: None,
@@ -503,12 +556,12 @@ pub(super) fn output_cap_truncated(output_tokens: Option<u64>, cap: u64, cancell
 /// OpenAI defaults this to true, but Horizon also supports configurable
 /// OpenAI-compatible endpoints. Sending the flag explicitly makes the
 /// intended contract stable across those backends: one assistant response
-/// may request several independent tools, while `session::fold_batched_tool_result`
+/// may request several independent tools, while the session coordinator
 /// still waits for every result before the next completion.
 pub(super) fn provider_additional_params(kind: ProviderKind) -> serde_json::Value {
     match kind {
         // OpenAI-compatible: one assistant response may request several
-        // independent tools, while `session::fold_batched_tool_result` still
+        // independent tools, while the session coordinator still
         // waits for every result before the next completion. Sending the
         // flag explicitly makes the intended contract stable across
         // configurable backends.

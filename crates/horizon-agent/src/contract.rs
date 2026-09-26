@@ -1,3 +1,5 @@
+mod conversation;
+pub use conversation::{ConversationInputKind, ConversationRecord};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -419,6 +421,8 @@ pub enum Event {
     /// at launch, so a cancelled pass still leaves the relation behind.
     /// Carries no frame item and no projection table row.
     MoaPassStarted(MoaPassStarted),
+    /// Exact provider history, independent of display and audit rows.
+    ConversationRecorded(ConversationRecord),
 }
 
 /// Payload for [`Event::MoaPassStarted`].
@@ -444,11 +448,11 @@ pub struct MoaProposer {
 /// the pass froze into the session's cleared set, and how many characters of
 /// tool-result text that removed from every subsequent provider request.
 ///
-/// `cleared_call_ids` is in history order (oldest first) — the order the
+/// `cleared_occurrence_ids` is in history order (oldest first) — the order the
 /// pass walked — so a replayed set is byte-identical to the live one.
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 pub struct HistoryCleared {
-    pub cleared_call_ids: Vec<ToolCallId>,
+    pub cleared_occurrence_ids: Vec<OccurrenceId>,
     pub recovered_chars: u64,
 }
 
@@ -583,6 +587,7 @@ pub fn event_kind(event: &Event) -> &'static str {
         Event::InputOutcome(_) => "input_outcome",
         Event::DeliveryAcknowledged(_) => "delivery_acknowledged",
         Event::MoaPassStarted(_) => "moa_pass_started",
+        Event::ConversationRecorded(_) => "conversation_recorded",
     }
 }
 

@@ -1,5 +1,5 @@
 //! Stopped rounds wait for the host to settle issued calls before another request.
-use super::{rig_tool_result_message, SessionLoopState, ToolCallDescriptor, TurnCompletion};
+use super::{SessionLoopState, ToolCallDescriptor, TurnCompletion};
 use crate::contract::{Command, ProviderEvent, ToolCallId};
 use std::collections::HashMap;
 
@@ -46,8 +46,18 @@ impl SessionLoopState {
                     for result in results {
                         if let Some(descriptor) = calls.get(&result.call_id) {
                             self.record_tool_effects(&result, descriptor);
-                            self.rig_history
-                                .push(rig_tool_result_message(&result, &descriptor.tool_id));
+                            if let Err(message) =
+                                self.rig_history.append_result(&result, &descriptor.tool_id)
+                            {
+                                let _ = self.events_tx.send(
+                                    crate::contract::Event::Error(crate::contract::Error {
+                                        message,
+                                    })
+                                    .into(),
+                                );
+                                self.inbox.push_front(Command::Shutdown);
+                                return;
+                            }
                         }
                     }
                     self.inbox.retain(|command| !matches!(command,
@@ -70,8 +80,8 @@ mod tests {
     use super::*;
     use crate::persistence::{event_log, projection::duckdb::Store};
     use crate::providers::rig::{
-        completion::{partial_assistant_message, CompletionStop},
-        mapping::rig_messages_from_horizon_events,
+        completion::CompletionStop,
+        conversation::{ConversationHistory, Prompt},
     };
     use crate::{
         contract::{
@@ -81,7 +91,6 @@ mod tests {
         live::LiveState,
         tools::{process_agent_provider_event, HostTools, ToolSessionBuilder},
     };
-    use rig_core::completion::Message;
     use serde_json::json;
 
     #[tokio::test]
@@ -159,6 +168,24 @@ mod tests {
             tool_id: "fs.read".into(),
             input: json!({"path":"not-run.txt"}).into(),
         };
+        let (events, receive) = crossbeam_channel::unbounded();
+        let mut history = ConversationHistory::default();
+        history.open_turn(&events);
+        history
+            .append_prompt(
+                Prompt::input(crate::contract::ConversationInputKind::User, "edit"),
+                &events,
+            )
+            .unwrap();
+        for event in receive.try_iter() {
+            live.extend_provider_events([event]).unwrap();
+        }
+        for request in [&written, &pending] {
+            let event =
+                crate::providers::rig::conversation::announcement(request, "stopped-response");
+            history.apply_event(&event).unwrap();
+            live.extend_events([event]);
+        }
         live.extend_events([
             Event::MessageCommitted(crate::contract::Message {
                 role: MessageRole::User,
@@ -185,31 +212,11 @@ mod tests {
             Event::ToolCallRequested(pending.clone()),
             Event::ProviderRequestFinished,
         ]);
-        let (events, receive) = crossbeam_channel::unbounded();
         let (commands, input) = tokio::sync::mpsc::unbounded_channel();
-        let rig_tool_call_from_request = |request: &ToolCallRequest| {
-            rig_core::completion::message::ToolCall::new(
-                rig_core::message::ToolCallId::new_or_mint(request.call_id.0.clone()),
-                rig_core::completion::message::ToolFunction::new(
-                    request.tool_id.clone(),
-                    request.input.0.clone(),
-                ),
-            )
-        };
         let mut state = SessionLoopState {
             commands: input,
             events_tx: events,
-            rig_history: vec![
-                Message::user("edit"),
-                partial_assistant_message(
-                    None,
-                    "",
-                    vec![
-                        rig_tool_call_from_request(&written),
-                        rig_tool_call_from_request(&pending),
-                    ],
-                ),
-            ],
+            rig_history: history,
             ..Default::default()
         };
         state
@@ -269,8 +276,10 @@ mod tests {
         let records = event_log::read(&log).unwrap().records;
         let restored: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
         assert_eq!(
-            rig_messages_from_horizon_events(&restored),
-            state.rig_history
+            ConversationHistory::from_events(&restored)
+                .unwrap()
+                .messages(),
+            state.rig_history.messages()
         );
         let store = Store::open_in_memory().unwrap();
         assert_eq!(
@@ -283,8 +292,10 @@ mod tests {
         let database = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
         assert_eq!(
             crate::providers::rig::history::load_rig_session_history(Some(&database), session, &[])
-                .messages,
-            state.rig_history
+                .unwrap()
+                .messages
+                .messages(),
+            state.rig_history.messages()
         );
         let changes = crate::transcript::aggregate_changes(
             &crate::transcript::build_tool_call_views(&live.frame().items),

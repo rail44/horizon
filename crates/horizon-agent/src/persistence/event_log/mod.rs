@@ -12,19 +12,24 @@ use crate::roles::RoleId;
 
 mod appender;
 mod health;
+mod offline;
+pub use offline::convert_conversation_file;
 mod turn;
 mod writer;
 
 #[cfg(test)]
 mod migration_tests;
 
+pub use crate::providers::rig::conversation::{
+    interrupted_conversation_calls, upgrade::upgrade_conversation_records,
+};
 pub use appender::{Appender, PendingEvents};
 pub use health::FailureSubscription;
 use turn::TurnTracker;
 pub use writer::{WriterHandle, WriterInit};
 
 pub(crate) const AGENT_EVENT_LOG_SCHEMA: &str = "horizon.agent.event_log";
-pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 3;
+pub(crate) const AGENT_EVENT_LOG_VERSION: u32 = 4;
 
 /// A format cutover requires operator action, not a persistence-disabled run.
 #[derive(Debug)]
@@ -36,7 +41,7 @@ pub struct UnsupportedEventLogFormat {
 impl std::fmt::Display for UnsupportedEventLogFormat {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(formatter,
-            "agent event log {} has version {:?}; explicit format conversion to version {} is required; use scripts/migrate-agent-history.py before starting Horizon",
+            "agent event log {} has version {:?}; explicit format conversion to version {} is required; run horizon-migrate-conversation (for v1/v2, first run scripts/migrate-agent-history.py) before starting Horizon",
             self.path.display(), self.found, AGENT_EVENT_LOG_VERSION)
     }
 }

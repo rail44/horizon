@@ -1,9 +1,9 @@
 //! Fresh interactions started by owner input or a completed background task.
 
-use rig_core::completion::Message;
-
+use super::super::conversation::Prompt;
+use super::deterministic_rig_response;
 use super::state::SessionLoopState;
-use super::{deterministic_rig_response, rig_tool_result_message};
+use crate::contract::ConversationInputKind;
 
 impl SessionLoopState {
     pub(super) async fn handle_user_message(&mut self, text: String) {
@@ -20,7 +20,15 @@ impl SessionLoopState {
         if self.cancel_outstanding_tool_calls().await {
             self.emit_cancelled_turn();
         }
-        self.begin_interaction();
+        if !self.begin_interaction() {
+            return;
+        }
+        self.rig_history
+            .append_prompt(
+                Prompt::input(ConversationInputKind::User, text.clone()),
+                &self.events_tx,
+            )
+            .expect("typed user input");
         let _ = self.events_tx.send(
             crate::contract::Event::MessageCommitted(crate::contract::Message {
                 role: crate::contract::MessageRole::User,
@@ -30,15 +38,13 @@ impl SessionLoopState {
         );
         // An owner message opens a Mixture-of-Agents pass; the
         // aggregator's turn runs once every proposer has
-        // answered. The message joins the conversation only
-        // after the pass, which carries it separately from the
-        // conversation so far.
+        // answered. Proposers see earlier interactions and receive this
+        // interaction's already-recorded owner input separately.
         let pass = self.run_moa_pass(&text).await;
-        self.moa_conversation.record_owner(text.clone());
         if let super::moa::PassOutcome::Cancelled = pass {
             return;
         }
-        let (prompt, injected) = self.inject_task_notification(Message::user(text.clone()));
+        let (prompt, injected) = self.inject_task_notification(Prompt::Current);
         let fallback_text = injected.unwrap_or(text);
         self.run_turn(prompt, move || deterministic_rig_response(&fallback_text))
             .await;
@@ -64,13 +70,21 @@ impl SessionLoopState {
             return;
         };
         let text = notification.text;
-        self.begin_interaction();
+        if !self.begin_interaction() {
+            return;
+        }
+        self.rig_history
+            .append_prompt(
+                Prompt::input(ConversationInputKind::Notification, text.clone()),
+                &self.events_tx,
+            )
+            .expect("typed notification");
         let _ = self
             .events_tx
             .send(crate::tools::notification_event(text.clone()).into());
         self.report_task_failures(notification.failures);
         let fallback_text = text.clone();
-        self.run_turn(Message::user(text), move || {
+        self.run_turn(Prompt::Current, move || {
             deterministic_rig_response(&fallback_text)
         })
         .await;
@@ -79,11 +93,13 @@ impl SessionLoopState {
     /// Settle a guard-halted result before the next request, so every tool
     /// call in provider history has a result. Fresh interactions also reset
     /// the tool-loop guards and standing-memory checkpoint.
-    fn begin_interaction(&mut self) {
+    fn begin_interaction(&mut self) -> bool {
         if let Some((result, tool_id)) = self.execution.take_halted() {
-            self.rig_history
-                .push(rig_tool_result_message(&result, &tool_id));
+            if !self.retain_prompt(Prompt::result(&result, &tool_id)) {
+                return false;
+            }
         }
+        self.rig_history.open_turn(&self.events_tx);
         self.guard.reset();
         if let Some(memory) = &mut self.memory {
             memory.checkpoint = super::memory::MemoryCheckpoint::Pending;
@@ -91,5 +107,6 @@ impl SessionLoopState {
         let _ = self.events_tx.send(
             crate::contract::Event::StateChanged(crate::contract::SessionState::Running).into(),
         );
+        true
     }
 }

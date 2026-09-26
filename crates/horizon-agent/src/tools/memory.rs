@@ -177,7 +177,7 @@ impl MemoryDocument {
 
 /// Replays every persisted `MemoryDigest` event's field operations to
 /// reconstruct the current memory document — the resume/replay counterpart to
-/// the live `MemoryState`, mirroring `clearing::cleared_call_ids_from_events`.
+/// the live `MemoryState`, mirroring `clearing::cleared_occurrence_ids_from_events`.
 /// Called at session spawn to seed `MemoryState` from the event log.
 pub fn memory_document_from_events(events: &[Event]) -> MemoryDocument {
     let mut document = MemoryDocument::default();

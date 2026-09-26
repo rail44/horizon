@@ -10,16 +10,16 @@ use super::completion::{
 use super::guards::{tool_result_fingerprint, GuardHalt, TurnLoopGuard};
 use super::mapping::{
     horizon_events_from_rig_message, horizon_provider_events_from_rig_message,
-    horizon_tool_definition_from_rig, repair_replayed_message_pairing,
-    rig_messages_from_horizon_events, rig_tool_call_provider_payload, rig_tool_call_request,
-    rig_workspace_snapshot_call, rig_workspace_snapshot_call_with_provider_metadata,
-    RIG_PROVIDER_PAYLOAD_SCHEMA, RIG_PROVIDER_PAYLOAD_VERSION,
+    horizon_tool_definition_from_rig, rig_messages_from_horizon_events,
+    rig_tool_call_provider_payload, rig_tool_call_request, rig_workspace_snapshot_call,
+    rig_workspace_snapshot_call_with_provider_metadata, RIG_PROVIDER_PAYLOAD_SCHEMA,
+    RIG_PROVIDER_PAYLOAD_VERSION,
 };
 use super::retry::{
     retry_backoff, retryable_rejection, sleep_unless_cancelled, with_pre_generation_retry, Attempt,
     Retried, PROVIDER_REQUEST_MAX_ATTEMPTS, PROVIDER_RETRY_MAX_BACKOFF,
 };
-use super::session::{fold_batched_tool_result, BatchStep, SessionLoopState};
+use super::session::SessionLoopState;
 use super::session_prompt::{session_environment, session_extra_sections};
 use super::*;
 use crate::config::RigAgentConfig;
@@ -907,6 +907,9 @@ fn rebuilds_rig_memory_messages_from_horizon_transcript_events() {
             crate::contract::OccurrenceId("call-1".to_string()),
             serde_json::json!({ "tab_count": 1 }),
         )),
+        Event::ProviderRequestSent(crate::contract::ProviderRequestSent {
+            model: "next-round".into(),
+        }),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             text: "There is one tab.".to_string(),
@@ -960,6 +963,7 @@ fn loads_initial_rig_history_from_duckdb_projection() {
             text: "hi".to_string(),
         }),
     ];
+    let events = super::conversation::upgrade::fixture(events);
 
     let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
     store
@@ -971,13 +975,13 @@ fn loads_initial_rig_history_from_duckdb_projection() {
         .expect("append events");
     let shared_store = DuckdbStoreHandle::new(store);
 
-    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]);
+    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]).unwrap();
     assert_eq!(
-        persisted.messages,
-        rig_messages_from_horizon_events(&events)
+        persisted.messages.messages(),
+        vec![RigMessage::user("hello"), RigMessage::assistant("hi")]
     );
     assert!(
-        persisted.cleared_call_ids.is_empty(),
+        persisted.cleared_occurrence_ids.is_empty(),
         "a log with no clearing pass restores an empty cleared set"
     );
 
@@ -1006,16 +1010,19 @@ fn load_rig_session_history_falls_back_to_event_log_when_store_is_unavailable() 
             text: "4".to_string(),
         }),
     ];
+    let events = super::conversation::upgrade::fixture(events);
 
-    let persisted = load_rig_session_history(None, session_id, &events);
+    let persisted = load_rig_session_history(None, session_id, &events).unwrap();
 
     assert_eq!(
-        persisted.messages,
-        rig_messages_from_horizon_events(&events),
+        persisted.messages.messages(),
+        super::conversation::ConversationHistory::from_events(&events)
+            .unwrap()
+            .messages(),
         "a None store must rebuild the same messages from the fallback events"
     );
     assert!(
-        persisted.cleared_call_ids.is_empty(),
+        persisted.cleared_occurrence_ids.is_empty(),
         "no clearing events → empty cleared set"
     );
 }
@@ -1027,13 +1034,13 @@ fn load_rig_session_history_falls_back_to_event_log_when_store_is_unavailable() 
 #[test]
 fn load_rig_session_history_returns_empty_when_store_and_events_are_both_empty() {
     let session_id = crate::contract::SessionId::new();
-    let persisted = load_rig_session_history(None, session_id, &[]);
+    let persisted = load_rig_session_history(None, session_id, &[]).unwrap();
     assert!(
-        persisted.messages.is_empty(),
+        persisted.messages.messages().is_empty(),
         "no store and no events → empty messages"
     );
     assert!(
-        persisted.cleared_call_ids.is_empty(),
+        persisted.cleared_occurrence_ids.is_empty(),
         "no store and no events → empty cleared set"
     );
 }
@@ -1065,6 +1072,7 @@ fn resumed_history_from_duckdb_is_pairing_valid() {
         tool_call_finished("call-1"),
         tool_call_request("call-2"),
     ];
+    let events = super::conversation::upgrade::fixture(events);
 
     let store = crate::persistence::projection::duckdb::Store::open(&path).expect("open store");
     store
@@ -1076,11 +1084,11 @@ fn resumed_history_from_duckdb_is_pairing_valid() {
         .expect("append events");
     let shared_store = DuckdbStoreHandle::new(store);
 
-    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]);
+    let persisted = load_rig_session_history(Some(&shared_store), session_id, &[]).unwrap();
     // user, assistant(call-1 + "Let me check."), tool(call-1),
     // assistant(call-2), tool(cancelled call-2).
-    assert_pairing_valid(&persisted.messages);
-    assert_eq!(persisted.messages.len(), 5);
+    assert_pairing_valid(&persisted.messages.messages());
+    assert_eq!(persisted.messages.messages().len(), 5);
 
     drop(shared_store);
     let _ = std::fs::remove_file(path);
@@ -1164,28 +1172,34 @@ fn a_persisted_error_contributes_no_message_when_history_is_rebuilt() {
             text: "4".to_string(),
         }),
     ];
+    let events = super::conversation::upgrade::fixture(events);
 
-    let persisted = load_rig_session_history(None, session_id, &events);
+    let persisted = load_rig_session_history(None, session_id, &events).unwrap();
 
-    assert_eq!(persisted.messages.len(), 2, "{:?}", persisted.messages);
+    assert_eq!(
+        persisted.messages.messages().len(),
+        2,
+        "{:?}",
+        persisted.messages.messages()
+    );
     assert!(
-        matches!(&persisted.messages[0], RigMessage::User { content }
+        matches!(&persisted.messages.messages()[0], RigMessage::User { content }
             if matches!(content.first(), Some(UserContent::Text(text))
                 if text.text == "what is 2+2?")),
         "got {:?}",
-        persisted.messages[0]
+        persisted.messages.messages()[0]
     );
     assert!(
-        matches!(&persisted.messages[1], RigMessage::Assistant { content, .. }
+        matches!(&persisted.messages.messages()[1], RigMessage::Assistant { content, .. }
             if matches!(content.first(), Some(AssistantContent::Text(text))
                 if text.text == "4")),
         "got {:?}",
-        persisted.messages[1]
+        persisted.messages.messages()[1]
     );
     assert!(
-        !format!("{:?}", persisted.messages).contains("Provider stream timed out"),
+        !format!("{:?}", persisted.messages.messages()).contains("Provider stream timed out"),
         "the fault's text must not reach the provider: {:?}",
-        persisted.messages
+        persisted.messages.messages()
     );
 }
 
@@ -1361,6 +1375,9 @@ fn an_out_of_order_parallel_tool_batch_replays_paired() {
         tool_call_request("call-b"),
         tool_call_finished("call-b"),
         tool_call_finished("call-a"),
+        Event::ProviderRequestSent(crate::contract::ProviderRequestSent {
+            model: "next-round".into(),
+        }),
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::Assistant,
             text: "done".to_string(),
@@ -1373,11 +1390,10 @@ fn an_out_of_order_parallel_tool_batch_replays_paired() {
     assert_eq!(messages.len(), 4);
 }
 
-/// The repair must be a fixed point: running it over an already-repaired
-/// sequence changes nothing, so a session resumed twice sees the same
-/// history both times.
+/// Legacy conversion discards unknown results and closes an interrupted
+/// call before the next owner input; the normal runtime does no such inference.
 #[test]
-fn rebuilt_history_pairing_repair_is_idempotent() {
+fn legacy_conversion_closes_a_missing_call_before_the_next_owner_input() {
     let events = vec![
         Event::MessageCommitted(AgentMessage {
             role: MessageRole::User,
@@ -1399,8 +1415,6 @@ fn rebuilt_history_pairing_repair_is_idempotent() {
 
     let messages = rig_messages_from_horizon_events(&events);
     assert_pairing_valid(&messages);
-
-    assert_eq!(repair_replayed_message_pairing(messages.clone()), messages);
 }
 
 #[test]
@@ -1593,8 +1607,7 @@ fn replayed_tool_call_events_are_normalized_when_history_is_rebuilt() {
     let messages = rig_messages_from_horizon_events(&events);
 
     // Both calls came from one provider response, so the rebuild folds them
-    // back into a single assistant message (see
-    // `mapping::repair_replayed_message_pairing`); neither was ever
+    // back into a single canonical response; neither was ever
     // answered, so each also gets a cancelled result behind it.
     assert_eq!(
         history_tool_call_arguments(&messages[0]),
@@ -1935,7 +1948,7 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         extra_sections,
         events_tx: tx.clone(),
         guard,
-        rig_history: history,
+        rig_history: super::conversation::fixture(history),
         execution: pending.into(),
         ..SessionLoopState::default()
     };
@@ -1978,11 +1991,13 @@ async fn halt_turn_loop_stashes_real_result_and_cancels_only_other_pending_calls
         "the real, already-executed result must be stashed for Continue/a new user message"
     );
     assert_eq!(state.rig_history.len(), 3);
-    assert!(matches!(&state.rig_history[2], RigMessage::User { content }
+    assert!(
+        matches!(&state.rig_history.messages()[2], RigMessage::User { content }
         if matches!(content.first(), Some(UserContent::ToolResult(result))
             if result.call.as_str() == id_b.0
                 && matches!(result.content.first(), Some(ToolResultContent::Text(text))
-                    if text.text.contains("cancelled")))));
+                    if text.text.contains("cancelled"))))
+    );
 
     assert!(!state.execution.has_pending_tools());
     match recv(&rx) {
@@ -2137,6 +2152,15 @@ fn start_fallback_rig_session_with_history(
                     }
                 }
                 let _ = commands.send(Command::ToolCallsSettled { id, results });
+            } else if matches!(
+                &event,
+                ProviderEvent::Event {
+                    event: Event::ConversationRecorded(_),
+                    ..
+                }
+            ) {
+                // These tests assert coordinator/UI events. Journal replay is tested separately.
+                continue;
             } else if forward.send(event).is_err() {
                 return;
             }
@@ -2167,10 +2191,11 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
             ..
         })
     ));
-    let call_id = match recv(&rx) {
-        Event::ToolCallRequested(request) => request.call_id,
+    let mut current_call = match recv(&rx) {
+        Event::ToolCallRequested(request) => request,
         other => panic!("expected a tool call request, got {other:?}"),
     };
+    let call_id = current_call.call_id.clone();
 
     // Each result asks the fallback responder (via `loop_again`) to request
     // the tool again — a self-sustaining tool loop, exactly what the cap
@@ -2179,14 +2204,14 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     for i in 0..TEST_ITERATION_CAP {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            crate::contract::OccurrenceId(call_id.0.clone()),
+            current_call.occurrence_id.clone(),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-        assert!(matches!(
-            recv(&rx),
-            Event::ToolCallRequested(request) if request.call_id == call_id
-        ));
+        current_call = match recv(&rx) {
+            Event::ToolCallRequested(request) if request.call_id == call_id => request,
+            event => panic!("expected next call: {event:?}"),
+        };
     }
 
     // The next tool-driven turn exceeds the cap: the session halts instead
@@ -2199,7 +2224,7 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // ToolCallFinished may be emitted for it.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        crate::contract::OccurrenceId(call_id.0.clone()),
+        current_call.occurrence_id.clone(),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(
@@ -2220,16 +2245,16 @@ fn rig_session_iteration_cap_halts_tool_loop_and_session_recovers() {
     // never intervened.
     let _ = tx.send(Command::ContinueTurn);
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-    assert!(matches!(
-        recv(&rx),
-        Event::ToolCallRequested(request) if request.call_id == call_id
-    ));
+    current_call = match recv(&rx) {
+        Event::ToolCallRequested(request) if request.call_id == call_id => request,
+        event => panic!("expected next call: {event:?}"),
+    };
 
     // Resolve that call with a plain (non-looping) result so the turn
     // completes normally, proving the resumed session is fully healthy.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        crate::contract::OccurrenceId(call_id.0.clone()),
+        current_call.occurrence_id.clone(),
         serde_json::json!({ "done": true }),
     )));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
@@ -2299,22 +2324,23 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
             ..
         })
     ));
-    let call_id = match recv(&rx) {
-        Event::ToolCallRequested(request) => request.call_id,
+    let mut current_call = match recv(&rx) {
+        Event::ToolCallRequested(request) => request,
         other => panic!("expected a tool call request, got {other:?}"),
     };
+    let call_id = current_call.call_id.clone();
 
     for i in 0..cap {
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
             call_id.clone(),
-            crate::contract::OccurrenceId(call_id.0.clone()),
+            current_call.occurrence_id.clone(),
             serde_json::json!({ "loop_again": true, "n": i }),
         )));
         assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
-        assert!(matches!(
-            recv(&rx),
-            Event::ToolCallRequested(request) if request.call_id == call_id
-        ));
+        current_call = match recv(&rx) {
+            Event::ToolCallRequested(request) if request.call_id == call_id => request,
+            event => panic!("expected next call: {event:?}"),
+        };
     }
 
     // The next tool-driven turn exceeds the cap. `summarize_on_cap` runs a
@@ -2324,7 +2350,7 @@ fn rig_session_forces_a_summary_when_the_explore_role_hits_its_cap() {
     // through to its plain-text reply, which becomes the report.
     let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
         call_id.clone(),
-        crate::contract::OccurrenceId(call_id.0.clone()),
+        current_call.occurrence_id.clone(),
         serde_json::json!({ "loop_again": true, "n": "final" }),
     )));
     assert_eq!(recv(&rx), Event::StateChanged(SessionState::Running));
@@ -2480,120 +2506,6 @@ fn doom_loop_trips_on_identical_tool_args_output_fingerprints_at_the_window_boun
 // completion per *arriving result* instead of waiting for the whole batch:
 // protocol-malformed history, a burst of stray "anything else?" turns, and
 // the iteration-cap guard burning N times faster than intended.
-
-#[test]
-fn fold_batched_tool_result_holds_non_last_results_and_leaves_the_last_for_the_caller() {
-    let call_a = ToolCallId("call-a".to_string());
-    let call_b = ToolCallId("call-b".to_string());
-    let call_c = ToolCallId("call-c".to_string());
-    let mut history = vec![
-        RigMessage::user("multi tool please"),
-        RigMessage::Assistant {
-            id: None,
-            content: vec![
-                AssistantContent::ToolCall(ToolCall::new(
-                    rig_core::message::ToolCallId::new_or_mint(call_a.0.clone()),
-                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/a" })),
-                )),
-                AssistantContent::ToolCall(ToolCall::new(
-                    rig_core::message::ToolCallId::new_or_mint(call_b.0.clone()),
-                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/b" })),
-                )),
-                AssistantContent::ToolCall(ToolCall::new(
-                    rig_core::message::ToolCallId::new_or_mint(call_c.0.clone()),
-                    ToolFunction::new("fs.read".to_string(), serde_json::json!({ "path": "/c" })),
-                )),
-            ],
-        },
-    ];
-    let mut pending: HashMap<ToolCallId, ToolCallDescriptor> = HashMap::from([
-        (
-            call_a.clone(),
-            ToolCallDescriptor {
-                identity: crate::test_support::tool_identity(&call_a),
-                tool_id: "fs.read".to_string(),
-                args: serde_json::json!({ "path": "/a" }),
-            },
-        ),
-        (
-            call_b.clone(),
-            ToolCallDescriptor {
-                identity: crate::test_support::tool_identity(&call_b),
-                tool_id: "fs.read".to_string(),
-                args: serde_json::json!({ "path": "/b" }),
-            },
-        ),
-        (
-            call_c.clone(),
-            ToolCallDescriptor {
-                identity: crate::test_support::tool_identity(&call_c),
-                tool_id: "fs.read".to_string(),
-                args: serde_json::json!({ "path": "/c" }),
-            },
-        ),
-    ]);
-
-    // First of three: two more calls are still outstanding, so the result
-    // is folded directly into history (in arrival order) and no turn runs.
-    pending.remove(&call_a);
-    let result_a = ToolCallResult::new(
-        call_a.clone(),
-        crate::contract::OccurrenceId(call_a.0.clone()),
-        serde_json::json!({ "contents": "a" }),
-    );
-    assert_eq!(
-        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_a, "fs.read"),
-        BatchStep::Continue
-    );
-    assert_eq!(history.len(), 3);
-
-    // Second of three: same story.
-    pending.remove(&call_b);
-    let result_b = ToolCallResult::new(
-        call_b.clone(),
-        crate::contract::OccurrenceId(call_b.0.clone()),
-        serde_json::json!({ "contents": "b" }),
-    );
-    assert_eq!(
-        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_b, "fs.read"),
-        BatchStep::Continue
-    );
-    assert_eq!(history.len(), 4);
-
-    // Third and last: pending is now empty, so the caller must run a turn
-    // with `result_c` as the prompt message — this function deliberately
-    // leaves it out of history, so the normal turn plumbing
-    // (`run_cancellable_turn`/`complete_rig_turn`) appends it right before
-    // the resulting assistant message.
-    pending.remove(&call_c);
-    let result_c = ToolCallResult::new(
-        call_c.clone(),
-        crate::contract::OccurrenceId(call_c.0.clone()),
-        serde_json::json!({ "contents": "c" }),
-    );
-    assert_eq!(
-        fold_batched_tool_result(&mut history, !pending.is_empty(), &result_c, "fs.read"),
-        BatchStep::RunTurn
-    );
-    assert_eq!(
-        history.len(),
-        4,
-        "the last result is left for the caller to append via the normal turn plumbing"
-    );
-
-    // The two folded-in-advance results land in arrival order, right after
-    // the assistant's tool_calls message.
-    assert!(matches!(&history[2], RigMessage::User { content }
-        if matches!(content.first(), Some(UserContent::ToolResult(result))
-            if result.call.as_str() == call_a.0
-                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
-                    if text.text.contains("\"a\"")))));
-    assert!(matches!(&history[3], RigMessage::User { content }
-        if matches!(content.first(), Some(UserContent::ToolResult(result))
-            if result.call.as_str() == call_b.0
-                && matches!(result.content.first(), Some(ToolResultContent::Text(text))
-                    if text.text.contains("\"b\"")))));
-}
 
 #[test]
 fn rig_session_batches_parallel_tool_results_into_one_follow_up_completion() {
@@ -2880,7 +2792,7 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
         let mut call_ids = Vec::new();
         for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
             match recv(&rx) {
-                Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+                Event::ToolCallRequested(request) => call_ids.push(request),
                 other => panic!("expected a tool call request, got {other:?}"),
             }
         }
@@ -2892,8 +2804,8 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
                 serde_json::json!({ "index": index })
             };
             let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-                call_id.clone(),
-                crate::contract::OccurrenceId(call_id.0.clone()),
+                call_id.call_id.clone(),
+                call_id.occurrence_id.clone(),
                 output,
             )));
             if is_last {
@@ -2913,15 +2825,15 @@ fn rig_session_iteration_cap_counts_one_tool_turn_per_batch() {
     let mut call_ids = Vec::new();
     for _ in 0..MULTI_TOOL_TEST_BATCH_SIZE {
         match recv(&rx) {
-            Event::ToolCallRequested(request) => call_ids.push(request.call_id),
+            Event::ToolCallRequested(request) => call_ids.push(request),
             other => panic!("expected a tool call request, got {other:?}"),
         }
     }
     for (index, call_id) in call_ids.iter().enumerate() {
         let is_last = index == call_ids.len() - 1;
         let _ = tx.send(Command::ToolCallResult(ToolCallResult::new(
-            call_id.clone(),
-            crate::contract::OccurrenceId(call_id.0.clone()),
+            call_id.call_id.clone(),
+            call_id.occurrence_id.clone(),
             serde_json::json!({ "index": index }),
         )));
         if !is_last {
@@ -4204,7 +4116,7 @@ fn restored_input_admission_and_receipts_match_the_live_session() {
             },
             None,
             SessionId::new(),
-            history,
+            super::conversation::upgrade::fixture(history),
         );
         if paused {
             tx.send(Command::ContinueTurn).unwrap();

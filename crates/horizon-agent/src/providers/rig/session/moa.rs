@@ -15,7 +15,7 @@
 
 use rig_core::completion::Message;
 
-use crate::contract::{Command, Error, Event, MessageRole, MoaPassStarted, MoaProposer};
+use crate::contract::{Command, Error, Event, MoaPassStarted, MoaProposer};
 use crate::tools::moa::Proposal;
 
 use super::state::SessionLoopState;
@@ -54,16 +54,16 @@ impl MoaConversation {
     /// would. Assistant messages before the first owner message belong to
     /// session startup; consecutive assistant messages collapse to the last,
     /// which is the answer that turn ended on.
-    pub(crate) fn from_events(events: &[Event]) -> Self {
+    pub(crate) fn from_history(
+        history: &super::super::conversation::ConversationHistory,
+        include_current: bool,
+    ) -> Self {
         let mut conversation = Self::default();
-        for event in events {
-            let Event::MessageCommitted(message) = event else {
-                continue;
-            };
-            match message.role {
-                MessageRole::User => conversation.record_owner(message.text.clone()),
-                MessageRole::Assistant => conversation.record_answer(message.text.clone()),
-                MessageRole::TaskNotification | MessageRole::AutoContinue => {}
+        for (owner, text) in history.owner_conversation(include_current) {
+            if owner {
+                conversation.record_owner(text);
+            } else {
+                conversation.record_answer(text);
             }
         }
         conversation
@@ -196,7 +196,8 @@ impl SessionLoopState {
             return PassOutcome::Proceed;
         };
 
-        let prompt = proposer_prompt(&self.moa_conversation, message);
+        let conversation = MoaConversation::from_history(&self.rig_history, false);
+        let prompt = proposer_prompt(&conversation, message);
         let mut launch = crate::tools::moa::launch(self.session_id, host, &pass.proposers, &prompt);
         let _ = self.events_tx.send(
             Event::MoaPassStarted(MoaPassStarted {
@@ -298,7 +299,7 @@ impl SessionLoopState {
     /// The message the block is injected as, plus the index to insert it at,
     /// resolving the index against the current history on first use.
     pub(crate) fn moa_injection(&mut self) -> Option<(usize, Message)> {
-        let history_len = self.rig_history.len();
+        let history_len = self.rig_history.turn_start();
         let turn = self.moa_turn.as_mut()?;
         let index = *turn.index.get_or_insert(history_len);
         Some((index, Message::user(turn.block.clone())))
@@ -307,6 +308,7 @@ impl SessionLoopState {
 
 #[cfg(test)]
 mod tests {
+    use crate::contract::MessageRole;
     use std::sync::{Arc, Mutex};
 
     use crossbeam_channel::Sender as CrossbeamSender;
@@ -493,12 +495,11 @@ mod tests {
     async fn the_proposer_prompt_carries_the_new_message_exactly_once() {
         let host = Arc::new(ScriptedHost::default());
         let (mut state, _commands, _events) = moa_state(host.clone());
-        state
-            .moa_conversation
-            .record_owner("an earlier question".to_string());
-        state
-            .moa_conversation
-            .record_answer("an earlier answer".to_string());
+        state.rig_history = super::super::super::conversation::fixture(vec![
+            Message::user("an earlier question"),
+            Message::assistant("an earlier answer"),
+        ]);
+        state.rig_history.open_turn(&state.events_tx);
 
         let driver = tokio::spawn({
             let host = host.clone();
@@ -863,7 +864,11 @@ mod tests {
             message(MessageRole::AutoContinue, "keep going"),
             message(MessageRole::Assistant, "final answer"),
         ];
-        let rebuilt = MoaConversation::from_events(&events);
+        let mut events = super::super::super::conversation::upgrade::fixture(events);
+        events.push(Event::TurnEnded(crate::contract::TurnEndReason::Completed));
+        let history =
+            super::super::super::conversation::ConversationHistory::from_events(&events).unwrap();
+        let rebuilt = MoaConversation::from_history(&history, true);
         assert_eq!(
             rebuilt.render(),
             "User:\nfirst question\n\nAssistant:\nfinal answer",

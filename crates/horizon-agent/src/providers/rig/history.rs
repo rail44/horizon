@@ -1,10 +1,9 @@
-use rig_core::completion::Message;
+use super::conversation::ConversationHistory;
 
-use crate::contract::{Event, SessionId, ToolCallId};
+use crate::contract::{Event, OccurrenceId, SessionId};
 use crate::persistence::projection::duckdb::DuckdbStoreHandle;
 
-use super::clearing::cleared_call_ids_from_events;
-use super::mapping::rig_messages_from_horizon_events;
+use super::clearing::cleared_occurrence_ids_from_events;
 use crate::tools::{memory_document_from_events, MemoryDocument};
 
 /// Everything a resumed session has to rebuild from its persisted events:
@@ -15,15 +14,12 @@ use crate::tools::{memory_document_from_events, MemoryDocument};
 /// the provider exactly what a continuously-running one would.
 #[derive(Debug, Default)]
 pub(super) struct RigSessionHistory {
-    pub(super) messages: Vec<Message>,
-    pub(super) cleared_call_ids: Vec<ToolCallId>,
+    pub(super) messages: ConversationHistory,
+    pub(super) cleared_occurrence_ids: Vec<OccurrenceId>,
     /// The standing-agent memory document replayed from the same events —
     /// `None` when no `MemoryDigest` events were found (a non-standing session,
     /// or a standing session that has never updated its memory).
     pub(super) memory_document: Option<MemoryDocument>,
-    /// The owner messages and answers a Mixture-of-Agents pass hands its
-    /// proposers, replayed from the same events. Empty for a fresh session.
-    pub(super) moa_conversation: super::session::moa::MoaConversation,
     /// `true` when the memory document was built from `fallback_events`
     /// (a cross-session seed, board #39/#41) rather than from this
     /// session's own DuckDB events. Only set in the store path, where the
@@ -33,14 +29,13 @@ pub(super) struct RigSessionHistory {
 }
 
 impl RigSessionHistory {
-    fn from_events(events: &[Event]) -> Self {
-        Self {
-            messages: rig_messages_from_horizon_events(events),
-            cleared_call_ids: cleared_call_ids_from_events(events),
+    fn from_events(events: &[Event]) -> Result<Self, String> {
+        Ok(Self {
+            messages: ConversationHistory::from_events(events)?,
+            cleared_occurrence_ids: cleared_occurrence_ids_from_events(events),
             memory_document: memory_document_from_events_if_nonempty(events),
-            moa_conversation: super::session::moa::MoaConversation::from_events(events),
             seed_from_fallback: false,
-        }
+        })
     }
 }
 
@@ -62,8 +57,7 @@ impl RigSessionHistory {
 /// Now `fallback_events` -- the JSONL event log's events the resume path
 /// already holds and threads through `StartSession::history` -- are used to
 /// rebuild the same history the store would have provided, using the same
-/// `rig_messages_from_horizon_events` / `cleared_call_ids_from_events`
-/// reconstruction. The store path (when `Some`) is unchanged: a live
+/// canonical conversation / exact clearing-identity reconstruction. The store path (when `Some`) is unchanged: a live
 /// session's normal load still goes through DuckDB. `fallback_events` being
 /// empty (a fresh `Control::SessionNew`, or persistence genuinely
 /// unavailable in a test) keeps the original empty-history return.
@@ -71,7 +65,7 @@ pub(super) fn load_rig_session_history(
     store: Option<&DuckdbStoreHandle>,
     session_id: SessionId,
     fallback_events: &[Event],
-) -> RigSessionHistory {
+) -> Result<RigSessionHistory, String> {
     // Host restoration supplies the authoritative log, which may be ahead of
     // an otherwise healthy projection. Memory-only cross-session seeds still
     // use the projection path below.
@@ -83,7 +77,7 @@ pub(super) fn load_rig_session_history(
     }
     let Some(store) = store else {
         if fallback_events.is_empty() {
-            return RigSessionHistory::default();
+            return Ok(RigSessionHistory::default());
         }
         return RigSessionHistory::from_events(fallback_events);
     };
@@ -107,19 +101,18 @@ pub(super) fn load_rig_session_history(
                 memory_document = memory_document_from_events_if_nonempty(fallback_events);
             }
             let seed_from_fallback = memory_from_fallback && memory_document.is_some();
-            RigSessionHistory {
-                messages: rig_messages_from_horizon_events(&events),
-                cleared_call_ids: cleared_call_ids_from_events(&events),
+            Ok(RigSessionHistory {
+                messages: ConversationHistory::from_events(&events)?,
+                cleared_occurrence_ids: cleared_occurrence_ids_from_events(&events),
                 memory_document,
-                moa_conversation: super::session::moa::MoaConversation::from_events(&events),
                 seed_from_fallback,
-            }
+            })
         })
         .unwrap_or_else(|_| {
             // DuckDB query failed: fall back entirely to `fallback_events`,
             // same as the no-store path above.
             if fallback_events.is_empty() {
-                return RigSessionHistory::default();
+                return Ok(RigSessionHistory::default());
             }
             RigSessionHistory::from_events(fallback_events)
         })

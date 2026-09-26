@@ -58,7 +58,7 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
 
 - `providers/rig/clearing.rs` — pass の決定（`plan_clearing_pass`）、
   provider view の seam（`history_for_provider_request`）、セッション状態
-  （`ClearingState`）、resume 再生（`cleared_call_ids_from_events`）。
+  （`ClearingState`）、resume 再生（`cleared_occurrence_ids_from_events`）。
 - `providers/rig/model_limits.rs` — `GET {base_url}/models` を
   `(base_url, model)` ごとにプロセス内 1 回だけ取得しキャッシュ（失敗も
   キャッシュ）。
@@ -81,7 +81,7 @@ Horizon 固有の強み: 消した本文は recall で**実際に**再取得で�
 - **有効窓が不明なら窓を持たない**（`None`）。セッション開始時に stderr へ
   1 行出すだけ。
 - **cleared set は凍結**。pass は 1 回だけ集合を決め、
-  `Event::HistoryCleared`（`cleared_call_ids` + `recovered_chars`）として
+  `Event::HistoryCleared`（`cleared_occurrence_ids` + `recovered_chars`）として
   event log に載る。以後のリクエストは同じ集合を適用するので projection は
   バイト一致し、cache 損は pass ごとに 1 回。
 - **保護は構造で担保**: 触るのは tool result の content のみ（user /
@@ -170,3 +170,15 @@ letta.md の survey に準拠。実行面は測定に従い乖離する:
    強制発火 env で反復 compaction の品質推移も測る）
 3. turn 規約との整合: clearing/要約はいずれも往復間で実行、
    `Event::TurnEnded` 境界は不変、WaitingForApproval 中は実行しない
+
+
+## 2026-09-27: canonical conversation projection
+
+Live and resumed sessions now use the same response-batch model, described in
+[agent-history-format.md](agent-history-format.md). Clearing is keyed by exact
+result occurrence, and placeholders use that response's own tool arguments.
+The current interaction starts at an explicit conversation boundary; a task
+notification or automatic continuation no longer truncates the owner's active
+context when standing memory is projected. Failed summary attempts retain real
+results and partial provider responses; no in-memory rollback diverges from the
+persisted log. Re-appending the retained result on Continue is idempotent.

@@ -40,7 +40,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
         internal_call_id: "internal-1".into(),
     });
     let before_finish: Vec<_> = rx.try_iter().collect();
-    assert_eq!(before_finish.len(), 5);
+    assert_eq!(before_finish.len(), 6);
     assert!(matches!(
         before_finish[0]
             .clone()
@@ -62,7 +62,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
             .expect("conversation event"),
         Event::AssistantTextDelta(_)
     ));
-    let Event::ToolCallRequested(request) = &before_finish[4]
+    let Event::ToolCallRequested(request) = &before_finish[5]
         .clone()
         .into_event()
         .expect("conversation event")
@@ -71,7 +71,7 @@ fn tool_call_flushes_deltas_and_preserves_raw_payload_before_text_commit() {
     };
     assert_eq!(request.input.0, serde_json::json!({"path":"README.md"}));
     assert!(
-        matches!(&before_finish[4], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
+        matches!(&before_finish[5], ProviderEvent::Event { provider_payload: Some(value), .. } if value == &payload)
     );
 
     response.push(StreamedAssistantContent::Final(

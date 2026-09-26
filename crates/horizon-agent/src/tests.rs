@@ -114,9 +114,9 @@ fn transcript_renderer_keeps_provider_neutral_messages() {
 #[test]
 fn agent_frame_folds_a_compaction_pass_into_its_own_marker_item() {
     let cleared = agent::HistoryCleared {
-        cleared_call_ids: vec![
-            agent::ToolCallId("call-0".to_string()),
-            agent::ToolCallId("call-1".to_string()),
+        cleared_occurrence_ids: vec![
+            agent::OccurrenceId("call-0".to_string()),
+            agent::OccurrenceId("call-1".to_string()),
         ],
         recovered_chars: 90_000,
     };

@@ -1,6 +1,6 @@
 use crate::contract::{
     Event, Message as AgentMessage, MessageDelta, MessageRole, OccurrenceId, ProviderEvent,
-    ProviderSide, ToolCallId, ToolCallRequest, ToolCallResult,
+    ToolCallId, ToolCallRequest, ToolCallResult,
 };
 use rig_core::completion::{
     message::{ToolCall, ToolFunction},
@@ -13,13 +13,8 @@ use rig_core::completion::ToolDefinition;
 #[cfg(test)]
 use crate::{contract::ToolPermission, tools::Definition};
 
-mod replay;
-mod response_order;
-mod tool_calls;
-
 #[cfg(test)]
 mod tests;
-pub(super) use replay::repair_replayed_message_pairing;
 
 pub(super) const RIG_PROVIDER_PAYLOAD_SCHEMA: &str = "horizon.rig.provider_payload";
 pub(super) const RIG_PROVIDER_PAYLOAD_VERSION: u32 = 1;
@@ -107,68 +102,19 @@ pub(super) fn horizon_tool_definition_from_rig(
     }
 }
 
+#[cfg(test)]
 pub(super) fn rig_messages_from_horizon_events(events: &[Event]) -> Vec<Message> {
-    let mut calls = tool_calls::ReplayedToolCalls::default();
-    let messages = response_order::ordered_for_provider(events)
-        .into_iter()
-        .filter_map(|event| match event {
-            Event::MessageCommitted(message) => Some(match message.role.provider_side() {
-                ProviderSide::User => {
-                    if message.role == MessageRole::User {
-                        calls.start_turn();
-                    }
-                    Message::user(message.text.clone())
-                }
-                ProviderSide::Assistant => Message::assistant(message.text.clone()),
-            }),
-            Event::ToolCallRequested(request) => calls.request(request),
-            Event::ToolCallFinished(result) => calls.result(result),
-            Event::ProviderRequestSent(_) | Event::TurnEnded(_) => {
-                calls.start_turn();
-                None
-            }
-            // A harness-detected fault (stream timeout, truncated response,
-            // HTTP error) is an audit record for the event log. The model
-            // is not shown one live, so a rebuilt history must not carry
-            // one either -- a resumed session's provider view is the same
-            // as a continuously-running one's.
-            Event::Error(_)
-            | Event::StateChanged(_)
-            | Event::ReasoningDelta(_)
-            | Event::AssistantTextDelta(_)
-            | Event::ToolCallStarted(_)
-            | Event::ApprovalRequested(_)
-            // Operator-intervention audit events (`SESSION_PROTOCOL_VERSION`
-            // v16): deliberately do not contribute to the provider's view
-            // of history -- the resolved approval is already represented
-            // by the `ToolCallStarted`/`ToolCallFinished` that follow, and
-            // the continue-turn by the *next* turn's events. Including the
-            // audit row itself would invent an operator message the model
-            // never received live.
-            | Event::ApprovalResolved(_)
-            | Event::ContinueTurnRequested(_)
-            | Event::ProviderRequestFirstToken
-            | Event::ProviderRequestFinished
-            | Event::ProviderRequestUsage(_)
-            // Tier 1 clearing is a projection, never a rewrite of canonical
-            // history: a resumed session reloads the full tool results here
-            // exactly as an uninterrupted one holds them in memory, and the
-            // cleared set is replayed separately
-            // (`clearing::cleared_call_ids_from_events`) so the *provider
-            // view* comes out identical either way.
-            | Event::HistoryCleared(_)
-            | Event::ProviderRateLimited(_)
-            | Event::Exited(_) => None,
-            // Standing-agent memory events are consumed by the provider-view
-            // projection (`history_for_provider_request`), not by the raw
-            // history rebuild: the document is prepended there, and the
-            // checkpoint-miss marker is transparency-only.
-            | Event::MemoryDigest(_)
-            | Event::MemoryCheckpointMissed
-            | Event::SessionInputSent { .. } | Event::EnvironmentReady { .. } | Event::EnvironmentActivated(_) | Event::EnvironmentActivationFailed(_) | Event::SessionResumed | Event::InputQueuePaused(_) | Event::InputStarted(_) | Event::InputAccepted(_) | Event::InputOutcome(_) | Event::DeliveryAcknowledged(_) | Event::MemorySeeded | Event::MoaPassStarted(_) => None,
-        })
-        .collect();
-    repair_replayed_message_pairing(messages)
+    let events = if events
+        .iter()
+        .any(|event| matches!(event, Event::ConversationRecorded(_)))
+    {
+        events.to_vec()
+    } else {
+        super::conversation::upgrade::fixture(events.to_vec())
+    };
+    super::conversation::ConversationHistory::from_events(&events)
+        .unwrap()
+        .messages()
 }
 
 pub(super) fn rig_tool_call_request(call: ToolCall) -> ToolCallRequest {
@@ -221,7 +167,8 @@ pub(super) fn rig_tool_call_provider_payload(call: &ToolCall) -> serde_json::Val
 /// Without it, a session recorded before that repair existed would
 /// re-poison itself the first time its history was reloaded from the
 /// projection.
-fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
+#[cfg(test)]
+pub(super) fn rig_tool_call_from_request(request: &ToolCallRequest) -> ToolCall {
     let mut arguments = request.input.0.clone();
     super::completion::replay_safe_tool_arguments(&mut arguments);
     ToolCall::new(
