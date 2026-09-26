@@ -1,6 +1,7 @@
 [workspace]
 members = [
     ".",
+    "crates/horizon-acp",
     "crates/horizon-agent",
     "crates/horizon-agentd",
     "crates/horizon-daemon-testkit",
@@ -36,6 +37,10 @@ exclude = ["preview-plugin"]
 # ever needed.)
 [workspace.dependencies]
 remoc = { version = "=0.18.3", default-features = false, features = ["rtc", "codec-postbag"] }
+# The ACP SDK and its schema crate: exact pins, upgraded together
+# (docs/acp-agentd-implementation-plan.md).
+agent-client-protocol = { version = "=2.2.0", features = ["unstable_protocol_v2"] }
+agent-client-protocol-schema = { version = "=1.9.1", features = ["unstable_protocol_v2"] }
 
 [package]
 name = "horizon"
