@@ -1,0 +1,18 @@
+[package]
+name = "horizon-acp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+agent-client-protocol = { workspace = true }
+agent-client-protocol-schema = { workspace = true }
+# `ApprovalKind`'s filesystem retry payload carries the sandbox's own
+# denial and grant types.
+horizon-sandbox = { path = "../horizon-sandbox" }
+horizon-wire = { path = "../horizon-wire" }
+schemars = { version = "1", features = ["uuid1"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
