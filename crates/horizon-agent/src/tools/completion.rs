@@ -16,13 +16,13 @@ use crate::frame::AgentFrame;
 // the lint compares against, and the variants are not constructed in a
 // hot loop.
 #[allow(clippy::large_enum_variant)]
-pub enum ToolCompletion {
+pub enum ToolCompletion<R = ToolCallResult> {
     /// An enforcing judge finished evaluating an approval candidate.
     ApprovalJudged(crate::judge::ApprovalJudgment),
     /// The call actually finished (successfully or not) -- fold
     /// `ToolCallFinished` and forward the result to the provider, exactly
     /// what every bash call did before this type grew a second variant.
-    Finished(ToolCallResult),
+    Finished(R),
     /// A sandboxed attempt's network egress was refused by the allowlist
     /// proxy for one or more domains (`docs/agent-approval-design.md` leg
     /// 4b). The call actually ran to completion (`result` is a genuine,
@@ -34,10 +34,7 @@ pub enum ToolCompletion {
     /// ("allow domain X for this session and retry"): approving adds
     /// `domains` to this session's allowlist and reruns the same call,
     /// still sandboxed; denying forwards `result` as-is.
-    DomainDenied {
-        domains: Vec<String>,
-        result: ToolCallResult,
-    },
+    DomainDenied { domains: Vec<String>, result: R },
     /// A host-side web request discovered a valid next hop whose domain has
     /// not been granted to this session. No contact with that domain has
     /// occurred. `horizon-agentd` turns this into `ApprovalKind::DomainGrant`, and
@@ -49,7 +46,7 @@ pub enum ToolCompletion {
     },
     FilesystemDenied {
         denials: Vec<horizon_sandbox::FilesystemDenial>,
-        result: ToolCallResult,
+        result: R,
     },
     /// A sandboxed attempt was refused mach-lookup to macOS security
     /// services (`docs/macos-containment-denial-reporting-design.md`) -- the
@@ -57,10 +54,7 @@ pub enum ToolCompletion {
     /// completion, the evidence is the kernel's own denial record, and
     /// approval records the service set for this session and reruns the
     /// same call, still sandboxed; denying forwards `result` as-is.
-    MachServiceDenied {
-        services: Vec<String>,
-        result: ToolCallResult,
-    },
+    MachServiceDenied { services: Vec<String>, result: R },
 }
 
 /// Compatibility name for the bash module's existing callers. New async
@@ -107,14 +101,43 @@ impl ToolCompletion {
         (should_fold_completion(frame, call_id) && &request.occurrence_id == occurrence_id)
             .then_some(request)
     }
+}
 
-    pub(crate) fn result_mut(&mut self) -> Option<&mut ToolCallResult> {
+impl<R> ToolCompletion<R> {
+    pub(crate) fn result_mut(&mut self) -> Option<&mut R> {
         match self {
             Self::Finished(result)
             | Self::DomainDenied { result, .. }
             | Self::FilesystemDenied { result, .. }
             | Self::MachServiceDenied { result, .. } => Some(result),
             Self::ApprovalJudged(_) | Self::DomainGrantRequired { .. } => None,
+        }
+    }
+    pub(crate) fn map_result<T>(self, map: impl FnOnce(R) -> T) -> ToolCompletion<T> {
+        match self {
+            Self::Finished(result) => ToolCompletion::Finished(map(result)),
+            Self::DomainDenied { domains, result } => ToolCompletion::DomainDenied {
+                domains,
+                result: map(result),
+            },
+            Self::FilesystemDenied { denials, result } => ToolCompletion::FilesystemDenied {
+                denials,
+                result: map(result),
+            },
+            Self::MachServiceDenied { services, result } => ToolCompletion::MachServiceDenied {
+                services,
+                result: map(result),
+            },
+            Self::ApprovalJudged(judgment) => ToolCompletion::ApprovalJudged(judgment),
+            Self::DomainGrantRequired {
+                call_id,
+                occurrence_id,
+                domains,
+            } => ToolCompletion::DomainGrantRequired {
+                call_id,
+                occurrence_id,
+                domains,
+            },
         }
     }
 }

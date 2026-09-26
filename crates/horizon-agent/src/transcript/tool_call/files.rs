@@ -8,33 +8,46 @@ pub(super) fn affected_files(
     input: &Value,
     output: Option<&Value>,
 ) -> Vec<FileEffect> {
+    let Some(output) = output else {
+        return Vec::new();
+    };
+    use crate::contract::tool_output::{decode, EditOutcome, FileEdits, FileWritten};
     match tool_id {
-        "fs.edit" => edit_entries(input)
-            .into_iter()
-            .map(|edit| {
-                let (added, removed) = line_diffstat(edit.old_string, edit.new_string);
-                FileEffect {
-                    path: edit.path.to_string(),
-                    added,
-                    removed,
-                    created: false,
-                }
+        "fs.edit" => decode::<FileEdits>(output)
+            .map(|result| {
+                let inputs = edit_entries(input);
+                result
+                    .edits
+                    .into_iter()
+                    .filter_map(|receipt| {
+                        let EditOutcome::Applied { occurrences } = receipt.outcome else {
+                            return None;
+                        };
+                        let edit = inputs
+                            .get(receipt.index)
+                            .filter(|edit| edit.path == receipt.path)?;
+                        let (added, removed) = line_diffstat(edit.old_string, edit.new_string);
+                        let occurrences = u32::try_from(occurrences).unwrap_or(u32::MAX);
+                        Some(FileEffect {
+                            path: receipt.path,
+                            added: added.saturating_mul(occurrences),
+                            removed: removed.saturating_mul(occurrences),
+                            created: false,
+                        })
+                    })
+                    .collect()
             })
-            .collect(),
-        "fs.write" => {
-            let Some(output) = output else {
-                return Vec::new();
-            };
-            let Some(path) = str_field(input, "path") else {
-                return Vec::new();
-            };
-            vec![FileEffect {
-                path: path.to_string(),
-                added: 0,
-                removed: 0,
-                created: output.get("created").and_then(Value::as_bool) == Some(true),
-            }]
-        }
+            .unwrap_or_default(),
+        "fs.write" => decode::<FileWritten>(output)
+            .map(|result| {
+                vec![FileEffect {
+                    path: result.path,
+                    added: 0,
+                    removed: 0,
+                    created: result.created,
+                }]
+            })
+            .unwrap_or_default(),
         _ => Vec::new(),
     }
 }

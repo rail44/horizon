@@ -10,6 +10,9 @@
 //! transcript`'s module doc for why that kept the whole family together
 //! rather than splitting the enum from its one constructor.
 
+use horizon_agent::contract::tool_output::{
+    decode, BashOutput, EditOutcome, FileEdits, FileRead, FileWritten, Location, Matches,
+};
 use horizon_agent::frame::AgentFrameItem;
 use horizon_agent::transcript::ToolCallClassification;
 use serde_json::Value;
@@ -87,11 +90,11 @@ fn terse_summary(
     match tool_id {
         "fs.read" => {
             let path = str_field(input, "path").unwrap_or_default();
-            let range = output.and_then(|output| {
-                let start = output.get("start_line").and_then(Value::as_u64)?;
-                let end = output.get("end_line").and_then(Value::as_u64)?;
-                let total = output.get("total_lines").and_then(Value::as_u64)?;
-                Some(format!("lines {start}-{end} of {total}"))
+            let range = output.and_then(decode::<FileRead>).map(|result| {
+                format!(
+                    "lines {}-{} of {}",
+                    result.start_line, result.end_line, result.total_lines
+                )
             });
             match range {
                 Some(range) => format!("{path} · {range}"),
@@ -106,9 +109,13 @@ fn terse_summary(
                 pattern.to_string()
             };
             let base = str_field(input, "base_path").unwrap_or_default();
-            let count = output
-                .and_then(|output| output.get("returned_count"))
-                .and_then(Value::as_u64);
+            let count = output.and_then(|output| {
+                if tool_id == "fs.grep" {
+                    decode::<Matches<Location>>(output).map(|result| result.returned_count)
+                } else {
+                    decode::<Matches<String>>(output).map(|result| result.returned_count)
+                }
+            });
             match count {
                 Some(count) => format!("{pattern} in {base} · {count} matches"),
                 None => format!("{pattern} in {base}"),
@@ -148,6 +155,11 @@ fn raw_json_fallback(tool_id: &str, input: &Value, output: Option<&Value>) -> (V
     )
 }
 
+fn raw_body(tool_id: &str, input: &Value, output: Option<&Value>) -> ToolCallBody {
+    let (lines, omitted) = raw_json_fallback(tool_id, input, output);
+    ToolCallBody::Raw { lines, omitted }
+}
+
 /// Maps a tool call's id/input/(optional) output to its [`ToolCallBody`]
 /// -- the per-tool body renderers of decision 3: fs.edit gets a
 /// reconstructed diff, fs.write a content preview, bash a command+output
@@ -165,26 +177,59 @@ pub(crate) fn build_tool_call_body(
             // tell which file (and which hunk of it) a run of lines belongs
             // to; a single edit keeps the bare diff it always had.
             let edits = edit_entries(input);
-            let labeled = edits.len() > 1;
+            let results = output.and_then(decode::<FileEdits>);
+            if output.is_some() && results.is_none() {
+                return raw_body(tool_id, input, output);
+            }
+            let labeled =
+                edits.len() > 1 || results.as_ref().is_some_and(|r| r.failed_index.is_some());
             let mut all_lines = Vec::new();
-            for edit in &edits {
+            for (index, edit) in edits.iter().enumerate() {
+                let outcome = results
+                    .as_ref()
+                    .and_then(|result| {
+                        result
+                            .edits
+                            .iter()
+                            .find(|receipt| receipt.index == index && receipt.path == edit.path)
+                    })
+                    .map(|receipt| &receipt.outcome);
+                let label = match outcome {
+                    Some(EditOutcome::Applied { occurrences, .. }) => {
+                        format!("applied ({occurrences} replacements)")
+                    }
+                    Some(EditOutcome::Failed { message }) => format!("failed: {message}"),
+                    Some(EditOutcome::NotAttempted) => "not attempted".into(),
+                    None if results.is_some() => "no recorded result".into(),
+                    None => "proposed".into(),
+                };
                 if labeled {
                     all_lines.push(DiffLine {
                         kind: DiffLineKind::Context,
-                        text: format!("--- {}", edit.path),
+                        text: format!("--- {} · {label}", edit.path),
                     });
                 }
-                all_lines.extend(reconstruct_line_diff(edit.old_string, edit.new_string));
+                if matches!(outcome, Some(EditOutcome::Applied { .. })) || results.is_none() {
+                    all_lines.extend(reconstruct_line_diff(edit.old_string, edit.new_string));
+                }
             }
             let (lines, omitted) = cap_lines_head(all_lines, MAX_DIFF_LINES);
             ToolCallBody::Diff { lines, omitted }
         }
         "fs.write" => {
-            let label = output
-                .and_then(|output| output.get("created"))
-                .and_then(Value::as_bool)
-                .map(|created| if created { "created" } else { "overwritten" })
-                .unwrap_or("written")
+            let result = output.and_then(decode::<FileWritten>);
+            if output.is_some() && result.is_none() {
+                return raw_body(tool_id, input, output);
+            }
+            let label = result
+                .map(|result| {
+                    if result.created {
+                        "created"
+                    } else {
+                        "overwritten"
+                    }
+                })
+                .unwrap_or("proposed")
                 .to_string();
             let content = str_field(input, "content").unwrap_or_default();
             let (lines, omitted) = cap_lines_head(
@@ -199,12 +244,17 @@ pub(crate) fn build_tool_call_body(
         }
         "bash" => {
             let command = str_field(input, "command").unwrap_or_default().to_string();
-            let exit_code = output
-                .and_then(|output| output.get("exit_code"))
-                .and_then(Value::as_i64);
-            let output_text = output
-                .and_then(|output| output.get("output"))
-                .and_then(Value::as_str)
+            let result = output.and_then(decode::<BashOutput>);
+            if output.is_some() && result.is_none() {
+                return raw_body(tool_id, input, output);
+            }
+            let exit_code = result.as_ref().and_then(BashOutput::exit_code);
+            let output_text = result
+                .as_ref()
+                .map(|result| match &result.message {
+                    Some(message) => format!("{message}\n{}", result.output),
+                    None => result.output.clone(),
+                })
                 .unwrap_or_default();
             let all_lines: Vec<String> = output_text.lines().map(str::to_string).collect();
             let (lines, omitted) = cap_lines_tail(all_lines, BASH_OUTPUT_TAIL_LINES);
@@ -267,7 +317,10 @@ mod tests {
         {
             let mut items = vec![
                 tool_requested("dup", "bash", json!({"command": "echo first"})),
-                tool_finished("dup", json!({"exit_code": 0, "output": "first"})),
+                tool_finished(
+                    "dup",
+                    json!({"exit_code": 0, "output": "first", "termination": "exited", "output_file": null, "truncated": false}),
+                ),
                 tool_requested("dup", "bash", json!({"command": "echo second"})),
             ];
             {
@@ -317,7 +370,10 @@ mod tests {
         let mut items = vec![
             tool_requested("dup", "bash", json!({"command": "first"})),
             tool_requested("dup", "bash", json!({"command": "retry"})),
-            tool_finished("dup", json!({"exit_code": 0, "output": "retry result"})),
+            tool_finished(
+                "dup",
+                json!({"exit_code": 0, "output": "retry result", "termination": "exited", "output_file": null, "truncated": false}),
+            ),
             AgentFrameItem::ToolCallFinished(
                 ToolCallResult::new(
                     ToolCallId("dup".into()),
@@ -337,14 +393,8 @@ mod tests {
         }
         let views = build_tool_call_views(&items);
         assert!(views[0].superseded());
-        assert_eq!(
-            tool_call_body(&items, &views[0]),
-            Some(ToolCallBody::Command {
-                command: "first".into(),
-                exit_code: None,
-                lines: vec![],
-                omitted: 0,
-            }),
+        assert!(
+            matches!(tool_call_body(&items, &views[0]), Some(ToolCallBody::Raw { ref lines, .. }) if lines.iter().any(|line| line.contains("replaces it")))
         );
         assert_eq!(
             tool_call_body(&items, &views[1]),
@@ -368,7 +418,7 @@ mod tests {
                     "new_string": "line1\nnew a\nnew b\nline3",
                 }],
             }),
-            Some(&json!({"path": "src/agent/view.rs", "replaced": true})),
+            Some(&edit_result("src/agent/view.rs")),
         );
         match body {
             ToolCallBody::Diff { lines, omitted } => {
@@ -438,10 +488,10 @@ mod tests {
         assert_eq!(
             diff_texts(&lines),
             vec![
-                (DiffLineKind::Context, "--- /w/a.rs"),
+                (DiffLineKind::Context, "--- /w/a.rs · proposed"),
                 (DiffLineKind::Removed, "old"),
                 (DiffLineKind::Added, "new"),
-                (DiffLineKind::Context, "--- /w/b.rs"),
+                (DiffLineKind::Context, "--- /w/b.rs · proposed"),
                 (DiffLineKind::Removed, "gone"),
                 (DiffLineKind::Added, "kept"),
             ]
@@ -453,7 +503,9 @@ mod tests {
         let body = build_tool_call_body(
             "bash",
             &json!({"command": "cargo test"}),
-            Some(&json!({"exit_code": 0, "output": "line1\nline2\n", "truncated": false})),
+            Some(
+                &json!({"exit_code": 0, "output": "line1\nline2\n", "truncated": false, "termination": "exited", "output_file": null}),
+            ),
         );
         match body {
             ToolCallBody::Command {
@@ -480,7 +532,9 @@ mod tests {
         let body = build_tool_call_body(
             "bash",
             &json!({"command": "seq"}),
-            Some(&json!({"exit_code": 0, "output": output_text})),
+            Some(
+                &json!({"exit_code": 0, "output": output_text, "termination": "exited", "output_file": null, "truncated": false}),
+            ),
         );
         match body {
             ToolCallBody::Command { lines, omitted, .. } => {
@@ -498,7 +552,9 @@ mod tests {
         let body = build_tool_call_body(
             "fs.read",
             &json!({"path": "src/lib.rs"}),
-            Some(&json!({"start_line": 1, "end_line": 40, "total_lines": 120})),
+            Some(
+                &json!({"start_line": 1, "end_line": 40, "total_lines": 120, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null}),
+            ),
         );
         assert_eq!(
             body,
@@ -511,7 +567,9 @@ mod tests {
         let body = build_tool_call_body(
             "fs.grep",
             &json!({"base_path": ".", "pattern": "notify"}),
-            Some(&json!({"returned_count": 3})),
+            Some(
+                &json!({"returned_count": 3, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 3}),
+            ),
         );
         assert_eq!(
             body,
@@ -524,7 +582,9 @@ mod tests {
         let body = build_tool_call_body(
             "fs.glob",
             &json!({"base_path": ".", "pattern": "*.rs"}),
-            Some(&json!({"returned_count": 5})),
+            Some(
+                &json!({"returned_count": 5, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 5}),
+            ),
         );
         assert_eq!(
             body,
@@ -574,7 +634,7 @@ mod tests {
             ),
             approval_requested("dup"),
             tool_started("dup"),
-            tool_finished("dup", json!({"path": "a.rs", "replaced": true})),
+            tool_finished("dup", edit_result("a.rs")),
             // A second, distinct call reuses the same call_id after the
             // first one's cycle is fully closed.
             tool_requested(
@@ -638,8 +698,11 @@ mod tests {
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
-            tool_finished("a", json!({"total_lines": 10})),
-            tool_finished("b", json!({"path": "b.rs", "replaced": true})),
+            tool_finished(
+                "a",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
+            tool_finished("b", edit_result("b.rs")),
         ];
         let views = build_tool_call_views(&items);
         match tool_call_body(&items, &views[1]) {
@@ -738,5 +801,39 @@ mod tests {
             ),
             other => panic!("expected a Summary body for task_output, got {other:?}"),
         }
+    }
+    #[test]
+    fn partial_edits_render_only_applied_diffs_and_label_the_other_outcomes() {
+        let input = json!({"edits": [
+            {"path": "/w/a", "old_string": "old", "new_string": "applied"},
+            {"path": "/w/b", "old_string": "missing", "new_string": "failed change"},
+            {"path": "/w/c", "old_string": "keep", "new_string": "unattempted change"}
+        ]});
+        let output = json!({"applied_count": 1, "file_count": 1, "failed_index": 1,
+        "message": "second edit failed", "is_error": true, "edits": [
+            {"index": 0, "path": "/w/a", "status": "applied", "occurrences": 2},
+            {"index": 1, "path": "/w/b", "status": "failed", "message": "not found"},
+            {"index": 2, "path": "/w/c", "status": "not_attempted"}
+        ]});
+        let ToolCallBody::Diff { lines, .. } =
+            build_tool_call_body("fs.edit", &input, Some(&output))
+        else {
+            panic!("expected edit receipts")
+        };
+        assert!(lines
+            .iter()
+            .any(|line| line.text.contains("applied (2 replacements)")));
+        assert!(lines
+            .iter()
+            .any(|line| line.text.contains("failed: not found")));
+        assert!(lines.iter().any(|line| line.text.contains("not attempted")));
+        assert_eq!(
+            lines
+                .iter()
+                .filter(|line| line.kind == DiffLineKind::Added)
+                .map(|line| line.text.as_str())
+                .collect::<Vec<_>>(),
+            ["applied"]
+        );
     }
 }

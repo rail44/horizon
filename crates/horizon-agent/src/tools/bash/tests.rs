@@ -71,7 +71,8 @@ fn echo_round_trip_reports_output_and_exit_zero() {
         &serde_json::from_value(json!({ "command": "echo hello" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert_eq!(output["exit_code"], 0);
     assert_eq!(output["output"], "hello\n");
@@ -91,7 +92,8 @@ fn non_zero_exit_is_a_normal_result_carrying_the_code() {
         &serde_json::from_value(json!({ "command": "exit 7" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert!(
         output.get("is_error").is_none(),
@@ -115,7 +117,8 @@ fn timeout_kills_the_process_and_reports_captured_partial_output() {
             .unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert!(
         started.elapsed() < Duration::from_secs(4),
@@ -165,7 +168,7 @@ fn timeout_kill_reaches_a_setsid_grandchild() {
         })).unwrap(),
         &cwd,
         &config(),
-    );
+    ).to_json();
 
     assert_eq!(output["is_error"], true);
     assert!(
@@ -238,8 +241,13 @@ fn repeated_spawn_failures_do_not_leak_file_descriptors() {
             &serde_json::from_value(json!({ "command": "echo hi" })).unwrap(),
             &cwd,
             &config(),
-        );
+        )
+        .to_json();
         assert_eq!(output["is_error"], true);
+        assert!(
+            output["output_file"].is_null(),
+            "a failed spawn has no capture to spill"
+        );
         assert!(
             output["message"]
                 .as_str()
@@ -280,7 +288,8 @@ fn background_child_holding_the_pipe_does_not_hang_the_call() {
         &cwd,
         Duration::from_millis(200),
         &config(),
-    );
+    )
+    .to_json();
 
     assert!(
         started.elapsed() < Duration::from_secs(5),
@@ -316,7 +325,8 @@ fn truncation_preserves_head_and_tail_and_spills_full_output() {
             .unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert_eq!(output["truncated"], true);
     let shown = output["output"].as_str().expect("shown output");
@@ -354,7 +364,8 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
         &serde_json::from_value(json!({ "command": "cd sub && pwd" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
     assert_eq!(first["exit_code"], 0);
     let first_output = first["output"].as_str().expect("first output");
     // Nothing but `pwd`'s own line: no cwd-tracking sentinel mixed in.
@@ -368,7 +379,8 @@ fn cwd_tracking_persists_a_cd_across_calls_with_no_sentinel_leakage() {
         &serde_json::from_value(json!({ "command": "pwd" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
     let second_output = second["output"].as_str().expect("second output");
     assert_eq!(
         second_output.trim(),
@@ -641,7 +653,8 @@ fn bash_child_runs_at_the_configured_niceness_or_falls_back_gracefully() {
         &serde_json::from_value(json!({ "command": "ps -o nice= -p $$" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert_eq!(
         output["exit_code"], 0,
@@ -899,7 +912,8 @@ fn lossy_non_utf8_output_does_not_panic() {
         &serde_json::from_value(json!({ "command": r"printf 'a\xffb'" })).unwrap(),
         &cwd,
         &config(),
-    );
+    )
+    .to_json();
 
     assert_eq!(output["exit_code"], 0);
     let shown = output["output"]

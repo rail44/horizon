@@ -55,19 +55,15 @@ const READ_ONLY_SUBCOMMANDS: &[&str] = &[
 /// Whether a bash tool input contains a directly-recognizable Git invocation
 /// that may write repository metadata.
 pub(crate) fn approved_metadata_roots(output: &Value) -> Option<Vec<PathBuf>> {
-    if output
-        .get("git_operation_approved")
-        .and_then(Value::as_bool)
-        != Some(true)
-    {
+    let evidence: crate::tools::output::Evidence = serde_json::from_value(output.clone()).ok()?;
+    if evidence.git_operation_approved != Some(true) {
         return None;
     }
-    let roots = output
-        .get("approved_git_metadata_roots")?
-        .as_array()?
-        .iter()
-        .map(|value| value.as_str().map(PathBuf::from))
-        .collect::<Option<Vec<_>>>()?;
+    let roots: Vec<_> = evidence
+        .approved_git_metadata_roots?
+        .into_iter()
+        .map(PathBuf::from)
+        .collect();
     (!roots.is_empty()).then_some(roots)
 }
 

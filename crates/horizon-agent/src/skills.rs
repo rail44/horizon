@@ -366,15 +366,15 @@ fn parse_skill_md(source: &str) -> Option<ParsedSkillMd> {
 /// composed [`SkillRegistry`]): returns `id`'s full body (capped at
 /// [`SKILL_BODY_CAP_CHARS`]), or an error listing every id this session can
 /// see if `id` does not match one. Argument decoding belongs to tools::input.
-pub(crate) fn execute_read(registry: &SkillRegistry, id: &str) -> serde_json::Value {
+pub(crate) fn execute_read(registry: &SkillRegistry, id: &str) -> Response {
     match registry.get(id) {
         Some(skill) => {
             let (body, truncated) = cap_to_chars(skill.body(), SKILL_BODY_CAP_CHARS);
-            serde_json::json!({
-                "id": skill.name,
-                "description": skill.description,
-                "body": body,
-                "truncated": truncated,
+            Response::succeeded(SkillRead {
+                id: skill.name.clone(),
+                description: skill.description.clone(),
+                body,
+                truncated,
             })
         }
         None => error_output(format!(
@@ -384,7 +384,8 @@ pub(crate) fn execute_read(registry: &SkillRegistry, id: &str) -> serde_json::Va
     }
 }
 
-use crate::tools::error_output;
+use crate::tools::output::error as error_output;
+use crate::tools::output::*;
 
 #[cfg(test)]
 mod tests {

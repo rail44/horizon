@@ -39,10 +39,10 @@ impl ToolUpdate {
     pub(crate) fn execute(
         live: &LiveState,
         request: &ToolCallRequest,
-        operation: impl FnOnce() -> serde_json::Value,
+        operation: impl FnOnce() -> super::output::Response,
     ) -> Result<Self, String> {
         let started = Self::start(live, request, None)?;
-        let result = request.identity().result(operation());
+        let result = request.identity().finish(operation());
         started.complete(live, result, Vec::new())
     }
 

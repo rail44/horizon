@@ -1,6 +1,7 @@
 //! Closed set of local synchronous tools. Selection may fail; execution always
 //! produces a result. Approval policy remains at the execution/approval boundary.
 
+#[cfg(test)]
 use serde_json::Value;
 
 use super::{catalog::Definition, config, fs, knowledge, memory, recall, ToolSessionState};
@@ -95,7 +96,7 @@ pub(super) fn execute(
     state: &ToolSessionState,
     input: &super::input::ToolInput,
     allow_external: bool,
-) -> Option<Value> {
+) -> Option<super::output::Response> {
     use super::input::ToolInput;
     Some(match input {
         ToolInput::ReadFile(input) => fs::read(state, input, allow_external),
@@ -124,7 +125,9 @@ pub(super) fn execute_auto(state: &ToolSessionState, id: &str, value: &Value) ->
         return None;
     }
     Some(match super::input::ToolInput::parse(id, value) {
-        Ok(input) => execute(state, &input, false).expect("synchronous tool"),
+        Ok(input) => execute(state, &input, false)
+            .expect("synchronous tool")
+            .to_json(),
         Err(message) => super::error_output(message),
     })
 }
@@ -132,7 +135,7 @@ pub(super) fn execute_auto(state: &ToolSessionState, id: &str, value: &Value) ->
 #[cfg(test)]
 pub(super) fn execute_approved(state: &ToolSessionState, id: &str, value: &Value) -> Value {
     match super::input::ToolInput::parse(id, value) {
-        Ok(input) => super::execute_approved(state, &input),
+        Ok(input) => super::execute_approved(state, &input).to_json(),
         Err(message) => super::error_output(message),
     }
 }

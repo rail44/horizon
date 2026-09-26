@@ -75,4 +75,4 @@ fn read_path_arg<'a>(tool_id: &str, input: &'a Value) -> Option<&'a str> {
     }
 }
 
-use super::error_output;
+use super::output::error as error_output;

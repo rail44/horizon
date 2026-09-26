@@ -25,7 +25,8 @@
 
 use std::path::{Path, PathBuf};
 
-use serde_json::{json, Value};
+use crate::tools::output::{BashOutput, BashTermination, Response};
+use serde_json::Value;
 
 use crate::frame::{AgentFrame, AgentFrameItem};
 
@@ -106,7 +107,15 @@ pub(crate) fn find_reusable_output(
         let AgentFrameItem::ToolCallFinished(result) = item else {
             continue;
         };
-        let Some(request) = frame.tool_call_request(&result.call_id) else {
+        let Some(request) = frame.items.iter().rev().find_map(|item| match item {
+            AgentFrameItem::ToolCallRequested(request)
+                if request.call_id == result.call_id
+                    && request.occurrence_id == result.occurrence_id =>
+            {
+                Some(request)
+            }
+            _ => None,
+        }) else {
             continue;
         };
         let command = request.input.get("command").and_then(Value::as_str);
@@ -121,7 +130,20 @@ pub(crate) fn find_reusable_output(
         let Some(command) = command.filter(|command| base_command(command) == incoming_base) else {
             continue;
         };
-        let Some(path) = result.output.get("output_file").and_then(Value::as_str) else {
+        if result.outcome != crate::contract::ToolOutcome::Succeeded {
+            continue;
+        }
+        let Some(output) = crate::contract::tool_output::decode::<BashOutput>(&result.output)
+        else {
+            continue;
+        };
+        if !matches!(
+            output.termination,
+            BashTermination::Exited { .. } | BashTermination::Reused { .. }
+        ) {
+            continue;
+        }
+        let Some(path) = output.output_file.as_deref() else {
             continue;
         };
         if Path::new(path).exists() {
@@ -130,7 +152,7 @@ pub(crate) fn find_reusable_output(
             return Some(ReusableOutput {
                 command: command.to_string(),
                 output_file: PathBuf::from(path),
-                exit_code: result.output.get("exit_code").and_then(Value::as_i64),
+                exit_code: output.exit_code(),
             });
         }
     }
@@ -144,7 +166,7 @@ pub(crate) fn find_reusable_output(
 /// model can re-filter it with `fs.read`/`fs.grep` without re-running.
 /// `reused_output: true` distinguishes this from a real run for the audit
 /// trail.
-pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) -> Value {
+pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) -> Response {
     let base = base_command(incoming_command);
     let exit_str = prior
         .exit_code
@@ -171,12 +193,16 @@ pub(crate) fn guidance_output(incoming_command: &str, prior: &ReusableOutput) ->
         path = prior.output_file.display(),
         exit_str = exit_str,
     );
-    json!({
-        "exit_code": prior.exit_code,
-        "output": output,
-        "truncated": false,
-        "output_file": prior.output_file.display().to_string(),
-        "reused_output": true,
+    Response::succeeded(BashOutput {
+        termination: BashTermination::Reused {
+            exit_code: prior.exit_code,
+            reused_output: true,
+        },
+        output,
+        truncated: false,
+        output_file: Some(prior.output_file.display().to_string()),
+        message: None,
+        note: None,
     })
 }
 
@@ -266,6 +292,7 @@ mod tests {
         exit_code: Option<i64>,
     ) -> AgentFrameItem {
         let mut output = json!({
+            "termination": "exited",
             "exit_code": exit_code,
             "output": "some output",
             "truncated": output_file.is_some(),
@@ -507,5 +534,17 @@ mod tests {
         ]);
         assert!(find_reusable_output(&f, "").is_none());
         std::fs::remove_file(&spill).ok();
+    }
+    #[test]
+    fn a_failed_capture_is_not_reused_as_a_successful_command_result() {
+        let temp = tempfile::NamedTempFile::new().unwrap();
+        let mut result = bash_result("failed", temp.path().to_str(), Some(0));
+        let AgentFrameItem::ToolCallFinished(result) = &mut result else {
+            unreachable!()
+        };
+        result.outcome = crate::contract::ToolOutcome::Failed;
+        let result = AgentFrameItem::ToolCallFinished(result.clone());
+        let history = frame(vec![bash_request("failed", "cargo test"), result]);
+        assert!(find_reusable_output(&history, "cargo test | tail -5").is_none());
     }
 }

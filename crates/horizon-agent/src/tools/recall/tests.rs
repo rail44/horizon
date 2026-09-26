@@ -6,6 +6,7 @@ use crate::contract::{
 use crate::persistence::projection::duckdb::{AppendEvent, DuckdbStoreHandle, Store};
 use crate::tools::state::RecallContext;
 use crate::tools::synchronous::execute_auto;
+use serde_json::{json, Value};
 
 /// Builds a fresh file-backed DuckDB projection at a throwaway path, seeded
 /// with `sessions` (each a `SessionId` and its committed messages), and a
@@ -698,4 +699,8 @@ fn catalog_advertises_recall_search_session_id() {
         definition.description.contains("session_id"),
         "the catalog description must mention `session_id`"
     );
+}
+
+fn session_id_json(session: SessionId) -> Value {
+    json!(session.as_uuid().to_string())
 }

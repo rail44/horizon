@@ -38,7 +38,7 @@ pub(crate) fn policy_events(
             crate::policy::plan_tool_call(state, request)
         {
             events.extend([
-                Event::ApprovalRequested(approval),
+                Event::ApprovalRequested(*approval),
                 Event::StateChanged(crate::contract::SessionState::WaitingForApproval),
             ]);
         }
@@ -49,10 +49,10 @@ pub(crate) fn policy_events(
 /// Exercise typed handlers from JSON fixtures through their real deserializer.
 pub(crate) fn with_input<T: serde::de::DeserializeOwned>(
     raw: &serde_json::Value,
-    execute: impl FnOnce(&T) -> serde_json::Value,
+    execute: impl FnOnce(&T) -> super::output::Response,
 ) -> serde_json::Value {
     match super::input::decode(raw) {
-        Ok(input) => execute(&input),
+        Ok(input) => execute(&input).to_json(),
         Err(error) => super::error_output(error.to_string()),
     }
 }

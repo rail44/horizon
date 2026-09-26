@@ -672,6 +672,7 @@ fn clearing_an_old_task_report_leaves_task_output_able_to_re_fetch_it() {
         },
     );
     let output = fetch.output;
+    let output = output.to_json();
     assert_eq!(output["status"], "finished");
     assert_eq!(output["report"], serde_json::Value::String(report));
 }

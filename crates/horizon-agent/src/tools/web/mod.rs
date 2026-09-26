@@ -6,15 +6,15 @@ use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::tools::output::Response;
 use crossbeam_channel::Sender;
 use futures_util::FutureExt;
 use horizon_sandbox_proxy::Allowlist;
 use reqwest::Url;
-use serde_json::Value;
 
 use crate::contract::{OccurrenceId, SessionId, ToolCallId, ToolCallIdentity};
-use crate::policy::{annotate_auto_approval, annotate_domain_approval};
-use crate::tools::error_output;
+use crate::tools::output::error as error_output;
+use crate::tools::output::{annotate_auto_approval, annotate_domain_approval};
 use crate::tools::state::ToolSessionState;
 use crate::tools::ToolCompletion;
 
@@ -98,7 +98,7 @@ pub(crate) fn spawn(
             _ = token.cancelled() => None,
             result = work => Some(match result {
                 Ok(completion) => completion,
-                Err(payload) => ToolCompletion::Finished(identity.result(
+                Err(payload) => ToolCompletion::Finished(identity.finish(
                     error_output(format!("{tool_id} worker panicked: {}", panic_message(&*payload))),
                 )),
             }),
@@ -140,7 +140,7 @@ async fn run(
 }
 
 enum WebOutcome {
-    Finished(Value),
+    Finished(Response),
     DomainGrantRequired(Vec<String>),
 }
 
@@ -166,7 +166,7 @@ fn with_identity(
                     annotate_domain_approval(&mut output, domains)
                 }
             }
-            ToolCompletion::Finished(identity.result(output))
+            ToolCompletion::Finished(identity.finish(output))
         }
         WebOutcome::DomainGrantRequired(domains) => ToolCompletion::DomainGrantRequired {
             call_id: identity.call_id,

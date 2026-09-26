@@ -4,16 +4,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde_json::Value;
+use crate::tools::output::Response;
 
+use super::super::BashCompletion;
 use super::super::{
     domain_denied, failed_output, finished, note_undrained, status_output, timeout_output,
 };
 use super::capture::Captured;
 use crate::config::BashToolConfig;
 use crate::contract::ToolCallIdentity;
-use crate::policy::{annotate_denied_domains, annotate_sandboxed};
-use crate::tools::bash::BashCompletion;
+use crate::tools::output::{annotate_denied_domains, annotate_sandboxed};
 
 pub(super) fn complete(
     identity: &ToolCallIdentity,
@@ -57,7 +57,7 @@ pub(super) fn complete(
     annotate_common(&mut value, &denials);
     #[cfg(target_os = "macos")]
     if let Some(error) = &denial_collection_error {
-        crate::policy::annotate_denial_collection_unavailable(&mut value, error);
+        crate::tools::output::annotate_denial_collection_unavailable(&mut value, error);
     }
     if !drained {
         note_undrained(&mut value, Duration::from_secs(config.drain_grace_secs));
@@ -65,38 +65,38 @@ pub(super) fn complete(
     // Filesystem retry takes precedence over domain retry. Both kinds of
     // evidence remain in the output, even if the shell itself exited zero.
     if !denials.filesystem.is_empty() {
-        crate::policy::annotate_filesystem_denials(&mut value, &denials.filesystem);
+        crate::tools::output::annotate_filesystem_denials(&mut value, &denials.filesystem);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
         }
         return BashCompletion::FilesystemDenied {
             denials: denials.filesystem,
-            result: identity.result(value),
+            result: value,
         };
     }
     #[cfg(target_os = "macos")]
     if !denials.mach_services.is_empty() {
-        crate::policy::annotate_denied_mach_services(&mut value, &denials.mach_services);
+        crate::tools::output::annotate_denied_mach_services(&mut value, &denials.mach_services);
         if !denied_domains.is_empty() {
             annotate_denied_domains(&mut value, &denied_domains);
         }
         return BashCompletion::MachServiceDenied {
             services: denials.mach_services,
-            result: identity.result(value),
+            result: value,
         };
     }
     finish_or_domain_denied(identity, value, denied_domains)
 }
 
-fn annotate_common(value: &mut Value, denials: &horizon_sandbox::ContainmentDenials) {
+fn annotate_common(value: &mut Response, denials: &horizon_sandbox::ContainmentDenials) {
     annotate_sandboxed(value, true);
-    crate::policy::annotate_network_denials(value, &denials.network);
-    crate::policy::annotate_ungrantable_denials(value, &denials.ungrantable);
+    crate::tools::output::annotate_network_denials(value, &denials.network);
+    crate::tools::output::annotate_ungrantable_denials(value, &denials.ungrantable);
 }
 
 fn finish_or_domain_denied(
     identity: &ToolCallIdentity,
-    mut value: Value,
+    mut value: Response,
     domains: Vec<String>,
 ) -> BashCompletion {
     if domains.is_empty() {
@@ -110,6 +110,7 @@ fn finish_or_domain_denied(
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::tools::bash::BashCompletion;
     use horizon_sandbox::{
         ContainmentDenials, FilesystemDenial, FilesystemGrant, FilesystemGrantAccess,
         FilesystemGrantScope, NetworkDenial, UngrantableDenial,
@@ -152,10 +153,11 @@ mod tests {
 
     fn finish(captured: Captured, domains: Vec<String>) -> (BashCompletion, PathBuf) {
         let cwd = Arc::new(Mutex::new(PathBuf::from("/workspace")));
+        let identity = crate::test_support::tool_identity(&crate::contract::ToolCallId(
+            "result-precedence".into(),
+        ));
         let completion = complete(
-            &crate::test_support::tool_identity(&crate::contract::ToolCallId(
-                "result-precedence".into(),
-            )),
+            &identity,
             captured,
             domains,
             Duration::from_secs(1),
@@ -163,7 +165,10 @@ mod tests {
             &crate::config::AgentToolsConfig::default().bash,
         );
         let final_cwd = cwd.lock().unwrap().clone();
-        (completion, final_cwd)
+        (
+            completion.map_result(|output| identity.finish(output)),
+            final_cwd,
+        )
     }
 
     #[test]

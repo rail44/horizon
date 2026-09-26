@@ -26,7 +26,9 @@
 //! section for what that means for *external* (e.g. `duckdb -readonly` CLI)
 //! access while `horizon-agentd` is running.
 
-use serde_json::{json, Value};
+use crate::tools::output::{
+    RecallEntry as OutputEntry, RecallHit, RecallRead, RecallSearch, Response,
+};
 
 use crate::contract::SessionId;
 use crate::persistence::projection::duckdb::RecallEntry;
@@ -48,7 +50,7 @@ const READ_TOTAL_CHAR_CAP: usize = 16_000;
 pub(super) fn search(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::RecallSearch,
-) -> Value {
+) -> Response {
     let query = input.query.as_deref();
     let named_session_id = input.session_id.map(SessionId::from_uuid);
     let limit = input.limit.get() as usize;
@@ -85,13 +87,17 @@ pub(super) fn search(
         .map(|hit| hit_json(hit, query, own_session_id))
         .collect::<Vec<_>>();
 
-    json!({
-        "total": report.total,
-        "hits": hits,
+    Response::succeeded(RecallSearch {
+        total: report.total,
+        hits,
     })
 }
 
-fn hit_json(entry: RecallEntry, query: Option<&str>, own_session_id: Option<SessionId>) -> Value {
+fn hit_json(
+    entry: RecallEntry,
+    query: Option<&str>,
+    own_session_id: Option<SessionId>,
+) -> RecallHit {
     let snippet = match query {
         Some(query) => snippet_around_match(&entry.text, query),
         // Listing mode: there's no match to center a snippet on, so just
@@ -99,23 +105,23 @@ fn hit_json(entry: RecallEntry, query: Option<&str>, own_session_id: Option<Sess
         // match-centered case, reusing the same cap).
         None => snippet_head(&entry.text),
     };
-    json!({
-        "session_id": session_id_json(entry.session_id),
-        "own_session": Some(entry.session_id) == own_session_id,
-        "sequence": entry.sequence,
-        "kind": entry.kind.as_str(),
-        "role_or_tool": entry.role_or_tool,
-        "snippet": snippet,
-        "at": entry.at,
-        "is_error": entry.is_error,
-        "turn_outcome": entry.turn_outcome,
-    })
+    RecallHit {
+        session_id: entry.session_id.as_uuid().to_string(),
+        own_session: Some(entry.session_id) == own_session_id,
+        sequence: entry.sequence,
+        kind: entry.kind.as_str().into(),
+        role_or_tool: entry.role_or_tool,
+        snippet,
+        at: entry.at,
+        is_error: entry.is_error,
+        turn_outcome: entry.turn_outcome,
+    }
 }
 
 pub(super) fn read(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::RecallRead,
-) -> Value {
+) -> Response {
     let recall = tool_state.recall_context();
     let Some(store) = recall.store.as_ref() else {
         return error_output(
@@ -158,27 +164,22 @@ pub(super) fn read(
             text = text.chars().take(remaining).collect();
         }
         used_chars += text.chars().count();
-        rows.push(json!({
-            "sequence": entry.sequence,
-            "kind": entry.kind.as_str(),
-            "role_or_tool": entry.role_or_tool,
-            "text": text,
-            "at": entry.at,
-            "is_error": entry.is_error,
-        }));
+        rows.push(OutputEntry {
+            sequence: entry.sequence,
+            kind: entry.kind.as_str().into(),
+            role_or_tool: entry.role_or_tool,
+            text,
+            at: entry.at,
+            is_error: entry.is_error,
+        });
         if truncated {
             break;
         }
     }
 
-    let mut output = json!({ "entries": rows });
-    if truncated {
-        output["note"] = json!(format!(
-            "output truncated at ~{READ_TOTAL_CHAR_CAP} characters; call recall.read again with \
-             a later from_sequence to continue"
-        ));
-    }
-    output
+    Response::succeeded(RecallRead { entries: rows, note: truncated.then(|| format!(
+        "output truncated at ~{READ_TOTAL_CHAR_CAP} characters; call recall.read again with a later from_sequence to continue"
+    )) })
 }
 
 /// Builds a snippet of roughly [`SNIPPET_RADIUS_CHARS`] * 2 characters
@@ -244,11 +245,6 @@ fn snippet_head(text: &str) -> String {
     snippet
 }
 
-use super::error_output;
-
-fn session_id_json(session: SessionId) -> Value {
-    json!(session.as_uuid().to_string())
-}
-
+use super::output::error as error_output;
 #[cfg(test)]
 mod tests;

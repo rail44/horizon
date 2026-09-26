@@ -31,18 +31,18 @@ mod write;
 
 use std::path::Path;
 
-use serde_json::{json, Value};
+use crate::tools::output::*;
 
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn read(tool_state: &ToolSessionState) -> Value {
+pub(super) fn read(tool_state: &ToolSessionState) -> Response {
     read_at(tool_state, tool_state.config_path())
 }
 
 pub(super) fn write(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::ConfigWrite,
-) -> Value {
+) -> Response {
     write::execute(
         tool_state,
         tool_state.config_path().map(Path::to_path_buf),
@@ -55,7 +55,7 @@ pub(super) fn write(
 /// env vars or the developer's own config file -- the same
 /// pure-function/path-parameter style `config`'s own precedence-resolution
 /// functions use, applied here for the same reason.
-fn read_at(tool_state: &ToolSessionState, path: Option<&Path>) -> Value {
+fn read_at(tool_state: &ToolSessionState, path: Option<&Path>) -> Response {
     let Some(path) = path else {
         return error_output(
             "could not resolve a config file path -- set HORIZON_CONFIG, or ensure $HOME or \
@@ -67,27 +67,34 @@ fn read_at(tool_state: &ToolSessionState, path: Option<&Path>) -> Value {
             if let Ok(mtime) = std::fs::metadata(path).and_then(|metadata| metadata.modified()) {
                 tool_state.record_mtime(path.to_path_buf(), mtime);
             }
-            json!({
-                "path": path.display().to_string(),
-                "exists": true,
-                "content": content,
+            Response::succeeded(ConfigRead {
+                path: path.display().to_string(),
+                exists: true,
+                content: Some(content),
+                message: None,
             })
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({
-            "path": path.display().to_string(),
-            "exists": false,
-            "content": Value::Null,
-            "message": "config file does not exist yet -- write it with config.write to create it",
-        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Response::succeeded(ConfigRead {
+                path: path.display().to_string(),
+                exists: false,
+                content: None,
+                message: Some(
+                    "config file does not exist yet -- write it with config.write to create it"
+                        .into(),
+                ),
+            })
+        }
         Err(error) => error_output(format!("cannot read `{}`: {error}", path.display())),
     }
 }
 
-use super::error_output;
+use crate::tools::output::error as error_output;
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     fn temp_path(label: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
@@ -101,7 +108,7 @@ mod tests {
         let tool_state = ToolSessionState::without_root();
         let missing = temp_path("missing");
 
-        let result = read_at(&tool_state, Some(&missing));
+        let result = read_at(&tool_state, Some(&missing)).to_json();
 
         assert_eq!(result["exists"], false);
         assert_eq!(result["content"], Value::Null);
@@ -115,7 +122,7 @@ mod tests {
         let path = temp_path("existing");
         std::fs::write(&path, "[theme]\naccent = \"#ffffff\"\n").unwrap();
 
-        let result = read_at(&tool_state, Some(&path));
+        let result = read_at(&tool_state, Some(&path)).to_json();
 
         assert_eq!(result["exists"], true);
         assert!(result["content"].as_str().unwrap().contains("accent"));
@@ -131,7 +138,7 @@ mod tests {
     fn read_at_errors_when_no_path_can_be_resolved() {
         let tool_state = ToolSessionState::without_root();
 
-        let result = read_at(&tool_state, None);
+        let result = read_at(&tool_state, None).to_json();
 
         assert_eq!(result["is_error"], true);
     }

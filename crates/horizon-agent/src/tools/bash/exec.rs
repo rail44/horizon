@@ -11,15 +11,14 @@ use std::process::ExitStatus;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use crate::tools::output::{BashOutput, BashTermination, Response};
 
 use crate::config::BashToolConfig;
 use crate::contract::ToolCallIdentity;
-use crate::tools::error_output;
 
 use super::output::{self, Capped};
 use super::registry::Registration;
-use super::BashCompletion;
+type BashCompletion = crate::tools::ToolCompletion<Response>;
 
 /// Niceness applied to every spawned bash child (`docs/agent-tools-design.md`,
 /// "Bash Containment"). An agent-driven command must not contend with
@@ -42,7 +41,7 @@ pub(super) fn run(
     input: &crate::tools::input::Bash,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     run_inner(
         registration,
         input,
@@ -62,7 +61,7 @@ pub(super) fn run_with_drain_grace(
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     run_inner(registration, input, cwd_handle, drain_grace, config)
 }
 
@@ -72,7 +71,7 @@ fn run_inner(
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     drain_grace: Duration,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     let command = &*input.command;
 
     let timeout = Duration::from_secs(input.timeout_secs.get());
@@ -129,7 +128,7 @@ fn success_output(
     raw_stderr: Vec<u8>,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     let mut shown_source = String::from_utf8_lossy(&raw_stdout).into_owned();
     apply_cwd_report(&raw_stderr, cwd_handle, &mut shown_source);
 
@@ -140,11 +139,15 @@ fn success_output(
         output_file.as_deref(),
     );
 
-    json!({
-        "exit_code": status.code(),
-        "output": shown,
-        "truncated": truncated,
-        "output_file": output_file.map(|path| path.display().to_string()),
+    Response::succeeded(BashOutput {
+        termination: BashTermination::Exited {
+            exit_code: status.code().expect("ordinary exit"),
+        },
+        message: None,
+        output: shown,
+        truncated,
+        output_file: output_file.map(|path| path.display().to_string()),
+        note: None,
     })
 }
 
@@ -176,15 +179,19 @@ fn apply_cwd_report(
     shown_source.push_str(trimmed);
 }
 
-fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
-    failed_output(
+fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Response {
+    let mut output = failed_output(
         &format!(
             "bash command timed out after {}s and was killed",
             timeout.as_secs()
         ),
         Some(raw_stdout),
         config,
-    )
+    );
+    output.bash_mut().expect("bash failure").termination = BashTermination::TimedOut {
+        timeout_secs: timeout.as_secs(),
+    };
+    output
 }
 
 /// The child ended without an exit code of its own — on unix, that means a
@@ -193,12 +200,14 @@ fn timeout_output(timeout: Duration, raw_stdout: Vec<u8>, config: &BashToolConfi
 /// intentionally sends a process a fatal signal (see `bash::cancel_call`
 /// and the process-group kill it performs, called for a still-running
 /// call whose turn was cancelled).
-fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Value {
-    failed_output(
+fn terminated_output(status: ExitStatus, raw_stdout: Vec<u8>, config: &BashToolConfig) -> Response {
+    let mut output = failed_output(
         &format!("bash command was terminated{}", signal_suffix(status)),
         Some(raw_stdout),
         config,
-    )
+    );
+    output.bash_mut().expect("bash failure").termination = BashTermination::Terminated;
+    output
 }
 
 #[cfg(unix)]
@@ -215,36 +224,38 @@ fn signal_suffix(_status: ExitStatus) -> String {
     String::new()
 }
 
-/// Delegates to the unified `tools::error_output` for the base error shape,
-/// for `bash::spawn` (`mod.rs`) to use when the work function itself panics
-/// (caught via `catch_unwind`, never reaching this module's normal error
-/// paths at all) -- see that module's panic-safety notes.
-pub(super) fn panic_output(message: &str) -> Value {
-    error_output(message)
+/// The worker's unwind boundary has no captured output or running process.
+pub(super) fn panic_output(message: &str) -> Response {
+    Response::failed(failure_body(message))
 }
 
-fn failed_output(message: &str, partial_output: Option<Vec<u8>>, config: &BashToolConfig) -> Value {
-    match partial_output {
-        None => error_output(message),
-        Some(raw) => {
-            let source = String::from_utf8_lossy(&raw).into_owned();
-            let output_file = output::spill(&source);
-            let Capped { shown, truncated } =
-                output::cap(&source, config.output_cap_chars, output_file.as_deref());
-            let mut value = error_output(message);
-            if let Some(map) = value.as_object_mut() {
-                map.insert("output".to_string(), Value::String(shown));
-                map.insert("truncated".to_string(), Value::Bool(truncated));
-                map.insert(
-                    "output_file".to_string(),
-                    output_file
-                        .map(|path| Value::String(path.display().to_string()))
-                        .unwrap_or(Value::Null),
-                );
-            }
-            value
-        }
+fn failure_body(message: &str) -> BashOutput {
+    BashOutput {
+        termination: BashTermination::Failed,
+        message: Some(message.into()),
+        output: String::new(),
+        truncated: false,
+        output_file: None,
+        note: None,
     }
+}
+
+fn failed_output(
+    message: &str,
+    partial_output: Option<Vec<u8>>,
+    config: &BashToolConfig,
+) -> Response {
+    let mut body = failure_body(message);
+    if let Some(raw) = partial_output {
+        let source = String::from_utf8_lossy(&raw).into_owned();
+        let output_file = output::spill(&source);
+        let Capped { shown, truncated } =
+            output::cap(&source, config.output_cap_chars, output_file.as_deref());
+        body.output = shown;
+        body.truncated = truncated;
+        body.output_file = output_file.map(|path| path.display().to_string());
+    }
+    Response::failed(body)
 }
 
 /// Build the result before classifying containment denials. A signal has no
@@ -255,7 +266,7 @@ fn status_output(
     raw_stderr: Vec<u8>,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     match status.code() {
         Some(_) => success_output(status, raw_stdout, raw_stderr, cwd_handle, config),
         // No exit code at all means signal-terminated -- this crate's own
@@ -269,30 +280,22 @@ fn status_output(
 }
 
 fn domain_denied(
-    identity: &ToolCallIdentity,
+    _identity: &ToolCallIdentity,
     domains: Vec<String>,
-    output: Value,
+    output: Response,
 ) -> BashCompletion {
     BashCompletion::DomainDenied {
         domains,
-        result: identity.result(output),
+        result: output,
     }
 }
 
-fn finished(identity: &ToolCallIdentity, output: Value) -> BashCompletion {
-    BashCompletion::Finished(identity.result(output))
+fn finished(_identity: &ToolCallIdentity, output: Response) -> BashCompletion {
+    BashCompletion::Finished(output)
 }
 
-fn note_undrained(value: &mut Value, drain_grace: Duration) {
-    if let Some(map) = value.as_object_mut() {
-        map.insert(
-            "note".to_string(),
-            Value::String(format!(
-                "output capture stopped {}ms after the command ended: a background \
-                 process is still holding the output pipe, so anything it prints later \
-                 is not included",
-                drain_grace.as_millis()
-            )),
-        );
+fn note_undrained(value: &mut Response, drain_grace: Duration) {
+    if let Some(output) = value.bash_mut() {
+        output.note = Some(format!("output capture stopped {}ms after the command ended: a background process is still holding the output pipe, so anything it prints later is not included", drain_grace.as_millis()));
     }
 }

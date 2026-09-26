@@ -63,6 +63,37 @@ Limits are now rejected instead of silently clamped. For example,
 type error rather than the default window. Removed fields such as
 `fs.grep.context` are unknown-field errors.
 
+### Result contract (2026-09-26)
+
+The same 18 non-board tools construct bodies from `contract::tool_output` and
+return `tools::output::Response`. Success/failure is chosen explicitly; approval
+and containment evidence is added before the result is serialized. `is_error`
+inside failed output is a derived provider-visible marker, never the authority
+for a built-in outcome. External board/host adapters retain their own JSON
+convention. The provider still receives `{outcome, output}` from the recorded
+`ToolCallResult`, both live and on resume.
+
+`fs.edit` records each entry as `Applied { occurrences }`, `Failed { message }`,
+or `NotAttempted`. Completed views count only recorded applied edits, including
+those before a later failure. Expanded rows label failed/unattempted entries and
+show only applied replacement diffs. Line totals remain reconstructed replacement
+statistics weighted by occurrences, not a net file/session diff (multiple matches
+on one line can contribute more than once). Pending approval previews remain
+proposals. No rollback is introduced.
+
+Bash records an explicit termination kind: ordinary exit, timeout, termination,
+execution failure, or reuse. An ordinary nonzero command exit remains a completed
+tool execution with that exit code; containment denial can still fail an exit-zero
+pipeline. Failed captures cannot be reused, and reuse binds the original request
+by both call and occurrence. Child reports are typed before registration and used
+by both push notifications and `task_output`, retaining useful partial reports.
+
+Display decoders share the producer types. Bodies without the required structure
+remain available as raw output instead of being represented as completed changes.
+The JSONL and wire envelopes are unchanged (event-log v3, agent wire v25); the
+additional bash termination field requires no log migration. Existing bash payloads
+without that field use the raw display fallback and are not reused as fresh results.
+
 ### Results
 
 `fs.read` is for a known file or a relevant line window, not content

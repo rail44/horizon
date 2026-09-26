@@ -8,8 +8,14 @@ fn build_tool_call_views_pairs_requests_with_their_results_in_request_order() {
     let items = vec![
         tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
         tool_requested("b", "fs.read", json!({"path": "src/lib.rs"})),
-        tool_finished("a", json!({"returned_count": 3})),
-        tool_finished("b", json!({"total_lines": 40})),
+        tool_finished(
+            "a",
+            json!({"returned_count": 3, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 3}),
+        ),
+        tool_finished(
+            "b",
+            json!({"total_lines": 40, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 40}),
+        ),
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(views.len(), 2);
@@ -60,7 +66,7 @@ fn a_task_output_call_reports_running_and_finished_distinctly() {
         tool_finished(
             "o",
             json!({"session_id": "3f2b", "description": "map the emit sites",
-                       "status": "running"}),
+                       "status": "running", "message": "not finished"}),
         ),
     ]);
     assert_eq!(running[0].verb, "Task Output");
@@ -99,7 +105,7 @@ fn an_errored_tool_call_is_marked_is_error_via_the_output_convention() {
         tool_requested("a", "bash", json!({"command": "cargo test"})),
         tool_finished(
             "a",
-            json!({"is_error": true, "message": "boom", "exit_code": 1}),
+            json!({"is_error": true, "message": "boom", "exit_code": 1, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
         ),
     ];
     let views = build_tool_call_views(&items);
@@ -115,7 +121,10 @@ fn running_row_expandable_for_any_finished_call_but_not_a_still_running_one() {
 
     let succeeded = build_tool_call_views(&[
         tool_requested("a", "bash", json!({"command": "x"})),
-        tool_finished("a", json!({"exit_code": 0})),
+        tool_finished(
+            "a",
+            json!({"exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
+        ),
     ]);
     assert!(running_row_expandable(&succeeded[0]));
 
@@ -130,7 +139,10 @@ fn running_row_expandable_for_any_finished_call_but_not_a_still_running_one() {
 fn a_call_with_no_approval_request_has_approval_state_none() {
     let items = vec![
         tool_requested("a", "fs.read", json!({"path": "a.rs"})),
-        tool_finished("a", json!({"total_lines": 1})),
+        tool_finished(
+            "a",
+            json!({"total_lines": 1, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 1}),
+        ),
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(views[0].approval, ApprovalState::None);
@@ -201,7 +213,10 @@ fn a_call_resolved_successfully_after_approval_is_approved() {
     let items = vec![
         tool_requested("a", "bash", json!({"command": "cargo build"})),
         approval_requested("a"),
-        tool_finished("a", json!({"exit_code": 0, "output": ""})),
+        tool_finished(
+            "a",
+            json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
+        ),
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(views[0].approval, ApprovalState::Approved);
@@ -242,7 +257,7 @@ fn fs_edit_derives_a_diffstat_from_old_and_new_string() {
                 }],
             }),
         ),
-        tool_finished("a", json!({"path": "src/agent/view.rs", "replaced": true})),
+        tool_finished("a", edit_result("src/agent/view.rs")),
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(views[0].verb, "Edit");
@@ -378,8 +393,14 @@ fn progress_counts_finished_vs_total_tool_calls() {
         tool_requested("a", "fs.read", json!({"path": "a.rs"})),
         tool_requested("b", "fs.read", json!({"path": "b.rs"})),
         tool_requested("c", "fs.read", json!({"path": "c.rs"})),
-        tool_finished("a", json!({"total_lines": 1})),
-        tool_finished("b", json!({"total_lines": 1})),
+        tool_finished(
+            "a",
+            json!({"total_lines": 1, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 1}),
+        ),
+        tool_finished(
+            "b",
+            json!({"total_lines": 1, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 1}),
+        ),
     ];
     let views = build_tool_call_views(&items);
     assert_eq!(progress(&views), (2, 3));
@@ -390,7 +411,7 @@ fn a_resolved_approval_within_the_turn_is_no_longer_pending() {
     let call_id = ToolCallId("a".to_string());
     let items = vec![
         approval_requested("a"),
-        tool_finished("a", json!({"path": "x.rs", "replaced": true})),
+        tool_finished("a", edit_result("x.rs")),
     ];
     assert!(!is_approval_still_pending(&items, &call_id));
 }
@@ -447,11 +468,7 @@ fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
         ),
         // A's result arrives first and must land on A's row, not on
         // the more recent B.
-        tool_finished_with_occurrence(
-            "fs.edit:1",
-            json!({ "is_error": false, "applied": true }),
-            occ_a.clone(),
-        ),
+        tool_finished_with_occurrence("fs.edit:1", edit_result("a.txt"), occ_a.clone()),
         tool_finished_with_occurrence(
             "fs.edit:1",
             json!({ "is_error": true, "message": "old_string not found" }),
@@ -485,13 +502,10 @@ fn provider_reused_call_id_attributes_each_occurrence_to_its_own_result() {
     );
     assert_eq!(views[1].call_id, ToolCallId("fs.edit:1".to_string()));
     assert!(views[1].finished());
-    assert_eq!(
-        views[1]
-            .affected_files
-            .iter()
-            .map(|f| f.path.as_str())
-            .collect::<Vec<_>>(),
-        vec!["b.txt"],
+    assert_eq!(views[1].target.as_deref(), Some("b.txt"));
+    assert!(
+        views[1].affected_files.is_empty(),
+        "a failed edit has no recorded mutations"
     );
     assert!(
         views[1].is_error(),
@@ -543,8 +557,7 @@ fn a_denial_retrys_parked_result_attaches_to_the_attempt_that_produced_it() {
             json!({
                 "is_error": true,
                 "denied_domains": ["evil.example.com"],
-                "exit_code": 0,
-            }),
+                "exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
             occ_1.clone(),
         ),
     ];
@@ -599,7 +612,11 @@ fn an_approved_denial_retry_closes_the_abandoned_attempt_as_superseded() {
         tool_superseded_with_occurrence("bash:1", occ_1.clone(), occ_2.clone()),
         tool_started_with_occurrence("bash:1", occ_2.clone()),
         // ... and finishes on its own.
-        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
+        tool_finished_with_occurrence(
+            "bash:1",
+            json!({ "exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
+            occ_2.clone(),
+        ),
     ];
 
     let views = build_tool_call_views(&items);
@@ -635,7 +652,11 @@ fn a_superseded_close_arriving_after_the_retrys_result_still_lands_on_its_own_ro
     let items = vec![
         tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
-        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
+        tool_finished_with_occurrence(
+            "bash:1",
+            json!({ "exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
+            occ_2.clone(),
+        ),
         tool_superseded_with_occurrence("bash:1", occ_1, occ_2.clone()),
     ];
 
@@ -659,7 +680,11 @@ fn the_collapsed_receipt_counts_a_superseded_attempt_once_not_twice() {
         tool_requested_with_occurrence("bash:1", "bash", command.clone(), occ_1.clone()),
         tool_requested_with_occurrence("bash:1", "bash", command, occ_2.clone()),
         tool_superseded_with_occurrence("bash:1", occ_1, occ_2.clone()),
-        tool_finished_with_occurrence("bash:1", json!({ "exit_code": 0 }), occ_2.clone()),
+        tool_finished_with_occurrence(
+            "bash:1",
+            json!({ "exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
+            occ_2.clone(),
+        ),
     ]);
 
     let aggregate = super::super::aggregate_receipt(&views);

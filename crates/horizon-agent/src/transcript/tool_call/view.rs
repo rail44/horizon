@@ -16,7 +16,8 @@ pub enum ToolCallKind {
         file_name: String,
         /// `(added, removed)` line counts, derived from the `old_string`/
         /// `new_string` pairs of `fs.edit`'s `edits` list (summed when the
-        /// call carries several edits for the one file). `None` when not
+        /// call carries several edits for the one file), weighted by recorded
+        /// applied occurrences once finished. `None` when not
         /// derivable (e.g. `fs.write`, which replaces wholesale rather
         /// than diffing).
         diffstat: Option<(u32, u32)>,
@@ -140,8 +141,12 @@ pub fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallView> {
                 kind,
                 ..
             } = classify(&entry.request.tool_id, &entry.request.input, output);
-            let affected_files =
-                affected_files(&entry.request.tool_id, &entry.request.input, output);
+            let affected_files = match result.map(|result| &result.outcome) {
+                Some(ToolOutcome::Succeeded | ToolOutcome::Failed) => {
+                    affected_files(&entry.request.tool_id, &entry.request.input, output)
+                }
+                _ => Vec::new(),
+            };
             ToolCallView {
                 call_id: entry.request.call_id.clone(),
                 occurrence_id: entry.request.occurrence_id.clone(),

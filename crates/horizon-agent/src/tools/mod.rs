@@ -15,6 +15,7 @@ mod knowledge;
 mod memory;
 pub(crate) mod moa;
 mod network;
+pub(crate) mod output;
 mod processing;
 mod recall;
 mod state;
@@ -118,18 +119,13 @@ pub fn start_approval_gate(
 pub(crate) fn execute_approved(
     tool_state: &ToolSessionState,
     input: &input::ToolInput,
-) -> serde_json::Value {
+) -> output::Response {
     synchronous::execute(tool_state, input, true)
-        .unwrap_or_else(|| error_output("tool has no synchronous Horizon-side execution"))
+        .unwrap_or_else(|| output::error("tool has no synchronous Horizon-side execution"))
 }
 
-/// Constructs the wire-visible tool error-output shape
-/// `{"is_error": true, "message": ...}`. `ToolCallResult::new`
-/// (`contract.rs`) and the DuckDB projection both read `output`'s
-/// `"is_error"` key to derive the typed `is_error` field, so every tool
-/// result that represents a failure must carry this shape in its `output`
-/// JSON. Callers that need additional fields (`output`, `truncated`, etc.)
-/// build on the returned base value by inserting into its object map.
+/// External board/host adapters retain their existing JSON error convention.
+/// Built-in typed handlers use `output::error`, which owns its failed outcome.
 pub(crate) fn error_output(message: impl Into<String>) -> serde_json::Value {
     serde_json::json!({ "is_error": true, "message": message.into() })
 }

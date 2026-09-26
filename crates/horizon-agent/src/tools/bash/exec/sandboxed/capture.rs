@@ -1,11 +1,11 @@
 //! Own the child through exit and output drain, then collect denial evidence.
 use super::super::{failed_output, stream::spawn_blocking_pump, take};
 use crate::config::BashToolConfig;
-#[cfg(target_os = "linux")]
-use crate::policy::annotate_sandboxed;
 use crate::tools::bash::process::kill_process_tree;
 use crate::tools::bash::registry::Registration;
-use serde_json::Value;
+#[cfg(target_os = "linux")]
+use crate::tools::output::annotate_sandboxed;
+use crate::tools::output::Response;
 use std::process::ExitStatus;
 use std::time::Duration;
 
@@ -26,7 +26,7 @@ pub(super) fn collect(
     timeout: Duration,
     config: &BashToolConfig,
     #[cfg(target_os = "macos")] started_at: std::time::SystemTime,
-) -> Result<Captured, Value> {
+) -> Result<Captured, Response> {
     // The binding is only mutated on Linux (`supervisor_report.take()`
     // below), so the `mut` lives on a cfg'd re-bind and macOS stays
     // warning-free under `-D warnings`.

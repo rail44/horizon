@@ -31,9 +31,8 @@
 
 use std::{collections::HashSet, fs, path::PathBuf};
 
-use serde_json::{json, Value};
+use crate::tools::output::*;
 
-use super::error_output;
 use super::locks::FileLocks;
 use super::safety::resolve_path;
 use super::staleness::check_staleness;
@@ -41,7 +40,7 @@ use crate::tools::state::ToolSessionState;
 
 use crate::tools::input::{Edit, EditFiles};
 
-pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles) -> Value {
+pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles) -> Response {
     let edits = &input.edits;
 
     // Every resolvable target is locked for the whole call, in the lexical
@@ -62,65 +61,52 @@ pub(in crate::tools) fn execute(tool_state: &ToolSessionState, input: &EditFiles
     let mut failure: Option<(usize, String)> = None;
 
     for (index, edit) in edits.iter().enumerate() {
-        if failure.is_some() {
-            outcomes.push(json!({
-                "index": index,
-                "path": edit.path,
-                "status": "not_attempted",
-            }));
-            continue;
-        }
-        match apply_one(tool_state, edit, &mut written) {
-            Ok(occurrences) => {
-                if !applied_paths.iter().any(|path| path == &edit.path) {
-                    applied_paths.push(edit.path.to_string());
+        let outcome = if failure.is_some() {
+            EditOutcome::NotAttempted
+        } else {
+            match apply_one(tool_state, edit, &mut written) {
+                Ok(occurrences) => {
+                    if !applied_paths.contains(&edit.path) {
+                        applied_paths.push(edit.path.clone());
+                    }
+                    EditOutcome::Applied { occurrences }
                 }
-                outcomes.push(json!({
-                    "index": index,
-                    "path": edit.path,
-                    "status": "applied",
-                    "occurrences": occurrences,
-                }));
+                Err(message) => {
+                    failure = Some((index, message.clone()));
+                    EditOutcome::Failed { message }
+                }
             }
-            Err(message) => {
-                outcomes.push(json!({
-                    "index": index,
-                    "path": edit.path,
-                    "status": "failed",
-                    "message": message,
-                }));
-                failure = Some((index, message));
-            }
-        }
+        };
+        outcomes.push(EditReceipt {
+            index,
+            path: edit.path.clone(),
+            outcome,
+        });
     }
-
     let applied_count = outcomes
         .iter()
-        .filter(|outcome| outcome["status"] == "applied")
+        .filter(|edit| matches!(edit.outcome, EditOutcome::Applied { .. }))
         .count();
-    let file_count = applied_paths.len();
-
-    match failure {
-        None => json!({
-            "edits": outcomes,
-            "applied_count": applied_count,
-            "file_count": file_count,
-        }),
-        Some((index, message)) => {
-            let not_attempted = edits.len() - index - 1;
-            let mut value = error_output(format!(
-                "edit at index {index} failed: {message}. {applied_count} earlier edit(s) \
-                 were applied and remain on disk; {not_attempted} later edit(s) were not \
-                 attempted — re-read the affected files and resend from index {index}."
-            ));
-            if let Some(map) = value.as_object_mut() {
-                map.insert("failed_index".to_string(), json!(index));
-                map.insert("edits".to_string(), json!(outcomes));
-                map.insert("applied_count".to_string(), json!(applied_count));
-                map.insert("file_count".to_string(), json!(file_count));
-            }
-            value
-        }
+    let failed_index = failure.as_ref().map(|(index, _)| *index);
+    let message = failure.map(|(index, message)| {
+        let not_attempted = edits.len() - index - 1;
+        format!(
+            "edit at index {index} failed: {message}. {applied_count} earlier edit(s) \
+            were applied and remain on disk; {not_attempted} later edit(s) were not \
+            attempted — re-read the affected files and resend from index {index}."
+        )
+    });
+    let output = FileEdits {
+        edits: outcomes,
+        applied_count,
+        file_count: applied_paths.len(),
+        failed_index,
+        message,
+    };
+    if output.failed_index.is_some() {
+        Response::failed(output)
+    } else {
+        Response::succeeded(output)
     }
 }
 
@@ -130,7 +116,8 @@ fn apply_one(
     written: &mut HashSet<PathBuf>,
 ) -> Result<usize, String> {
     let path_arg = edit.path.as_str();
-    let resolved = resolve_path(tool_state, path_arg, false).map_err(|error| message_of(&error))?;
+    let resolved =
+        resolve_path(tool_state, path_arg, false).map_err(|error| error.message().to_owned())?;
 
     if !resolved.is_file() {
         return Err(format!(
@@ -142,7 +129,8 @@ fn apply_one(
     // does track that write, but the gate exists to catch *other* writers,
     // and this call's own evolving content must not be able to trip it.
     if !written.contains(&resolved) {
-        check_staleness(tool_state, &resolved, path_arg).map_err(|error| message_of(&error))?;
+        check_staleness(tool_state, &resolved, path_arg)
+            .map_err(|error| error.message().to_owned())?;
     }
 
     let content = fs::read_to_string(&resolved)
@@ -174,14 +162,4 @@ fn apply_one(
     written.insert(resolved);
 
     Ok(match_count)
-}
-
-/// Unwraps the message out of an [`error_output`]-shaped value, so a helper
-/// that reports call-level errors can contribute a per-edit outcome instead.
-fn message_of(error: &Value) -> String {
-    error
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown error")
-        .to_string()
 }

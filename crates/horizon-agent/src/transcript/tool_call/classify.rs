@@ -1,7 +1,8 @@
+use crate::contract::tool_output::*;
 use serde_json::Value;
 
 use super::super::file_name;
-use super::files::{distinct_edit_paths, edit_entries};
+use super::files::{affected_files, distinct_edit_paths, edit_entries};
 use super::util::{command_head, line_diffstat, str_field};
 use super::view::ToolCallKind;
 
@@ -17,10 +18,8 @@ pub struct ToolCallClassification {
 }
 
 /// Maps a tool id to its display verb, target, (would-be) result
-/// summary, and any tool-specific structured data -- the one place that
-/// knows the exact input/output JSON shape each tool in
-/// `crate::tools` uses (see that module's `tools/fs`, `tools/bash`
-/// submodules). Unknown tool ids fall back to the raw id as the verb with
+/// summary, and structured display data. Output decoding uses the same
+/// contract::tool_output definitions as execution and history. Unknown tool ids fall back to the raw id as the verb with
 /// no target/summary, so a future tool renders *something* sane rather
 /// than nothing.
 ///
@@ -52,10 +51,18 @@ fn classify_tool(
         "fs.edit" => {
             let edits = edit_entries(input);
             let paths = distinct_edit_paths(&edits);
-            let diffstat = edits.iter().fold((0, 0), |(added, removed), edit| {
+            let planned_diffstat = edits.iter().fold((0, 0), |(added, removed), edit| {
                 let (edit_added, edit_removed) = line_diffstat(edit.old_string, edit.new_string);
                 (added + edit_added, removed + edit_removed)
             });
+            let effects = affected_files(tool_id, input, output);
+            let diffstat = if output.is_some() {
+                effects
+                    .iter()
+                    .fold((0, 0), |(a, r), file| (a + file.added, r + file.removed))
+            } else {
+                planned_diffstat
+            };
             // One edit still reads as the file it touches; a batch reads as
             // its own cardinality, since no single path represents it.
             let target = match (edits.len(), paths.len()) {
@@ -77,15 +84,22 @@ fn classify_tool(
             (
                 "Edit".to_string(),
                 target,
-                Some(format!("+{added} -{removed}")),
+                Some(match output.and_then(decode::<FileEdits>) {
+                    Some(result) if result.failed_index.is_some() => format!(
+                        "{} applied, failed at edit {} · +{added} -{removed}",
+                        result.applied_count,
+                        result.failed_index.unwrap() + 1
+                    ),
+                    _ => format!("+{added} -{removed}"),
+                }),
                 kind,
             )
         }
         "fs.write" => {
             let path = str_field(input, "path").unwrap_or_default().to_string();
             let summary = output
-                .and_then(|output| output.get("created"))
-                .and_then(Value::as_bool)
+                .and_then(decode::<FileWritten>)
+                .map(|result| result.created)
                 .map(|created| {
                     if created {
                         "created".to_string()
@@ -107,9 +121,8 @@ fn classify_tool(
             let command = str_field(input, "command").unwrap_or_default();
             let head = command_head(command);
             let summary = output
-                .and_then(|output| output.get("exit_code"))
-                .and_then(Value::as_i64)
-                .map(|code| format!("exit {code}"));
+                .and_then(decode::<BashOutput>)
+                .map(|result| result.summary());
             (
                 "Bash".to_string(),
                 Some(head.clone()),
@@ -120,8 +133,8 @@ fn classify_tool(
         "fs.read" => {
             let path = str_field(input, "path").unwrap_or_default().to_string();
             let summary = output
-                .and_then(|output| output.get("total_lines"))
-                .and_then(Value::as_u64)
+                .and_then(decode::<FileRead>)
+                .map(|result| result.total_lines)
                 .map(|lines| format!("{lines} lines"));
             (
                 "Read".to_string(),
@@ -133,8 +146,12 @@ fn classify_tool(
         "fs.grep" | "fs.glob" => {
             let pattern = str_field(input, "pattern").unwrap_or_default().to_string();
             let summary = output
-                .and_then(|output| output.get("returned_count"))
-                .and_then(Value::as_u64)
+                .and_then(|output| match tool_id {
+                    "fs.grep" => {
+                        decode::<Matches<Location>>(output).map(|result| result.returned_count)
+                    }
+                    _ => decode::<Matches<String>>(output).map(|result| result.returned_count),
+                })
                 .map(|count| format!("{count} matches"));
             let verb = if tool_id == "fs.grep" { "Grep" } else { "Glob" };
             (
@@ -180,7 +197,9 @@ fn classify_tool(
             let description = str_field(input, "description")
                 .unwrap_or_default()
                 .to_string();
-            let summary = output.and_then(|output| str_field(output, "status").map(str::to_string));
+            let summary = output
+                .and_then(decode::<TaskOutput>)
+                .map(|result| result.status().to_string());
             (
                 "Task".to_string(),
                 Some(description),
@@ -192,11 +211,13 @@ fn classify_tool(
             // The label the launch recorded, echoed back by the fetch so
             // this row reads like the launch row rather than a bare uuid.
             let target = output
-                .and_then(|output| str_field(output, "description"))
-                .or_else(|| str_field(input, "session_id"))
-                .unwrap_or_default()
-                .to_string();
-            let summary = output.and_then(|output| str_field(output, "status").map(str::to_string));
+                .and_then(decode::<TaskOutput>)
+                .map(|result| result.description().to_string())
+                .or_else(|| str_field(input, "session_id").map(str::to_string))
+                .unwrap_or_default();
+            let summary = output
+                .and_then(decode::<TaskOutput>)
+                .map(|result| result.status().to_string());
             (
                 "Task Output".to_string(),
                 Some(target),

@@ -11,11 +11,11 @@
 //! advertised catalog for untrusted sessions by `rig_tool_definitions`
 //! (gated on `RigAgentConfig::trusted_project`).
 
-use serde_json::Value;
+use crate::tools::output::Response;
 
 use crate::tools::state::ToolSessionState;
 
-pub(super) fn read(state: &ToolSessionState, input: &crate::tools::input::ReadEntry) -> Value {
+pub(super) fn read(state: &ToolSessionState, input: &crate::tools::input::ReadEntry) -> Response {
     with_main_root(state, |root| {
         crate::knowledge::execute_read(root, &input.id)
     })
@@ -24,16 +24,16 @@ pub(super) fn read(state: &ToolSessionState, input: &crate::tools::input::ReadEn
 pub(super) fn write(
     state: &ToolSessionState,
     input: &crate::tools::input::KnowledgeWrite,
-) -> Value {
+) -> Response {
     with_main_root(state, |root| crate::knowledge::execute_write(root, input))
 }
 
 fn with_main_root(
     state: &ToolSessionState,
-    execute: impl FnOnce(&std::path::Path) -> Value,
-) -> Value {
+    execute: impl FnOnce(&std::path::Path) -> Response,
+) -> Response {
     let Some(root) = state.workspace_root() else {
-        return crate::tools::error_output("knowledge tools require a workspace root");
+        return crate::tools::output::error("knowledge tools require a workspace root");
     };
     let main_root = crate::knowledge::main_root(root).unwrap_or(root.to_path_buf());
     execute(&main_root)

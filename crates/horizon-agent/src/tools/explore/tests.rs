@@ -895,9 +895,9 @@ fn a_panicking_activity_observer_becomes_a_failed_outcome() {
     });
     assert!(!outcome.has_usable_report());
     let output = outcome.into_output(SessionId::new(), "watcher");
-    assert_eq!(output["is_error"], true);
+    assert!(output.failed());
     assert_eq!(
-        output["message"],
+        output.message.as_deref().unwrap(),
         "the task waiter panicked: observer failed"
     );
 }

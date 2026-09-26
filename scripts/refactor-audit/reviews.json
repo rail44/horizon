@@ -145,6 +145,43 @@
     },
     {
       "target": {
+        "file": "crates/horizon-agent/src/tools/execution.rs",
+        "owner": "<free>",
+        "name": "execute_synchronous",
+        "partition": "production"
+      },
+      "sha256": "8698c4cc8c6a9dd7bfecef9f488f7de061e63438c16430ae21bf5e93a6102cc9",
+      "related": {
+        "crates/horizon-agent/src/tools/bash/job.rs": "dfded47bae31b6300b9a8ca6fb89f3cdff9349a2875160752b6d3d051ec2d0c3",
+        "crates/horizon-agent/src/tools/explore/children.rs": "cfc317bb0c6777672f44307a4f4ac381a3218576f1e13e4a23cedce78178ab45",
+        "crates/horizon-agent/src/tools/output/annotations.rs": "f7f8d5fe2f4e0082023eeb2558b42d109219daebf53bfd5c4578f773027dcea7",
+        "crates/horizon-agent/src/tools/output/evidence.rs": "c962576a718642264786eba506dff2a9b50a7043ebd2f80e70f41406be4a2658",
+        "crates/horizon-agent/src/tools/output/mod.rs": "d3ac5c88552a18ca80a39950765211341c2e87a9f22f89448fde8419af79e634",
+        "crates/horizon-agent/src/tools/synchronous.rs": "6d19e29ca7efc83e395384473705fd4f1cea35dfe6e991650f8f16c6aa098b58"
+      },
+      "decision": "preserve",
+      "reason": "The 18 non-board built-ins construct typed response bodies with explicit outcomes. Execution evidence is assembled before serialization and child notifications consume typed reports. JSON inference is confined to the external board and host adapter; their domain contracts remain out of scope.",
+      "commit": "cf9a2daac8b6c7d6ea0088ce6d787b2acbac1874"
+    },
+    {
+      "target": {
+        "file": "crates/horizon-agent/src/tools/fs/edit.rs",
+        "owner": "<free>",
+        "name": "execute",
+        "partition": "production"
+      },
+      "sha256": "07dae60c69c2425f1e6408281e6092ec09191ed014e90788eb878cb1fa8fd77f",
+      "related": {
+        "crates/horizon-agent/src/contract/tool_output/filesystem.rs": "0f99b41652581f337b836731aadfee520d930296ee33362e32dba58bdd16eefe",
+        "crates/horizon-agent/src/transcript/diff.rs": "457c67da7c9d6c5041eff6bfcedf2fdf559c9581b64ca662424003562466bb41",
+        "crates/horizon-agent/src/transcript/tool_call/files.rs": "fa091d9bdb5801de168bdfce122028d456f3b6b15afd5ac61b8cdfcd502bdd61"
+      },
+      "decision": "preserve",
+      "reason": "Typed per-edit receipts retain applied, failed and unattempted entries and actual occurrence counts. Transcript aggregation consumes only recorded effects, including partial failure. A real edit round trip through JSONL, DuckDB, provider history and change projection verifies the contract.",
+      "commit": "cf9a2daac8b6c7d6ea0088ce6d787b2acbac1874"
+    },
+    {
+      "target": {
         "file": "crates/horizon-agent/src/transcript/tool_call/view.rs",
         "owner": "<free>",
         "name": "build_tool_call_views",

@@ -1,7 +1,6 @@
 use super::completion::approval_is_unresolved;
 use super::input::PreparedCall;
 use super::transition::ToolUpdate;
-use serde_json::Value;
 
 use crate::contract::SessionId;
 use crate::contract::{
@@ -11,7 +10,7 @@ use crate::frame::AgentFrame;
 use crate::judge::ApprovalCandidate;
 use crate::tools::bash;
 use crate::tools::bash::{ApprovalSource, HostExecutionApproval, SandboxedApprovalOrigin};
-use crate::tools::error_output;
+use crate::tools::output::{error as error_output, Response};
 use crate::tools::state::{session_runtime, SessionRuntime, ToolSessionState};
 
 /// The user's decision on a pending `ApprovalRequested` tool call.
@@ -155,11 +154,7 @@ pub fn unattended_refusal_result(
     request: &ToolCallRequest,
 ) -> Option<ToolCallResult> {
     let message = unattended_refusal_message(tool_state, request)?;
-    Some(ToolCallResult::new(
-        request.call_id.clone(),
-        request.occurrence_id.clone(),
-        error_output(message),
-    ))
+    Some(request.identity().finish(error_output(message)))
 }
 
 /// [`unattended_refusal_result`] folded into the session's live frame and
@@ -531,7 +526,7 @@ fn resolve_filesystem_denial_retry(
     if let Err(error) = runtime.tool_state.approve_filesystem_grants(&grants) {
         return ApprovalOutcome::from(started.complete(
             &runtime.live_state,
-            request.identity().result(error_output(format!(
+            request.identity().finish(error_output(format!(
                 "Approved filesystem grants could not be revalidated: {error}"
             ))),
             Vec::new(),
@@ -729,11 +724,11 @@ fn unstarted_error(
     else {
         return ApprovalOutcome::AlreadyResolved;
     };
-    let result = identity.result(error_output(message));
+    let result = identity.finish(error_output(message));
     forward_prior_result(runtime, result)
 }
 
-fn denied_output() -> Value {
+fn denied_output() -> Response {
     error_output("denied by user")
 }
 
@@ -741,7 +736,7 @@ fn denied_output() -> Value {
 fn declined_result(
     runtime: &SessionRuntime,
     call_id: &ToolCallId,
-    output: Value,
+    output: Response,
 ) -> ApprovalOutcome {
     // Same `occurrence_id` fixup as `unstarted_error` -- look up the
     // request's `occurrence_id` from the live frame so the transcript and
@@ -755,7 +750,7 @@ fn declined_result(
     else {
         return ApprovalOutcome::AlreadyResolved;
     };
-    let result = ToolCallResult::denied(call_id.clone(), identity.occurrence_id, output);
+    let result = ToolCallResult::denied(call_id.clone(), identity.occurrence_id, output.to_json());
     ApprovalOutcome::from(ToolUpdate::finish(&runtime.live_state, result))
 }
 

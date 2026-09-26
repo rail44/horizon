@@ -19,7 +19,7 @@
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-use serde_json::Value;
+use crate::contract::tool_output::TaskReport;
 
 use crate::contract::SessionId;
 
@@ -31,7 +31,7 @@ pub(super) struct Completion {
     pub(super) description: String,
     /// The child's full result value -- the same shape `task_output`
     /// returns (`report`/`capped`/`is_error`/`message`).
-    pub(super) output: Value,
+    pub(super) output: TaskReport,
 }
 
 /// What a `task_output` lookup found.
@@ -45,8 +45,7 @@ pub(super) enum Lookup {
         description: String,
     },
     Finished {
-        description: String,
-        output: Value,
+        output: TaskReport,
     },
 }
 
@@ -54,7 +53,7 @@ struct Child {
     requester: SessionId,
     description: String,
     /// `None` while the child is still running.
-    outcome: Option<Value>,
+    outcome: Option<TaskReport>,
 }
 
 #[derive(Default)]
@@ -104,7 +103,7 @@ pub(super) fn register_hostless(requester: SessionId, child: SessionId, descript
 /// Returns the requester to wake, or `None` if that session already went
 /// away (its whole registry footprint is gone, so there is nobody to
 /// notify).
-pub(super) fn complete(child: SessionId, output: Value) -> Option<SessionId> {
+pub(super) fn complete(child: SessionId, output: TaskReport) -> Option<SessionId> {
     let mut registry = lock();
     let entry = registry.children.get_mut(&child)?;
     if entry.outcome.is_some() {
@@ -131,7 +130,7 @@ pub(super) fn complete(child: SessionId, output: Value) -> Option<SessionId> {
 /// into the aggregator's `rig_history`; a proposal reaches it as the pass's
 /// own provider-view block instead. The registration stays so `task_output`
 /// can still re-read the proposer's full report.
-pub(in crate::tools) fn complete_without_notification(child: SessionId, output: Value) {
+pub(in crate::tools) fn complete_without_notification(child: SessionId, output: TaskReport) {
     let mut registry = lock();
     let Some(entry) = registry.children.get_mut(&child) else {
         return;
@@ -166,7 +165,6 @@ pub(super) fn lookup(requester: SessionId, child: SessionId) -> Lookup {
     match registry.children.get(&child) {
         Some(entry) if entry.requester == requester => match &entry.outcome {
             Some(output) => Lookup::Finished {
-                description: entry.description.clone(),
                 output: output.clone(),
             },
             None => Lookup::Running {

@@ -55,43 +55,27 @@ pub(super) fn notification_text(completions: &[Completion]) -> String {
     text
 }
 
-/// The fields of a child's result value the notification reads.
-struct ChildResult<'a> {
-    failed: bool,
-    capped: bool,
-    message: &'a str,
-    report: &'a str,
-}
-
-impl<'a> ChildResult<'a> {
-    fn read(output: &'a serde_json::Value) -> Self {
-        Self {
-            failed: output.get("is_error").and_then(serde_json::Value::as_bool) == Some(true),
-            capped: output.get("capped").and_then(serde_json::Value::as_bool) == Some(true),
-            message: output
-                .get("message")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default(),
-            report: output
-                .get("report")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default(),
-        }
-    }
-
+impl crate::contract::tool_output::TaskReport {
     /// A child that died or was capped mid-thought can leave a "partial
     /// report" with no body -- the observed extreme being one whose entire
     /// text was `</mm:think>`. Shipping that as content reads like an
     /// answer, so the notification says what happened instead
     /// (`super::report_body_is_empty`).
     fn usable(&self) -> bool {
-        !super::report_body_is_empty(self.report)
+        !super::report_body_is_empty(self.report.as_deref().unwrap_or_default())
     }
 
     /// What happened, for a child that produced no usable report.
     fn cause(&self) -> String {
-        match (self.failed, self.capped) {
-            (true, _) if !self.message.is_empty() => format!("failed: {}", self.message),
+        match (self.failed(), self.capped) {
+            (true, _)
+                if self
+                    .message
+                    .as_ref()
+                    .is_some_and(|message| !message.is_empty()) =>
+            {
+                format!("failed: {}", self.message.as_deref().unwrap_or_default())
+            }
             (true, _) => "failed".to_string(),
             (false, true) => "hit its turn limit".to_string(),
             (false, false) => "ended its turn with nothing to say".to_string(),
@@ -106,7 +90,7 @@ pub(super) fn failure_lines(completions: &[Completion]) -> Vec<String> {
     completions
         .iter()
         .filter_map(|completion| {
-            let result = ChildResult::read(&completion.output);
+            let result = &completion.output;
             (!result.usable()).then(|| {
                 format!(
                     "task \"{description}\" (session_id: {session_id}) {cause} — no usable report",
@@ -121,14 +105,14 @@ pub(super) fn failure_lines(completions: &[Completion]) -> Vec<String> {
 
 fn entry(position: usize, completion: &Completion) -> String {
     let session_id = completion.session_id.as_uuid().to_string();
-    let result = ChildResult::read(&completion.output);
+    let result = &completion.output;
 
     let usable = result.usable();
     let status = if usable {
-        match (result.failed, result.capped) {
+        match (result.failed(), result.capped) {
             (true, _) => format!(
                 "finished with an error ({}); partial report follows",
-                result.message
+                result.message.as_deref().unwrap_or_default()
             ),
             (false, true) => {
                 "completed, but hit its turn limit — the report is partial".to_string()
@@ -147,7 +131,7 @@ fn entry(position: usize, completion: &Completion) -> String {
         description = completion.description,
     );
     if usable {
-        let (head, truncated) = truncate_report(result.report);
+        let (head, truncated) = truncate_report(result.report.as_deref().unwrap_or_default());
         entry.push('\n');
         entry.push_str(&head);
         if truncated {

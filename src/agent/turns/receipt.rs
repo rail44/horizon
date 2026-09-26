@@ -202,23 +202,35 @@ mod tests {
     fn aggregate_receipt_folds_mixed_classes_into_prose_counts() {
         let items = vec![
             tool_requested("q1", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
-            tool_finished("q1", json!({"returned_count": 1})),
+            tool_finished(
+                "q1",
+                json!({"returned_count": 1, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 1}),
+            ),
             tool_requested(
                 "q2",
                 "fs.glob",
                 json!({"base_path": ".", "pattern": "*.rs"}),
             ),
-            tool_finished("q2", json!({"returned_count": 2})),
+            tool_finished(
+                "q2",
+                json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
+            ),
             tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("r1", json!({"total_lines": 10})),
+            tool_finished(
+                "r1",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
             tool_requested(
                 "e1",
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
-            tool_finished("e1", json!({"path": "b.rs", "replaced": true})),
+            tool_finished("e1", edit_result("b.rs")),
             tool_requested("b1", "bash", json!({"command": "cargo test"})),
-            tool_finished("b1", json!({"exit_code": 0, "output": ""})),
+            tool_finished(
+                "b1",
+                json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
@@ -237,19 +249,31 @@ mod tests {
     fn aggregate_receipt_counts_distinct_paths_not_call_counts() {
         let items = vec![
             tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("r1", json!({"total_lines": 10})),
+            tool_finished(
+                "r1",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
             tool_requested("r2", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("r2", json!({"total_lines": 10})),
+            tool_finished(
+                "r2",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
             tool_requested("r3", "fs.read", json!({"path": "b.rs"})),
-            tool_finished("r3", json!({"total_lines": 5})),
+            tool_finished(
+                "r3",
+                json!({"total_lines": 5, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 5}),
+            ),
             tool_requested(
                 "e1",
                 "fs.edit",
                 json!({"edits": [{"path": "c.rs", "old_string": "x", "new_string": "y"}]}),
             ),
-            tool_finished("e1", json!({"path": "c.rs", "replaced": true})),
+            tool_finished("e1", edit_result("c.rs")),
             tool_requested("e2", "fs.write", json!({"path": "c.rs", "content": "z"})),
-            tool_finished("e2", json!({"path": "c.rs", "created": false})),
+            tool_finished(
+                "e2",
+                json!({"path": "c.rs", "created": false, "bytes_written": 1}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
@@ -312,9 +336,15 @@ mod tests {
         // behind for a successful run.
         let items = vec![
             tool_requested("b1", "bash", json!({"command": "cargo build"})),
-            tool_finished("b1", json!({"exit_code": 0, "output": ""})),
+            tool_finished(
+                "b1",
+                json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
+            ),
             tool_requested("b2", "bash", json!({"command": "cargo test"})),
-            tool_finished("b2", json!({"exit_code": 0, "output": ""})),
+            tool_finished(
+                "b2",
+                json!({"exit_code": 0, "output": "", "termination": "exited", "output_file": null, "truncated": false}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         let aggregate = aggregate_receipt(&tool_calls);
@@ -362,9 +392,15 @@ mod tests {
         let items = vec![
             user_message("fix the bug"),
             tool_requested("a", "fs.grep", json!({"base_path": ".", "pattern": "x"})),
-            tool_finished("a", json!({"returned_count": 2})),
+            tool_finished(
+                "a",
+                json!({"returned_count": 2, "base_path": ".", "pattern": "fixture", "matches": [], "truncated": false, "total_matches": 2}),
+            ),
             tool_requested("b", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("b", json!({"total_lines": 10})),
+            tool_finished(
+                "b",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
             assistant_delta("Looking at the code, I"),
         ];
         let bursts = segment_bursts(&items);

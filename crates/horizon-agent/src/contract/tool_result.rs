@@ -31,9 +31,9 @@ pub struct ToolCallResult {
 }
 
 impl ToolCallResult {
-    /// Normalize a tool handler's success/failure convention once at the
-    /// execution boundary. Cancellation, user denial, and retry replacement
-    /// have explicit constructors; payload text never implies those states.
+    /// Adapter for external JSON tools and fixtures. Built-in handlers construct
+    /// their result through tools::output::Response with an explicit outcome.
+    /// Cancellation, denial, and replacement never depend on payload markers.
     pub fn new(
         call_id: ToolCallId,
         occurrence_id: OccurrenceId,
@@ -69,8 +69,10 @@ impl ToolCallResult {
         output: impl Into<JsonValue>,
     ) -> Self {
         Self {
+            call_id,
+            occurrence_id,
+            output: output.into(),
             outcome: ToolOutcome::Denied,
-            ..Self::new(call_id, occurrence_id, output)
         }
     }
 

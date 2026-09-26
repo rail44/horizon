@@ -1,6 +1,6 @@
 use std::fs;
 
-use serde_json::{json, Value};
+use crate::tools::output::*;
 
 use super::error_output;
 use super::locks::FileLocks;
@@ -11,7 +11,7 @@ use crate::tools::state::ToolSessionState;
 pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::WriteFile,
-) -> Value {
+) -> Response {
     let path_arg = input.path.as_str();
     let content = input.content.as_str();
 
@@ -46,9 +46,9 @@ pub(in crate::tools) fn execute(
         tool_state.record_mtime(resolved.clone(), mtime);
     }
 
-    json!({
-        "path": path_arg,
-        "bytes_written": content.len(),
-        "created": !existed,
+    Response::succeeded(FileWritten {
+        path: path_arg.into(),
+        bytes_written: content.len(),
+        created: !existed,
     })
 }

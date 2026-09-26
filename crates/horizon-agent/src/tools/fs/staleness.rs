@@ -1,6 +1,6 @@
 use std::{fs, path::Path};
 
-use serde_json::Value;
+use crate::tools::output::Response;
 
 use super::error_output;
 use crate::tools::state::ToolSessionState;
@@ -14,7 +14,7 @@ pub(super) fn check_staleness(
     tool_state: &ToolSessionState,
     resolved: &Path,
     display_path: &str,
-) -> Result<(), Value> {
+) -> Result<(), Response> {
     let Some(recorded) = tool_state.recorded_mtime(resolved) else {
         return Err(error_output(format!(
             "`{display_path}` has not been read this session — read it first"

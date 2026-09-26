@@ -20,35 +20,27 @@ pub struct FileChange {
     pub file_name: String,
     pub added: u32,
     pub removed: u32,
-    /// Set once any successful `fs.write` call against this path reported
-    /// `created: true` (the same `output.get("created")` convention
-    /// `classify`'s `fs.write` arm reads). `fs.write` never produces a
-    /// diffstat at all (`ToolCallKind::File::diffstat` is `None` for it --
-    /// it replaces wholesale rather than diffing), so this flag is the
-    /// overview's only signal from a write call.
+    /// A recorded write created this file. Whole-file writes carry no diffstat.
     pub created: bool,
 }
 
-/// Aggregates every successful, finished `fs.edit`/`fs.write` call in
-/// `tool_calls` -- the *whole session's* [`super::build_tool_call_views`]
-/// output, not one turn/burst's -- into one [`FileChange`] per distinct
-/// path, ordered by each path's first touch. A failed call (`is_error`) or
-/// one still in flight contributes nothing, the same "failures never
-/// aggregate" rule [`super::aggregate_receipt`] follows -- simplified here
-/// to a plain skip, since this overview has no per-call chip fallback to
-/// fall back to.
+/// Aggregates recorded file effects from finished calls in the whole session.
+/// Applied edits survive a later failure in the same batch. Pending, denied,
+/// cancelled and superseded calls contribute no effects; an unrecognized
+/// payload never fabricates a mutation from the request alone.
 ///
 /// **Honest limitation**: multiple mutations to the same file have their
 /// diffstats *summed*, not combined into a net diff across the file's
 /// whole session history -- two edits that each touch 3 lines report `+6
 /// −6` here even if the second fully reverted the first's changes.
 /// Each contribution is only a per-edit reconstruction for `fs.edit`, and
-/// this aggregation has no access to the file's real end-to-end content to
+/// counts are weighted by recorded replacement occurrences (including repeated
+/// matches on a line); this aggregation has no access to the file's real end-to-end content to
 /// diff against instead.
 pub fn aggregate_changes(tool_calls: &[ToolCallView]) -> Vec<FileChange> {
     let mut changes: Vec<FileChange> = Vec::new();
     for call in tool_calls {
-        if !call.is_success() || classify_call(&call.tool_id) != CallClass::Edit {
+        if classify_call(&call.tool_id) != CallClass::Edit {
             continue;
         }
         for file in &call.affected_files {
@@ -237,13 +229,13 @@ mod tests {
                 "fs.edit",
                 json!({"edits": [{"path": "src/a.rs", "old_string": "x", "new_string": "y\nz"}]}),
             ),
-            tool_finished("e1", json!({"path": "src/a.rs", "replaced": true})),
+            tool_finished("e1", edit_result("src/a.rs")),
             tool_requested(
                 "e2",
                 "fs.edit",
                 json!({"edits": [{"path": "src/a.rs", "old_string": "y\nz", "new_string": "w"}]}),
             ),
-            tool_finished("e2", json!({"path": "src/a.rs", "replaced": true})),
+            tool_finished("e2", edit_result("src/a.rs")),
         ];
         let tool_calls = build_tool_call_views(&items);
         let changes = aggregate_changes(&tool_calls);
@@ -264,20 +256,20 @@ mod tests {
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "x", "new_string": "y"}]}),
             ),
-            tool_finished("e1", json!({"path": "b.rs", "replaced": true})),
+            tool_finished("e1", edit_result("b.rs")),
             tool_requested(
                 "e2",
                 "fs.edit",
                 json!({"edits": [{"path": "a.rs", "old_string": "x", "new_string": "y"}]}),
             ),
-            tool_finished("e2", json!({"path": "a.rs", "replaced": true})),
+            tool_finished("e2", edit_result("a.rs")),
             // A second touch of b.rs must not move it later in the order.
             tool_requested(
                 "e3",
                 "fs.edit",
                 json!({"edits": [{"path": "b.rs", "old_string": "y", "new_string": "z"}]}),
             ),
-            tool_finished("e3", json!({"path": "b.rs", "replaced": true})),
+            tool_finished("e3", edit_result("b.rs")),
         ];
         let tool_calls = build_tool_call_views(&items);
         let changes = aggregate_changes(&tool_calls);
@@ -293,7 +285,10 @@ mod tests {
                 "fs.write",
                 json!({"path": "new.rs", "content": "fn main() {}"}),
             ),
-            tool_finished("w1", json!({"path": "new.rs", "created": true})),
+            tool_finished(
+                "w1",
+                json!({"path": "new.rs", "created": true, "bytes_written": 1}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         let changes = aggregate_changes(&tool_calls);
@@ -312,7 +307,10 @@ mod tests {
                 "fs.write",
                 json!({"path": "existing.rs", "content": "fn main() {}"}),
             ),
-            tool_finished("w1", json!({"path": "existing.rs", "created": false})),
+            tool_finished(
+                "w1",
+                json!({"path": "existing.rs", "created": false, "bytes_written": 1}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         let changes = aggregate_changes(&tool_calls);
@@ -341,9 +339,15 @@ mod tests {
     fn aggregate_changes_ignores_non_edit_calls() {
         let items = vec![
             tool_requested("r1", "fs.read", json!({"path": "a.rs"})),
-            tool_finished("r1", json!({"total_lines": 10})),
+            tool_finished(
+                "r1",
+                json!({"total_lines": 10, "path": "fixture", "content_version": null, "content": "", "content_chars": 0, "truncated": false, "notice": null, "next_offset": null, "start_line": 1, "end_line": 10}),
+            ),
             tool_requested("b1", "bash", json!({"command": "cargo test"})),
-            tool_finished("b1", json!({"exit_code": 0})),
+            tool_finished(
+                "b1",
+                json!({"exit_code": 0, "termination": "exited", "output_file": null, "output": "", "truncated": false}),
+            ),
         ];
         let tool_calls = build_tool_call_views(&items);
         assert!(aggregate_changes(&tool_calls).is_empty());

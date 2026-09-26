@@ -5,7 +5,7 @@ use super::BASH_NICE_LEVEL;
 use super::{failed_output, note_undrained, status_output, take, timeout_output, wrapped_script};
 use crate::config::BashToolConfig;
 use crate::tools::bash::registry::Registration;
-use serde_json::Value;
+use crate::tools::output::Response;
 use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 use std::sync::{Arc, Mutex as StdMutex};
@@ -20,7 +20,7 @@ pub(super) async fn run_async(
     cwd: &Path,
     cwd_handle: &Arc<StdMutex<PathBuf>>,
     config: &BashToolConfig,
-) -> Value {
+) -> Response {
     let mut cmd = prepare_command(command, cwd);
     let child = match cmd.spawn() {
         Ok(child) => child,

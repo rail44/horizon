@@ -1,13 +1,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::tools::output::{Response, WebFetch};
 use dom_smoothie::{Config, Readability, TextMode};
 use horizon_sandbox_proxy::Allowlist;
 use reqwest::header::{
     ACCEPT, ACCEPT_ENCODING, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, LOCATION,
 };
 use reqwest::{redirect, Client, StatusCode, Url};
-use serde_json::{json, Value};
 
 use super::error_output;
 use super::ssrf::{remote_addr_is_safe, validate_url, SafeResolver};
@@ -23,7 +23,7 @@ const MAX_TITLE_CHARACTERS: usize = 1_000;
 const MAX_BYLINE_CHARACTERS: usize = 1_000;
 
 pub(super) enum FetchOutcome {
-    Finished(Value),
+    Finished(Response),
     DomainGrantRequired(Vec<String>),
 }
 
@@ -134,7 +134,7 @@ async fn read_response(
     mut response: reqwest::Response,
     final_url: String,
     max_characters: usize,
-) -> Result<Value, String> {
+) -> Result<Response, String> {
     if !response.status().is_success() {
         let status = response.status();
         let body = read_capped(&mut response, 8 * 1024)
@@ -198,7 +198,7 @@ async fn format_content(
     final_url: String,
     content_type: String,
     max_characters: usize,
-) -> Result<Value, String> {
+) -> Result<Response, String> {
     if is_html(&content_type) {
         let extracted = extract_html(text, final_url.clone()).await?;
         let (content, truncated) = truncate_chars(&extracted.content, max_characters);
@@ -206,23 +206,23 @@ async fn format_content(
         let byline = extracted
             .byline
             .map(|byline| truncate_chars(&byline, MAX_BYLINE_CHARACTERS).0);
-        Ok(json!({
-            "is_error": false,
-            "url": final_url,
-            "title": title,
-            "byline": byline,
-            "content_type": content_type,
-            "content": content,
-            "truncated": truncated,
+        Ok(Response::succeeded(WebFetch {
+            url: final_url,
+            title: Some(title),
+            byline,
+            content_type,
+            content,
+            truncated,
         }))
     } else {
         let (content, truncated) = truncate_chars(&text, max_characters);
-        Ok(json!({
-            "is_error": false,
-            "url": final_url,
-            "content_type": content_type,
-            "content": content,
-            "truncated": truncated,
+        Ok(Response::succeeded(WebFetch {
+            url: final_url,
+            title: None,
+            byline: None,
+            content_type,
+            content,
+            truncated,
         }))
     }
 }
@@ -298,7 +298,17 @@ fn supported_content_type(content_type: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
 
+    async fn read_response(
+        response: reqwest::Response,
+        url: String,
+        max: usize,
+    ) -> Result<Value, String> {
+        super::read_response(response, url, max)
+            .await
+            .map(|output| output.to_json())
+    }
     fn domain_from_input(raw: &Value) -> Result<String, String> {
         let input = serde_json::from_value(raw.clone()).map_err(|error| error.to_string())?;
         super::domain_from_input(&input)
@@ -380,7 +390,6 @@ mod tests {
         assert_eq!(
             output,
             json!({
-                "is_error": false,
                 "url": "https://example.com/final",
                 "content_type": "text/plain",
                 "content": "aé",
@@ -440,7 +449,7 @@ mod tests {
                 assert_eq!(domains, vec!["example.invalid"]);
             }
             FetchOutcome::Finished(output) => {
-                panic!("expected a domain grant before any request, got {output}")
+                panic!("expected a domain grant before any request, got {output:?}")
             }
         }
     }

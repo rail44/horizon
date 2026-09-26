@@ -174,7 +174,10 @@ fn synchronous(request: &ToolCallRequest, output: Value) -> ToolOutput {
 }
 
 fn with_events(_request: &ToolCallRequest, output: Value, events: Vec<Event>) -> ToolOutput {
-    ToolOutput { output, events }
+    ToolOutput {
+        output: super::output::Response::external(output),
+        events,
+    }
 }
 
 #[cfg(test)]
@@ -227,7 +230,7 @@ mod tests {
             input: json!({"action":"review","id":1}).into(),
         };
         let result = execute_operation(&state, SessionId::new(), &request);
-        assert_eq!(result.output, json!({"queued": true}));
+        assert_eq!(result.output.to_json(), json!({"queued": true}));
         assert!(
             matches!(result.events.as_slice(), [Event::SessionInputSent { session_id, input }]
             if *session_id == recipient && input.id == "review-request")

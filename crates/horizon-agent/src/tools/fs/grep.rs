@@ -1,9 +1,9 @@
 use std::fs;
 use std::path::Path;
 
+use crate::tools::output::*;
 use globset::{Glob, GlobMatcher};
 use regex::Regex;
-use serde_json::{json, Value};
 
 use super::error_output;
 use super::safety::resolve_read_path;
@@ -29,18 +29,18 @@ const MAX_OUTPUT_CHARS: usize = 50_000;
 struct GrepResults {
     visited: usize,
     scan_truncated: bool,
-    matches: Vec<Value>,
+    matches: Vec<Location>,
     total_matches: usize,
     bytes_read: u64,
     rendered_chars: usize,
     output_capped: bool,
 }
 
-fn render_location(path: &Path, line_number: usize) -> Value {
-    json!({
-        "path": path.display().to_string(),
-        "line_number": line_number,
-    })
+fn render_location(path: &Path, line_number: usize) -> Location {
+    Location {
+        path: path.display().to_string(),
+        line_number,
+    }
 }
 
 fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults) {
@@ -57,7 +57,10 @@ fn scan_file(path: &Path, regex: &Regex, limit: usize, results: &mut GrepResults
             continue;
         }
         let candidate = render_location(path, index + 1);
-        let candidate_chars = candidate.to_string().chars().count();
+        let candidate_chars = serde_json::to_string(&candidate)
+            .expect("location serializes")
+            .chars()
+            .count();
         if results.rendered_chars.saturating_add(candidate_chars) > MAX_OUTPUT_CHARS {
             results.output_capped = true;
             continue;
@@ -71,7 +74,7 @@ pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::Grep,
     allow_out_of_root: bool,
-) -> Value {
+) -> Response {
     let base_arg = input.base_path.as_str();
     let pattern = input.pattern.as_str();
     let glob_filter = input.glob.as_deref();
@@ -154,7 +157,7 @@ fn scan(
     results
 }
 
-fn render_results(results: GrepResults, base_arg: &str, pattern: &str) -> Value {
+fn render_results(results: GrepResults, base_arg: &str, pattern: &str) -> Response {
     let mut notes = Vec::new();
     if results.scan_truncated {
         notes.push(traverse::scan_truncated_note(results.visited));
@@ -171,18 +174,18 @@ fn render_results(results: GrepResults, base_arg: &str, pattern: &str) -> Value 
     let mut output_capped = results.output_capped;
     loop {
         let returned_count = matches.len();
-        let mut output = json!({
-            "base_path": base_arg,
-            "pattern": pattern,
-            "matches": matches,
-            "returned_count": returned_count,
-            "total_matches": results.total_matches,
-            "truncated": results.total_matches > returned_count || output_capped || results.scan_truncated,
+        let output = Response::succeeded(Matches {
+            base_path: base_arg.into(),
+            pattern: pattern.into(),
+            matches: matches.clone(),
+            returned_count,
+            total_matches: results.total_matches,
+            truncated: results.total_matches > returned_count
+                || output_capped
+                || results.scan_truncated,
+            note: (!notes.is_empty()).then(|| notes.join(" ")),
         });
-        if !notes.is_empty() {
-            output["note"] = json!(notes.join(" "));
-        }
-        if output.to_string().chars().count() <= MAX_OUTPUT_CHARS || matches.is_empty() {
+        if output.to_json().to_string().chars().count() <= MAX_OUTPUT_CHARS || matches.is_empty() {
             return output;
         }
         matches.pop();

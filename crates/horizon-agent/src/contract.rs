@@ -17,6 +17,7 @@ pub use horizon_wire::SessionId;
 mod provider_event;
 pub use provider_event::ProviderEvent;
 
+pub mod tool_output;
 mod tool_result;
 pub use tool_result::{ToolCallResult, ToolOutcome};
 

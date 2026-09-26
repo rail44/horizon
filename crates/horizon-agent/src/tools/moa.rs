@@ -239,8 +239,8 @@ pub(crate) fn launch(
             let output = outcome.into_output(proposer.session_id, &description);
             let failure = (!usable).then(|| {
                 output
-                    .get("message")
-                    .and_then(serde_json::Value::as_str)
+                    .message
+                    .as_deref()
                     .unwrap_or("the proposer produced no usable answer")
                     .to_string()
             });

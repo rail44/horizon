@@ -26,10 +26,13 @@
 //! and emits the event — so the state mutation and the persistence happen in
 //! one place (the loop), not split across a host boundary.
 
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::json;
+use serde_json::Value;
 
 use crate::contract::{Event, MemoryDigest, MemoryField, MemoryOp};
-use crate::tools::error_output;
+use crate::tools::output::error as error_output;
+use crate::tools::output::*;
 
 /// The model-visible tool id.
 pub(crate) const TOOL_ID: &str = "memory.update";
@@ -207,32 +210,26 @@ pub(crate) fn parse_update(input: &Value) -> Result<MemoryDigest, String> {
 /// **No side effect here.** The session loop owns the state mutation and event
 /// emission (see the module doc): this handler only validates and confirms, so
 /// the model sees whether its edit was well-formed before the loop applies it.
-pub(super) fn execute(input: &crate::tools::input::MemoryUpdate) -> Value {
+pub(super) fn execute(input: &crate::tools::input::MemoryUpdate) -> Response {
     match input.digest() {
         Ok(digest) => {
             if let Some(reason) = &digest.no_update_reason {
-                json!({
-                    "ok": true,
-                    "no_update": true,
-                    "reason": reason,
+                Response::succeeded(MemoryUpdated::Skipped {
+                    ok: true,
+                    no_update: true,
+                    reason: reason.clone(),
                 })
             } else {
-                let fields: Vec<&str> = digest
+                let fields: Vec<String> = digest
                     .updates
                     .iter()
-                    .map(|u| field_label(u.field))
+                    .map(|u| field_label(u.field).to_owned())
                     .collect();
-                let mut result = json!({
-                    "ok": true,
-                    "fields_updated": fields,
-                });
-                if let Some(range) = digest.folded_log_range {
-                    result["folded_log_range"] = json!({
-                        "from_seq": range.from_seq,
-                        "to_seq": range.to_seq,
-                    });
-                }
-                result
+                Response::succeeded(MemoryUpdated::Updated {
+                    ok: true,
+                    fields_updated: fields,
+                    folded_log_range: digest.folded_log_range,
+                })
             }
         }
         Err(message) => error_output(message),

@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use serde_json::Value;
+use crate::tools::output::Response;
 
 use super::error_output;
 use crate::tools::state::ToolSessionState;
@@ -22,7 +22,7 @@ use crate::tools::state::ToolSessionState;
 /// Returns `Err` with an error value for any input validation or
 /// canonicalization failure. The caller decides whether the error is
 /// returned to the model or routed to the approval gate.
-fn canonicalize(requested: &str) -> Result<PathBuf, Value> {
+fn canonicalize(requested: &str) -> Result<PathBuf, Response> {
     let requested_path = Path::new(requested);
     if !requested_path.is_absolute() {
         return Err(error_output(format!(
@@ -131,7 +131,7 @@ pub(super) fn resolve_path(
     tool_state: &ToolSessionState,
     requested: &str,
     allow_out_of_root: bool,
-) -> Result<PathBuf, Value> {
+) -> Result<PathBuf, Response> {
     resolve(
         tool_state,
         requested,
@@ -146,7 +146,7 @@ pub(super) fn resolve_read_path(
     tool_state: &ToolSessionState,
     requested: &str,
     allow_out_of_root: bool,
-) -> Result<PathBuf, Value> {
+) -> Result<PathBuf, Response> {
     resolve(
         tool_state,
         requested,
@@ -160,7 +160,7 @@ fn resolve(
     requested: &str,
     allow_out_of_root: bool,
     confinement: Confinement,
-) -> Result<PathBuf, Value> {
+) -> Result<PathBuf, Response> {
     let Some(workspace_root) = tool_state.workspace_root() else {
         return Err(error_output(
             "workspace root is unavailable for this session — file tools cannot resolve any path",

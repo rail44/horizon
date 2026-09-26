@@ -1,11 +1,13 @@
 use super::input::{PreparedCall, ToolInput};
+use super::output::{error as error_output, Response};
 use super::transition::ToolUpdate;
 use crate::contract::{Event, Message, MessageRole, SessionId, ToolCallRequest, ToolCallResult};
 use crate::judge::ApprovalCandidate;
 use crate::live::LiveState;
-use crate::policy::{annotate_auto_approval, plan_prepared_call, AutomaticTool, ToolPlan};
+use crate::policy::{plan_prepared_call, AutomaticTool, ToolPlan};
+use crate::tools::output::annotate_auto_approval;
 use crate::tools::state::{session_runtime, ToolSessionState};
-use crate::tools::{bash, board, error_output};
+use crate::tools::{bash, board};
 use serde_json::Value;
 
 /// Boundary for tools needing shell-owned state, such as `workspace.snapshot`.
@@ -27,12 +29,21 @@ pub enum Execution {
 /// Tool-specific output, with domain records that must precede its result.
 /// Lifecycle events are owned by ToolUpdate rather than individual handlers.
 pub(crate) struct ToolOutput {
-    pub output: Value,
+    pub output: Response,
     pub events: Vec<Event>,
 }
 
 impl From<Value> for ToolOutput {
     fn from(output: Value) -> Self {
+        Self {
+            output: Response::external(output),
+            events: Vec::new(),
+        }
+    }
+}
+
+impl From<Response> for ToolOutput {
+    fn from(output: Response) -> Self {
         Self {
             output,
             events: Vec::new(),
@@ -50,17 +61,17 @@ pub fn execute_agent_tool(
     let prepared = match PreparedCall::new(request) {
         Ok(prepared) => prepared,
         Err(message) => {
-            return ToolUpdate::finish(live, request.identity().result(error_output(message)))
+            return ToolUpdate::finish(live, request.identity().finish(error_output(message)))
                 .map(Execution::Applied)
         }
     };
     match plan_prepared_call(tool_state, &prepared) {
         ToolPlan::Approval(approval) => Ok(Execution::AwaitApproval(Box::new(ApprovalCandidate {
             request: request.clone(),
-            approval,
+            approval: *approval,
         }))),
         ToolPlan::Reject(output) => {
-            ToolUpdate::finish(live, request.identity().result(output)).map(Execution::Applied)
+            ToolUpdate::finish(live, request.identity().finish(output)).map(Execution::Applied)
         }
         ToolPlan::Automatic(mode) => {
             execute_automatic(host, tool_state, session_id, live, &prepared, mode)
@@ -90,7 +101,7 @@ fn execute_automatic(
             let Some(runtime) = session_runtime(session_id) else {
                 return started.complete(
                     live,
-                    request.identity().result(error_output(format!(
+                    request.identity().finish(error_output(format!(
                         "{} has no registered session runtime",
                         request.tool_id
                     ))),
@@ -112,7 +123,7 @@ fn execute_automatic(
                     live,
                     request
                         .identity()
-                        .result(error_output("sandboxed bash requires a workspace root")),
+                        .finish(error_output("sandboxed bash requires a workspace root")),
                     Vec::new(),
                 );
             };
@@ -121,7 +132,7 @@ fn execute_automatic(
                 if let Some(prior) = bash::find_reusable_output(&live.frame(), command) {
                     let mut output = bash::guidance_output(command, &prior);
                     annotate_auto_approval(&mut output, "contained", "isolated worktree session");
-                    return started.complete(live, request.identity().result(output), Vec::new());
+                    return started.complete(live, request.identity().finish(output), Vec::new());
                 }
             }
             bash::spawn_sandboxed(
@@ -138,7 +149,7 @@ fn execute_automatic(
     };
     started.complete(
         live,
-        request.identity().result(output.output),
+        request.identity().finish(output.output),
         output.events,
     )
 }
@@ -166,8 +177,14 @@ fn execute_synchronous(
         _ => {}
     }
     super::synchronous::execute(tool_state, &request.input, false)
-        .or_else(|| host.execute_auto(&request.tool_id, &request.request.input))
-        .or_else(|| board::execute_auto(tool_state, &request.tool_id, &request.request.input))
+        .or_else(|| {
+            host.execute_auto(&request.tool_id, &request.request.input)
+                .map(Response::external)
+        })
+        .or_else(|| {
+            board::execute_auto(tool_state, &request.tool_id, &request.request.input)
+                .map(Response::external)
+        })
         .unwrap_or_else(|| {
             error_output(format!(
                 "Tool `{}` cannot be executed automatically.",

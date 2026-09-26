@@ -77,7 +77,8 @@ pub(crate) mod worker;
 use std::panic::AssertUnwindSafe;
 
 use crossbeam_channel::Receiver;
-use serde_json::{json, Value};
+#[cfg(test)]
+use serde_json::Value;
 
 use super::execution::ToolOutput;
 use crate::contract::{
@@ -296,10 +297,9 @@ pub(crate) fn start(
 
     synchronous(
         request,
-        json!({
-            "session_id": child_id.as_uuid().to_string(),
-            "description": description,
-            "status": "started",
+        Response::succeeded(TaskOutput::Started {
+            session_id: child_id.as_uuid().to_string(),
+            description,
         }),
     )
 }
@@ -321,7 +321,7 @@ pub(crate) fn register_finished_child_for_test(
     output: Value,
 ) {
     children::register_hostless(requester, child, description);
-    children::complete(child, output);
+    children::complete(child, test_report(child, description, output));
 }
 
 /// `task_output`: the full report of one finished child owned by this
@@ -340,24 +340,14 @@ pub(crate) fn output(
             "no task with session_id `{}` was launched from this session",
             target.as_uuid()
         )),
-        children::Lookup::Running { description } => json!({
-            "session_id": target.as_uuid().to_string(),
-            "description": description,
-            "status": "running",
-            "message": "this task has not finished yet. If nothing else is ready to \
-                        do, end your turn instead of polling: the completion \
-                        notification starts a new turn on its own, and calling \
-                        task_output again before then only costs a round.",
+        children::Lookup::Running { description } => Response::succeeded(TaskOutput::Running {
+            session_id: target.as_uuid().to_string(), description,
+            message: "this task has not finished yet. If nothing else is ready to do, end your turn instead of polling: the completion notification starts a new turn on its own, and calling task_output again before then only costs a round.".into(),
         }),
-        children::Lookup::Finished {
-            description,
-            mut output,
-        } => {
-            if let Some(map) = output.as_object_mut() {
-                map.insert("description".to_string(), Value::String(description));
-                map.insert("status".to_string(), Value::String("finished".to_string()));
-            }
-            output
+        children::Lookup::Finished { output } => {
+            let failed = output.failed();
+            let body = TaskOutput::Finished { report: output };
+            if failed { Response::failed(body) } else { Response::succeeded(body) }
         }
     };
     synchronous(request, output)
@@ -419,7 +409,7 @@ pub(crate) fn deliver_test_completion(
     output: Value,
 ) {
     children::register_hostless(requester, child, description);
-    if let Some(requester) = children::complete(child, output) {
+    if let Some(requester) = children::complete(child, test_report(child, description, output)) {
         notify::wake(requester);
     }
 }
@@ -427,11 +417,11 @@ pub(crate) fn deliver_test_completion(
 /// A tool call that resolves right now -- which, since the 2026-07-28
 /// asynchronous cutover, is *every* `task`/`task_output` call: launching is
 /// no longer something the call waits on.
-fn synchronous(_request: &ToolCallRequest, output: Value) -> ToolOutput {
+fn synchronous(_request: &ToolCallRequest, output: Response) -> ToolOutput {
     output.into()
 }
 
-use super::error_output;
+use super::output::{error as error_output, Response, TaskOutput, TaskReport};
 
 /// Reasoning-close tags a serving layer can leak into an assistant message
 /// with no opening tag anywhere -- the `</mm:think>` shape observed
@@ -508,33 +498,19 @@ pub(super) struct Outcome {
 }
 
 impl Outcome {
-    pub(super) fn into_output(self, session_id: SessionId, description: &str) -> Value {
-        let mut output = json!({
-            "session_id": session_id.as_uuid().to_string(),
-            "description": description,
-        });
-        let map = output.as_object_mut().expect("json object");
-        // A report alongside `HaltedByIterationCap` means the forced
-        // wrap-up completion (`providers::rig::session::halt_turn_loop`)
-        // succeeded -- a partial but genuine answer, not a failure. Flagged
-        // explicitly so the requester (and anything downstream) can tell
-        // "capped, still useful" apart from an ordinary completed report.
+    pub(super) fn into_output(self, session_id: SessionId, description: &str) -> TaskReport {
         let capped = matches!(
             self.terminal,
             Terminal::TurnEnded(Some(TurnEndReason::HaltedByIterationCap))
         ) && self.has_usable_report();
-        let failure = self.failure_message();
-        if let Some(report) = self.report {
-            map.insert("report".to_string(), Value::String(report));
+        let message = self.failure_message();
+        TaskReport {
+            session_id: session_id.as_uuid().to_string(),
+            description: description.into(),
+            report: self.report,
+            capped,
+            message,
         }
-        if capped {
-            map.insert("capped".to_string(), Value::Bool(true));
-        }
-        if let Some(message) = failure {
-            map.insert("is_error".to_string(), Value::Bool(true));
-            map.insert("message".to_string(), Value::String(message));
-        }
-        output
     }
 
     /// A report with an actual body behind it -- a stored report that is
@@ -773,3 +749,23 @@ pub(super) fn unix_epoch_ms() -> u64 {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+fn test_report(child: SessionId, description: &str, output: Value) -> TaskReport {
+    TaskReport {
+        session_id: child.as_uuid().to_string(),
+        description: description.into(),
+        report: output
+            .get("report")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        capped: output
+            .get("capped")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        message: output
+            .get("message")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }
+}

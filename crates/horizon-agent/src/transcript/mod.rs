@@ -173,6 +173,22 @@ pub(crate) mod test_support {
         })
     }
 
+    pub(crate) fn edit_result(path: &str) -> Value {
+        use crate::contract::tool_output::{EditOutcome, EditReceipt, FileEdits};
+        serde_json::to_value(FileEdits {
+            edits: vec![EditReceipt {
+                index: 0,
+                path: path.into(),
+                outcome: EditOutcome::Applied { occurrences: 1 },
+            }],
+            applied_count: 1,
+            file_count: 1,
+            failed_index: None,
+            message: None,
+        })
+        .unwrap()
+    }
+
     pub(crate) fn tool_finished(call_id: &str, output: Value) -> AgentFrameItem {
         AgentFrameItem::ToolCallFinished(ToolCallResult::new(
             ToolCallId(call_id.to_string()),

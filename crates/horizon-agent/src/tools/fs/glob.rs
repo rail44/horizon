@@ -1,5 +1,5 @@
+use crate::tools::output::*;
 use globset::Glob;
-use serde_json::{json, Value};
 
 use super::error_output;
 use super::safety::resolve_read_path;
@@ -10,7 +10,7 @@ pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::Glob,
     allow_out_of_root: bool,
-) -> Value {
+) -> Response {
     let base_arg = input.base_path.as_str();
     let pattern = input.pattern.as_str();
     let limit = usize::try_from(input.limit.get()).unwrap_or(usize::MAX);
@@ -55,16 +55,13 @@ pub(in crate::tools) fn execute(
         }
     }
 
-    let mut output = json!({
-        "base_path": base_arg,
-        "pattern": pattern,
-        "matches": matches,
-        "returned_count": matches.len(),
-        "total_matches": total_matches,
-        "truncated": total_matches > matches.len(),
-    });
-    if scan_truncated {
-        output["note"] = json!(traverse::scan_truncated_note(visited));
-    }
-    output
+    Response::succeeded(Matches {
+        base_path: base_arg.into(),
+        pattern: pattern.into(),
+        returned_count: matches.len(),
+        total_matches,
+        truncated: total_matches > matches.len(),
+        matches,
+        note: scan_truncated.then(|| traverse::scan_truncated_note(visited)),
+    })
 }

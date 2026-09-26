@@ -1,10 +1,10 @@
 use std::time::Duration;
 
+use crate::tools::output::{Response, SearchResult, WebSearch};
 use async_trait::async_trait;
 use reqwest::header::HeaderValue;
 use reqwest::{redirect, Client, Url};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
 
 use crate::config::EXA_API_KEY_VAR;
 
@@ -24,17 +24,6 @@ struct SearchRequest {
     query: String,
     num_results: usize,
     max_characters: usize,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct SearchResult {
-    title: String,
-    url: String,
-    content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    published_date: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    author: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -198,7 +187,7 @@ struct ExaResult {
     highlights: Vec<String>,
 }
 
-pub(super) async fn execute(input: crate::tools::input::WebSearch) -> Value {
+pub(super) async fn execute(input: crate::tools::input::WebSearch) -> Response {
     let api_key = match std::env::var(EXA_API_KEY_VAR) {
         Ok(value) if !value.trim().is_empty() => value,
         _ => {
@@ -222,16 +211,15 @@ pub(super) async fn execute(input: crate::tools::input::WebSearch) -> Value {
     .await
 }
 
-async fn execute_with_adapter(adapter: &dyn SearchAdapter, request: SearchRequest) -> Value {
+async fn execute_with_adapter(adapter: &dyn SearchAdapter, request: SearchRequest) -> Response {
     let query = request.query.clone();
     match adapter.search(request).await {
         Ok(response) => {
-            let output = json!({
-                "is_error": false,
-                "query": query,
-                "results": response.results,
+            let output = Response::succeeded(WebSearch {
+                query,
+                results: response.results,
             });
-            if serde_json::to_vec(&output)
+            if serde_json::to_vec(&output.to_json())
                 .is_ok_and(|bytes| bytes.len() <= MAX_NORMALIZED_OUTPUT_BYTES)
             {
                 output
@@ -280,6 +268,7 @@ use super::error_output;
 
 #[cfg(test)]
 mod tests {
+    use serde_json::{json, Value};
     use std::sync::Mutex;
 
     use super::*;
@@ -320,7 +309,8 @@ mod tests {
                 max_characters: 500,
             },
         )
-        .await;
+        .await
+        .to_json();
         assert!(output.get("provider").is_none());
         assert!(output.get("request_id").is_none());
         assert_eq!(output["results"][0]["content"], "Excerpt");

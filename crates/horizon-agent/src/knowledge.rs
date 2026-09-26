@@ -221,13 +221,14 @@ pub(crate) fn prompt_section(cwd: &Path) -> Option<String> {
 
 // --- tool handlers --------------------------------------------------------
 
-use crate::tools::error_output;
+use crate::tools::output::error as error_output;
+use crate::tools::output::*;
 
 /// Executes `knowledge.read`: returns one entry's frontmatter and body,
 /// re-read from disk. Any status is readable. The entry is looked up by
 /// `id` in the store keyed by `root` (the session's project main root,
 /// resolved by the caller).
-pub(crate) fn execute_read(root: &Path, id: &str) -> serde_json::Value {
+pub(crate) fn execute_read(root: &Path, id: &str) -> Response {
     if !is_valid_slug(id) {
         return error_output(format!(
             "knowledge.read: `id` must be a slug (lowercase alphanumeric and hyphens), got `{id}`"
@@ -238,16 +239,16 @@ pub(crate) fn execute_read(root: &Path, id: &str) -> serde_json::Value {
         Ok(source) => match parse_knowledge_md(&source) {
             Some(entry) => {
                 let (body, truncated) = cap_to_chars(entry.body, KNOWLEDGE_BODY_CAP_CHARS);
-                serde_json::json!({
-                    "id": entry.id,
-                    "description": entry.description,
-                    "anchors": entry.anchors,
-                    "sources": entry.sources,
-                    "created": entry.created,
-                    "updated": entry.updated,
-                    "status": entry.status.as_str(),
-                    "body": body,
-                    "truncated": truncated,
+                Response::succeeded(KnowledgeRead {
+                    id: entry.id,
+                    description: entry.description,
+                    anchors: entry.anchors,
+                    sources: entry.sources,
+                    created: entry.created,
+                    updated: entry.updated,
+                    status: entry.status.as_str().into(),
+                    body,
+                    truncated,
                 })
             }
             None => error_output(format!(
@@ -268,10 +269,7 @@ pub(crate) fn execute_read(root: &Path, id: &str) -> serde_json::Value {
 /// today. Optional fields (`anchors`, `status`) default to the existing
 /// entry's values (or empty/active for a new entry). No approval — the
 /// tool-event recording is the audit.
-pub(crate) fn execute_write(
-    root: &Path,
-    input: &crate::tools::input::KnowledgeWrite,
-) -> serde_json::Value {
+pub(crate) fn execute_write(root: &Path, input: &crate::tools::input::KnowledgeWrite) -> Response {
     let id = input.id.as_str();
     if !is_valid_slug(id) {
         return error_output(format!(
@@ -328,13 +326,13 @@ pub(crate) fn execute_write(
 
     let serialized = serialize_entry(&entry);
     match std::fs::write(&path, &serialized) {
-        Ok(()) => serde_json::json!({
-            "id": entry.id,
-            "description": entry.description,
-            "path": path.display().to_string(),
-            "created": entry.created,
-            "updated": entry.updated,
-            "status": entry.status.as_str(),
+        Ok(()) => Response::succeeded(KnowledgeWritten {
+            id: entry.id,
+            description: entry.description,
+            path: path.display().to_string(),
+            created: entry.created,
+            updated: entry.updated,
+            status: entry.status.as_str().into(),
         }),
         Err(error) => error_output(format!("cannot write `{}`: {error}", path.display())),
     }

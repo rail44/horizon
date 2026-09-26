@@ -1,9 +1,9 @@
 use std::path::{Path, PathBuf};
 use std::{fs, io};
 
-use serde_json::{json, Value};
+use crate::tools::output::*;
 
-use super::error_output;
+use crate::tools::output::error as error_output;
 use crate::tools::state::ToolSessionState;
 
 /// The pure-ish body of `config.write`: takes the resolved target path as a
@@ -13,7 +13,7 @@ pub(super) fn execute(
     tool_state: &ToolSessionState,
     path: Option<PathBuf>,
     input: &crate::tools::input::ConfigWrite,
-) -> Value {
+) -> Response {
     let Some(path) = path else {
         return error_output(
             "could not resolve a config file path to write to -- set HORIZON_CONFIG, or ensure \
@@ -53,17 +53,17 @@ pub(super) fn execute(
         tool_state.record_mtime(path.clone(), mtime);
     }
 
-    json!({
-        "path": path.display().to_string(),
-        "bytes_written": content.len(),
-        "created": !existed,
+    Response::succeeded(FileWritten {
+        path: path.display().to_string(),
+        bytes_written: content.len(),
+        created: !existed,
     })
 }
 
 /// Mirrors `tools::fs::staleness::check_staleness` exactly, reusing the
 /// same generic `ToolSessionState` mtime tracking (it isn't
 /// `workspace_root`-scoped, so this works unchanged for a path outside it).
-fn check_staleness(tool_state: &ToolSessionState, path: &Path) -> Result<(), Value> {
+fn check_staleness(tool_state: &ToolSessionState, path: &Path) -> Result<(), Response> {
     let Some(recorded) = tool_state.recorded_mtime(path) else {
         return Err(error_output(format!(
             "`{}` has not been read this session -- read it with config.read first",
@@ -113,6 +113,7 @@ fn write_atomically(path: &Path, content: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
 
     fn execute(state: &ToolSessionState, path: Option<PathBuf>, raw: &Value) -> Value {
         crate::tools::test_support::with_input::<crate::tools::input::ConfigWrite>(raw, |input| {

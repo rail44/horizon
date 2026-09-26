@@ -6,14 +6,16 @@ use super::{
 };
 use crate::config::BashToolConfig;
 use crate::contract::{SessionId, ToolCallIdentity};
-use crate::policy::{
+use crate::tools::input::{Bash, PreparedCall};
+use crate::tools::network::SessionNetworkProxy;
+use crate::tools::output::{
     annotate_auto_approval, annotate_domain_approval, annotate_filesystem_grant_approval,
     annotate_git_operation_approval, annotate_host_execution_approval, annotate_sandboxed,
 };
-use crate::tools::input::{Bash, PreparedCall};
-use crate::tools::network::SessionNetworkProxy;
-use crate::tools::{error_output, ToolSessionState};
+use crate::tools::output::{error as error_output, Response};
+use crate::tools::ToolSessionState;
 use crossbeam_channel::Sender;
+#[cfg(test)]
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -138,25 +140,25 @@ fn run_sandboxed_job(
                 "Git metadata grant validation failed before execution: {error}"
             ));
             annotate_sandboxed(&mut output, false);
-            BashCompletion::Finished(job.identity.result(output))
+            crate::tools::ToolCompletion::Finished(output)
         }
     };
     if let (Some(roots), Some(result)) = (
         sandbox.git_metadata_roots.as_deref(),
         completion.result_mut(),
     ) {
-        annotate_git_operation_approval(&mut result.output, roots);
+        annotate_git_operation_approval(result, roots);
     }
     // Denial variants already carry their evidence; origin markers apply only
     // to Finished, matching the approval audit contract.
-    if let BashCompletion::Finished(result) = &mut completion {
-        sandbox.origin.annotate(&mut result.output);
+    if let crate::tools::ToolCompletion::Finished(result) = &mut completion {
+        sandbox.origin.annotate(result);
     }
-    completion
+    completion.map_result(|output| job.identity.finish(output))
 }
 
 impl SandboxedApprovalOrigin {
-    fn annotate(&self, output: &mut Value) {
+    fn annotate(&self, output: &mut Response) {
         match self {
             SandboxedApprovalOrigin::Tier1Auto => annotate_auto_approval(
                 output,
@@ -183,7 +185,7 @@ impl SandboxedApprovalOrigin {
                 }
             }
             SandboxedApprovalOrigin::MachServiceGrant { services } => {
-                crate::policy::annotate_mach_service_grant_approval(output, services);
+                crate::tools::output::annotate_mach_service_grant_approval(output, services);
             }
         }
     }
@@ -239,7 +241,7 @@ fn spawn_host(job: BashJob, approval: Option<HostExecutionApproval>) {
                 );
             }
         }
-        BashCompletion::Finished(job.identity.result(output))
+        BashCompletion::Finished(job.identity.finish(output))
     });
 }
 
@@ -295,7 +297,7 @@ pub(super) fn run_job_body(
             eprintln!(
                 "bash worker panicked (session {session_id:?}, execution {identity:?}): {message}"
             );
-            BashCompletion::Finished(identity.result(exec::panic_output(&format!(
+            BashCompletion::Finished(identity.finish(exec::panic_output(&format!(
                 "bash worker panicked: {message}"
             ))))
         }

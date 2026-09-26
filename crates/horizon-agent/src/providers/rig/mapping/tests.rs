@@ -179,3 +179,108 @@ fn provider_results_preserve_outcome_separately_from_arbitrary_tool_data() {
         assert_eq!(replay.last(), Some(&message));
     }
 }
+
+#[test]
+fn actual_partial_edit_survives_log_database_provider_and_change_projection() {
+    use crate::contract::tool_output::{decode, EditOutcome, FileEdits};
+    use crate::contract::{SessionId, ToolOutcome};
+    use crate::live::LiveState;
+    use crate::persistence::{event_log, projection::duckdb::Store};
+    use crate::tools::{execute_agent_tool, Execution, HostTools, ToolSessionBuilder, ToolUpdate};
+    use crate::transcript::{aggregate_changes, build_tool_call_views};
+    use serde_json::json;
+
+    struct NoHost;
+    impl HostTools for NoHost {
+        fn execute_auto(&self, _: &str, _: &serde_json::Value) -> Option<serde_json::Value> {
+            None
+        }
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    let path = root.join("changed.txt");
+    let untouched = root.join("untouched.txt");
+    std::fs::write(&path, "old\nold\n").unwrap();
+    std::fs::write(&untouched, "keep\n").unwrap();
+    let state = ToolSessionBuilder::new(root.clone())
+        .with_isolated_worktree(true)
+        .build();
+    let session = SessionId::new();
+    let log = root.join("events.jsonl");
+    let (writer, ready) = event_log::WriterHandle::open(&log);
+    assert!(matches!(
+        ready.recv().unwrap(),
+        event_log::WriterInit::Ready(_)
+    ));
+    let live =
+        LiveState::with_event_log_and_history(session, None, None, writer.clone(), Vec::new());
+    let execute = |tool: &str, input: serde_json::Value| {
+        let request = ToolCallRequest {
+            call_id: ToolCallId(tool.into()),
+            occurrence_id: OccurrenceId::new(),
+            tool_id: tool.into(),
+            input: input.into(),
+        };
+        live.extend_events([Event::ToolCallRequested(request.clone())]);
+        let Execution::Applied(ToolUpdate::Finished { result, .. }) =
+            execute_agent_tool(&NoHost, &state, session, &live, &request).unwrap()
+        else {
+            panic!("expected a synchronous result")
+        };
+        result
+    };
+    execute("fs.read", json!({"path": path}));
+    let result = execute(
+        "fs.edit",
+        json!({"edits": [
+            {"path": path, "old_string": "old", "new_string": "new", "replace_all": true},
+            {"path": path, "old_string": "absent", "new_string": "never"},
+            {"path": untouched, "old_string": "keep", "new_string": "never"}
+        ]}),
+    );
+    assert_eq!(result.outcome, ToolOutcome::Failed);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), "new\nnew\n");
+    assert_eq!(std::fs::read_to_string(&untouched).unwrap(), "keep\n");
+    let facts = decode::<FileEdits>(&result.output).unwrap();
+    assert_eq!(facts.applied_count, 1);
+    assert_eq!(facts.failed_index, Some(1));
+    assert!(matches!(
+        facts.edits[0].outcome,
+        EditOutcome::Applied { occurrences: 2 }
+    ));
+    assert!(matches!(facts.edits[1].outcome, EditOutcome::Failed { .. }));
+    assert_eq!(facts.edits[2].outcome, EditOutcome::NotAttempted);
+
+    writer.flush().unwrap();
+    let records = event_log::read(&log).unwrap().records;
+    let replay: Vec<_> = records.iter().map(|record| record.event.clone()).collect();
+    assert_eq!(replay, live.events());
+    let store = Store::open_in_memory().unwrap();
+    let imported = store.replace_from_event_log_records(records).unwrap();
+    assert_eq!(imported.skipped, 0);
+    let saved_frame = store.frame_for_session(session).unwrap();
+    assert_eq!(saved_frame, live.frame());
+    for frame in [&saved_frame, &live.frame()] {
+        let views = build_tool_call_views(&frame.items);
+        let changes = aggregate_changes(&views);
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].path, path.to_str().unwrap());
+        assert_eq!((changes[0].added, changes[0].removed), (2, 2));
+        assert!(views.last().unwrap().is_error());
+        assert!(views
+            .last()
+            .unwrap()
+            .result_summary
+            .as_ref()
+            .unwrap()
+            .contains("1 applied"));
+    }
+    let messages = rig_messages_from_horizon_events(&replay);
+    assert_eq!(
+        messages.last(),
+        Some(&rig_tool_result_message(&result, "fs.edit"))
+    );
+    let stored = crate::persistence::projection::duckdb::DuckdbStoreHandle::new(store);
+    let restored = super::super::history::load_rig_session_history(Some(&stored), session, &[]);
+    assert_eq!(restored.messages, messages);
+}

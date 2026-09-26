@@ -1,7 +1,7 @@
 use std::fs;
 use std::time::UNIX_EPOCH;
 
-use serde_json::{json, Value};
+use crate::tools::output::*;
 
 use super::error_output;
 use super::safety::resolve_read_path;
@@ -19,7 +19,7 @@ pub(in crate::tools) fn execute(
     tool_state: &ToolSessionState,
     input: &crate::tools::input::ReadFile,
     allow_out_of_root: bool,
-) -> Value {
+) -> Response {
     let path_arg = input.path.as_str();
 
     let resolved = match resolve_read_path(tool_state, path_arg, allow_out_of_root) {
@@ -63,13 +63,13 @@ pub(in crate::tools) fn execute(
             )
         });
 
-    output["path"] = json!(path_arg);
-    output["content_version"] = json!(content_version);
-    output
+    output.path = path_arg.into();
+    output.content_version = content_version;
+    Response::succeeded(output)
 }
 
 /// Render a bounded line window independently of filesystem access and staleness tracking.
-fn render_content(content: &str, input: &crate::tools::input::ReadFile) -> Value {
+fn render_content(content: &str, input: &crate::tools::input::ReadFile) -> FileRead {
     let offset = usize::try_from(input.offset.get()).unwrap_or(usize::MAX);
     let limit = input.limit.get() as usize;
 
@@ -141,14 +141,16 @@ fn render_content(content: &str, input: &crate::tools::input::ReadFile) -> Value
     }
     let notice = (!notices.is_empty()).then(|| notices.join(" "));
 
-    json!({
-        "start_line": start_index + 1,
-        "end_line": end_index,
-        "total_lines": total_lines,
-        "truncated": next_offset.is_some() || truncated_line_count > 0,
-        "next_offset": next_offset,
-        "content_chars": rendered_chars,
-        "notice": notice,
-        "content": rendered,
-    })
+    FileRead {
+        path: String::new(),
+        content_version: None,
+        start_line: start_index + 1,
+        end_line: end_index,
+        total_lines,
+        truncated: next_offset.is_some() || truncated_line_count > 0,
+        next_offset,
+        content_chars: rendered_chars,
+        notice,
+        content: rendered,
+    }
 }
