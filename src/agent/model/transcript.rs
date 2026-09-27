@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::time::Duration;
 
-use horizon_acp::ToolOutcome;
+use horizon_acp::{HumanDecision, ToolOutcome};
 use horizon_agent::transcript::{
     classify, edit_entries, reconstruct_line_diff, ApprovalState, DiffLineKind, FileChange,
     FileEffect, ToolCallClassification, ToolCallKind,
@@ -264,6 +264,7 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
                 affected_files,
                 approval: derive_approval_state(
                     permission.map(|permission| permission.decision),
+                    call.meta.human_decision.as_ref(),
                     call.started(),
                     outcome.as_ref(),
                 ),
@@ -274,16 +275,29 @@ pub(crate) fn build_tool_call_views(items: &[AgentFrameItem]) -> Vec<ToolCallVie
 }
 
 /// `permission` is `None` for a call that never had a permission request on
-/// this attachment, `Some(decision)` otherwise. A started call reads as
-/// approved before its result arrives.
+/// this attachment, `Some(decision)` otherwise; `human_decision` is the
+/// daemon's `ToolCallMeta::human_decision`, which also covers replayed
+/// calls. A started call reads as approved before its result arrives; a
+/// denied outcome wins over that.
 fn derive_approval_state(
     permission: Option<Option<PermissionDecision>>,
+    human_decision: Option<&HumanDecision>,
     started: bool,
     outcome: Option<&ToolOutcome>,
 ) -> ApprovalState {
-    let Some(decision) = permission else {
-        return ApprovalState::None;
+    let recorded = human_decision.map(|decision| match decision {
+        HumanDecision::Approved => PermissionDecision::Approved,
+        HumanDecision::Denied { .. } => PermissionDecision::Denied,
+    });
+    let decision = match (permission, recorded) {
+        (Some(Some(decision)), _) => Some(decision),
+        (_, Some(recorded)) => Some(recorded),
+        (Some(None), None) => None,
+        (None, None) => return ApprovalState::None,
     };
+    if outcome == Some(&ToolOutcome::Denied) {
+        return ApprovalState::Denied;
+    }
     if started {
         return ApprovalState::Approved;
     }

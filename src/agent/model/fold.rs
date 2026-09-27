@@ -309,6 +309,7 @@ impl AgentModel {
                         outcome: None,
                         auto_approved: None,
                         policy_tier: None,
+                        human_decision: None,
                     },
                     status: ToolCallStatus::Pending,
                     input: serde_json::Value::Null,

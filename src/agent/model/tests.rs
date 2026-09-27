@@ -62,6 +62,7 @@ fn meta(call_id: &str, tool_id: &str, outcome: Option<ToolOutcome>) -> ToolCallM
         outcome,
         auto_approved: None,
         policy_tier: None,
+        human_decision: None,
     }
 }
 
@@ -357,14 +358,17 @@ fn status_follows_state_updates_and_retains_the_stop_result() {
     let mut model = AgentModel::default();
     assert_eq!(model.frame.status(), None);
     apply(&mut model, idle(None));
-    assert_eq!(model.frame.status(), Some(SessionStatus::WaitingForInput));
+    assert_eq!(model.frame.status(), Some(SessionStatus::Starting));
     assert!(
         model.frame.items.is_empty(),
         "idle without a reason ends no turn"
     );
+    apply(&mut model, user_message("u1", "hello"));
+    apply(&mut model, idle(None));
+    assert_eq!(model.frame.status(), Some(SessionStatus::WaitingForInput));
 
     for (reason, expected) in [
-        (v2::StopReason::EndTurn, SessionStatus::WaitingForInput),
+        (v2::StopReason::EndTurn, SessionStatus::Completed),
         (v2::StopReason::Cancelled, SessionStatus::Cancelled),
         (v2::StopReason::MaxTurnRequests, SessionStatus::Paused),
         (
@@ -538,4 +542,68 @@ fn running_task_progress_upserts_in_launch_order_and_finished_retires() {
     assert_eq!(model.tasks[0].task_session_id, second);
     model.apply(progress(first, TaskProgressState::Finished, None));
     assert_eq!(model.tasks.len(), 1);
+}
+
+#[test]
+fn the_daemons_recorded_human_decision_badges_replayed_calls() {
+    let mut model = AgentModel::default();
+    let mut approved = meta("call-1", "bash", Some(ToolOutcome::Succeeded));
+    approved.human_decision = Some(horizon_acp::HumanDecision::Approved);
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Completed),
+            Some(approved),
+        )),
+    );
+    let mut denied = meta("call-2", "fs.edit", Some(ToolOutcome::Denied));
+    denied.human_decision = Some(horizon_acp::HumanDecision::Denied {
+        reason: Some("not now".into()),
+    });
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-2",
+            Some(v2::ToolCallStatus::Failed),
+            Some(denied),
+        )),
+    );
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-3",
+            Some(v2::ToolCallStatus::Completed),
+            Some(meta("call-3", "fs.read", Some(ToolOutcome::Succeeded))),
+        )),
+    );
+    let approvals: Vec<_> = build_tool_call_views(&model.frame.items)
+        .into_iter()
+        .map(|view| view.approval)
+        .collect();
+    assert_eq!(
+        approvals,
+        [
+            ApprovalState::Approved,
+            ApprovalState::Denied,
+            ApprovalState::None
+        ]
+    );
+}
+
+#[test]
+fn a_recorded_approval_before_the_call_starts_reads_approved() {
+    let mut model = AgentModel::default();
+    let mut recorded = meta("call-1", "bash", None);
+    recorded.human_decision = Some(horizon_acp::HumanDecision::Approved);
+    apply(
+        &mut model,
+        v2::SessionUpdate::ToolCallUpdate(tool_update(
+            "occ-1",
+            Some(v2::ToolCallStatus::Pending),
+            Some(recorded),
+        )),
+    );
+    let views = build_tool_call_views(&model.frame.items);
+    assert_eq!(views[0].approval, ApprovalState::Approved);
 }

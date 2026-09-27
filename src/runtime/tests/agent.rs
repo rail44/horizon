@@ -33,8 +33,14 @@ use crate::agent::model::{AgentEvent, PermissionDecision, ToolCallIdentity};
 
 #[derive(Clone, Copy, Default)]
 struct FakeAgentBehavior {
-    /// Answer `initialize` with the extension-version rejection.
+    /// Answer `initialize` with an error-shaped extension-version rejection.
     reject_initialize: bool,
+    /// Report a different extension version on a successful `initialize`
+    /// and reject every later request except `_horizon/drain`.
+    mismatched_ext_version: bool,
+    /// Initialize normally but reject `session/list` with the
+    /// extension-version mismatch error.
+    reject_requests: bool,
     /// Never answer `initialize`.
     hang_initialize: bool,
     /// Hand `session/new` and `session/resume` responders to the test
@@ -86,6 +92,17 @@ struct FakeAgentd {
     task: JoinHandle<()>,
 }
 
+fn mismatch_error() -> agent_client_protocol::Error {
+    agent_client_protocol::Error::new(
+        -32600,
+        format!(
+            "horizon ext version mismatch: daemon {} client {}",
+            HORIZON_ACP_EXT_VERSION + 5,
+            HORIZON_ACP_EXT_VERSION
+        ),
+    )
+}
+
 fn session_uuid(id: &v2::SessionId) -> SessionId {
     SessionId::from_uuid(uuid::Uuid::parse_str(&id.0).unwrap())
 }
@@ -124,16 +141,14 @@ async fn serve_fake_agentd(
                     return Ok(());
                 }
                 if behavior.reject_initialize {
-                    return responder.respond_with_error(agent_client_protocol::Error::new(
-                        -32600,
-                        format!(
-                            "horizon ext version mismatch: daemon {} client {}",
-                            HORIZON_ACP_EXT_VERSION + 5,
-                            HORIZON_ACP_EXT_VERSION
-                        ),
-                    ));
+                    return responder.respond_with_error(mismatch_error());
                 }
                 record(&c1, AgentCall::Initialize);
+                let ext_version = if behavior.mismatched_ext_version {
+                    HORIZON_ACP_EXT_VERSION + 5
+                } else {
+                    HORIZON_ACP_EXT_VERSION
+                };
                 let mut response = v2::InitializeResponse::new(
                     ProtocolVersion::V2,
                     v2::Implementation::new("fake-agentd", "0.0.0"),
@@ -142,7 +157,7 @@ async fn serve_fake_agentd(
                 write_horizon_meta(
                     &mut response.meta,
                     &InitializeMeta {
-                        ext_version: HORIZON_ACP_EXT_VERSION,
+                        ext_version,
                         binary_id: "fake-agentd".into(),
                     },
                 )
@@ -229,6 +244,9 @@ async fn serve_fake_agentd(
                         responder: Responder<v2::ListSessionsResponse>,
                         _connection: V2ConnectionTo<Client>| {
                 record(&c4, AgentCall::List);
+                if behavior.mismatched_ext_version || behavior.reject_requests {
+                    return responder.respond_with_error(mismatch_error());
+                }
                 responder.respond(v2::ListSessionsResponse::new(Vec::new()))
             },
             agent_client_protocol::on_receive_request!(),
@@ -804,35 +822,32 @@ async fn a_second_generation_mismatch_after_recovery_goes_fatal_instead_of_loopi
     let _ = std::fs::remove_file(&socket_path);
 }
 
-/// An extension-version rejection triggers the drain-and-respawn recovery.
-/// The drain rides a fresh connection that must itself initialize, so here
-/// the second connection's daemon accepts `initialize`; the respawned
-/// daemon is then adopted.
-#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_version_rejecting_daemon_is_drained_and_the_respawn_adopted() {
-    let (socket_path, control_socket) = stub_socket_paths("rej");
-    let listener = bind_stub_listener(&socket_path);
-    let (handle, _host_tools, _workspace_roots) =
-        AgentdHandle::start(&socket_path, &control_socket);
-
+/// Serves `mismatched` on the stub's next connection and expects the
+/// runtime's recovery there: `initialize`, then `_horizon/drain`.
+async fn expect_drain(listener: &tokio::net::UnixListener) {
     let (stream, _) = listener.accept().await.unwrap();
-    let _rejecting = serve_fake_agentd(
+    let mut fake = serve_fake_agentd(
         stream,
         FakeAgentBehavior {
-            reject_initialize: true,
+            mismatched_ext_version: true,
             ..Default::default()
         },
     )
     .await;
+    assert!(matches!(fake.next_call().await, AgentCall::Initialize));
+    assert!(matches!(fake.next_call().await, AgentCall::Drain));
+}
 
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut drain = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
-    assert!(matches!(drain.next_call().await, AgentCall::Initialize));
-    assert!(matches!(drain.next_call().await, AgentCall::Drain));
-
+/// Replaces the drained daemon with a compatible one and checks it is
+/// adopted.
+async fn expect_respawn_adopted(
+    listener: tokio::net::UnixListener,
+    socket_path: &std::path::Path,
+    handle: &AgentdHandle,
+) {
     drop(listener);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let listener = bind_stub_listener(&socket_path);
+    let listener = bind_stub_listener(socket_path);
     let (stream, _) = listener.accept().await.unwrap();
     let mut fake = serve_fake_agentd(stream, FakeAgentBehavior::default()).await;
     assert!(matches!(fake.next_call().await, AgentCall::Initialize));
@@ -840,39 +855,56 @@ async fn a_version_rejecting_daemon_is_drained_and_the_respawn_adopted() {
     let list_handle = handle.clone();
     let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
     assert_eq!(listed.unwrap(), Ok(Vec::new()));
+}
+
+/// A daemon that reports another extension version on a successful
+/// `initialize` is drained on that same connection; the recovery's fresh
+/// connection drains it again and the respawned daemon is adopted.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_version_mismatched_daemon_is_drained_on_the_same_connection_and_the_respawn_adopted() {
+    let (socket_path, control_socket) = stub_socket_paths("rej");
+    let listener = bind_stub_listener(&socket_path);
+    let (handle, _host_tools, _workspace_roots) =
+        AgentdHandle::start(&socket_path, &control_socket);
+
+    expect_drain(&listener).await;
+    expect_drain(&listener).await;
+    expect_respawn_adopted(listener, &socket_path, &handle).await;
 
     drop(handle);
     let _ = std::fs::remove_file(&socket_path);
 }
 
-/// The same stale daemon rejects the drain connection's `initialize` too,
-/// so it cannot be drained over ACP and the runtime names the manual fix.
+/// A request the daemon rejects with the extension-version mismatch error
+/// enters the same recovery: drain on that connection, then respawn.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn a_version_rejecting_daemon_that_rejects_the_drain_connection_needs_a_manual_stop() {
-    let (socket_path, control_socket) = stub_socket_paths("rej2");
+async fn a_request_rejected_for_the_extension_version_drains_and_respawns() {
+    let (socket_path, control_socket) = stub_socket_paths("reqrej");
     let listener = bind_stub_listener(&socket_path);
     let (handle, _host_tools, _workspace_roots) =
         AgentdHandle::start(&socket_path, &control_socket);
-    let mut agent = start_mock_session(&handle, SessionId::new());
 
-    let rejecting = FakeAgentBehavior {
-        reject_initialize: true,
-        ..Default::default()
-    };
     let (stream, _) = listener.accept().await.unwrap();
-    let _first = serve_fake_agentd(stream, rejecting).await;
-    let (stream, _) = listener.accept().await.unwrap();
-    let mut drain = serve_fake_agentd(stream, rejecting).await;
+    let mut rejecting = serve_fake_agentd(
+        stream,
+        FakeAgentBehavior {
+            reject_requests: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    assert!(matches!(rejecting.next_call().await, AgentCall::Initialize));
+    let list_handle = handle.clone();
+    let listed = tokio::task::spawn_blocking(move || list_handle.session_list()).await;
+    assert!(listed
+        .unwrap()
+        .unwrap_err()
+        .contains("horizon ext version mismatch"));
+    assert!(matches!(rejecting.next_call().await, AgentCall::List));
+    assert!(matches!(rejecting.next_call().await, AgentCall::Drain));
 
-    let event = next_agent_update(&mut agent).await;
-    let AgentUpdate::State(AttachmentState::Failed(message)) = &event else {
-        panic!("expected the failed recovery to fan out as an error, got {event:?}");
-    };
-    assert!(message.contains("stop it manually"), "error was: {message}");
-    assert!(
-        drain.calls.try_recv().is_err(),
-        "no drain reached the daemon"
-    );
+    expect_drain(&listener).await;
+    expect_respawn_adopted(listener, &socket_path, &handle).await;
 
     drop(handle);
     let _ = std::fs::remove_file(&socket_path);

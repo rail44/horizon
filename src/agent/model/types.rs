@@ -92,8 +92,14 @@ impl ToolCall {
         }
     }
 
+    /// Whether the call ran: in progress, or finished after running.
+    /// A denied or cancelled call never started.
     pub(crate) fn started(&self) -> bool {
-        self.status != ToolCallStatus::Pending
+        match self.status {
+            ToolCallStatus::InProgress | ToolCallStatus::Completed => true,
+            ToolCallStatus::Failed => self.meta.outcome != Some(ToolOutcome::Denied),
+            ToolCallStatus::Pending | ToolCallStatus::Cancelled => false,
+        }
     }
 }
 
@@ -194,12 +200,14 @@ pub(crate) enum SessionState {
 /// with the retained stop result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SessionStatus {
+    Starting,
     Running,
     ToolRunning,
     WaitingForInput,
     WaitingForApproval,
     Cancelled,
     Paused,
+    Completed,
     Failed,
     Terminated,
 }

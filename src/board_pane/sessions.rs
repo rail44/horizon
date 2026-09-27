@@ -11,11 +11,13 @@ use std::collections::HashMap;
 impl From<SessionStatus> for BoardSessionActivity {
     fn from(status: SessionStatus) -> Self {
         match status {
+            SessionStatus::Starting => Self::Starting,
             SessionStatus::Running => Self::Running,
             SessionStatus::ToolRunning => Self::ToolRunning,
             SessionStatus::WaitingForInput => Self::WaitingForInput,
             SessionStatus::WaitingForApproval => Self::WaitingForApproval,
             SessionStatus::Cancelled => Self::Cancelled,
+            SessionStatus::Completed => Self::Completed,
             SessionStatus::Failed => Self::Failed,
             SessionStatus::Paused => Self::Paused,
             SessionStatus::Terminated => Self::Terminated,
@@ -126,6 +128,7 @@ mod tests {
     #[test]
     fn every_runtime_status_maps_to_its_own_activity() {
         for (status, expected) in [
+            (SessionStatus::Starting, BoardSessionActivity::Starting),
             (SessionStatus::Running, BoardSessionActivity::Running),
             (
                 SessionStatus::ToolRunning,
@@ -140,6 +143,7 @@ mod tests {
                 BoardSessionActivity::WaitingForApproval,
             ),
             (SessionStatus::Cancelled, BoardSessionActivity::Cancelled),
+            (SessionStatus::Completed, BoardSessionActivity::Completed),
             (SessionStatus::Failed, BoardSessionActivity::Failed),
             (SessionStatus::Paused, BoardSessionActivity::Paused),
             (SessionStatus::Terminated, BoardSessionActivity::Terminated),

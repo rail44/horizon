@@ -318,6 +318,7 @@ impl Session {
         let route = self.route;
         tokio::spawn(async move {
             if let Err(error) = request.block_task().await {
+                routes.note_error(&error);
                 routes.deliver_to(
                     route,
                     session_error(route, format!("{what} failed: {error}")),

@@ -23,8 +23,10 @@ impl AgentFrame {
         })
     }
 
-    /// The current state with the retained stop result. A failed, cancelled
-    /// or halted result survives idle until the session runs again.
+    /// The current state with the retained stop result. A completed,
+    /// failed, cancelled or halted result survives idle until the session
+    /// runs again; idle without a result reads as starting until the
+    /// session has a message.
     pub(crate) fn status(&self) -> Option<SessionStatus> {
         Some(match self.state()? {
             SessionState::Running => SessionStatus::Running,
@@ -37,7 +39,15 @@ impl AgentFrame {
                 Some(TurnEndReason::HaltedByIterationCap | TurnEndReason::HaltedByDoomLoop) => {
                     SessionStatus::Paused
                 }
-                Some(TurnEndReason::Completed) | None => SessionStatus::WaitingForInput,
+                Some(TurnEndReason::Completed) => SessionStatus::Completed,
+                None if !self
+                    .items
+                    .iter()
+                    .any(|item| matches!(item, AgentFrameItem::Message(_))) =>
+                {
+                    SessionStatus::Starting
+                }
+                None => SessionStatus::WaitingForInput,
             },
         })
     }

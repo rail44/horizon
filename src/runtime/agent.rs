@@ -33,12 +33,8 @@ use super::common::{
     SILENCE_MISMATCH_THRESHOLD,
 };
 use super::connection::connect_or_spawn_agentd_retrying;
-use super::routing::{parse_session_id, AgentRoutes, RouteKey};
+use super::routing::{parse_session_id, AgentRoutes, RouteKey, EXT_VERSION_MISMATCH};
 use crate::agent::model::AgentEvent;
-
-/// The message prefix of the daemon's `initialize` rejection when the
-/// extension versions differ.
-const EXT_VERSION_MISMATCH: &str = "horizon ext version mismatch";
 
 /// The binary id this client reports in `initialize`.
 const CLIENT_BINARY_ID: &str = concat!("horizon/", env!("CARGO_PKG_VERSION"));
@@ -440,6 +436,7 @@ where
     let transport = ByteStreams::new(write_half.compat_write(), read_half.compat());
     let main_control = control.clone();
     let main_routes = routes.clone();
+    routes.clear_version_mismatch();
     let result = client(&routes)
         .connect_with(transport, async move |connection: V2ConnectionTo<Agent>| {
             let initialized = tokio::select! {
@@ -457,6 +454,11 @@ where
                         break StreamEnd::EstablishedFailure(
                             "established agentd disconnected".to_string(),
                         );
+                    }
+                    message = main_routes.version_mismatch() => {
+                        drain_on(&connection).await;
+                        main_routes.connection_reset(message.clone());
+                        break StreamEnd::VersionRejected { message };
                     }
                     op = ops.recv() => {
                         let Some(op) = op else {
@@ -528,11 +530,14 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
     };
     match read_horizon_meta::<InitializeMeta>(response.meta.as_ref()) {
         Some(Ok(meta)) if meta.ext_version == HORIZON_ACP_EXT_VERSION => {}
+        // The daemon accepts `initialize` across versions so that it can be
+        // drained on this same connection.
         Some(Ok(meta)) => {
+            drain_on(connection).await;
             return Err(EstablishError::Rejected(format!(
             "{EXT_VERSION_MISMATCH}: agentd {} speaks v{}, this shell v{HORIZON_ACP_EXT_VERSION}",
             meta.binary_id, meta.ext_version
-        )))
+        )));
         }
         Some(Err(_)) | None => {
             return Err(EstablishError::Rejected(format!(
@@ -549,16 +554,29 @@ async fn initialize(connection: &V2ConnectionTo<Agent>) -> Result<(), EstablishE
     Ok(())
 }
 
+/// Sends `_horizon/drain` and waits, bounded, for the daemon to act on it.
+async fn drain_on(connection: &V2ConnectionTo<Agent>) {
+    let _ = tokio::time::timeout(
+        establish_timeout(),
+        connection.send_request(DrainRequest {}).block_task(),
+    )
+    .await;
+}
+
 /// Bounds one established-phase request. A deadline expiry fails only that
 /// request; the connection stays up.
 async fn call<T>(
+    routes: &AgentRoutes,
     deadline: Duration,
     what: &str,
     request: agent_client_protocol::SentRequest<T>,
 ) -> Result<T, String> {
     match tokio::time::timeout(deadline, request.block_task()).await {
         Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(format!("{what} failed: {error}")),
+        Ok(Err(error)) => {
+            routes.note_error(&error);
+            Err(format!("{what} failed: {error}"))
+        }
         Err(_elapsed) => Err(format!("{what} did not answer within {deadline:?}")),
     }
 }
@@ -619,12 +637,15 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                                 );
                                 routes.deliver_to(route, Inbound::Opened(Ok(())));
                             }
-                            Err(error) => routes.deliver_to(
-                                route,
-                                Inbound::Opened(Err(format!(
-                                    "failed to start the agent session: {error}"
-                                ))),
-                            ),
+                            Err(error) => {
+                                routes.note_error(&error);
+                                routes.deliver_to(
+                                    route,
+                                    Inbound::Opened(Err(format!(
+                                        "failed to start the agent session: {error}"
+                                    ))),
+                                )
+                            }
                         }
                         Ok(())
                     })
@@ -640,6 +661,7 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                     .start_session()
                     .on_receiving_result(async move |result| {
                         let opened = result.map(|_| ()).map_err(|error| {
+                            routes.note_error(&error);
                             format!("failed to attach to the agent session: {error}")
                         });
                         routes.deliver_to(route, Inbound::Opened(opened));
@@ -649,21 +671,24 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
         }
         Op::SessionList { reply } => {
             let connection = connection.clone();
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let _ = reply.send(list_sessions(&connection).await);
+                let _ = reply.send(list_sessions(&routes, &connection).await);
             });
         }
         Op::ListProviders { reply } => {
             let request = send(connection, ListProvidersRequest {});
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "provider list", request).await;
+                let result = call(&routes, OP_TIMEOUT, "provider list", request).await;
                 let _ = reply.send(result.map(|response| response.providers));
             });
         }
         Op::ListProviderModels { provider, reply } => {
             let request = send(connection, ListProviderModelsRequest { provider });
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "provider model list", request).await;
+                let result = call(&routes, OP_TIMEOUT, "provider model list", request).await;
                 let _ = reply.send(result.map(|response| response.models));
             });
         }
@@ -681,8 +706,9 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                 )),
             );
             let request = send(connection, request);
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "set session model", request).await;
+                let result = call(&routes, OP_TIMEOUT, "set session model", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }
@@ -693,8 +719,9 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                     workspace_root: root,
                 },
             );
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "watch board", request).await;
+                let result = call(&routes, OP_TIMEOUT, "watch board", request).await;
                 let _ = reply.send(result.map(|_| ()));
             });
         }
@@ -705,8 +732,9 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
                     workspace_root: root,
                 },
             );
+            let routes = routes.clone();
             tokio::spawn(async move {
-                let result = call(OP_TIMEOUT, "board organizer", request).await;
+                let result = call(&routes, OP_TIMEOUT, "board organizer", request).await;
                 let _ = reply.send(result.map(|response| response.session_id));
             });
         }
@@ -721,8 +749,11 @@ fn handle_op(op: Op, connection: &V2ConnectionTo<Agent>, routes: &Arc<AgentRoute
         }
         Op::ReloadProviderConfig => {
             let request = send(connection, ReloadProviderConfigRequest {});
+            let routes = routes.clone();
             tokio::spawn(async move {
-                if let Err(error) = call(OP_TIMEOUT, "reload_provider_config", request).await {
+                if let Err(error) =
+                    call(&routes, OP_TIMEOUT, "reload_provider_config", request).await
+                {
                     eprintln!("horizon-agentd client: provider config reload failed: {error}");
                 }
             });
@@ -762,13 +793,16 @@ fn open_session(
     ));
 }
 
-async fn list_sessions(connection: &V2ConnectionTo<Agent>) -> Result<Vec<SessionSummary>, String> {
+async fn list_sessions(
+    routes: &AgentRoutes,
+    connection: &V2ConnectionTo<Agent>,
+) -> Result<Vec<SessionSummary>, String> {
     let mut summaries = Vec::new();
     let mut cursor = None;
     loop {
         let mut request = v2::ListSessionsRequest::new();
         request.cursor = cursor;
-        let response = call(OP_TIMEOUT, "agent list", send(connection, request)).await?;
+        let response = call(routes, OP_TIMEOUT, "agent list", send(connection, request)).await?;
         summaries.extend(
             response
                 .sessions

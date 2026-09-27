@@ -91,6 +91,7 @@ pub(crate) mod test_support {
                 outcome: None,
                 auto_approved: None,
                 policy_tier: None,
+                human_decision: None,
             },
             status: ToolCallStatus::Pending,
             input,
