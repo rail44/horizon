@@ -5,21 +5,16 @@
 //!
 //! Which numbers a build puts in that range is *not* this crate's business:
 //! the version constants belong to the hub being spoken, so the "range this
-//! build advertises" constructor lives beside them --
-//! `horizon_agent::wire::agent_version_range` and
-//! `horizon_terminal_core::wire::terminal_version_range`, one pair per hub
-//! since `docs/runtime-crate-alignment-design.md` phase 2.
-//!
-//! The `[`SessionHub::hello`]` links in the type docs below point at that
-//! hub trait, which lives in the crate that owns it; the wording is pinned
-//! byte-for-byte by the committed wire-schema artifact (it is these types'
-//! `description`), so it is left exactly as it was written.
+//! build advertises" constructor lives beside them (e.g.
+//! `horizon_terminal_core::wire::terminal_version_range`), one pair per hub.
+//! `horizon-agentd` speaks ACP and negotiates through `initialize` instead
+//! (`docs/acp-agentd-design.md`).
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// An inclusive protocol-version range one peer supports, as exchanged in
-/// [`SessionHub::hello`].
+/// a hub's `hello`.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct VersionRange {
     pub min_supported: u32,
@@ -50,7 +45,7 @@ impl std::fmt::Display for VersionRange {
 }
 
 /// The client half of the version negotiation, carried by the first rtc
-/// call on every connection ([`SessionHub::hello`]).
+/// call on every connection (the hub's `hello`).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ClientHello {
     pub supported: VersionRange,

@@ -211,9 +211,11 @@ lands:
 - **First-party viewers** (image / markdown / git diff). Native Rust
   views on the session-less pane plumbing the theme settings view
   introduced (`PaneKind::View`, `docs/theme-settings-view-design.md`).
-- **ACP as the shell↔agentd line — design 2026-09-27**
-  (`docs/acp-agentd-design.md`; decision on board #63). The shell
-  becomes an ACP client; `horizon-agentd` speaks ACP v2 in place of the
+- **ACP as the shell↔agentd line — implemented 2026-09-27** (stages A–D
+  on the integration branch, main merge pending; stage E, external
+  agents, pending a config consultation) (`docs/acp-agentd-design.md`,
+  `docs/acp-agentd-implementation-plan.md`; decision on board #63). The
+  shell is an ACP client; `horizon-agentd` speaks ACP v2 in place of the
   remoc agent hub (terminald/logd stay remoc), and external ACP agents
   (Claude Code via `claude-agent-acp`, v1) attach to the same client
   directly, with their session management left to the agent. Build on

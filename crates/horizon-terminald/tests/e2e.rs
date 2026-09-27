@@ -467,14 +467,13 @@ async fn drain_agentd(socket_path: &Path) {
 /// **The terminald split's acceptance property**
 /// (`docs/terminald-split-design.md` decisions 1-2): the exact sequence
 /// `Reload Agent Runtime` performs against the *agent* daemon — graceful
-/// rtc `drain`, wait for the process to exit, spawn a fresh one on the same
-/// socket — leaves a `horizon-terminald` session fully usable: still listed,
+/// `_horizon/drain`, wait for the process to exit, spawn a fresh one on the
+/// same socket — leaves a `horizon-terminald` session fully usable: still listed,
 /// still attachable, its retained frame intact, and its shell still alive
 /// (proven by making the same PTY echo a *new* marker afterwards).
 ///
 /// Before the split this was impossible by construction: one process owned
-/// both, and its drain killed every PTY (`SessionHub::drain` called
-/// `TerminalHost::shutdown_all`). The test is deliberately end-to-end over
+/// both, and its drain killed every PTY. The test is deliberately end-to-end over
 /// two real daemons on two real sockets, because that separation is the
 /// whole deliverable — the client-side half is pinned separately in
 /// `src/runtime/tests.rs`

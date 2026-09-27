@@ -10,13 +10,13 @@ use crossbeam_channel::{unbounded, Receiver, Sender};
 use horizon_agent::contract::{
     self, Command, Error as AgentError, Event, Initialization, ProviderEvent, ProviderId, SessionId,
 };
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::roles::RoleId;
 use horizon_agent::tools::{
     process_agent_provider_event, register_exploration_host, register_session_runtime, HostTools,
     ToolCompletion, ToolSessionState,
 };
-use horizon_agent::wire::AgentWireEvent;
 
 use super::approval::{dispatch_inbound_command, gate_processing_approval};
 use super::completion::fold_tool_completion;

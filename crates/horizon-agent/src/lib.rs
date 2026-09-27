@@ -15,6 +15,7 @@ pub mod auxiliary;
 pub mod config;
 pub mod contract;
 pub mod frame;
+pub mod hosting;
 pub(crate) mod instructions;
 pub mod judge;
 pub mod knowledge;
@@ -30,7 +31,6 @@ pub mod skills;
 pub mod summarize;
 pub mod tools;
 pub mod transcript;
-pub mod wire;
 
 #[cfg(test)]
 mod test_support;

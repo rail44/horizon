@@ -1,20 +1,18 @@
 //! Merge-time classifier for the committed wire-schema artifact — the
 //! mechanical half of `docs/remoc-adoption-design.md` §4's skew
 //! discipline ("additive only", rule 3), and the successor to the four
-//! hand-maintained `CONTRACT_VERSION` pin tests that used to live in
-//! `crates/horizon-agent/src/wire.rs` (§4 rule 4).
+//! hand-maintained `CONTRACT_VERSION` pin tests (§4 rule 4).
 //!
 //! The division of labor:
 //!
-//! - one `tests/wire_schema.rs` per runtime crate
-//!   (`crates/horizon-agent`, `crates/horizon-terminal-core`) regenerates
-//!   that runtime's schema from its live wire types and fails on any drift
-//!   from the committed artifact (`schema/agent-wire.json`,
-//!   `schema/terminal-wire.json`), so every wire change is visible,
-//!   reviewable text in its PR diff. The two generators share
+//! - one `tests/wire_schema.rs` per wire-owning crate (`crates/horizon-acp`,
+//!   `crates/horizon-terminal-core`, `crates/horizon-board`) regenerates
+//!   that wire's schema from its live types and fails on any drift from the
+//!   committed artifact (`schema/acp-ext-wire.json`,
+//!   `schema/terminal-wire.json`, `schema/log-wire.json`), so every wire
+//!   change is visible, reviewable text in its PR diff. The generators share
 //!   [`sort_object_keys`] from this module so the artifacts stay
-//!   mechanically comparable — they were one document until
-//!   `docs/runtime-crate-alignment-design.md` phase 2.
+//!   mechanically comparable.
 //! - `scripts/check-wire-schema.sh` (run by `hooks/pre-commit`) feeds this
 //!   module (through this crate's `check_wire_schema` example) the
 //!   merge-base's copy of each artifact next to the current one;
@@ -47,9 +45,10 @@
 use serde_json::{Map, Value};
 
 /// The artifact key carrying the protocol version of the hub the artifact
-/// documents — `horizon_agent::wire::AGENT_PROTOCOL_VERSION` in
-/// `agent-wire.json`, `horizon_terminal_core::wire::
-/// TERMINAL_PROTOCOL_VERSION` in `terminal-wire.json`. A change to this
+/// documents — `horizon_acp::HORIZON_ACP_EXT_VERSION` in
+/// `acp-ext-wire.json`, `horizon_terminal_core::wire::
+/// TERMINAL_PROTOCOL_VERSION` in `terminal-wire.json`,
+/// `horizon_board::wire::LOG_PROTOCOL_VERSION` in `log-wire.json`. A change to this
 /// value between the two compared schemas is the explicit version-bump
 /// marker that legitimizes an otherwise-forbidden reshape.
 ///

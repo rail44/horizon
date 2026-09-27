@@ -4276,7 +4276,6 @@ dependencies = [
  "ignore",
  "libc",
  "regex",
- "remoc",
  "reqwest",
  "rig-core",
  "schemars 1.2.2",
@@ -4307,7 +4306,6 @@ dependencies = [
  "horizon-sandbox",
  "horizon-wire",
  "libc",
- "remoc",
  "serde",
  "serde_json",
  "tempfile",
@@ -4448,7 +4446,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
- "horizon-agent",
  "horizon-daemon-testkit",
  "horizon-terminal-core",
  "horizon-wire",

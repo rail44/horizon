@@ -224,7 +224,7 @@ fn duplicate_creation_preserves_the_existing_session_command_owner() {
     let session = SessionId::new();
     let commands = state.install_test_session(session);
     let connection = crate::session::Connection::new(state.clone());
-    let request = horizon_agent::wire::SessionNew {
+    let request = horizon_agent::hosting::SessionNew {
         session_id: session,
         provider_id: horizon_agent::contract::ProviderId("builtin.agent.mock".into()),
         role_id: None,

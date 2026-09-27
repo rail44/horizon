@@ -4,7 +4,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::{Event, TaskProgress, ToolCallProgress};
-use crate::wire::ModelSelection;
+use crate::hosting::ModelSelection;
 
 // Keep frequent text deltas inline instead of allocating for every event.
 // This enum is smaller than the former envelope with its four sidecar Options.

@@ -10,12 +10,12 @@ use horizon_agent::contract::{
     ApprovalDecisionPayload, ApprovalRequest, Command, ContinueTurnRequested, Event, OccurrenceId,
     ProviderEvent, SessionId, SessionState, ToolCallId,
 };
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
     resolve_approval, should_fold_completion, start_approval_gate, unattended_refusal_result,
     ApprovalCandidate, ApprovalDecision, ApprovalGate, ApprovalOutcome, ToolSessionState,
 };
-use horizon_agent::wire::AgentWireEvent;
 
 use super::events::{apply_and_send_session_events, send_session_event};
 use super::state::AgentdState;

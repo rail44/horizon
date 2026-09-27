@@ -7,8 +7,8 @@ use std::sync::Arc;
 use horizon_agent::contract::{
     Command, Event, SessionId, TaskProgress, TaskProgressState, ToolCallProgress,
 };
+use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd, WorkspaceRootResolved};
 use horizon_agent::live::LiveState;
-use horizon_agent::wire::{AgentWireEvent, AttachmentEnd, WorkspaceRootResolved};
 use tokio::sync::{mpsc, oneshot, watch};
 use uuid::Uuid;
 

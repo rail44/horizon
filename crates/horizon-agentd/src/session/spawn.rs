@@ -9,10 +9,10 @@ use std::thread;
 use crossbeam_channel::unbounded;
 
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::roles::RoleId;
 use horizon_agent::runtime_panic::catch_runtime_panic;
 use horizon_agent::tools::unregister_session_runtime;
-use horizon_agent::wire::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::panic::{
@@ -42,7 +42,10 @@ fn resolve_and_announce_session_model(
     session_id: SessionId,
     provider_id: &ProviderId,
     role_id: Option<&RoleId>,
-) -> (Option<String>, Option<horizon_agent::wire::ModelSelection>) {
+) -> (
+    Option<String>,
+    Option<horizon_agent::hosting::ModelSelection>,
+) {
     let model = lock_unpoisoned(&state.providers).resolved_model(provider_id, role_id);
     let selection = model
         .as_deref()
@@ -73,18 +76,18 @@ fn selection_for_provider_id(
     state: &Arc<AgentdState>,
     provider_id: &ProviderId,
     model: &str,
-) -> Option<horizon_agent::wire::ModelSelection> {
+) -> Option<horizon_agent::hosting::ModelSelection> {
     let id = provider_id.0.as_str();
     let config = lock_unpoisoned(&state.agent_config);
     if id == "builtin.agent.rig" {
-        return Some(horizon_agent::wire::ModelSelection {
+        return Some(horizon_agent::hosting::ModelSelection {
             provider: config.providers.default_name.clone(),
             model: model.to_string(),
         });
     }
     if let Some(name) = id.strip_prefix("builtin.agent.rig.") {
         if config.providers.entry(name).is_some() {
-            return Some(horizon_agent::wire::ModelSelection {
+            return Some(horizon_agent::hosting::ModelSelection {
                 provider: name.to_string(),
                 model: model.to_string(),
             });
@@ -92,7 +95,7 @@ fn selection_for_provider_id(
         return None;
     }
     if let Some(name) = id.strip_prefix("builtin.agent.moa.") {
-        return Some(horizon_agent::wire::ModelSelection {
+        return Some(horizon_agent::hosting::ModelSelection {
             provider: horizon_agent::config::MOA_PROVIDER_NAME.to_string(),
             model: name.to_string(),
         });

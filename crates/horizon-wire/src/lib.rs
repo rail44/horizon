@@ -27,8 +27,8 @@ pub mod spawn;
 
 pub use channels::{
     channel_schema, receive_pump, CappedReceiver, CappedWatchReceiver, CHANNEL_BUFFER,
-    COMMAND_MAX_ITEM_BYTES, CONTROL_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES,
-    RTC_MAX_REQUEST_BYTES, TERMINAL_EVENT_MAX_ITEM_BYTES, TOOL_IO_MAX_ITEM_BYTES,
+    COMMAND_MAX_ITEM_BYTES, FRAME_MAX_ITEM_BYTES, RTC_MAX_REPLY_BYTES, RTC_MAX_REQUEST_BYTES,
+    TERMINAL_EVENT_MAX_ITEM_BYTES,
 };
 pub use codec::{DecodeSkipLog, WireCodec};
 pub use hub::{negotiate_hello, HelloGate, HubError};

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use horizon_agent::contract::{Command, ProviderId, SessionId, TaskProgress};
-use horizon_agent::wire::AgentWireEvent;
+use horizon_agent::hosting::AgentWireEvent;
 
 use super::events::send_session_event;
 use super::spawn::spawn_session_thread;

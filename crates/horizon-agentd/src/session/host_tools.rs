@@ -5,8 +5,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::contract;
+use horizon_agent::hosting::HostToolRequest;
 use horizon_agent::tools::HostTools;
-use horizon_agent::wire::HostToolRequest;
 
 use super::state::AgentdState;
 
@@ -16,7 +16,7 @@ use super::state::AgentdState;
 pub(crate) const HOST_TOOL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// Sends a host-tool request through the current connection's
-/// `HubHello::host_tools` bridge, if a connection is live. Returns whether
+/// `_horizon/host_tool` bridge, if a connection is live. Returns whether
 /// the send was actually accepted, for the one caller
 /// ([`AgentdHostTools::execute_auto`]) that needs to fail fast rather
 /// than wait out its full timeout when nothing is listening.

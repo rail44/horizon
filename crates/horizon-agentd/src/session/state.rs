@@ -11,11 +11,11 @@ use crossbeam_channel::Sender;
 
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, ProviderId, SessionId};
+use horizon_agent::hosting::{HostToolRequest, HostToolResponse};
 use horizon_agent::persistence::event_log::WriterHandle;
 use horizon_agent::persistence::projection::duckdb::{DuckdbStoreHandle, SharedDuckdbStore};
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::roles::RoleId;
-use horizon_agent::wire::{HostToolRequest, HostToolResponse};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Notify;
 
@@ -62,27 +62,26 @@ pub(crate) struct AgentdState {
     /// this map's whole vocabulary.
     pub(super) session_subscriptions: super::subscription::SessionSubscriptions,
     /// The current connection's host-tool request bridge (the local half of
-    /// `HubHello::host_tools`), installed by the hub's `hello` and cleared
-    /// when the connection ends — connection-global, unlike the
+    /// `_horizon/host_tool`), installed by a successful `initialize` and
+    /// cleared when the connection ends — connection-global, unlike the
     /// session-scoped subscribers above.
     pub(super) host_tools_outgoing: Mutex<Option<UnboundedSender<HostToolRequest>>>,
     /// Flips once (see [`Self::mark_resume_ready`]) after
     /// [`super::resume::resume_persisted_sessions`] finishes populating `sessions` from the
-    /// log. The hub's `list_agents`/`attach_agent` must not answer while
+    /// log. `session/list` and `session/resume` must not answer while
     /// this is still false -- see [`Self::wait_until_resume_ready`] -- or a
     /// (re)connecting client would see a partial (or, right after bind,
-    /// completely empty) view of sessions that genuinely exist. `hello`
-    /// never checks this: it doesn't depend on session state at all, which
-    /// is the whole point of binding first (see `main`).
+    /// completely empty) view of sessions that genuinely exist.
+    /// `initialize` never checks this: it doesn't depend on session state
+    /// at all, which is the whole point of binding first (see `main`).
     resume_ready: AtomicBool,
     resume_notify: Notify,
     /// This process's own startup event-log corruption diagnostics
     /// (`persistence::event_log::ReadReport::skipped_summary`), `None` until
     /// [`Self::set_skipped_lines_summary`] runs (or forever, if the startup
     /// read found nothing to skip) -- see [`Self::skipped_lines_summary`]
-    /// and the hub's `hello` (`crate::hub`), which forwards this once per
-    /// connection over `HubHello::skipped_lines`, restoring the step-3 trim
-    /// recorded in `docs/agent-runtime-split-design.md`.
+    /// and `initialize` (`crate::hub`), which forwards this once per
+    /// connection as a `_horizon/session_event` `SkippedLines` notice.
     skipped_lines_summary: Mutex<Option<String>>,
     /// Shared, multi-reader-blocking handle onto the live DuckDB projection
     /// (see [`SharedDuckdbStore`]'s doc comment) -- the *same* instance
@@ -210,7 +209,7 @@ impl AgentdState {
 
     /// Called once from [`crate::spawn_resume_task`], alongside
     /// [`Self::set_writer`] -- before [`Self::mark_resume_ready`], so the
-    /// hub's readiness-gated summary send (the task `hello` spawns in
+    /// hub's readiness-gated summary send (the task `initialize` spawns in
     /// `crate::hub`) always observes the final value.
     pub(crate) fn set_skipped_lines_summary(&self, summary: Option<String>) {
         *self.skipped_lines_summary.lock().unwrap() = summary;
@@ -227,9 +226,8 @@ impl AgentdState {
         self.resume_notify.notify_waiters();
     }
 
-    /// Blocks (async, so it only ever parks the one hub-call task
-    /// `SessionHubServerShared` spawned for this request -- see
-    /// [`crate::handle_connection`]) until
+    /// Blocks (async, so it only ever parks the task the ACP handler
+    /// spawned for this request -- see `crate::hub`) until
     /// [`Self::mark_resume_ready`] has run. Builds the `Notified` future
     /// before re-checking the flag, per `tokio::sync::Notify`'s documented
     /// pattern for "wait for a one-time event without a missed-wakeup race"
@@ -362,7 +360,7 @@ pub(super) struct SessionEntry {
     /// chip keeps reading `moa · mix` instead of the resolved aggregator id
     /// `model` above carries. `None` until the first switch, or when the
     /// spawn-time provider has no config entry (e.g. the mock provider).
-    pub(super) selection: Option<horizon_agent::wire::ModelSelection>,
+    pub(super) selection: Option<horizon_agent::hosting::ModelSelection>,
     pub(super) inbound: Sender<Command>,
     /// Requests an atomic history/live handoff from the session owner.
     /// The reply owns the subscription, so abandoning it revokes delivery.

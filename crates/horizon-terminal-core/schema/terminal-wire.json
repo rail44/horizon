@@ -1,8 +1,8 @@
 {
-  "$comment": "Generated from the live wire types (the TerminalHub rtc trait and the vocabularies its channels carry). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent -p horizon-terminal-core wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
+  "$comment": "Generated from the live wire types (the TerminalHub rtc trait and the vocabularies its channels carry). Regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp -p horizon-terminal-core wire_schema`; additive-vs-reshape classification of changes is scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
   "$defs": {
     "ClientHello": {
-      "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection ([`SessionHub::hello`]).",
+      "description": "The client half of the version negotiation, carried by the first rtc\ncall on every connection (the hub's `hello`).",
       "properties": {
         "binary_id": {
           "type": "string"
@@ -165,7 +165,7 @@
       "type": "object"
     },
     "TerminalAttachment": {
-      "description": "What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]\nhand back: the session's live channels. Since wire v11\n(`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a\nsnapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`\nwhose current value *is* the latest frame at every moment, seeded on\nattach with the daemon-retained latest frame. The wire diff machinery is\ngone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and\nrow-change detection moved to the client (a `TerminalLine` comparison of\nconsecutive frames). `events` carries everything that is *not* a frame\n(`TerminalUpdate`: title, bell, clipboard, exit, error).",
+      "description": "What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]\nhand back: the session's live channels. Since wire v11\n(`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a\nsnapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`\nwhose current value *is* the latest frame at every moment, seeded on\nattach with the daemon-retained latest frame. The wire diff machinery is\ngone: no `Snapshot`/`FrameDiff` split, no per-connection baseline, and\nrow-change detection moved to the client (a `TerminalLine` comparison of\nconsecutive frames). `events` carries everything that is *not* a frame\n(`TerminalUpdate`: title, bell, clipboard, exit, error).",
       "properties": {
         "commands": {
           "$comment": "remoc rch channel half: a chmux port reference on the wire; the x-channel-payload schema is what flows through it",
@@ -668,13 +668,13 @@
       "type": "object"
     },
     "TerminalHubHello": {
-      "description": "`horizon-terminald`'s `hello` reply. Deliberately channel-free: every\nconnection-global channel [`HubHello`] hands over belongs to the agent\ndomain (host tools, the event log's startup diagnostic), and the\nterminal domain's only streams are per-attachment\n([`TerminalAttachment`]).\n\n`binary_id` is load-bearing beyond diagnostics here — it is the terminald\nconnection's skew insurance (`docs/terminald-split-design.md` decision\n6). A terminald that outlives many UI rebuilds may be running an older\nbinary than the client that connects to it, and the layer *below* the\nnegotiated version (remoc/chmux framing, the Postbag codec) is not\ncovered by version negotiation at all — the tmux 3.6 lesson. The client\nrecords this id at `hello` and names it if a post-`hello` decode failure\nsuggests exactly that kind of skew, so the failure surfaces as a clean\nrefusal pointing at `Reload Terminal Runtime` rather than as silent\nmisbehavior.",
+      "description": "`horizon-terminald`'s `hello` reply. Channel-free: the terminal domain's\nonly streams are per-attachment ([`TerminalAttachment`]).\n\n`binary_id` is load-bearing beyond diagnostics here — it is the terminald\nconnection's skew insurance (`docs/terminald-split-design.md` decision\n6). A terminald that outlives many UI rebuilds may be running an older\nbinary than the client that connects to it, and the layer *below* the\nnegotiated version (remoc/chmux framing, the Postbag codec) is not\ncovered by version negotiation at all — the tmux 3.6 lesson. The client\nrecords this id at `hello` and names it if a post-`hello` decode failure\nsuggests exactly that kind of skew, so the failure surfaces as a clean\nrefusal pointing at `Reload Terminal Runtime` rather than as silent\nmisbehavior.",
       "properties": {
         "binary_id": {
           "type": "string"
         },
         "negotiated": {
-          "description": "The highest mutually supported version (see [`HubHello::negotiated`]).",
+          "description": "The highest mutually supported version.",
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
@@ -1176,7 +1176,7 @@
       ]
     },
     "VersionRange": {
-      "description": "An inclusive protocol-version range one peer supports, as exchanged in\n[`SessionHub::hello`].",
+      "description": "An inclusive protocol-version range one peer supports, as exchanged in\na hub's `hello`.",
       "properties": {
         "current": {
           "format": "uint32",

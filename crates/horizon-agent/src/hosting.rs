@@ -1,30 +1,16 @@
-//! The agent runtime's whole wire: the payload vocabulary that crosses
-//! `horizon-agentd`'s socket (this file), plus the [`SessionHub`] rtc trait
-//! and version pair that carry it ([`hub`]).
+//! The vocabulary between `horizon-agentd`'s session threads and the
+//! connections serving them: the per-attachment event stream
+//! ([`AgentWireEvent`]), the spawn request and listing summaries, and the
+//! host-tool exchange. `horizon-agentd` maps these onto ACP v2 and the
+//! `_horizon/*` extensions (`crates/horizon-acp`,
+//! `docs/acp-agentd-design.md`); none of these types is serialized onto a
+//! socket itself.
 //!
-//! The v10 remoc cutover (`docs/remoc-adoption-design.md` §2) deleted this
-//! module's JSONL machinery wholesale: the `Envelope`/`EnvelopeBody` pair,
-//! the `agent_control`/`agent_command`/`agent_event` kind constants, the
-//! `Control` dispatch enum, and the `encode_*`/`decode_*`/`read_*`/
-//! `write_*` framing helpers. What used to be `Control` variants maps onto
-//! [`SessionHub`] instead: `SessionList`/`SessionNew`/
-//! `SessionLoad` are rtc calls (`list_agents`/`new_agent`/`attach_agent`),
-//! `HostToolRequest`/`HostToolResponse` ride connection-global channels
-//! handed over in [`HubHello`], and the session-scoped announcements ride
-//! the per-attachment [`AgentWireEvent`] channel.
-//!
-//! **Guardrail 1 (contract ≠ wire)** still holds: this module references
-//! [`crate::contract`] types (`Command`, `Event`, `SessionId`, ...); nothing
-//! in `contract` references this module. The vocabulary types in this file
-//! also stay serde-plain and remoc-free; remoc is confined to [`hub`],
-//! which is where it arrived when
-//! `docs/runtime-crate-alignment-design.md` phase 2 moved the hub trait out
-//! of the dissolved `horizon-session-protocol` and into the runtime crate
-//! that owns it.
+//! This module references [`crate::contract`] types (`Event`, `SessionId`,
+//! ...); nothing in `contract` references this module.
 
 use std::path::PathBuf;
 
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::contract::{
@@ -33,24 +19,9 @@ use crate::contract::{
 };
 use crate::roles::RoleId;
 
-mod hub;
-
-// Glob rather than a hand-listed surface: `#[rtc::remote]` generates a
-// dozen companion items (client, the four server flavors, the request
-// enums) whose names are the macro's business, and every one of them is
-// part of this wire by construction.
-pub use hub::*;
-
-/// Everything a hosted agent session pushes to its attached client, on the
-/// attachment's event channel (`horizon_session_protocol::AgentAttachment::
-/// events`): the session's provider events, plus the session-scoped
-/// announcements that were their own control envelopes on the JSONL wire.
-//
-// The stale crate path above is frozen deliberately: this doc comment is
-// the type's `description` in the committed wire-schema artifact, so
-// rewording it would show up as an artifact diff for no wire reason. The
-// channel is `wire::AgentAttachment::events` now.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// Everything a hosted agent session pushes to its attachment: the
+/// session's provider events plus the session-scoped announcements.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AgentWireEvent {
     /// Start of this attachment's private history and metadata snapshot.
     ReplayStarted,
@@ -75,7 +46,7 @@ pub enum AgentWireEvent {
     /// Live correction of a freshly isolated session's authoritative
     /// `workspace_root` (and derivation edge) — sent once, right after
     /// `horizon-agentd` resolves the session's isolated worktree, which
-    /// only finishes *after* `new_agent` already returned. Not sent at all
+    /// only finishes *after* `session/new` already returned. Not sent at all
     /// when isolation fails and degrades to a shared spawn (nothing to
     /// correct then, mirroring [`SessionSummary::parent_session_id`]'s
     /// "the edge exists only via isolation").
@@ -94,15 +65,14 @@ pub enum AgentWireEvent {
     /// a model id otherwise. Display-only and ephemeral like
     /// `ToolCallProgress`: the composer's model chip renders `provider ·
     /// model` (`moa · mix`) instead of the aggregator's resolved model id
-    /// that [`Self::SessionModel`] carries. An appended variant, so the wire
-    /// stays additive (no protocol bump — the `TaskProgress` precedent).
+    /// that [`Self::SessionModel`] carries.
     SessionSelection(ModelSelection),
     /// Close the preview identified by its streaming key.
     ToolCallProgressClosed(String),
 }
 
 /// Why an attachment ended. Reattach to obtain a fresh, complete snapshot.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum AttachmentEnd {
     Replaced,
     Lagged,
@@ -126,7 +96,7 @@ impl AgentWireEvent {
 
 /// [`AgentWireEvent::SessionSelection`]'s payload — the `(provider, model)`
 /// pair a switch named, echoing `contract::Command::SetSessionModel`.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ModelSelection {
     /// The `[[providers]]` / `[[moa]]` entry name the picker or CLI named
     /// (the legacy `[provider]` fold-in resolves as `default`).
@@ -137,7 +107,7 @@ pub struct ModelSelection {
 }
 
 /// [`AgentWireEvent::WorkspaceRootResolved`]'s payload.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct WorkspaceRootResolved {
     pub workspace_root: PathBuf,
     /// Additive, like [`SessionSummary::parent_session_id`] -- `None` for an
@@ -147,9 +117,9 @@ pub struct WorkspaceRootResolved {
     pub parent_session_id: Option<SessionId>,
 }
 
-/// One configured provider as `SessionHub::list_providers` reports it —
+/// One configured provider as `_horizon/list_providers` reports it —
 /// the model picker's per-provider data.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ProviderSummary {
     /// The `[[providers]]` `name` — what `set_session_model`'s `provider`
     /// argument names. The legacy `[provider]` fold-in resolves as
@@ -165,7 +135,7 @@ pub struct ProviderSummary {
     /// The model this entry runs when nothing has selected one, if the file
     /// names it. `None` leaves the kind's own built-in default in place. The
     /// picker's candidate ids come from the provider's own `/models`
-    /// listing (`SessionHub::list_provider_models`), not from here.
+    /// listing (`_horizon/list_provider_models`), not from here.
     pub default_model: Option<String>,
     /// Build-time resolved (the entry's key variable was set when the
     /// provider surface was built). `false` = registered but unavailable
@@ -177,8 +147,8 @@ pub struct ProviderSummary {
     pub default: bool,
 }
 
-/// One entry of a `SessionHub::list_agents` reply.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// One entry of a `session/list` reply.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionSummary {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
@@ -200,7 +170,7 @@ pub struct SessionSummary {
     /// value; for an isolated session, `horizon-agentd` overrides it with
     /// the worktree path it creates, which the caller cannot know in
     /// advance since worktree creation finishes asynchronously, after
-    /// `new_agent` already returned -- see
+    /// `session/new` already returned -- see
     /// `session::resolve_and_create_isolated_worktree`). Populated from the
     /// same `SessionEntry.workspace_root` a resumed session's summary reads
     /// too. New event-log records persist this authoritative value, and
@@ -211,9 +181,9 @@ pub struct SessionSummary {
 }
 
 /// Per `docs/agent-runtime-split-design.md` guardrail 5, spawning a fresh
-/// session (`SessionHub::new_agent`) is distinct from attaching to an
-/// existing one (`attach_agent`) and carries per-session overrides.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// session (`session/new`) is distinct from attaching to an existing one
+/// (`session/resume`) and carries per-session overrides.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SessionNew {
     pub session_id: SessionId,
     pub provider_id: ProviderId,
@@ -247,26 +217,24 @@ pub struct SessionNew {
     /// instead of confining it to `workspace_root` directly -- decision 3's
     /// per-spawn isolation knob. The origin-based default (palette: shared;
     /// CLI/control-plane: isolated) plus any explicit per-spawn override are
-    /// both resolved client-side before this ever reaches the wire;
+    /// both resolved client-side before this ever reaches the daemon;
     /// `horizon-agentd` just executes whatever concrete choice arrives
     /// here (see `docs/session-relationship-design.md` decision 3).
     pub isolate: bool,
 }
 
 /// The agent (child) asking the client to run a host-coupled tool (e.g.
-/// `workspace.snapshot`) over this same connection -- guardrail 4. Rides
-/// the connection-global `HubHello::host_tools` channel; the `request_id`
-/// correlation survives the cutover because the exchange is genuinely
-/// asynchronous on the daemon side (a session thread blocks on the
-/// matching [`HostToolResponse`]).
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+/// `workspace.snapshot`) over this same connection -- guardrail 4. Sent as
+/// `_horizon/host_tool`; the `request_id` correlates the reply because a
+/// session thread blocks on the matching [`HostToolResponse`].
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostToolRequest {
     pub request_id: RequestId,
     pub tool_id: String,
     pub input: JsonValue,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct HostToolResponse {
     pub request_id: RequestId,
     pub output: JsonValue,
@@ -275,19 +243,6 @@ pub struct HostToolResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    // The four `contract_version_*` pin tests that lived here -- each a
-    // hand-maintained `assert_eq!(CONTRACT_VERSION, 9)` whose doc comment
-    // re-argued why a given change was or wasn't a bump -- are retired
-    // (`docs/remoc-adoption-design.md` §4 rule 4). Their job, forcing a
-    // human decision on every wire-shape change, now belongs to the
-    // committed schema artifact and its checkers: any wire change shows up
-    // as a diff of `crates/horizon-agent/schema/agent-wire.json`
-    // (drift-enforced by this crate's `tests/wire_schema.rs`, and
-    // narrated by `AGENT_PROTOCOL_VERSION`'s own doc comment, where the
-    // v1-v18 bump history those tests carried now lives), and
-    // `scripts/check-wire-schema.sh` fails any non-additive change that
-    // doesn't bump `AGENT_PROTOCOL_VERSION` alongside it.
 
     #[test]
     fn agent_wire_event_round_trips_each_variant() {

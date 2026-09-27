@@ -5,10 +5,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use horizon_agent::contract::SessionId;
-use horizon_agent::persistence::event_log::WriterHandle;
-use horizon_agent::wire::{
+use horizon_agent::hosting::{
     HostToolRequest, HostToolResponse, ModelSelection, ProviderSummary, SessionNew, SessionSummary,
 };
+use horizon_agent::persistence::event_log::WriterHandle;
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::spawn::spawn_session_thread;
@@ -93,7 +93,7 @@ impl Connection {
     }
 
     /// A provider's own live model-id listing for the picker's discovery
-    /// (`SessionHub::list_provider_models`), fetched by the entry's own
+    /// (`_horizon/list_provider_models`), fetched by the entry's own
     /// resolved base URL and key. An unknown provider, an unavailable entry,
     /// or an endpoint that answers nothing yields an empty list — discovery
     /// augments the picker, it never blocks a pick.
@@ -148,7 +148,7 @@ impl Connection {
     }
 
     /// Installs the current connection's host-tool bridge (the local half
-    /// behind `HubHello::host_tools`) — the connection-global counterpart
+    /// behind `_horizon/host_tool`) — the connection-global counterpart
     /// of the per-attachment subscriptions installed by [`Self::attach`].
     pub(crate) fn connect_host_tools(&self, outgoing: UnboundedSender<HostToolRequest>) {
         *self.state.host_tools_outgoing.lock().unwrap() = Some(outgoing);
@@ -169,7 +169,7 @@ impl Connection {
     pub(crate) fn subscribe_agent(
         &self,
         session_id: SessionId,
-    ) -> tokio::sync::mpsc::Receiver<horizon_agent::wire::AgentWireEvent> {
+    ) -> tokio::sync::mpsc::Receiver<horizon_agent::hosting::AgentWireEvent> {
         super::attachment::subscribe(&self.state, session_id)
     }
 
@@ -231,8 +231,8 @@ impl Connection {
         self.state.wait_until_resume_ready().await;
     }
 
-    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see the hub's
-    /// `hello` (`crate::hub`), which waits for [`Self::wait_until_resume_ready`]
+    /// Delegates to [`AgentdState::skipped_lines_summary`] -- see
+    /// `initialize` (`crate::hub`), which waits for [`Self::wait_until_resume_ready`]
     /// first so this always reflects the finished startup read.
     pub(crate) fn skipped_lines_summary(&self) -> Option<String> {
         self.state.skipped_lines_summary()

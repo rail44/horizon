@@ -9,11 +9,11 @@ use horizon_agent::contract::{
     Error as AgentError, Event, ProviderEvent, ProviderId, SessionId, SessionState, TurnEndReason,
 };
 use horizon_agent::frame::{AgentFrame, AgentFrameItem};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::Appender;
 use horizon_agent::roles::RoleId;
 use horizon_agent::runtime_panic::{catch_runtime_panic, PanicLocation, PanicReport};
-use horizon_agent::wire::AgentWireEvent;
 
 use super::events::{apply_and_send_session_events, send_session_event};
 use super::resume::session_is_dead;

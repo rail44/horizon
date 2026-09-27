@@ -37,13 +37,11 @@ use crate::{TerminalCommand, TerminalFrame, TerminalSpawnSpec, TerminalSummary, 
 /// terminal-side bumps (v5's owned colors, v7's frame styles/selection/
 /// cursor shape, v8's `SetColorScheme`, v9's dropped `TerminalFrame.text`,
 /// v11's snapshot-valued frame path, v12's scrollback windowing, v13's
-/// structured input, v17's carve-out of this very trait) — is recorded once,
-/// whole, on `horizon_agent::wire::AGENT_PROTOCOL_VERSION`. It is not
-/// duplicated or divided here: several of those bumps were terminal changes
-/// that moved the *shared* number, so splitting the narrative by domain
-/// would rewrite what happened. From 18 on the two constants move
-/// independently, and only genuinely terminal-side history will be recorded
-/// here.
+/// structured input, v17's carve-out of this very trait) — was recorded on
+/// the agent hub's `AGENT_PROTOCOL_VERSION`, which the ACP cutover retired
+/// (`docs/acp-agentd-design.md`; the text survives in the history of
+/// `crates/horizon-agent/src/wire/hub.rs`). From 18 on this constant moves
+/// on its own, and only terminal-side history is recorded here.
 ///
 /// **This slice is append-only** (`docs/terminald-split-design.md` decision
 /// 5): `horizon-terminald` is rarely restarted
@@ -88,8 +86,7 @@ pub const MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION: u32 = 20;
 ///
 /// The range *type* is domain-free ([`VersionRange`]); which numbers go in
 /// it is not, which is why this constructor sits beside this hub's own two
-/// constants rather than on the type. `horizon_agent::wire::
-/// agent_version_range` is its agent-side twin.
+/// constants rather than on the type.
 pub fn terminal_version_range() -> VersionRange {
     VersionRange::new(
         MIN_SUPPORTED_TERMINAL_PROTOCOL_VERSION,
@@ -104,11 +101,8 @@ pub fn terminal_client_hello(binary_id: impl Into<String>) -> ClientHello {
     ClientHello::new(terminal_version_range(), binary_id)
 }
 
-/// `horizon-terminald`'s `hello` reply. Deliberately channel-free: every
-/// connection-global channel [`HubHello`] hands over belongs to the agent
-/// domain (host tools, the event log's startup diagnostic), and the
-/// terminal domain's only streams are per-attachment
-/// ([`TerminalAttachment`]).
+/// `horizon-terminald`'s `hello` reply. Channel-free: the terminal domain's
+/// only streams are per-attachment ([`TerminalAttachment`]).
 ///
 /// `binary_id` is load-bearing beyond diagnostics here — it is the terminald
 /// connection's skew insurance (`docs/terminald-split-design.md` decision
@@ -120,20 +114,14 @@ pub fn terminal_client_hello(binary_id: impl Into<String>) -> ClientHello {
 /// suggests exactly that kind of skew, so the failure surfaces as a clean
 /// refusal pointing at `Reload Terminal Runtime` rather than as silent
 /// misbehavior.
-//
-// The `[`HubHello`]` link above dangles on purpose: that type is
-// `horizon-agent`'s, a crate this one must never depend on. The wording is
-// pinned byte-for-byte by the committed wire-schema artifact (it is this
-// type's `description`), so it stays exactly as written — the same rule
-// `horizon_wire::negotiate` records for its own types.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalHubHello {
-    /// The highest mutually supported version (see [`HubHello::negotiated`]).
+    /// The highest mutually supported version.
     pub negotiated: u32,
     pub binary_id: String,
 }
 
-/// What [`SessionHub::create_terminal`]/[`SessionHub::attach_terminal`]
+/// What [`TerminalHub::create_terminal`]/[`TerminalHub::attach_terminal`]
 /// hand back: the session's live channels. Since wire v11
 /// (`docs/remoc-adoption-design.md` §5 Option A) frame delivery is a
 /// snapshot-valued signal — `frames` is an `rch::watch<TerminalFrame>`
@@ -143,10 +131,6 @@ pub struct TerminalHubHello {
 /// row-change detection moved to the client (a `TerminalLine` comparison of
 /// consecutive frames). `events` carries everything that is *not* a frame
 /// (`TerminalUpdate`: title, bell, clipboard, exit, error).
-//
-// The `SessionHub` links above name the *pre-v17* owner of these methods
-// and are frozen for the same artifact-description reason as
-// `TerminalHubHello`'s: they live on [`TerminalHub`] now.
 #[derive(Serialize, Deserialize, JsonSchema)]
 pub struct TerminalAttachment {
     /// The snapshot-valued frame signal: every observation is a full
@@ -163,8 +147,8 @@ pub struct TerminalAttachment {
 }
 
 /// The terminal hub — `horizon-terminald`'s whole rtc surface
-/// (`docs/terminald-split-design.md` decision 1). Carved off `SessionHub`
-/// in v17 so terminal hosting lives in its own rarely-restarted process:
+/// (`docs/terminald-split-design.md` decision 1). Carved off the agent
+/// daemon's hub in v17 so terminal hosting lives in its own rarely-restarted process:
 /// `Reload Agent Runtime` drains the *agent* daemon and never touches a
 /// PTY, while `Reload Terminal Runtime` is the explicit, destructive
 /// counterpart for this one.
@@ -174,12 +158,10 @@ pub struct TerminalAttachment {
 /// so a reshape is a heavy, user-visible change. New methods and new
 /// `#[serde(default)]`/`Unknown`-guarded vocabulary go on the end; a retired
 /// method becomes a tombstone that errors, never a hole. The version range
-/// [`hello`](Self::hello) negotiates still gates *behavior* the same way it
-/// does on the agent hub.
+/// [`hello`](Self::hello) negotiates gates *behavior*.
 #[rtc::remote]
 pub trait TerminalHub {
-    /// Version negotiation, identical in shape to `SessionHub::hello` —
-    /// the first call on every connection, and (with
+    /// Version negotiation — the first call on every connection, and (with
     /// [`drain`](Self::drain)) the version-stable surface a
     /// range-rejected client may still use.
     async fn hello(&self, client: ClientHello) -> Result<TerminalHubHello, HubError>;
@@ -205,9 +187,9 @@ pub trait TerminalHub {
     async fn attach_terminal(&self, session_id: Uuid) -> Result<TerminalAttachment, HubError>;
 
     /// Flush-and-exit: shuts every hosted terminal down and exits. The
-    /// destructive half of `Reload Terminal Runtime`; like
-    /// `SessionHub::drain` the call itself typically errors because the
-    /// process is gone before a reply can travel.
+    /// destructive half of `Reload Terminal Runtime`. The call itself
+    /// typically errors because the process is gone before a reply can
+    /// travel.
     async fn drain(&self) -> Result<(), HubError>;
 }
 

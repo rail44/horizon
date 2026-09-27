@@ -75,6 +75,12 @@ After step 1, iterating on agent code rebuilds only the agent crates.
 
 ## Replay and reconnect
 
+> **Note (2026-09-27):** the agent hub moved to ACP v2 on 2026-09-27
+> (`docs/acp-agentd-design.md`): the `hello` exchange below is ACP's
+> `initialize`, with the version check on `_meta.horizon.ext_version`, and
+> `session_load` is `session/resume`. remoc remains for the terminal and
+> log hubs.
+
 - **agentd start**: read the log → per session, rebuild provider history
   via the existing mapping → any turn open at the log's tail is committed
   as cancelled → ready.
@@ -89,6 +95,13 @@ After step 1, iterating on agent code rebuilds only the agent crates.
   ACP mapping, and it makes log forensics easier.
 
 ## ACP compatibility guardrails
+
+> **Note (2026-09-27):** the agent hub moved to ACP v2 on 2026-09-27
+> (`docs/acp-agentd-design.md`, decision on board #63): `horizon-agentd` no
+> longer serves a remoc hub, and its `hello` is ACP's `initialize`. remoc
+> remains for the terminal hub (`horizon-terminald`) and the log hub
+> (`horizon-logd`). `docs/acp-agentd-design.md` is the mapping table guardrail 6 asks for;
+> the guardrails below record the pre-ACP design.
 
 Adopting the Agent Client Protocol later (either direction: Horizon as ACP
 client hosting external agents, or agentd speaking ACP to other frontends)

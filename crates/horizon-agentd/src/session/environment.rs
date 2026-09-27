@@ -11,6 +11,7 @@ use super::state::{lock_unpoisoned, AgentdState};
 use crossbeam_channel::Sender;
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{Command, Event, ProviderId, SessionId};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::judge::JudgeHandle;
 use horizon_agent::live::LiveState;
 use horizon_agent::persistence::event_log::PersistedSessionContext;
@@ -20,7 +21,6 @@ use horizon_agent::tools::{
     register_exploration_host, register_session_runtime, RecallContext, SessionDomainPolicy,
     ToolCompletion, ToolSessionState,
 };
-use horizon_agent::wire::AgentWireEvent;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 

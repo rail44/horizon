@@ -1,5 +1,5 @@
 //! The **terminal** wire-schema artifact's generator and drift check — the
-//! twin of `crates/horizon-agent/tests/wire_schema.rs`, and the reason the
+//! sibling of `crates/horizon-acp/tests/wire_schema.rs`, and the reason the
 //! terminal slice's append-only discipline
 //! (`docs/terminald-split-design.md` decision 5) is diff-visible on its own.
 //! Every type that crosses `horizon-terminald`'s socket derives
@@ -7,11 +7,11 @@
 //! live types and fails on any drift from
 //! `crates/horizon-terminal-core/schema/terminal-wire.json`.
 //!
-//! To regenerate after an intentional wire change (both artifacts in one
-//! go):
+//! To regenerate after an intentional wire change (the ACP extension and
+//! terminal artifacts in one go):
 //!
 //! ```sh
-//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
 //!     -p horizon-terminal-core wire_schema
 //! ```
 //!
@@ -31,10 +31,9 @@
 //!   the v11 frame watch, `TerminalUpdate` events, `TerminalCommand`).
 //!
 //! The negotiation half (`ClientHello`, `VersionRange`, `HubError`) is
-//! `horizon-wire`'s and appears in the agent artifact too — identically, by
-//! construction: both generators share `horizon_wire::schema_check`'s
-//! sort helper, so the shared `$defs` stay byte-comparable and the two
-//! documents still reassemble into the pre-split union.
+//! `horizon-wire`'s and appears in the log artifact too — identically, by
+//! construction: the generators share `horizon_wire::schema_check`'s sort
+//! helper, so the shared `$defs` stay byte-comparable.
 
 use std::path::Path;
 
@@ -105,7 +104,7 @@ fn generate_wire_schema() -> Value {
         "title": "horizon-terminal-wire",
         "$comment": "Generated from the live wire types (the TerminalHub rtc trait and the \
                      vocabularies its channels carry). Regenerate with \
-                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
                      -p horizon-terminal-core wire_schema`; additive-vs-reshape classification \
                      of changes is scripts/check-wire-schema.sh \
                      (docs/remoc-adoption-design.md §4).",
@@ -138,14 +137,14 @@ fn committed_wire_schema_artifact_is_current() {
         panic!(
             "failed to read the committed wire-schema artifact at {}: {error}\n\
              regenerate it with: HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run \
-             -p horizon-agent -p horizon-terminal-core wire_schema",
+             -p horizon-acp -p horizon-terminal-core wire_schema",
             path.display()
         )
     });
     assert_eq!(
         committed, generated,
         "the committed terminal wire-schema artifact is stale. A wire type changed shape; \
-         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
          -p horizon-terminal-core wire_schema` and commit the artifact diff alongside the \
          change (scripts/check-wire-schema.sh classifies it as additive or reshape). \
          Remember that this slice is append-only (docs/terminald-split-design.md \

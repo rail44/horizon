@@ -101,6 +101,12 @@ transport re-swap would strand only the hub trait and channel plumbing.
 
 ## 2. Architecture
 
+> **Note (2026-09-27):** the agent hub moved to ACP v2 on 2026-09-27
+> (`docs/acp-agentd-design.md`, decision on board #63): `horizon-agentd` no
+> longer serves a remoc hub, and its `hello` is ACP's `initialize`. remoc
+> remains for the terminal hub (`horizon-terminald`) and the log hub
+> (`horizon-logd`). The text below records the design as it was.
+
 ### The hub trait
 
 One `#[rtc::remote]` trait replaces the envelope protocol. Sketch (shapes
@@ -231,6 +237,13 @@ This replaces a regime of nine bumps in two weeks (v1–v9, each a hard
 with no version event at all.
 
 ## 4. Skew discipline
+
+> **Note (2026-09-27):** since the agent hub moved to ACP v2
+> (`docs/acp-agentd-design.md`), the agent side of this discipline is the
+> `crates/horizon-acp/schema/acp-ext-wire.json` artifact, versioned by
+> `HORIZON_ACP_EXT_VERSION`; `agent-wire.json` and
+> `AGENT_PROTOCOL_VERSION` are gone. The terminal and log artifacts are
+> unchanged.
 
 Tolerant evolution only works if reshapes are actually impossible to land
 by accident. Rules, then enforcement:

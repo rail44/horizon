@@ -24,7 +24,7 @@ pub struct ContinueTurnRequest {
     pub session_id: SessionId,
 }
 
-/// Mirrors `SessionHub::list_providers` (crates/horizon-agent/src/wire/hub.rs).
+/// Lists the configured providers.
 #[derive(
     Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
 )]
@@ -36,7 +36,7 @@ pub struct ListProvidersResponse {
     pub providers: Vec<ProviderSummary>,
 }
 
-/// Mirrors `wire::ProviderSummary` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::ProviderSummary` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ProviderSummary {
     pub name: String,
@@ -48,7 +48,7 @@ pub struct ProviderSummary {
     pub default: bool,
 }
 
-/// Mirrors `SessionHub::list_provider_models` (crates/horizon-agent/src/wire/hub.rs).
+/// Lists a provider's own model ids (its `GET /models`).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(
     method = "_horizon/list_provider_models",
@@ -63,14 +63,14 @@ pub struct ListProviderModelsResponse {
     pub models: Vec<String>,
 }
 
-/// Mirrors `SessionHub::watch_board` (crates/horizon-agent/src/wire/hub.rs).
+/// Starts watching a workspace's board.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(method = "_horizon/watch_board", response = EmptyResponse)]
 pub struct WatchBoardRequest {
     pub workspace_root: PathBuf,
 }
 
-/// Mirrors `SessionHub::ensure_board_organizer` (crates/horizon-agent/src/wire/hub.rs).
+/// Starts, or finds, a workspace's board organizer session.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(
     method = "_horizon/ensure_board_organizer",
@@ -85,14 +85,14 @@ pub struct EnsureBoardOrganizerResponse {
     pub session_id: SessionId,
 }
 
-/// Mirrors `SessionHub::reload_provider_config` (crates/horizon-agent/src/wire/hub.rs).
+/// Reloads the provider configuration from the config file.
 #[derive(
     Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
 )]
 #[request(method = "_horizon/reload_provider_config", response = EmptyResponse)]
 pub struct ReloadProviderConfigRequest {}
 
-/// Mirrors `SessionHub::drain` (crates/horizon-agent/src/wire/hub.rs).
+/// Flushes the event log and exits the daemon.
 #[derive(
     Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest,
 )]
@@ -101,7 +101,7 @@ pub struct DrainRequest {}
 
 // -- agent → client request --
 
-/// Mirrors `wire::HostToolRequest` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
 #[request(method = "_horizon/host_tool", response = HostToolResponse)]
 pub struct HostToolRequest {
@@ -110,7 +110,7 @@ pub struct HostToolRequest {
     pub input: serde_json::Value,
 }
 
-/// Mirrors `wire::HostToolResponse` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::HostToolResponse` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcResponse)]
 pub struct HostToolResponse {
     pub output: serde_json::Value,
@@ -147,8 +147,8 @@ pub struct ToolCallProgressNotification {
     pub event: ToolCallProgressEvent,
 }
 
-/// Mirrors `wire::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`
-/// (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`
+/// (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolCallProgressEvent {
@@ -228,8 +228,9 @@ pub struct FoldedLogRange {
 
 /// Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,
 /// HistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),
-/// `wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)
-/// and `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).
+/// `hosting::AgentWireEvent::AttachmentClosed`
+/// (crates/horizon-agent/src/hosting.rs) and the daemon's startup
+/// event-log skipped-lines diagnostic.
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema, JsonRpcNotification)]
 #[notification(method = "_horizon/session_event")]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -268,7 +269,7 @@ pub enum SessionEventNotification {
     },
 }
 
-/// Mirrors `wire::AttachmentEnd` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::AttachmentEnd` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum AttachmentEnd {

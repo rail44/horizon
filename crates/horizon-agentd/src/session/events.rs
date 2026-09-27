@@ -4,8 +4,8 @@
 //! on it.
 
 use horizon_agent::contract::{Event, SessionId};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
-use horizon_agent::wire::AgentWireEvent;
 
 use super::state::{lock_unpoisoned, AgentdState};
 

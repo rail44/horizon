@@ -23,12 +23,6 @@ tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-
 uuid = { version = "1.18", features = ["v4"] }
 
 [dev-dependencies]
-# `tests/e2e.rs` alone: the terminald split's acceptance property is that
-# draining `horizon-agentd` leaves this daemon's PTYs alive, and proving it
-# means driving a *real* agentd -- which needs the agent hub client. The
-# shipped `horizon-terminald` binary links none of it (`cargo tree
-# -p horizon-terminald -e normal` has no agent crate and no duckdb).
-horizon-agent = { path = "../horizon-agent" }
 # The shared daemon-process helpers both test binaries here use. Crucially it
 # also owns `horizon-agentd`'s hermetic-spawn contract, so the acceptance
 # test's agentd is spawned by the same definition agentd's own suite uses

@@ -207,7 +207,7 @@ impl AgentdHandle {
     /// enqueue onto the op queue meanwhile; once the hub is live each op
     /// is *dispatched* in queue order but *executed* on its own task, so
     /// there is no cross-op completion-order guarantee — a slow
-    /// `new_agent` does not delay a `list_agents` behind it, and two lists
+    /// `session/new` does not delay a `session/list` behind it, and two lists
     /// may complete in either order. Per-session ordering is carried by
     /// each attachment's own channels, not the op queue.
     pub(crate) fn start(

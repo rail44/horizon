@@ -153,7 +153,7 @@
       "type": "object"
     },
     "AttachmentEnd": {
-      "description": "Mirrors `wire::AttachmentEnd` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::AttachmentEnd` (crates/horizon-agent/src/hosting.rs).",
       "enum": [
         "replaced",
         "lagged",
@@ -175,7 +175,7 @@
       "type": "object"
     },
     "DrainRequest": {
-      "description": "Mirrors `SessionHub::drain` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Flushes the event log and exits the daemon.",
       "type": "object"
     },
     "EmptyResponse": {
@@ -183,7 +183,7 @@
       "type": "object"
     },
     "EnsureBoardOrganizerRequest": {
-      "description": "Mirrors `SessionHub::ensure_board_organizer` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Starts, or finds, a workspace's board organizer session.",
       "properties": {
         "workspace_root": {
           "type": "string"
@@ -285,7 +285,7 @@
       "type": "object"
     },
     "HostToolRequest": {
-      "description": "Mirrors `wire::HostToolRequest` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::HostToolRequest` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
         "input": true,
         "request_id": {
@@ -303,7 +303,7 @@
       "type": "object"
     },
     "HostToolResponse": {
-      "description": "Mirrors `wire::HostToolResponse` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::HostToolResponse` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
         "output": true
       },
@@ -367,7 +367,7 @@
       "type": "object"
     },
     "ListProviderModelsRequest": {
-      "description": "Mirrors `SessionHub::list_provider_models` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Lists a provider's own model ids (its `GET /models`).",
       "properties": {
         "provider": {
           "type": "string"
@@ -393,7 +393,7 @@
       "type": "object"
     },
     "ListProvidersRequest": {
-      "description": "Mirrors `SessionHub::list_providers` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Lists the configured providers.",
       "type": "object"
     },
     "ListProvidersResponse": {
@@ -624,7 +624,7 @@
       "type": "object"
     },
     "ProviderSummary": {
-      "description": "Mirrors `wire::ProviderSummary` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::ProviderSummary` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
         "api_key_env": {
           "description": "The environment variable name the entry's API key is read from.",
@@ -661,11 +661,11 @@
       "type": "object"
     },
     "ReloadProviderConfigRequest": {
-      "description": "Mirrors `SessionHub::reload_provider_config` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Reloads the provider configuration from the config file.",
       "type": "object"
     },
     "SessionEventNotification": {
-      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),\n`wire::AgentWireEvent::AttachmentClosed` (crates/horizon-agent/src/wire.rs)\nand `HubHello::skipped_lines` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Mirrors `contract::Event::{SessionResumed, ProviderRateLimited,\nHistoryCleared, Error, Exited}` (crates/horizon-agent/src/contract.rs),\n`hosting::AgentWireEvent::AttachmentClosed`\n(crates/horizon-agent/src/hosting.rs) and the daemon's startup\nevent-log skipped-lines diagnostic.",
       "oneOf": [
         {
           "properties": {
@@ -836,7 +836,7 @@
       "type": "string"
     },
     "SessionInfoMeta": {
-      "description": "Mirrors `wire::SessionSummary` minus `session_id` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::SessionSummary` minus `session_id` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
         "parent_session_id": {
           "anyOf": [
@@ -870,7 +870,7 @@
       "type": "object"
     },
     "SessionNewMeta": {
-      "description": "Mirrors `wire::SessionNew` minus `workspace_root` (crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::SessionNew` minus `workspace_root` (crates/horizon-agent/src/hosting.rs).",
       "properties": {
         "isolate": {
           "type": "boolean"
@@ -1005,7 +1005,7 @@
       "type": "object"
     },
     "ToolCallProgressNotification": {
-      "description": "Mirrors `wire::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`\n(crates/horizon-agent/src/wire.rs).",
+      "description": "Mirrors `hosting::AgentWireEvent::{ToolCallProgress, ToolCallProgressClosed}`\n(crates/horizon-agent/src/hosting.rs).",
       "oneOf": [
         {
           "description": "Mirrors `contract::ToolCallProgress` (crates/horizon-agent/src/contract.rs).",
@@ -1156,7 +1156,7 @@
       "type": "object"
     },
     "WatchBoardRequest": {
-      "description": "Mirrors `SessionHub::watch_board` (crates/horizon-agent/src/wire/hub.rs).",
+      "description": "Starts watching a workspace's board.",
       "properties": {
         "workspace_root": {
           "type": "string"

@@ -8,7 +8,7 @@ use agent_client_protocol::schema::v2;
 use agent_client_protocol::{Client, Responder, V2ConnectionTo};
 use horizon_acp as acp;
 use horizon_agent::contract::{ApprovalRequest, Command, SessionId};
-use horizon_agent::wire::{AgentWireEvent, AttachmentEnd};
+use horizon_agent::hosting::{AgentWireEvent, AttachmentEnd};
 use tokio::sync::{mpsc, oneshot};
 
 use super::mapping::{self, horizon_meta, Mapper, Outgoing};

@@ -18,7 +18,7 @@ use horizon_acp as acp;
 use horizon_agent::contract::{
     self, ApprovalRequest, Event, MessageRole, SessionId, SessionState, TurnEndReason,
 };
-use horizon_agent::wire::{AgentWireEvent, ModelSelection};
+use horizon_agent::hosting::{AgentWireEvent, ModelSelection};
 
 /// Everything one mapped event can put on the connection.
 #[derive(Debug)]

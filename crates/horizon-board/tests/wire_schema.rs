@@ -1,5 +1,5 @@
 //! The **log** wire-schema artifact's generator and drift check — the third
-//! sibling of `crates/horizon-agent/tests/wire_schema.rs` and
+//! sibling of `crates/horizon-acp/tests/wire_schema.rs` and
 //! `crates/horizon-terminal-core/tests/wire_schema.rs`. Every type that
 //! crosses `horizon-logd`'s socket derives `schemars::JsonSchema`; this test
 //! regenerates the document from those live types and fails on any drift from
@@ -9,7 +9,7 @@
 //! go):
 //!
 //! ```sh
-//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+//! HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
 //!     -p horizon-terminal-core -p horizon-board wire_schema
 //! ```
 
@@ -66,7 +66,7 @@ fn generate_wire_schema() -> Value {
         "title": "horizon-log-wire",
         "$comment": "Generated from the live wire types (the LogHub rtc trait and the \
                      IngestRequest/IngestReply vocabularies). Regenerate with \
-                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+                     `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
                      -p horizon-terminal-core -p horizon-board wire_schema`; \
                      additive-vs-reshape classification of changes is \
                      scripts/check-wire-schema.sh (docs/remoc-adoption-design.md §4).",
@@ -94,14 +94,14 @@ fn committed_wire_schema_artifact_is_current() {
         panic!(
             "failed to read the committed wire-schema artifact at {}: {error}\n\
              regenerate it with: HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run \
-             -p horizon-agent -p horizon-terminal-core -p horizon-board wire_schema",
+             -p horizon-acp -p horizon-terminal-core -p horizon-board wire_schema",
             path.display()
         )
     });
     assert_eq!(
         committed, generated,
         "the committed log wire-schema artifact is stale. A wire type changed shape; \
-         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent \
+         regenerate with `HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp \
          -p horizon-terminal-core -p horizon-board wire_schema` and commit the artifact \
          diff alongside the change (scripts/check-wire-schema.sh classifies it as \
          additive or reshape)."

@@ -124,7 +124,7 @@ fn spawn_agentd_at(socket_path: PathBuf, event_log_path: PathBuf) -> AgentdProce
 /// Same as [`spawn_agentd_at`], but additionally sets `horizon-agentd`'s
 /// test-only [`TEST_RESUME_DELAY_MS_VAR`] hook -- for the bind-first
 /// ordering test, which needs the log-read-plus-resume phase to take long
-/// enough that hello answering before it finishes (and `session_list`
+/// enough that `initialize` answering before it finishes (and `session_list`
 /// waiting for it) is provably a consequence of the ordering fix, not
 /// incidental timing.
 fn spawn_agentd_with_resume_delay(
@@ -144,7 +144,7 @@ fn spawn_agentd_with_resume_delay(
 /// Same as [`spawn_agentd_at`], but additionally sets `horizon-agentd`'s
 /// test-only [`TEST_DUCKDB_REBUILD_DELAY_MS_VAR`] hook -- for proving the
 /// DuckDB rebuild (task 1 of the readiness fix) no longer sits on the
-/// resume-readiness path `hello`/`session_list` block on.
+/// resume-readiness path `session_list` blocks on.
 fn spawn_agentd_with_duckdb_rebuild_delay(
     socket_path: PathBuf,
     event_log_path: PathBuf,

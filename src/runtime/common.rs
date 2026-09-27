@@ -8,8 +8,9 @@
 //! op queue, and [`RuntimeControl`] — so that draining one leaves the other
 //! untouched. Everything in this module is deliberately domain-free: the
 //! agent-specific and terminal-specific halves live in [`super::agent`]
-//! and [`super::terminal`] respectively, because their op vocabularies,
-//! their `hello` replies, and what a drain costs genuinely differ (agentd's
+//! and [`super::terminal`] respectively, because their protocols (ACP v2
+//! for agentd, a remoc hub for terminald), their handshakes, and what a
+//! drain costs genuinely differ (agentd's
 //! drain kills nothing; terminald's kills every PTY, which is also why only
 //! terminald carries the below-schema skew insurance).
 
@@ -24,14 +25,15 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Notify;
 use tokio::task::JoinHandle;
 
-/// The bound on the whole remoc establishment sequence — chmux handshake,
-/// base-channel handover, and the `hello` rtc call. A healthy daemon
-/// completes it in milliseconds; what this bounds is the *cross-generation*
-/// case (`docs/remoc-adoption-design.md` §6): a still-running JSONL
-/// daemon blocks in `read_line` waiting for a newline our chmux hello
-/// never contains (measured — the v9 pre-hello loop is *silent* against
-/// chmux bytes), so it presents as this timeout — never chmux's own raw
-/// 60 s `ChMux(Timeout)`.
+/// The bound on the whole establishment sequence — for terminald the chmux
+/// handshake, base-channel handover, and the `hello` rtc call; for agentd
+/// the ACP `initialize`. A healthy daemon completes it in milliseconds;
+/// what this bounds is the *cross-generation* case
+/// (`docs/remoc-adoption-design.md` §6): a still-running JSONL daemon
+/// blocks in `read_line` waiting for a newline our chmux hello never
+/// contains (measured — the v9 pre-hello loop is *silent* against chmux
+/// bytes), so it presents as this timeout — never chmux's own raw 60 s
+/// `ChMux(Timeout)`.
 const ESTABLISH_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Test-only override for [`ESTABLISH_TIMEOUT`]
@@ -56,10 +58,11 @@ pub(super) fn establish_timeout() -> Duration {
 /// persistence is the signal.
 pub(super) const SILENCE_MISMATCH_THRESHOLD: u32 = 3;
 
-/// Deadline for one established-phase rtc call (`list_terminals`,
-/// `list_agents`, `attach_terminal`, `attach_agent`, `new_agent`). Not
-/// tight on purpose: `list_agents`/`new_agent`/`attach_agent` legitimately
-/// block on the daemon's resume-readiness gate (a large event log takes
+/// Deadline for one established-phase call (terminald's `list_terminals`,
+/// `attach_terminal`; agentd's `session/list`, `session/new`,
+/// `session/resume`, and `_horizon/*` requests). Not tight on purpose:
+/// agentd's session calls legitimately block on the daemon's
+/// resume-readiness gate (a large event log takes
 /// real seconds to resume), so a short deadline would misreport a healthy
 /// startup as a failure. A timeout fails only that op — the runtime and
 /// connection survive.
@@ -177,8 +180,9 @@ pub(super) enum StreamEnd {
     GenerationMismatch {
         message: String,
     },
-    /// The daemon speaks remoc and answered `hello` with an explicit
-    /// version-range rejection. Recoverable via an rtc `drain`; consumes
+    /// The daemon answered the handshake with an explicit version mismatch
+    /// (terminald's `hello` range rejection, agentd's `initialize`
+    /// extension-version mismatch). Recoverable via a `drain`; consumes
     /// the recovery budget.
     VersionRejected {
         message: String,

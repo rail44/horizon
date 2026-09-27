@@ -14,7 +14,7 @@
 //! points a role would need; this module is the first thing that actually
 //! populates them.
 //!
-//! [`RoleId`] is the wire/contract-level identifier (`wire::SessionNew`,
+//! [`RoleId`] is the wire/contract-level identifier (`hosting::SessionNew`,
 //! `contract::StartSession`/`Initialization`, `persistence::event_log::
 //! Record`); [`resolve`] maps it to the static [`RoleDefinition`] a
 //! provider builds its per-session config and prompt from
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 
 /// The wire/contract-level role identifier -- a `String` newtype in the
 /// same style as [`crate::contract::ProviderId`], so it round-trips through
-/// JSON (`wire::SessionNew`/`SessionSummary`) and the persisted event log
+/// JSON (`hosting::SessionNew`/`SessionSummary`) and the persisted event log
 /// (`persistence::event_log::Record`) unchanged.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct RoleId(pub String);

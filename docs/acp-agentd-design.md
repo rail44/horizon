@@ -1,7 +1,8 @@
 # ACP をシェルと agentd の間の線にする
 
-Status: design 2026-09-27。決定の記録は board #63（本文と 2026-09-27 のコメント）。
-実装計画は `docs/acp-agentd-implementation-plan.md`。実装は未着手。
+Status: implemented 2026-09-27（統合ブランチ上。main へのマージは未了）。
+決定の記録は board #63（本文と 2026-09-27 のコメント）。実装計画は
+`docs/acp-agentd-implementation-plan.md`。外部エージェント（段 E）は未着手。
 
 ## 形
 
@@ -135,12 +136,42 @@ ACP に居場所が無い。線を越える必要があるかどうかの選別�
 - **daemon と一接続多セッション。** 仕様の記述は stdio の子プロセス前提
   だが、crate は任意のバイトストリームを受け、sessionId で多重化できる。
   agentd の Unix socket 上で動かすのは実装の自由。
-- **版管理。** 今の lockstep（`AGENT_PROTOCOL_VERSION`）は `initialize` の
-  `_meta` に載せる。`docs/agent-runtime-split-design.md` が hello の版
+- **版管理。** lockstep の版（`HORIZON_ACP_EXT_VERSION`、旧
+  `AGENT_PROTOCOL_VERSION` の後継）は `initialize` の `_meta` に載せる。`docs/agent-runtime-split-design.md` が hello の版
   チェックを wire から分けた理由がここ。
 - **wire skew checker。** `crates/horizon-agent/schema/agent-wire.json` と
   `scripts/check-wire-schema.sh` の agent 側は、ACP 拡張のスキーマ管理に
   置き換わる。
+
+## 実装での確定事項
+
+- `initialize` は拡張版が違っても成功する。応答の `_meta.horizon` に
+  daemon 側の `ext_version` と `binary_id` が載る。版が違う接続では、
+  daemon は `_horizon/drain` 以外の要求を拒否する。シェルは応答の版を見て
+  不一致なら `_horizon/drain` を送り、runtime ごとに一度 respawn する。
+- ACP の `toolCallId` は occurrence id。`call_id` は `tool_call_update` の
+  `_meta.horizon` に載る。
+- messageId はセッションごとの連番で `msg-{n}`（ユーザー・アシスタントの
+  メッセージ）と `thought-{n}`（それに伴う reasoning）。連番は
+  `MessageCommitted` と `ToolCallRequested` で進み、再生でも同じ値になる。
+- `session/request_permission` の選択肢は `ApprovalKind` によらず常に
+  `approve` と `deny` の二つ。種類ごとの内容は `_meta.horizon` の
+  `ApprovalMeta` に載る。
+- シェルのセッションが送る command は `Prompt`、`Cancel`、`Approve`、
+  `Deny`、`ContinueTurn`、`Close` の六つ。モデル切替はセッションの
+  command ではなく、接続上の `session/set_config_option`。
+- `tool_call_update` の `_meta.horizon.human_decision` が
+  `ApprovalResolved` を運ぶ。再生でも人の承認・拒否の印が残る。
+- `ProviderRequestUsage` は線を越えない。`usage_update` は送らない。
+- `_horizon/session_event` は一本の通知で、`SessionResumed`、
+  `ProviderRateLimited`、`HistoryCleared`、`AttachmentClosed`、`Error`、
+  `Exited`、`SkippedLines` の種類を持つ。
+- 拡張語彙のスキーマは `crates/horizon-acp/schema/acp-ext-wire.json`。
+  remoc の agent hub（`SessionHub`、`AGENT_PROTOCOL_VERSION`、
+  `agent-wire.json`）は削除した。agentd 内部のセッションと接続の間の
+  語彙は `horizon_agent::hosting`。
+- remoc を話す旧 `horizon-agentd` は ACP のシェルから drain できない。
+  切り替え後の最初の起動の前に手で止める（AGENTS.md）。
 
 ## 関連
 

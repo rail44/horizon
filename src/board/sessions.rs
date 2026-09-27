@@ -8,8 +8,8 @@
 
 use std::collections::HashMap;
 
-use gpui::{App, Context, Entity, Subscription, WeakEntity};
 use crate::agent::model::SessionStatus;
+use gpui::{App, Context, Entity, Subscription, WeakEntity};
 use horizon_workspace::SessionId;
 
 use super::activity::BoardSessionActivity;

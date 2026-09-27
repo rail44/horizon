@@ -431,7 +431,7 @@ impl MoaTable {
 }
 
 /// The reserved selection-group name MoA entries are offered (and selected)
-/// under — `list_providers` reports one [`crate::wire::ProviderSummary`]
+/// under — `list_providers` reports one [`crate::hosting::ProviderSummary`]
 /// with this name whose "models" are the `[[moa]]` entry names, and
 /// `set_session_model` resolves this `provider` against [`MoaTable`] rather
 /// than [`ProvidersTable`]. Mirrors `horizon_config::MOA_PROVIDER_NAME`
@@ -543,7 +543,7 @@ impl Default for NamedProviderConfig {
 
 impl NamedProviderConfig {
     /// The provider's own live model listing (`GET {base_url}/models`), for
-    /// the picker's discovery (`SessionHub::list_provider_models`).
+    /// the picker's discovery (`_horizon/list_provider_models`).
     /// Resolves this entry the same way [`Self::resolved`] resolves its
     /// base URL and key name — the kind's env var, then the entry's
     /// `base_url`, then the kind's own default endpoint — so an Anthropic

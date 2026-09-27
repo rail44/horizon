@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use horizon_agent::config::AgentToolsConfig;
 use horizon_agent::contract::SessionId;
+use horizon_agent::hosting::{AgentWireEvent, WorkspaceRootResolved};
 use horizon_agent::tools::{RecallContext, ToolSessionBuilder};
-use horizon_agent::wire::{AgentWireEvent, WorkspaceRootResolved};
 
 use super::events::send_session_event;
 use super::state::AgentdState;
@@ -16,7 +16,7 @@ use crate::worktree;
 
 /// Builds a session's file-tool confinement root (`tools::state::
 /// ToolSessionState::workspace_root`): an explicit `workspace_root` --
-/// carried by a fresh `wire::SessionNew`, when the caller supplied one --
+/// carried by a fresh `hosting::SessionNew`, when the caller supplied one --
 /// takes precedence over `ToolSessionBuilder::for_current_dir`'s default of
 /// this process's own cwd. Resumed sessions also carry the validated root
 /// recovered from their event-log context. Pulled out of
@@ -237,7 +237,7 @@ mod tests {
     }
 
     /// `None` (today's only value Horizon actually sends -- see
-    /// `wire::SessionNew::workspace_root`'s doc comment) must keep behaving
+    /// `hosting::SessionNew::workspace_root`'s doc comment) must keep behaving
     /// exactly as before this field existed: confined to this process's own
     /// cwd.
     #[test]

@@ -1,8 +1,11 @@
 # ACP 化の実装計画
 
-Status: plan 2026-09-27、main `c96f685a` に照らして更新。設計は
+Status: 段 A〜D implemented 2026-09-27（統合ブランチ上。main へのマージは
+未了）。段 E は未着手（config の相談が先）。設計は
 `docs/acp-agentd-design.md`、決定は board #63（本文と 2026-09-27 のコメント）。
-段 A は着手済み。
+実装が計画から外れた点は `docs/acp-agentd-design.md` の「実装での確定事項」
+に記録し、下の表はそれに合わせてある。以下の「今の」は計画時点（main
+`c96f685a`）の状態を指す。
 
 ## 前提となる調査結果
 
@@ -95,7 +98,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | agent→client 通知 | `_horizon/task_progress` | `AgentWireEvent::TaskProgress` |
 | agent→client 通知 | `_horizon/tool_call_progress` | `ToolCallProgress` と `ToolCallProgressClosed` |
 | agent→client 通知 | `_horizon/memory` | `MemoryDigest` / `MemoryCheckpointMissed` |
-| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`Error`、`Exited`、`skipped_lines`、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
+| agent→client 通知 | `_horizon/session_event` | `SessionResumed`、`ProviderRateLimited`、`HistoryCleared`、`Error`、`Exited`、`SkippedLines`（旧 `HubHello::skipped_lines`）、`AttachmentClosed{Replaced/Lagged/Detached/SessionEnded}` |
 | agent→client 通知 | `_horizon/provider_request` | `ProviderRequestSent` / `FirstToken` / `Finished`（turn receipt 用） |
 
 `ReplayStarted` / `ReplayComplete` は `session/resume` の要求と応答に対応する
@@ -158,8 +161,9 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   通知する。`Lagged` を受けたシェルは `session/resume` を出し直す。
 - **`contract::Event` から v2 更新への写像**は接続側に置き、セッション単位の
   状態を持つ:
-  - messageId は再生でも同じ値になるよう `turn_id` と turn 内の序数から
-    決める。
+  - messageId は再生でも同じ値になるよう、セッションごとの連番から
+    `msg-{n}` / `thought-{n}` を作る（連番は `MessageCommitted` と
+    `ToolCallRequested` で進む）。
   - `StateChanged` と `TurnEnded` から `state_update`（running / idle+
     stop_reason / requires_action）を作る。
   - `ToolCallRequested` / `Started` / `Finished` は toolCallId =
@@ -173,8 +177,9 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   `session/request_permission` 要求になる。承認待ちごとに spawn したタスクが
   要求を送って応答を待ち、`ApproveToolCall{identity}` /
   `DenyToolCall{identity, reason}` を `dispatch_inbound_command` に渡す。
-  選択肢は `ApprovalKind` から組む（Standard は allow_once / reject_once、
-  DomainGrant は「ドメインを許可して再実行」の allow_once など）。
+  選択肢は `ApprovalKind` によらず `approve`（allow_once）と
+  `deny`（reject_once）の二つ。種類ごとの内容は `_meta.horizon` の
+  `ApprovalMeta` で運ぶ。
   **再接続時は、まだ保留中の承認を `session/resume` の応答後に再度要求する**
   （前の接続とともに要求が死ぬため）。今の無人時拒否はそのまま。
 
@@ -193,8 +198,9 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
   Ready まで待たせる今の挙動も保つ。
 - `common.rs` の remoc 形の部分（`connect_hub`、`classify_connect_error`、
   `StreamEnd`）は terminald 用に残し、agent 側は ACP 用の接続と失敗分類を
-  `agent.rs` に持つ。version 不一致の判定は `initialize` の error で行い、
-  `_horizon/drain` で古い agentd を落として respawn する今の回復を保つ。
+  `agent.rs` に持つ。version 不一致の判定は `initialize` の応答の
+  `_meta.horizon.ext_version` で行い、`_horizon/drain` で古い agentd を
+  落として respawn する回復を保つ。
 - **モデルの書き直し。** `LiveState` と `frame::fold` は `contract::Event` の
   上に書かれている。シェルは新たに `src/agent/model/` に v2 `SessionUpdate`
   と `_horizon/*` 通知を畳む fold を持ち、出力型は今の `AgentFrame` /
@@ -233,7 +239,7 @@ attach の仕組みは atomic になっている。`connection.attach(id)` が
 | `crates/horizon-terminald/tests/e2e.rs` の agentd drain | `_horizon/drain` |
 | `src/runtime/tests.rs` の `FakeSessionHub`（31 件） | crate の `Channel::duplex()` 上で偽の v2 agent を動かす |
 | `src/runtime/routing/tests.rs`（7 件）、`runtime/attachment.rs` の 2 件 | 型を差し替えて保つ |
-| `crates/horizon-agent/tests/wire_schema.rs` | `crates/horizon-acp/tests/wire_schema.rs` |
+| `crates/horizon-agent/tests/wire_schema.rs` | `crates/horizon-acp/tests/wire_schema.rs`（旧ファイルと `agent-wire.json` は削除） |
 | `crates/horizon-agent/tests/skew.rs`（Postbag） | 削除 |
 | `scripts/check-wire-schema.sh` | `agent-wire.json` の削除を RESHAPE にしない移行の腕を足す（`session-wire.json` の腕と同じ形） |
 
@@ -266,8 +272,9 @@ remoc を話す旧 `horizon-agentd` は新しいシェルから drain できな�
 
 ## 実装中に決めてよいこと
 
-- messageId の決め方（`turn_id` + 序数を既定）。
-- `_horizon/session_event` を一本にまとめるか、種類ごとに分けるか。
+- messageId の決め方（セッションごとの連番に決着）。
+- `_horizon/session_event` を一本にまとめるか、種類ごとに分けるか（一本に
+  決着）。
 - v1 の外部エージェントからの `SessionNotification` を `src/agent/model/`
   へ正規化する層の置き場（`horizon-acp` かシェル内か）。
 

@@ -38,15 +38,22 @@ explicitly destructive (every terminal session, and whatever is running in
 it, ends).
 
 **A protocol bump needs a full Horizon restart, not a runtime reload.**
-Both hubs run lockstep (`MIN_SUPPORTED == current`), so a shell built
-before the bump and a daemon built after it have no overlapping range:
-`hello` rejects the pairing, and the auto-drain-and-respawn recovery
-just respawns the same mismatched daemon. The shell reports sessions it
-created while nothing reaches the daemon — no events, no transcript,
-silent. `Reload Agent Runtime` cannot fix this because it only replaces
-the daemon side. Rebuild, then restart the app itself (hit 2026-08-03
-merging the v19 bump; diagnosed only after a standalone `horizon-agentd`
-proved the writer was healthy).
+The shell and `horizon-agentd` compare `HORIZON_ACP_EXT_VERSION`
+(`crates/horizon-acp`) in `initialize`'s `_meta.horizon`; on a mismatch
+the shell drains the daemon over `_horizon/drain` and respawns it, once
+per runtime. A shell built before an extension bump paired with a daemon
+built after it still needs a full app restart: the respawned daemon
+mismatches again. `Reload Agent Runtime` cannot fix this because it only
+replaces the daemon side. The terminal hub runs the same lockstep over
+its `hello` (`MIN_SUPPORTED == current`). Rebuild, then restart the app
+itself (hit 2026-08-03 merging the v19 bump of the former remoc agent
+hub, where the shell reported sessions it created while nothing reached
+the daemon — no events, no transcript, silent; diagnosed only after a
+standalone `horizon-agentd` proved the writer was healthy).
+
+One-time migration: a `horizon-agentd` from before the ACP cutover
+(2026-09-27, still speaking remoc) cannot be drained by an ACP shell.
+Stop it manually before the first launch of an ACP build.
 
 There is no CI. The local quality gate below is mandatory before finishing
 any work — run it yourself and make sure all five are clean:
@@ -83,17 +90,18 @@ filter string. When a run dumps many failures, parse `cargo nextest run
 reliable and cheaper.
 
 The fourth step is the wire skew checker (`docs/remoc-adoption-design.md`
-§4). There is one committed wire-schema artifact per runtime —
-`crates/horizon-agent/schema/agent-wire.json`,
+§4). There is one committed wire-schema artifact per wire —
+`crates/horizon-acp/schema/acp-ext-wire.json` (the `_horizon/*` and
+`_meta.horizon` vocabulary on the ACP line to `horizon-agentd`),
 `crates/horizon-terminal-core/schema/terminal-wire.json`, and
-`crates/horizon-board/schema/log-wire.json`, each with its own version pair,
-so an agent-side bump no longer drains `horizon-terminald`'s PTYs — and the
+`crates/horizon-board/schema/log-wire.json`, each with its own version,
+so an agent-side bump never drains `horizon-terminald`'s PTYs — and the
 checker diffs each against the merge-base's copy, failing on
-any non-additive change that doesn't bump that hub's protocol version
-(`AGENT_PROTOCOL_VERSION` / `TERMINAL_PROTOCOL_VERSION` /
+any non-additive change that doesn't bump that wire's version
+(`HORIZON_ACP_EXT_VERSION` / `TERMINAL_PROTOCOL_VERSION` /
 `LOG_PROTOCOL_VERSION`) with it. If you changed a wire type, regenerate
 the artifacts first:
-`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-agent
+`HORIZON_BLESS_WIRE_SCHEMA=1 cargo nextest run -p horizon-acp
 -p horizon-terminal-core -p horizon-board wire_schema` (a stale artifact
 is itself a red nextest test).
 
@@ -238,7 +246,7 @@ re-reads the file and applies `[theme]` (chrome, `[theme.ansi]`, and the
 derived terminal colors), `[keybindings]` (built-in defaults plus every
 chord/command override, unbinding whatever the previous apply's chords
 were first — see `workspace::apply_bindings`), and provider configuration.
-The shell updates future title calls; `reload_provider_config` pushes the
+The shell updates future title calls; `_horizon/reload_provider_config` pushes the
 provider reload to `horizon-agentd` without respawning it. New sessions use the
 new conversation and judge settings. Existing sessions retain their judge
 connection; explicit model switching resolves the latest conversation catalog.
@@ -274,6 +282,11 @@ distinct from `HORIZON_GPUI_DRIVE`, which bypasses that pipeline entirely
 check: it creates two terminal tabs plus a split, restarts the UI against the
 same agentd and persisted workspace, and verifies stable session ids,
 layout, and a restored terminal frame.
+
+`scripts/check-acp-agent-flow.sh` is the isolated agent-flow check on
+the local mock provider `scripts/mock-openai-provider.py`: one plain turn,
+one approval round trip through the shell, and a UI restart that resumes
+the agent session and runs a further turn.
 
 A view under development can be checked before it is merged: register a
 named preview with sample data, build `preview-plugin/`, and run
@@ -312,9 +325,10 @@ The shell is GPUI-based (the Floem shell retired at tag
   tree, session attachments, operations/queries, mode state, spatial
   navigation, the pure command model, and the `workspace.snapshot`
   payload — is `crates/horizon-workspace`.
-- `runtime/` — the shell's two eager runtime clients (`agent.rs` for
-  `horizon-agentd`, `terminal.rs` for `horizon-terminald`, over the
-  shared machinery in `common.rs`), each with its own connection, op
+- `runtime/` — the shell's two eager runtime clients (`agent.rs`, the
+  ACP v2 client of `horizon-agentd`; `terminal.rs`, the remoc client of
+  `horizon-terminald` over the connect machinery in `common.rs`, which
+  also holds what both share), each with its own connection, op
   queue, and route table: non-blocking connect/spawn, per-domain routing,
   and explicit per-daemon drain. See `docs/terminald-split-design.md` for why reloading
   one must not disturb the other. `link.rs` and `notify.rs` are the same
@@ -330,10 +344,13 @@ The shell is GPUI-based (the Floem shell retired at tag
   `docs/session-daemon-design.md` and `docs/terminald-split-design.md`;
   print the kitty conformance matrix with `cargo test -p
   horizon-terminal-core print_compliance_matrix -- --nocapture`.
-- `agent/` — the agent pane: per-session model entities (`session.rs`, folding
-  events through the shared `LiveState`), and the view (Markdown transcript, composer,
-  approvals). Contract/providers/tools/persistence live in
-  `crates/horizon-agent`, hosted by `crates/horizon-agentd` — see
+- `agent/` — the agent pane: per-session model entities (`session.rs`),
+  `model/` (the fold from ACP session updates and `_horizon/*`
+  notifications to the pane's frame), and the view (Markdown transcript,
+  composer, approvals). Contract/providers/tools/persistence live in
+  `crates/horizon-agent`, hosted by `crates/horizon-agentd`; the
+  `_horizon/*` and `_meta.horizon` vocabulary shared by the shell and the
+  daemon is `crates/horizon-acp` — see `docs/acp-agentd-design.md` and
   `docs/agent-runtime-split-design.md`.
 - `board/` — the task board as two session-less views: `list.rs` (the
   rank-ordered task tree) and `thread.rs` (one task's posts), each taking

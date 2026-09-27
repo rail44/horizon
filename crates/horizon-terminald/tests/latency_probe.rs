@@ -67,7 +67,7 @@ fn spawn_terminald() -> DaemonProcess {
     DaemonProcess::spawn(&mut command, socket_path)
 }
 
-/// A connected `SessionHub` client over the real socket, plus the chmux
+/// A connected `TerminalHub` client over the real socket, plus the chmux
 /// mux task (aborted on drop). The v10 successor of the JSONL
 /// connect-and-handshake this probe used to open by hand.
 struct HubClient {

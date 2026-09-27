@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use horizon_agent::config::AgentConfig;
 use horizon_agent::contract::{ApprovalKind, ApprovalRequest, Event, ToolCallId};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::persistence::projection::duckdb::SharedDuckdbStore;
 use horizon_agent::registry::ProviderRegistry;
 use horizon_agent::tools::ApprovalCandidate;
-use horizon_agent::wire::AgentWireEvent;
 
 use super::state::AgentdState;
 

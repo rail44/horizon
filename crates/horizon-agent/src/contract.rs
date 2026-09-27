@@ -790,13 +790,11 @@ pub struct MessageDelta {
 ///   persisted event-log format is unchanged by the v10 cutover
 ///   (`docs/remoc-adoption-design.md` §6: on-disk format out of scope) and
 ///   every pre-v10 log line still decodes.
-/// - **Binary formats** (the v10 Postbag wire) carry it as its JSON *text*
-///   in one string. `serde_json::Value`'s own `Deserialize` is built on
-///   serde's `deserialize_any`, which only a self-describing format can
-///   answer — Postbag rejects it outright (`DeserializeAnyUnsupported`),
-///   so a raw `Value` cannot cross the v10 wire at all. Tool I/O is
-///   control-plane traffic; the double encode is an accepted cost for
-///   keeping the single pinned Postbag codec.
+/// - **Binary formats** carry it as its JSON *text* in one string, since
+///   `serde_json::Value`'s own `Deserialize` is built on serde's
+///   `deserialize_any`, which only a self-describing format can answer.
+///   No binary format carries it since the agent hub moved to ACP
+///   (`docs/acp-agentd-design.md`).
 ///
 /// `Deref`s to the inner [`serde_json::Value`] (reads like `.get(..)` and
 /// indexing keep their shape); construct via `From<serde_json::Value>`,
@@ -1157,8 +1155,7 @@ mod json_value_tests {
     /// under serde_json the wrapper is *transparent* — byte-identical to a
     /// plain `serde_json::Value` field — so the event log's on-disk JSONL
     /// format is unchanged by the v10 cutover and pre-v10 log lines still
-    /// decode. (The binary-wire path is proven under the actual Postbag
-    /// codec in this crate's `tests/skew.rs`.)
+    /// decode.
     #[test]
     fn json_value_is_transparent_under_serde_json() {
         let inner = serde_json::json!({"path": "a.txt", "nested": [1, 2, {"k": true}]});

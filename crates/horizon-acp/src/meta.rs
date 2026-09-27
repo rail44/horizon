@@ -73,7 +73,7 @@ pub struct InitializeMeta {
     pub binary_id: String,
 }
 
-/// Mirrors `wire::SessionNew` minus `workspace_root` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::SessionNew` minus `workspace_root` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionNewMeta {
     pub session_id: SessionId,
@@ -83,7 +83,7 @@ pub struct SessionNewMeta {
     pub spawn_source_session_id: Option<SessionId>,
 }
 
-/// Mirrors `wire::SessionSummary` minus `session_id` (crates/horizon-agent/src/wire.rs).
+/// Mirrors `hosting::SessionSummary` minus `session_id` (crates/horizon-agent/src/hosting.rs).
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct SessionInfoMeta {
     pub workspace_root: Option<PathBuf>,

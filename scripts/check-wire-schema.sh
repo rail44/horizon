@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
 # Merge-time skew-discipline check for the wire-schema artifacts
 # (docs/remoc-adoption-design.md §4 rule 3, second half). The nextest drift
-# tests (crates/horizon-agent/tests/wire_schema.rs,
-# crates/horizon-terminal-core/tests/wire_schema.rs) already guarantee each
+# tests (crates/horizon-acp/tests/wire_schema.rs,
+# crates/horizon-terminal-core/tests/wire_schema.rs,
+# crates/horizon-board/tests/wire_schema.rs) already guarantee each
 # committed artifact matches its live wire types; this script compares them
 # against the merge-base's copies and fails if any change is a *reshape*
 # (removed/renamed/reordered/retyped, or newly required) rather than
 # additive (new optional field, appended variant, new definition) -- unless
-# the same change bumps that hub's protocol version, which the artifact
-# embeds as x-session-protocol-version. Classification lives in
+# the same change bumps that wire's version, which the artifact embeds as
+# x-session-protocol-version. Classification lives in
 # horizon_wire::schema_check; this wrapper only supplies git plumbing.
 # Runs from hooks/pre-commit.
 #
-# There is one artifact per runtime (docs/runtime-crate-alignment-design.md
-# phase 2): each hub carries its own version pair, so an agent-side bump no
-# longer drains horizon-terminald's PTYs. The set is *discovered*, not
+# There is one artifact per wire: the ACP extension vocabulary between the
+# shell and horizon-agentd (acp-ext, versioned by HORIZON_ACP_EXT_VERSION),
+# the terminal hub (terminal), and the log hub (log). Each carries its own
+# version, so an agent-side bump never drains horizon-terminald's PTYs.
+# The set is *discovered*, not
 # listed, so a third runtime (the WASM plugin view is the expected next
 # one) cannot slip past this check by being unknown to the script.
 #
@@ -25,10 +28,13 @@
 # Every discovered artifact lands in exactly one of four buckets, none of
 # them silent: present on both sides (classified, or reported unchanged),
 # new on this branch (reported as having no predecessor to diff), gone from
-# this branch (an error -- deleting a wire is not an additive change), or,
-# for a merge-base that predates the artifact split, the transition arm
-# below, which reassembles this tree's artifacts into the old union
-# `session-wire.json` and classifies *that* rather than skipping.
+# this branch (an error -- deleting a wire is not an additive change), or
+# one of two transition arms: for a merge-base that predates the artifact
+# split, the arm below that reassembles this tree's artifacts into the old
+# union `session-wire.json` and classifies *that* rather than skipping; and
+# for a merge-base that still has the remoc agent hub's `agent-wire.json`,
+# the arm that reports its retirement, provided its successor `acp-ext`
+# artifact is present (docs/acp-agentd-design.md).
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -38,6 +44,10 @@ artifact_pattern='^crates/[^/]+/schema/[^/]+-wire\.json$'
 # merge-base. It matches the pattern too, so it is special-cased only when
 # this tree no longer has it (i.e. the split happened on this branch).
 union_artifact="crates/horizon-session-protocol/schema/session-wire.json"
+# The remoc agent hub's artifact, retired by the ACP cutover, and the
+# artifact of the wire that replaced it.
+retired_agent_artifact="crates/horizon-agent/schema/agent-wire.json"
+acp_ext_artifact="crates/horizon-acp/schema/acp-ext-wire.json"
 # The ref additive-only evolution is measured against; override for a PR
 # stacked on another branch, e.g. WIRE_SCHEMA_BASE=origin/feature.
 base_ref="${WIRE_SCHEMA_BASE:-origin/main}"
@@ -94,9 +104,19 @@ status=0
 
 # An artifact the merge-base had and this tree does not is a removal, which
 # is never additive. The union artifact is exempt: losing it *is* the
-# artifact split, handled by the transition arm below.
+# artifact split, handled by the transition arm below. So is the retired
+# agent artifact while its ACP successor is present.
 for artifact in ${base_artifacts[@]+"${base_artifacts[@]}"}; do
   if [ "$artifact" = "$union_artifact" ] || [ -f "$artifact" ]; then
+    continue
+  fi
+  if [ "$artifact" = "$retired_agent_artifact" ]; then
+    if [ -f "$acp_ext_artifact" ]; then
+      echo "wire-schema: agent artifact retired since merge-base; the agent hub is ACP v2 now ($acp_ext_artifact)"
+      continue
+    fi
+    echo "RESHAPE:  $artifact is gone from this tree and its successor $acp_ext_artifact is missing"
+    status=1
     continue
   fi
   echo "RESHAPE:  $artifact existed at merge-base $base and is gone from this tree"

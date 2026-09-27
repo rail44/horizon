@@ -16,7 +16,7 @@
 //! The skip-vs-fatal boundary differs by channel kind, and this matters for
 //! the frame path:
 //!
-//! - **`rch::mpsc`** (events, commands, tool I/O): an item that is oversized
+//! - **`rch::mpsc`** (events, commands): an item that is oversized
 //!   or undecodable is a *per-item* `recv` error the loops skip (adoption
 //!   condition 2), and the channel survives.
 //! - **`rch::watch`** (the v11 frame path): the *receive* side is equally
@@ -71,23 +71,12 @@ pub const FRAME_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
 /// would silently shrink that ceiling to a quarter.
 pub const TERMINAL_EVENT_MAX_ITEM_BYTES: usize = 4 * 1024 * 1024;
 
-/// Command-channel items (`TerminalCommand`, agent `Command`) and the
-/// JSON-payload-bearing tool exchanges (`AgentWireEvent`,
-/// `HostToolRequest`/`HostToolResponse`). Sized at 1 MiB rather than a
-/// tighter control-plane cap because these legitimately carry user-scaled
-/// data: a terminal `Paste`/`Input` is whatever the user pasted, and tool
-/// inputs/outputs (`JsonValue`) carry file contents.
+/// Command-channel items (`TerminalCommand`). Sized at 1 MiB rather than a
+/// tighter control-plane cap because a terminal `Paste`/`Input` is
+/// whatever the user pasted.
 pub const COMMAND_MAX_ITEM_BYTES: usize = 1024 * 1024;
 
-/// See [`COMMAND_MAX_ITEM_BYTES`] — the tool-I/O alias, kept separate so
-/// the two classes can diverge without a wire-wide sweep.
-pub const TOOL_IO_MAX_ITEM_BYTES: usize = 1024 * 1024;
-
-/// Small control-plane strings (the `skipped_lines` startup diagnostic).
-pub const CONTROL_MAX_ITEM_BYTES: usize = 64 * 1024;
-
-/// One rtc request (`hello`, `create_terminal(spec)`, `new_agent(new)`,
-/// ...). Requests are small structured arguments — specs, ids, version
+/// One rtc request (`hello`, `create_terminal(spec)`, ...). Requests are small structured arguments — specs, ids, version
 /// ranges — never bulk data, so exceeding this is always a bug, and the
 /// consequence is deliberately blunt: the daemon drops the oversized
 /// request per-item, the call fails when its reply channel closes, and —
@@ -97,7 +86,7 @@ pub const CONTROL_MAX_ITEM_BYTES: usize = 64 * 1024;
 /// data has its own channels with their own caps.
 pub const RTC_MAX_REQUEST_BYTES: usize = 64 * 1024;
 
-/// One rtc reply (`HubHello`, attachments, `list_*` vectors). Sized to hold
+/// One rtc reply (hello replies, attachments, `list_*` vectors). Sized to hold
 /// a terminal attachment, which is the largest reply: since v11 the
 /// attachment's frames watch **inlines its seed (the retained latest frame)
 /// into the reply** — `rch::watch::Receiver`'s serializer snapshots
@@ -140,7 +129,7 @@ pub type CappedWatchReceiver<T, const MAX_ITEM_SIZE: usize> =
 
 /// Drains one inbound `rch::mpsc` channel into `route`, forever: the
 /// receive-side loop every hub repeats for every channel a client sends
-/// *to* it (agent commands, host-tool responses, terminal commands). Spawn
+/// *to* it (terminal commands). Spawn
 /// it as a task; it returns when the channel ends.
 ///
 /// It encodes adoption condition 2's skip-vs-fatal boundary once, so no
@@ -174,10 +163,8 @@ pub async fn receive_pump<T, const BUFFER: usize, const MAX_ITEM_SIZE: usize>(
 /// The schema stand-in for a remoc channel half: on the wire it is a chmux
 /// port reference, not data, so the artifact documents it as an opaque
 /// marker. What flows *through* each channel is documented separately by
-/// the artifact's `channels` section -- one artifact per runtime crate,
-/// generated beside the hub that owns it
-/// (`crates/horizon-agent/tests/wire_schema.rs` and
-/// `crates/horizon-terminal-core/tests/wire_schema.rs`).
+/// the artifact's `channels` section, generated beside the hub that owns it
+/// (`crates/horizon-terminal-core/tests/wire_schema.rs`).
 pub fn channel_schema<T: JsonSchema>(
     generator: &mut schemars::SchemaGenerator,
 ) -> schemars::Schema {

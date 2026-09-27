@@ -7,11 +7,11 @@ use std::sync::Arc;
 use crossbeam_channel::Sender;
 
 use horizon_agent::contract::{Command, SessionId};
+use horizon_agent::hosting::AgentWireEvent;
 use horizon_agent::live::LiveState;
 use horizon_agent::tools::{
     refuse_unattended, resolve_auto_approval, JudgeDecision, ToolCompletion, ToolUpdate,
 };
-use horizon_agent::wire::AgentWireEvent;
 
 use super::approval::{emit_human_approval, forward_approval_outcome};
 use super::events::send_session_event;

@@ -12,11 +12,8 @@
 /// silently fork the wire.
 ///
 /// Postbag is **not self-describing** (`deserialize_any` is rejected), so
-/// the vocabularies' free-form JSON payloads — tool call inputs/outputs —
-/// cross this wire as `horizon_agent::contract::JsonValue` (their JSON
-/// text in one string) instead of `serde_json::Value`; see that type's
-/// doc for the format-aware encoding that keeps the event log's on-disk
-/// JSONL format byte-identical.
+/// a vocabulary's free-form JSON payloads must travel as their JSON text in
+/// one string rather than as `serde_json::Value`.
 pub type WireCodec = remoc::codec::Postbag;
 
 /// A rate-limited log for the receive/send loops' skip paths (adoption

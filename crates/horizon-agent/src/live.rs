@@ -36,7 +36,7 @@ pub(crate) struct State {
     /// `moa · mix` rather than the aggregator's resolved model id. Same
     /// sidecar rules as `session_model`: never replayed from persisted
     /// history, re-sent fresh at attach time.
-    session_selection: Option<crate::wire::ModelSelection>,
+    session_selection: Option<crate::hosting::ModelSelection>,
 }
 
 impl State {
@@ -102,7 +102,7 @@ impl State {
         self.session_model.as_deref()
     }
 
-    pub(crate) fn session_selection(&self) -> Option<&crate::wire::ModelSelection> {
+    pub(crate) fn session_selection(&self) -> Option<&crate::hosting::ModelSelection> {
         self.session_selection.as_ref()
     }
 }
@@ -323,7 +323,7 @@ impl LiveState {
     /// caller asked for), if a [`ProviderEvent::session_selection`]-carrying
     /// event has folded in yet -- see [`State::session_selection`]'s doc
     /// comment.
-    pub fn session_selection(&self) -> Option<crate::wire::ModelSelection> {
+    pub fn session_selection(&self) -> Option<crate::hosting::ModelSelection> {
         self.inner.borrow().session_selection().cloned()
     }
 
